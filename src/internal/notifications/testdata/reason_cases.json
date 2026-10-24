@@ -1,0 +1,423 @@
+{
+  "about": [
+    "Shared classification corpus «event × recipient → reason» (sk-303.13, plan task T002;",
+    "extended by sk-303.14 / T005).",
+    "The SAME file must be executed by THREE independent consumers: the runtime classifier",
+    "notifications.Classify (see reason_corpus_test.go), the SQL projection of the migration (introduced in 000041,",
+    "edition 2 — in 000045; see migrations/migration_000041_test.go) and the reason projection in the delivery",
+    "tract (internal/outbox/push_classification_parity_test.go).",
+    "There cannot be one executable function here — the migration does not call application code, and the tract",
+    "answers a different question («reason → what the person will see»), — so implementation equivalence",
+    "is held precisely by this set of regressions. The tract projection is checked by a SEPARATE assertion:",
+    "agreement of the first two says nothing about it.",
+    "",
+    "Case fields:",
+    "  id        — stable identifier of the case (used in subtest names);",
+    "  note      — where the case comes from: a row of the spec table or a named edge;",
+    "  event     — facts of the event: type, changedFields, assigneeCleared, explicitAccept, staleLockRelease,",
+    "              outcomeChanged (sk-489: the close INCIDENTALLY changed the outcome; the source of the fact is the presence of",
+    "              previousCloseOutcome in the event payload, see T003);",
+    "  recipient — the recipient's relation to the issue at the moment of the event; digestRecipient — the relation",
+    "              of the digest: a digest is addressed to a person, not to an issue, so 'is this their digest'",
+    "              is derived from no relation to a single issue;",
+    "  expect    — the expectation: outcome (reason|audit_only|no_reason_for_recipient|unmapped),",
+    "              reason (only with outcome=reason) and whether the recipient falls into the AUDIENCE of each",
+    "              channel. feed/push here is the registry audience, not a user setting:",
+    "              materialisation of a row is decided by the composition 'channel enabled AND recipient in the",
+    "              audience', and the second half of that composition is checked here."
+  ],
+  "cases": [
+    {
+      "id": "create-with-assignee/new-assignee",
+      "note": "pair table: issue created already with an assignee | new assignee | Issue assignment",
+      "event": { "type": "issue.created" },
+      "recipient": { "newAssignee": true, "assignee": true },
+      "expect": { "outcome": "reason", "reason": "assignment", "feed": false, "push": true }
+    },
+    {
+      "id": "create-with-assignee/subscriber",
+      "note": "pair table: issue created already with an assignee | issue and project subscribers | New issue",
+      "event": { "type": "issue.created" },
+      "recipient": { "subscriber": true },
+      "expect": { "outcome": "reason", "reason": "issue_created", "feed": true, "push": false }
+    },
+    {
+      "id": "create-with-assignee/assignee-also-subscriber",
+      "note": "assignee who is also subscribed: one reason per pair, the more specific one wins",
+      "event": { "type": "issue.created" },
+      "recipient": { "subscriber": true, "newAssignee": true, "assignee": true },
+      "expect": { "outcome": "reason", "reason": "assignment", "feed": true, "push": true }
+    },
+    {
+      "id": "create-without-assignee/subscriber",
+      "note": "pair table: issue created without an assignee | subscribers | New issue",
+      "event": { "type": "issue.created" },
+      "recipient": { "subscriber": true },
+      "expect": { "outcome": "reason", "reason": "issue_created", "feed": true, "push": false }
+    },
+    {
+      "id": "create/stranger",
+      "note": "a stranger recipient of a create event: no reason, and that is not a failure",
+      "event": { "type": "issue.created" },
+      "recipient": {},
+      "expect": { "outcome": "no_reason_for_recipient" }
+    },
+    {
+      "id": "update-assignee/new-assignee",
+      "note": "pair table: edit that changed the assignee | new assignee | Issue assignment",
+      "event": { "type": "issue.updated", "changedFields": ["assignee"] },
+      "recipient": { "newAssignee": true, "assignee": true },
+      "expect": { "outcome": "reason", "reason": "assignment", "feed": false, "push": true }
+    },
+    {
+      "id": "update-assignee/subscriber",
+      "note": "pair table: edit that changed the assignee | subscribers | Issue assignment",
+      "event": { "type": "issue.updated", "changedFields": ["assignee"] },
+      "recipient": { "subscriber": true },
+      "expect": { "outcome": "reason", "reason": "assignment", "feed": true, "push": false }
+    },
+    {
+      "id": "update-assignee-and-priority/new-assignee",
+      "note": "pair table: edit changed assignee and priority | new assignee | Issue assignment",
+      "event": { "type": "issue.updated", "changedFields": ["assignee", "priority"] },
+      "recipient": { "newAssignee": true, "assignee": true },
+      "expect": { "outcome": "reason", "reason": "assignment", "feed": false, "push": true }
+    },
+    {
+      "id": "update-assignee-and-priority/subscriber",
+      "note": "pair table: subscribers receive Issue assignment — the reason's priority outranks «other edits»",
+      "event": { "type": "issue.updated", "changedFields": ["assignee", "priority"] },
+      "recipient": { "subscriber": true },
+      "expect": { "outcome": "reason", "reason": "assignment", "feed": true, "push": false }
+    },
+    {
+      "id": "update-priority-only/subscriber",
+      "note": "pair table: edit changed only priority | subscribers | Other issue edits",
+      "event": { "type": "issue.updated", "changedFields": ["priority"] },
+      "recipient": { "subscriber": true },
+      "expect": { "outcome": "reason", "reason": "other_edits", "feed": true, "push": false }
+    },
+    {
+      "id": "update-unassign/subscriber",
+      "note": "pair table: assignee cleared | subscribers | Issue assignment, feed channel; no push — the addressee does not exist",
+      "event": { "type": "issue.updated", "changedFields": ["assignee"], "assigneeCleared": true },
+      "recipient": { "subscriber": true },
+      "expect": { "outcome": "reason", "reason": "assignment", "feed": true, "push": false }
+    },
+    {
+      "id": "update-title-only/subscriber",
+      "note": "edits of other fields produce no delivery: the event lives in the journal, and that is not a failure",
+      "event": { "type": "issue.updated", "changedFields": ["title", "description", "due_at"] },
+      "recipient": { "subscriber": true },
+      "expect": { "outcome": "audit_only" }
+    },
+    {
+      "id": "status-changed/subscriber",
+      "note": "the feed of «Delegated issue status» is ANY status change on a watched issue",
+      "event": { "type": "issue.status_changed" },
+      "recipient": { "subscriber": true },
+      "expect": { "outcome": "reason", "reason": "delegated_status", "feed": true, "push": false }
+    },
+    {
+      "id": "status-changed/delegating-creator",
+      "note": "push — to the creator and only when the issue is really delegated",
+      "event": { "type": "issue.status_changed" },
+      "recipient": { "creator": true },
+      "expect": { "outcome": "reason", "reason": "delegated_status", "feed": false, "push": true }
+    },
+    {
+      "id": "status-changed/creator-is-actor",
+      "note": "the creator themselves changed the status: there is no delegation, the push audience does not include them",
+      "event": { "type": "issue.status_changed" },
+      "recipient": { "creator": true, "actor": true },
+      "expect": { "outcome": "reason", "reason": "delegated_status", "feed": false, "push": false }
+    },
+    {
+      "id": "status-changed/creator-is-assignee",
+      "note": "creator and assignee are the same person: the issue is delegated to nobody",
+      "event": { "type": "issue.status_changed" },
+      "recipient": { "creator": true, "assignee": true },
+      "expect": { "outcome": "reason", "reason": "delegated_status", "feed": false, "push": false }
+    },
+    {
+      "id": "status-changed-outcome/creator",
+      "note": "sk-489, R-7: the repeated close changed the outcome — the author is addressed with the outcome_changed reason, so they do not get the status row (otherwise two notifications about one action)",
+      "event": { "type": "issue.status_changed", "outcomeChanged": true },
+      "recipient": { "creator": true },
+      "expect": { "outcome": "no_reason_for_recipient" }
+    },
+    {
+      "id": "status-changed-outcome/creator-is-subscriber",
+      "note": "sk-489, R-7, the distinguishing case: the author is SUBSCRIBED to their own issue. The branch reads 'subscriber OR author', so an implementation that checked only 'not the author' would return the status row to them as a subscriber — IsCreator must win over IsSubscriber",
+      "event": { "type": "issue.status_changed", "outcomeChanged": true },
+      "recipient": { "creator": true, "subscriber": true },
+      "expect": { "outcome": "no_reason_for_recipient" }
+    },
+    {
+      "id": "status-changed-outcome/subscriber",
+      "note": "sk-489: a subscriber who is not the author gets the status row as usual — for them an outcome change is not a reason but a detail of the close",
+      "event": { "type": "issue.status_changed", "outcomeChanged": true },
+      "recipient": { "subscriber": true },
+      "expect": { "outcome": "reason", "reason": "delegated_status", "feed": true, "push": false }
+    },
+    {
+      "id": "outcome-changed/creator",
+      "note": "sk-489 / US-3: the outcome of a closed issue changed — the reason is addressed to the requester, both channels are their audience",
+      "event": { "type": "issue.outcome_changed" },
+      "recipient": { "creator": true },
+      "expect": { "outcome": "reason", "reason": "outcome_changed", "feed": true, "push": true }
+    },
+    {
+      "id": "outcome-changed/creator-is-actor",
+      "note": "sk-489: the author CHANGED THE OUTCOME THEMSELVES. The registry answers with the same reason and the same audience — the silence for them comes not from here but from the recipient SELECTION (the own-action exclusion, selectFanOutCandidateSQL), and is checked through the real writer by case (c) of matrix row 43. The case is written exactly so, to make visible which layer owns the rule",
+      "event": { "type": "issue.outcome_changed" },
+      "recipient": { "creator": true, "actor": true },
+      "expect": { "outcome": "reason", "reason": "outcome_changed", "feed": true, "push": true }
+    },
+    {
+      "id": "outcome-changed/subscriber-not-creator",
+      "note": "sk-489: a subscriber who is not the author gets no separate row about an outcome change — there is no reason on any channel",
+      "event": { "type": "issue.outcome_changed" },
+      "recipient": { "subscriber": true },
+      "expect": { "outcome": "no_reason_for_recipient" }
+    },
+    {
+      "id": "outcome-changed/assignee-not-creator",
+      "note": "sk-489, edge: the assignee of a closed issue is not an addressee. The outcome is edited FOR them, not by them, and the requester must learn about it",
+      "event": { "type": "issue.outcome_changed" },
+      "recipient": { "assignee": true, "subscriber": true },
+      "expect": { "outcome": "no_reason_for_recipient" }
+    },
+    {
+      "id": "accept-explicit/creator",
+      "note": "acceptance with the explicit tool | creator | Issue accepted by assignee",
+      "event": { "type": "issue.accepted", "explicitAccept": true },
+      "recipient": { "creator": true },
+      "expect": { "outcome": "reason", "reason": "accepted", "feed": false, "push": true }
+    },
+    {
+      "id": "accept-explicit/subscriber",
+      "note": "the same acceptance goes to a subscriber in the feed",
+      "event": { "type": "issue.accepted", "explicitAccept": true },
+      "recipient": { "subscriber": true },
+      "expect": { "outcome": "reason", "reason": "accepted", "feed": true, "push": false }
+    },
+    {
+      "id": "accept-auto/anyone",
+      "note": "pair table: acceptance stamped automatically (claim, self-assign, creating an issue on yourself) | anyone | no reason",
+      "event": { "type": "issue.accepted" },
+      "recipient": { "subscriber": true, "creator": true, "assignee": true },
+      "expect": { "outcome": "audit_only" }
+    },
+    {
+      "id": "claim/subscriber",
+      "note": "claiming an issue gets no reason of its own — it arrives as a delegated-issue status change",
+      "event": { "type": "issue.claimed" },
+      "recipient": { "subscriber": true, "creator": true },
+      "expect": { "outcome": "audit_only" }
+    },
+    {
+      "id": "close/creator",
+      "note": "closing also arrives as a status change; it has no reason of its own",
+      "event": { "type": "issue.closed" },
+      "recipient": { "creator": true, "subscriber": true },
+      "expect": { "outcome": "audit_only" }
+    },
+    {
+      "id": "archive/subscriber",
+      "note": "archival is excluded from the registry as a matter of fact: there is no delivery for it on any path",
+      "event": { "type": "issue.archived" },
+      "recipient": { "subscriber": true },
+      "expect": { "outcome": "audit_only" }
+    },
+    {
+      "id": "dependency-created/subscriber",
+      "note": "creating a dependency is excluded from the registry — a journal event",
+      "event": { "type": "dependency.created" },
+      "recipient": { "subscriber": true },
+      "expect": { "outcome": "audit_only" }
+    },
+    {
+      "id": "dependency-deleted/subscriber",
+      "note": "deleting a dependency — same",
+      "event": { "type": "dependency.deleted" },
+      "recipient": { "subscriber": true },
+      "expect": { "outcome": "audit_only" }
+    },
+    {
+      "id": "unclaim-manual/subscriber",
+      "note": "a manual unclaim carries the sibling issue.status_changed; there must not be a second notification for one action (INV-6)",
+      "event": { "type": "issue.unclaimed" },
+      "recipient": { "subscriber": true },
+      "expect": { "outcome": "audit_only" }
+    },
+    {
+      "id": "unclaim-stale-lock/subscriber",
+      "note": "lock release by the stale-lock reaper — reason «Automatic unclaim», off by default, the reason has no push",
+      "event": { "type": "issue.unclaimed", "staleLockRelease": true },
+      "recipient": { "subscriber": true },
+      "expect": { "outcome": "reason", "reason": "auto_unclaim", "feed": true, "push": false }
+    },
+    {
+      "id": "comment-created/subscriber",
+      "note": "creating a comment | to subscribers | Comment (off by default)",
+      "event": { "type": "comment.created" },
+      "recipient": { "subscriber": true },
+      "expect": { "outcome": "reason", "reason": "comment", "feed": true, "push": false }
+    },
+    {
+      "id": "attachment-added/subscriber",
+      "note": "an attachment is projected onto the issue and belongs to the Attachment reason (INV-13)",
+      "event": { "type": "attachment.added" },
+      "recipient": { "subscriber": true },
+      "expect": { "outcome": "reason", "reason": "attachment", "feed": true, "push": false }
+    },
+    {
+      "id": "reparent/subscriber",
+      "note": "parent change | to subscribers | Moved in the tree",
+      "event": { "type": "issue.reparented" },
+      "recipient": { "subscriber": true },
+      "expect": { "outcome": "reason", "reason": "reparent", "feed": true, "push": false }
+    },
+    {
+      "id": "comment-mention/mentioned",
+      "note": "a mention in a comment is addressed and arrives on both channels",
+      "event": { "type": "comment.mention" },
+      "recipient": { "mentioned": true },
+      "expect": { "outcome": "reason", "reason": "mention", "feed": true, "push": true }
+    },
+    {
+      "id": "issue-mention/mentioned",
+      "note": "a mention in the issue text — the same reason",
+      "event": { "type": "issue.mention" },
+      "recipient": { "mentioned": true },
+      "expect": { "outcome": "reason", "reason": "mention", "feed": true, "push": true }
+    },
+    {
+      "id": "comment-mention/subscriber-not-mentioned",
+      "note": "a subscriber who was not mentioned does not get the mention reason: mention delivery is produced by addressing, not by subscription (INV-8)",
+      "event": { "type": "comment.mention" },
+      "recipient": { "subscriber": true },
+      "expect": { "outcome": "no_reason_for_recipient" }
+    },
+    {
+      "id": "reminder-rang/owner",
+      "note": "a reminder rang | to the owner | Reminder; the feed channel is inapplicable (SC-022)",
+      "event": { "type": "reminder.rang" },
+      "recipient": { "reminderOwner": true },
+      "expect": { "outcome": "reason", "reason": "reminder", "feed": false, "push": true }
+    },
+    {
+      "id": "reminder-rang/subscriber-not-owner",
+      "note": "someone else's reminder is not addressed to a subscriber",
+      "event": { "type": "reminder.rang" },
+      "recipient": { "subscriber": true },
+      "expect": { "outcome": "no_reason_for_recipient" }
+    },
+    {
+      "id": "reminder-set/owner",
+      "note": "setting a reminder is a journal event; it has no delivery",
+      "event": { "type": "reminder.set" },
+      "recipient": { "reminderOwner": true, "subscriber": true },
+      "expect": { "outcome": "audit_only" }
+    },
+    {
+      "id": "comment-edited/subscriber",
+      "note": "editing a comment produces no delivery",
+      "event": { "type": "comment.edited" },
+      "recipient": { "subscriber": true },
+      "expect": { "outcome": "audit_only" }
+    },
+    {
+      "id": "attachment-removed/subscriber",
+      "note": "removing an attachment deliberately does not notify",
+      "event": { "type": "attachment.removed" },
+      "recipient": { "subscriber": true },
+      "expect": { "outcome": "audit_only" }
+    },
+    {
+      "id": "label-added/subscriber",
+      "note": "labels — journal",
+      "event": { "type": "issue.label_added" },
+      "recipient": { "subscriber": true },
+      "expect": { "outcome": "audit_only" }
+    },
+    {
+      "id": "project-member-added/subscriber",
+      "note": "project administration is not a reason",
+      "event": { "type": "project.member_added" },
+      "recipient": { "subscriber": true },
+      "expect": { "outcome": "audit_only" }
+    },
+    {
+      "id": "unaccepted-digest/addressee",
+      "note": "US-4: unaccepted digest, addressee — reason «Unaccepted issue — reminder», push only",
+      "event": { "type": "nudge.unaccepted_digest" },
+      "recipient": { "digestRecipient": true },
+      "expect": { "outcome": "reason", "reason": "unaccepted_reminder", "feed": false, "push": true }
+    },
+    {
+      "id": "unaccepted-digest/not-addressee",
+      "note": "a digest is addressed — an issue subscriber does not receive it, and that is not a failure",
+      "event": { "type": "nudge.unaccepted_digest" },
+      "recipient": { "subscriber": true, "creator": true, "assignee": true },
+      "expect": { "outcome": "no_reason_for_recipient" }
+    },
+    {
+      "id": "unreviewed-digest/addressee",
+      "note": "US-5: unreviewed digest, addressee — reason «Awaiting review — reminder», push only",
+      "event": { "type": "nudge.unreviewed_digest" },
+      "recipient": { "digestRecipient": true },
+      "expect": { "outcome": "reason", "reason": "review_reminder", "feed": false, "push": true }
+    },
+    {
+      "id": "unreviewed-digest/not-addressee",
+      "note": "addressing of the second category is checked separately from the first — categories are not merged (R-4)",
+      "event": { "type": "nudge.unreviewed_digest" },
+      "recipient": { "subscriber": true, "creator": true },
+      "expect": { "outcome": "no_reason_for_recipient" }
+    },
+    {
+      "id": "unreviewed-digest/addressee-also-creator",
+      "note": "edge: the digest addressee is also the creator of issues in it — still exactly one reason, the digest one",
+      "event": { "type": "nudge.unreviewed_digest" },
+      "recipient": { "digestRecipient": true, "creator": true, "subscriber": true },
+      "expect": { "outcome": "reason", "reason": "review_reminder", "feed": false, "push": true }
+    },
+    {
+      "id": "review-marked/author",
+      "note": "INV-2: a review mark is a journal record, there is no reason even for the author",
+      "event": { "type": "review.marked" },
+      "recipient": { "creator": true, "actor": true, "subscriber": true },
+      "expect": { "outcome": "audit_only" }
+    },
+    {
+      "id": "review-marked/assignee",
+      "note": "INV-2: the assignee does not learn about the mark on any channel — journal silence, not unmapped",
+      "event": { "type": "review.marked" },
+      "recipient": { "assignee": true, "subscriber": true },
+      "expect": { "outcome": "audit_only" }
+    },
+    {
+      "id": "review-flag-changed/author",
+      "note": "INV-2: flipping the review-required flag produces no delivery",
+      "event": { "type": "review.flag_changed" },
+      "recipient": { "creator": true, "actor": true },
+      "expect": { "outcome": "audit_only" }
+    },
+    {
+      "id": "review-flag-changed/subscriber",
+      "note": "INV-2: an issue subscriber does not learn about the flag change either",
+      "event": { "type": "review.flag_changed" },
+      "recipient": { "subscriber": true },
+      "expect": { "outcome": "audit_only" }
+    },
+    {
+      "id": "unknown-type/subscriber",
+      "note": "edge: an event with a delivery path the registry cannot name — observable unmapped, not a silent loss",
+      "event": { "type": "issue.teleported" },
+      "recipient": { "subscriber": true },
+      "expect": { "outcome": "unmapped" }
+    }
+  ]
+}

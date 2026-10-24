@@ -1,0 +1,52 @@
+# Build artifacts
+src/bin/
+src/api
+src/cmd/api/api
+
+# Test binaries
+*.test
+*.out
+
+# Coverage
+coverage.txt
+coverage.html
+
+# IDE / editor
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Local env (never commit secrets)
+.env
+.env.local
+
+# Generated swagger docs (added in later slices)
+src/docs/
+
+# Vendor — using go modules, no vendor dir
+vendor/
+
+# Python bytecode (embedded monitor_runner.py asset + its stdlib test)
+__pycache__/
+*.pyc
+
+.worktrees/
+
+# Local environment — real values and secrets never go into git.
+.env.*
+!.env.example
+!.env.*.example
+
+# AI agent local settings (per-developer, may hold tokens).
+.claude/settings.local.json
+.mcp.json
+CLAUDE.local.md
+docs/coderev/
+docs/research/
+docs/plan/
+docs/tasks/

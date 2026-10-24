@@ -1,0 +1,47 @@
+--accent-amber	--warn
+--accent-amber-fill	--warn
+--accent-amber-tint	--warn-t
+--accent-blue	--info
+--accent-cyan	--secondary
+--accent-cyan-fill	--secondary
+--accent-green	--ok
+--accent-magenta	
+--accent-magenta-tint	
+--accent-orange	
+--accent-red	--err
+--accent-violet	--violet
+--accent-yellow	
+--bg-base	--bg
+--bg-elevated	--elev
+--bg-hover	--elev
+--bg-selected	--primary-t
+--border	--line-2
+--border-subtle	--line
+--brand	--primary
+--brand-fill	--primary
+--brand-hover	--primary-h
+--brand-muted	--primary-t
+--brand-text	--primary
+--fg-base	--ink-2
+--fg-emphasis	--ink
+--fg-high	--ink
+--fg-low	--ink-2
+--fg-muted	--ink-3
+--font-size-body	
+--font-size-heading	
+--font-size-meta	
+--font-size-title	
+--line-base	--line-body
+--line-tight	--line-h4
+--match-bg	--mark
+--match-fg	--on-mark
+--radius-default	--radius-control
+--radius-dialog	--radius-panel
+--shadow-elevation-1	--shadow-segment
+--shadow-elevation-2	--shadow-popover
+--space-lg	--space-3
+--space-md	--space-2
+--space-sm	--space-1
+--space-xl	--space-4
+--space-xs	
+--status-standing	--secondary

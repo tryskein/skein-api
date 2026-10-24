@@ -1,0 +1,144 @@
+-- 000047_nudges_indexes — sk-303.14, task T017.
+--
+-- ONE partial index under the HOT UNACCEPTED QUERY, and only under it.
+--
+-- WHY THIS INDEX HERE, NOT IN 000044 AND NOT IN 000046. The rule is the
+-- same across the wave: an index appears together with its query, because
+-- an index without a query is untestable. The unaccepted set's semantic
+-- contract (internal/review/set.go) states MEMBERSHIP, but not join
+-- shape, column order, or selectivity — all of that is derived from the
+-- query. Migration 000044 introduced the columns and deliberately
+-- introduced no partial index; 000046 introduced the unreviewed index
+-- together with its queries and explicitly left unaccepted to this
+-- migration. The hot unaccepted query — walking all addressees with a
+-- join on rate-limit state and a due-time predicate — is written by THIS
+-- task (internal/nudges/store.go), so here the index shape is derivable
+-- and fixable.
+--
+-- WHAT IS SERVED. The unaccepted select walks issues, joins them to users
+-- on ASSIGNEE NAME (assignee is stored as text) and folds into pairs
+-- "addressee and their unaccepted issues". So the index key is
+-- LOWER(assignee), and that is its only column: that is the join key, and
+-- there is no other entry into the query.
+--
+-- ⚠ CORRECTED ERROR (repair A/8). The first revision carried a SECOND key
+-- column, assignee_set_at DESC, and justified it as: "the schedule base
+-- is taken from it (MAX per group, R-5), and having it in the key spares
+-- the fold a heap visit for every row". The justification is WRONG and
+-- was checked by measurement:
+--
+--   * the plan node is Index Scan, not Index Only Scan, i.e. a heap
+--     visit is present and must be: the fold needs i.id (array_agg of
+--     the issue list) and i.assignee (join to users on name), and
+--     neither is in the index. A second key column does not cancel the
+--     heap visit and cannot;
+--   * an index rebuilt FROM ONE COLUMN (LOWER(assignee)) with the same
+--     partial body yields THE SAME plan. Measurement on 20 020 issues
+--     rows, of which 20 in the unaccepted set (EXPLAIN ANALYZE, BUFFERS,
+--     the same worker select text):
+--
+--         two columns: Index Scan using idx_issues_unaccepted_assignee,
+--                      rows=20, Buffers: shared hit=3
+--         one column:  Index Scan using idx_issues_unaccepted_assignee,
+--                      rows=20, Buffers: shared hit=2 read=1
+--
+--     The difference is one buffer and one read against three hits, i.e.
+--     nothing: both forms read the same handful of pages.
+--
+-- DECISION: the second column is DROPPED. It gives this query no
+-- measurable benefit, and it costs index space, an extra write on every
+-- assignment, and — worse — an assertion in the migration class that
+-- hard-pins a shape nothing justifies. Migration 000047 had not yet
+-- shipped, so it is edited itself, not by a follow-up migration. The
+-- error is left here as a record, not erased: the reasoning "a column in
+-- the key spares the heap" looks natural and will be reproduced by the
+-- next reader if the measurement is not left.
+--
+-- The schedule base (MAX(assignee_set_at) per addressee) is computed from
+-- the heap in the same Index Scan — and that is fine: an addressee has a
+-- handful of set rows, which is why the partial index exists.
+--
+-- PARTIAL BODY — THE IMMUTABLE PART OF THE SET CONTRACT:
+--
+--     status NOT IN ('closed', 'standing') AND accepted_at IS NULL
+--     AND assignee_set_at IS NOT NULL
+--
+-- Three conditions and exactly three. Each must be LITERALLY implied by
+-- the query WHERE, otherwise the planner will not prove applicability and
+-- will not pick the index:
+--
+--   * the first two come from the unaccepted fragment (status.ActiveWork
+--     plus accepted_at IS NULL) — the text matches character for
+--     character, because the fragment is the source of this text;
+--   * the third is put by the query itself: a row without a schedule
+--     base does not enter the select (wave decision A/1, recorded as a
+--     comment in sk-303.14.2.8.1). Historical issues assigned before
+--     release have no base and it has nowhere to come from, and a
+--     schedule without a base refuses — there is nothing and no reason
+--     to remind on such a row.
+--
+-- WHAT IS NOT IN THE BODY AND WHY. `assignee IS NOT NULL` suggests
+-- itself as a fourth conjunct and is not added: it is REDUNDANT. A row
+-- with an empty assignee does not enter the select anyway — LOWER(NULL)
+-- yields NULL, and the join to users on LOWER(assignee) does not find
+-- it — so the conjunct cuts no extra row and lengthens the predicate
+-- body.
+--
+-- ⚠ The first revision of this header claimed otherwise: that such a
+-- conjunct would make the index INAPPLICABLE, because it is not implied
+-- by the query WHERE. The claim was CHECKED BY MEASUREMENT and turned
+-- out wrong: with it the planner still picks Index Scan. The reason is
+-- the equality join on LOWER(assignee): the operator is strict, so
+-- non-emptiness of both LOWER(assignee) and assignee itself follows, and
+-- the implication is proved. The error is left here as a record, not
+-- erased, so the next reader does not reconstruct the same reasoning
+-- from scratch.
+--
+-- The RULE itself still stands and was checked on another conjunct: a
+-- condition NOT implied by the select WHERE (tried `priority = 1`)
+-- returns the plan to a sequential scan — i.e. turns the index off,
+-- showing nothing except the plan. So the applicability gate lives in
+-- the plan check on volume (class T020, matrix row 86), and the
+-- migration class holds only the BODY COMPOSITION: exactly three
+-- conjuncts, a fourth will not pass silently.
+--
+-- Assignee resolvability, addressee deactivation, category unsubscribe
+-- and rate-limit state do not enter the body for the same reason as in
+-- 000046: they are external tables, and a partial predicate must be
+-- IMMUTABLE and computed from one issues row.
+--
+-- WHY ONE INDEX. The unaccepted select has one entry (join on assignee
+-- name) and one fold order; there is no second path, unlike the
+-- delegated surface — the unaccepted set has no public number or
+-- filter, its consumers are the reminder select and the re-check at
+-- delivery. The re-check addresses issues by name (i.id = ANY(...)) and
+-- is served by the primary key.
+--
+-- COST. Rows outside the partial predicate do not enter the index at
+-- all: accepted and closed issues outnumber hanging unaccepted ones by
+-- orders of magnitude. Writes get more expensive on assign, accept and
+-- close — operations incomparably fewer than worker ticks.
+--
+-- CONCURRENTLY IS NOT USED: golang-migrate runs the migration in a
+-- transaction, and CREATE INDEX CONCURRENTLY is forbidden in a
+-- transaction. The same choice as every previous migration in the
+-- repository.
+--
+-- GENERATION. sqlc.yaml reads `schema: migrations`, so the
+-- internal/storage/generated/ directory is rebuilt and committed in THE
+-- SAME commit — cleanliness of the directory after a generator run is a
+-- gate of EVERY task with a migration (sqlc-generated job, sk-339).
+
+CREATE INDEX idx_issues_unaccepted_assignee
+    ON issues (LOWER(assignee))
+ WHERE status NOT IN ('closed', 'standing')
+   AND accepted_at IS NULL
+   AND assignee_set_at IS NOT NULL;
+
+COMMENT ON INDEX idx_issues_unaccepted_assignee IS
+    'sk-303.14 T017: hot select of the unaccepted set by the background '
+    'reminder worker (internal/nudges). The only key column is the join key '
+    'to users on assignee name; there is no second column on purpose, it '
+    'gave this query no measurable benefit (see the migration header). '
+    'Partialness repeats the immutable part of the set contract LITERALLY: '
+    'otherwise the planner will not prove applicability.';

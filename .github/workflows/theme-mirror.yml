@@ -1,0 +1,58 @@
+name: Theme mirror
+
+# skein-api keeps a Go mirror of the theme-token registry that lives in
+# skein-frontend. The check compares the two and needs both repositories, so
+# it checks them out side by side in the layout of the umbrella repository.
+# It is a separate workflow (not a job of ci.yml) so that the paths filter
+# applies; it is not part of the release.
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "src/internal/themes/**"
+      - ".github/workflows/theme-mirror.yml"
+  push:
+    branches: [main]
+    paths:
+      - "src/internal/themes/**"
+      - ".github/workflows/theme-mirror.yml"
+
+concurrency:
+  group: theme-mirror-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  theme-mirror:
+    name: theme-mirror
+    runs-on: ubuntu-24.04
+    steps:
+      # Layout expected by scripts/check-theme-mirror.sh of the umbrella:
+      #   umbrella/scripts/check-theme-mirror.sh
+      #   umbrella/projects/skein-api
+      #   umbrella/projects/skein-frontend
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: tryskein/skein
+          ref: main
+          path: umbrella
+          persist-credentials: false
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          path: umbrella/projects/skein-api
+          persist-credentials: false
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: tryskein/skein-frontend
+          ref: main
+          path: umbrella/projects/skein-frontend
+          persist-credentials: false
+      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version-file: umbrella/projects/skein-api/src/go.mod
+          cache-dependency-path: umbrella/projects/skein-api/src/go.sum
+      - name: Compare registry and mirror
+        run: bash umbrella/scripts/check-theme-mirror.sh

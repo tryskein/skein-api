@@ -1,0 +1,29 @@
+-- Rollback of 000049_lock_owner — sk-424.
+--
+-- ⚠ WHAT EXACTLY THIS ROLLBACK RESTORES. Not "an extra column" — it restores
+-- an ACCESS-CONTROL DEFECT. Without `locked_by_user_id` a lock again has no
+-- owner, and the holder check again relies on the session string alone:
+-- a value that is not an identity document, is openly visible to every
+-- reader of the issue (`lockedBy` in detail and show, `actorSessionId` in the feed) and
+-- belongs to nobody (the primary key of `agents` is a pair, there is no uniqueness on
+-- `session_id` alone). Whoever presents someone else's session string can again release,
+-- close and edit someone else's locked issue.
+--
+-- So the rollback is not routine. It is appropriate in exactly one case: applying 000049
+-- turned out to be broken in itself and has to be removed to be fixed. In all
+-- other cases "rolling back just in case" here means "reopening
+-- the hole", and the operator must read this BEFORE the rollback, not learn it afterwards.
+--
+-- ⚠ WHAT IS LOST IRREVERSIBLY. DROP COLUMN deletes data silently and successfully:
+-- the owners of ALL current locks go away — both those restored by the seed from the
+-- journal and those written after the apply. Re-applying restores from the journal
+-- only the locks whose `issue.claimed` event is still there and whose moment matches the
+-- current `locked_at`; a lock that survived a rollback and re-apply without such an event
+-- comes back with owner NULL, that is "unknown", and until it is released
+-- it can be opened only by an administrator via force.
+--
+-- The mechanics are otherwise trivial and unconditional: remove what was added. The foreign key
+-- constraint goes away together with the column, no separate DROP CONSTRAINT is
+-- needed; the column comment goes too.
+
+ALTER TABLE issues DROP COLUMN IF EXISTS locked_by_user_id;

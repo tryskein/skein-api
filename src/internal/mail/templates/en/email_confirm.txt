@@ -1,0 +1,9 @@
+Hello,
+
+To confirm this email address for Skein, open the link:
+
+{{.Link}}
+
+The link works until {{.ExpiresAt}}.
+
+If you did not sign up for Skein, just ignore this email.

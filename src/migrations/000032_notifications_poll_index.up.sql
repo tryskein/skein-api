@@ -1,0 +1,53 @@
+-- 000032_notifications_poll_index — sk-142.5 (T5)
+--
+-- Performance index for the agent task-monitor poll (PollForMonitor,
+-- notifications/store.go, spec §6). The poll's driving table is
+-- `notifications n` with this WHERE shape:
+--
+--     user_id    = $1                       -- equality (token owner)
+--     project_id = $10                      -- equality (token's project, NOT NULL v1)
+--     archived_at IS NULL                   -- partial predicate
+--     type = ANY($2)                        -- whitelist
+--     created_at <= now() - SAFETY_LAG      -- watermark range
+--     (created_at, id) > ($4, $5)           -- row-value cursor lower bound
+--   ORDER BY created_at, id
+--   LIMIT $9
+--
+-- Index chosen by measured EXPLAIN (ANALYZE, BUFFERS) over ~60k seeded
+-- notifications (47 users × 10 projects; one target user with a 150-row
+-- subtree slice in one project), NOT hardcoded from the plan:
+--
+--   * Pre-existing indexes (migration 000008): idx_notif_unread and
+--     idx_notif_user_type are partial on `read_at IS NULL` — the poll never
+--     filters read_at (read-state is untouched, spec §6), so they don't
+--     apply. idx_notif_user_project is keyed (user_id, project_id, id DESC):
+--     it gives the (user,project) narrowing but its id-DESC order cannot
+--     satisfy ORDER BY (created_at, id), so the planner read every
+--     user+project row (277) and appended a top-N / quicksort.
+--
+--   * (user_id, project_id, created_at, id) makes BOTH leading columns the
+--     equality predicates the poll always supplies (project_id is NOT NULL
+--     in v1), so the trailing (created_at, id) is index-ordered within the
+--     equality-constrained group — the ORDER BY is satisfied by the index
+--     and the sort disappears. Adding project_id only to INCLUDE (the
+--     plan's first guess) left it a non-narrowing filter and the planner
+--     kept the bitmap+sort; promoting it to a key column is what wins.
+--
+--   * Partial WHERE archived_at IS NULL matches the query predicate exactly
+--     and keeps the index off archived rows. INCLUDE(event_id, type) was
+--     measured and made no difference (read_at is selected and not
+--     indexable here, so no index-only scan is possible — the heap fetch
+--     happens regardless), so the index is kept minimal.
+--
+-- Measured effect (idx_notif_user_project bitmap + sort → ordered index scan):
+--   * live-start (every first poll):   136 buffers + bitmap+sort → 3 buffers, Index Scan, no sort
+--   * steady-state (recent cursor):    184 buffers + quicksort   → 40 buffers, Index Scan, no sort
+--   * epoch full-backlog (bounded by the credential Floor in prod, rare):
+--                                       slightly fewer buffers, still bitmap+sort — acceptable.
+--
+-- Plain CREATE INDEX (not CONCURRENTLY): migrations run inside a transaction
+-- at startup, where CONCURRENTLY is illegal and unnecessary.
+
+CREATE INDEX idx_notifications_monitor_poll
+    ON notifications (user_id, project_id, created_at, id)
+    WHERE archived_at IS NULL;

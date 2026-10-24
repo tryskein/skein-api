@@ -1,0 +1,32 @@
+# sqlc configuration — generates type-safe Go code from raw SQL queries.
+#
+# Workflow:
+#   1. Edit migrations/*.up.sql — sqlc reads these as the schema source.
+#   2. Add or change queries under internal/storage/queries/<table>.sql.
+#   3. Run `sqlc generate` (from this directory) to regenerate
+#      internal/storage/generated/.
+#
+# Generated code IS committed to the repo (see README "Database migrations")
+# so contributors don't need a working sqlc install just to build the binary.
+#
+# Nothing about that arrangement keeps the committed output in step with the
+# schema, so a CI job does: `sqlc-generated` in .github/workflows/ci.yml re-runs
+# `sqlc generate` and fails when internal/storage/generated/ changes. It is
+# pinned to the sqlc version stamped in the generated files' header (v1.31.1 at
+# the time of writing) — bump the two together or the job reports version churn
+# as drift. Until sk-339 this comment promised that check and no such job
+# existed; the model had by then fallen two tables and nine columns behind.
+version: "2"
+sql:
+  - engine: "postgresql"
+    queries: "internal/storage/queries"
+    schema: "migrations"
+    gen:
+      go:
+        package: "generated"
+        out: "internal/storage/generated"
+        sql_package: "pgx/v5"
+        emit_pointers_for_null_types: true
+        emit_json_tags: true
+        json_tags_case_style: "snake"
+        emit_prepared_queries: false

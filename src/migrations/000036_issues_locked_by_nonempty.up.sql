@@ -1,0 +1,34 @@
+-- 000036_issues_locked_by_nonempty — sk-202 coderev follow-up (grok).
+--
+-- issues.locked_by is a session id or NULL. The empty string is neither,
+-- and it is the one value that would break the claim path in a way that
+-- reports as a 500:
+--
+--   * Store.Claim's Go guard reads `*old.LockedBy != ""` before deciding
+--     "locked by another session", so '' skips the already_claimed branch.
+--   * Claim's UPDATE predicate is `locked_by IS NULL OR locked_by = $3`,
+--     which '' also fails to match.
+--
+-- Result: zero rows updated, and (post-sk-202) the RowsAffected()==0 branch
+-- correctly reports an internal inconsistency — a 500 on a row nobody could
+-- ever claim again.
+--
+-- '' is already unreachable in code, which is why this is a constraint and
+-- not a runtime check:
+--
+--   * The Claim UPDATE (internal/issues/store.go) is the only writer of a
+--     non-NULL locked_by. Patch's unlock CASE, Unclaim, Close and the
+--     stale-lock reaper only ever write NULL, and no INSERT INTO issues
+--     names the column (new rows default to NULL).
+--   * That UPDATE binds locked_by to input.SessionID, and Claim rejects
+--     SessionID == "" with a ValidationError before it opens the
+--     transaction. The guard was introduced by 6e9efde, the same commit
+--     that introduced Claim — so no released version could write ''.
+--
+-- The constraint's job is the future: it stops a second writer added later
+-- from reintroducing the shape silently, in the same declarative style as
+-- issues_locked_consistency (000004). NULL locked_by yields NULL (not
+-- false) for this predicate, so unlocked rows pass unaffected.
+
+ALTER TABLE issues
+    ADD CONSTRAINT issues_locked_by_nonempty CHECK (locked_by <> '');

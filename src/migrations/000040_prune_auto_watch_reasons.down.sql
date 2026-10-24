@@ -1,0 +1,28 @@
+-- Rollback of 000040_prune_auto_watch_reasons.
+--
+-- ⚠ DATA IS NOT RESTORED, and that is a decision, not an omission.
+--
+-- The up migration stripped the 'commenter' and 'mention' watch reasons and
+-- deleted rows that had no remaining reason after that. There is nowhere to
+-- restore them from: only the deleted row knew which reasons it carried, and
+-- "give both reasons back to everyone" would recreate exactly the noise this
+-- wave exists to remove — and would also invent a watch for people who never
+-- had one.
+--
+-- There is deliberately no shadow copy table and no soft-delete flag in place
+-- of DELETE: either would be an undeclared change of construction and would
+-- keep the very data the wave is getting rid of.
+--
+-- What rollback actually does: drop this migration's trail in the counters
+-- journal so a re-apply (the up/down/up smoke) does not double the rows.
+-- The smoke checks CHAIN INTEGRITY, not data return.
+--
+-- The only way to get the deleted watches back is a restore of the
+-- full-database backup taken BEFORE this migration was applied, as a separate
+-- restore with the service stopped. That backup is not optional and not this
+-- file's to arrange: a migration cannot know whether a copy was taken, so the
+-- gate that takes it — preflight counts, whole-database copy, verified restore
+-- into an isolated database, a recorded expiry date for the artifact — is an
+-- external step of the release procedure, executed before the new image starts.
+
+DELETE FROM migration_counters WHERE migration = '000040_prune_auto_watch_reasons';

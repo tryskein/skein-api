@@ -1,0 +1,26 @@
+-- Rollback of 000043_suppress_agent_actions_default_on.
+--
+-- Restores the column DEFAULT to false. The up → down → up pair is
+-- idempotent: a second up rewrites zero rows (all already true) and sets
+-- DEFAULT true again.
+--
+-- ⚠ PER-ACCOUNT PREVIOUS VALUES ARE NOT RESTORED. This is the same decision
+-- taken by migration 000039 when it rewrote reason defaults, and it is
+-- deliberate: for rollback to give each account its previous value, the
+-- migration would have to keep a shadow copy table — an undeclared
+-- construction that outlives the migration itself and stores exactly the
+-- data the deploy is getting rid of. There is no, and must not be, such a
+-- mechanism here.
+--
+-- What rollback means in practice: after it, NEW rows are created off again,
+-- and the ones the up rewrote stay on. Returning their previous values is
+-- only possible by restoring a backup taken before the deploy, as a
+-- separate restore.
+--
+-- Rolling back the DEFAULT does not roll back BEHAVIOUR: the fallback for an
+-- account with no prefs row lives in code (`COALESCE(..., true)` in fan-out
+-- and `Store.GetPrefs`), and returning that is a return of the application
+-- image, not of the migration. Deploy rollback order is therefore the usual
+-- one: image first, then schema.
+ALTER TABLE user_notification_prefs
+    ALTER COLUMN suppress_agent_actions SET DEFAULT false;

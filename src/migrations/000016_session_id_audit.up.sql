@@ -1,0 +1,14 @@
+-- 000016 — drop the unused agents.label column.
+--
+-- agents.label was a vestigial X-Skein-Agent-Label echo: the optional
+-- header was upserted into agents.label and echoed back in
+-- whoami / prime responses to the agent itself, but the value was
+-- never propagated into events.actor or issues.locked_by rendering
+-- so no other observer ever saw it. Mcp-Session-Id (already written
+-- to events.actor_session_id since 000001) subsumes the per-agent
+-- identity job: deterministic, auto-set by the MCP client, and
+-- string-joinable across systems (external conversation logs).
+--
+-- events.actor_session_id was introduced in 000001_init.up.sql; this
+-- migration only removes the now-dead label column.
+ALTER TABLE agents DROP COLUMN IF EXISTS label;

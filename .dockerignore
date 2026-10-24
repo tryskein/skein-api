@@ -1,0 +1,32 @@
+# Build artifacts
+bin/
+obj/
+*.exe
+
+# IDE/editor noise
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Local env files (must never be baked into images)
+.env
+.env.*
+
+# Git metadata
+.git/
+.gitignore
+
+# Docker metadata (avoid recursion)
+Dockerfile
+.dockerignore
+docker-compose*.yml
+docker-compose*.yaml
+
+# Documentation
+README.md
+*.md
+
+# OS junk
+.DS_Store
+Thumbs.db

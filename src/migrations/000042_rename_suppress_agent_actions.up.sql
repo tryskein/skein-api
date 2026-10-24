@@ -1,0 +1,39 @@
+-- 000042_rename_suppress_agent_actions — sk-335.
+--
+-- Renames column `user_notification_prefs.suppress_own_agent_actions`
+-- to `suppress_agent_actions` following a change of the setting's MEANING.
+--
+-- WHAT CHANGED. The old meaning — "do not notify me about MY agents'
+-- actions" — was unreachable by construction. In the watcher arms of
+-- fan-out (`selectFanOutCandidateSQL`) the setting branch sat immediately
+-- under the self-action exclusion and required the OPPOSITE condition: the
+-- exclusion only passed rows where the recipient is NOT the actor, and the
+-- setting branch required a match. Inside it the condition was always
+-- false, and it removed no row whether the setting was on or off. An agent
+-- acts under the owner's key, so its actions were already silenced by the
+-- self-action exclusion as the owner's own.
+--
+-- The new meaning — "do not notify me about ANY agents' actions, including
+-- other people's". It is reachable: actor kind already arrives in the query
+-- as a parameter (`events.actor_type`), and the setting branch now rests
+-- only on that.
+--
+-- WHY A RENAME, NOT A NEW COLUMN. The setting is not introduced again: it
+-- is the same row, the same default, the same toggle on the same form. A
+-- new column would mean "off from scratch for everyone" and would lose the
+-- already-expressed intent of those who had turned the setting on. A name
+-- with the word "own" after the meaning change is a lie, so the name
+-- changes, not the data.
+--
+-- BOUNDS. Suppression applies ONLY to the watcher path. The role path —
+-- assignment, accept, delegated status, mention, reminder — is never
+-- suppressed: the watcher path is broadcast noise, and the setting exists
+-- for silence there, while a personal address is addressed to the
+-- recipient personally. Spec invariant INV-8 names a mention of the owner
+-- by their own agent as the case the mention channel exists for.
+--
+-- THE DEFAULT DOES NOT CHANGE: `false`. This is an option for people who
+-- find it noisy, not a new default behaviour. RENAME COLUMN keeps type,
+-- NOT NULL and DEFAULT.
+ALTER TABLE user_notification_prefs
+    RENAME COLUMN suppress_own_agent_actions TO suppress_agent_actions;

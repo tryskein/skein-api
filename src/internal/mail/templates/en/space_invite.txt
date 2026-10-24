@@ -1,0 +1,9 @@
+Hello,
+
+{{.InviterName}} invites you to the space "{{.SpaceName}}" in Skein. To accept or decline, open the link:
+
+{{.Link}}
+
+The invitation is valid until {{.ExpiresAt}}.
+
+If you did not expect this invitation, just ignore this email.

@@ -1,0 +1,21 @@
+-- 000068_access_visible_point_cost — sk-674.18, T010 (K-1, SC-002, SC-013).
+--
+-- WHY. skein_project_visible (000067) is the recipient filter: fan-out,
+-- digest, mentions, monitor, reading a project by id. Declared without
+-- COST, a SQL function gets the default cost of 100 — for
+-- the planner a call is almost free (0.25 units), although the body is EXISTS
+-- over the relation skein_project_access_set with index probes of users,
+-- project_members and projects. With such an estimate the planner does not care
+-- how many rows the function is called on: in the subtree subscription branch of
+-- fan-out a Seq Scan on issue_watchers (a call per subscription with
+-- scope='subtree') beat the index path on issue_watchers_pkey (a call
+-- only on subscriptions of the event's ancestors) — 1400 against 1447 on the corpus of
+-- test No. 15, where before T010 an index stood.
+--
+-- WHY 1000. The minimal value at which the index path wins on the same corpus
+-- (at 1 and 10 — Seq Scan, at 1000 and 10000 —
+-- Index Scan). It is below the real cost of the body (several index
+-- probes), i.e. it does not overstate it. Calibration of the cost of the relation function
+-- K-1; there is no rule in it, the body does not change.
+
+ALTER FUNCTION skein_project_visible(uuid, uuid) COST 1000;

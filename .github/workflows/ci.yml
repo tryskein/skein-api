@@ -1,0 +1,213 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_call:
+
+# Cancel superseded runs of the same pull request. Runs on main and runs
+# called from the release workflow are never cancelled.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  SQLC_VERSION: "1.31.1"
+  MIGRATE_VERSION: "v4.20.1"
+
+jobs:
+  lint:
+    name: lint (go vet, gofmt)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version-file: src/go.mod
+          cache-dependency-path: src/go.sum
+      - name: go vet
+        working-directory: src
+        run: go vet ./...
+      - name: gofmt
+        working-directory: src
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "The following files are not gofmt-clean:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+  # internal/storage/generated/ is committed so that contributors can build
+  # without sqlc installed. Nothing else keeps it in step with migrations/, so
+  # this job regenerates it and fails when the working tree changes.
+  # SQLC_VERSION must match the version stamped in the header of the generated
+  # files: bump both in the same commit, or the job reports version churn as
+  # drift.
+  sqlc-generated:
+    name: sqlc-generated
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Install sqlc
+        run: |
+          mkdir -p "$RUNNER_TEMP/bin"
+          curl -fsSL "https://github.com/sqlc-dev/sqlc/releases/download/v${SQLC_VERSION}/sqlc_${SQLC_VERSION}_linux_amd64.tar.gz" \
+            | tar -xz -C "$RUNNER_TEMP/bin" sqlc
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - name: Regenerate and compare
+        run: |
+          sqlc version
+          (cd src && sqlc generate)
+          # --untracked-files=all: a new query file generates a new file that
+          # `git diff` alone would not see.
+          changed=$(git status --porcelain --untracked-files=all -- src/internal/storage/generated)
+          if [ -n "$changed" ]; then
+            echo "ERROR: the committed sqlc output does not match migrations/ + internal/storage/queries/."
+            echo "Run 'cd src && sqlc generate' (sqlc v${SQLC_VERSION}) and commit the result."
+            echo "$changed"
+            git --no-pager diff -- src/internal/storage/generated || true
+            exit 1
+          fi
+          echo "sqlc output matches the schema"
+
+  # Unit: no database (DB-backed tests skip without TEST_DATABASE_URL), plus
+  # the stdlib unittest tests of the served monitor runner.
+  unit:
+    name: unit
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version-file: src/go.mod
+          cache-dependency-path: src/go.sum
+      - name: Go unit tests
+        working-directory: src
+        run: |
+          rc=0
+          go test -count=1 ./... > "$RUNNER_TEMP/go-unit.out" 2>&1 || rc=$?
+          cat "$RUNNER_TEMP/go-unit.out"
+          if [ "$rc" -ne 0 ] || grep -Eq '^FAIL\s' "$RUNNER_TEMP/go-unit.out"; then
+            echo "ERROR: go test failed"
+            exit 1
+          fi
+          if ! grep -Eiq '^(ok |--- PASS:)' "$RUNNER_TEMP/go-unit.out"; then
+            echo "ERROR: zero unit tests executed (all skipped or no packages)"
+            exit 1
+          fi
+      - name: Python runner unit tests
+        working-directory: src
+        run: |
+          # Every *_test.py runs on its own with `python3 <file>` (unittest).
+          # A file counts only if it prints "Ran N tests"; N minus the
+          # "skipped=" count is the number executed. A total of zero is red.
+          find . -name '*_test.py' | sort > "$RUNNER_TEMP/py-files.txt"
+          if [ ! -s "$RUNNER_TEMP/py-files.txt" ]; then
+            echo "ERROR: no *_test.py files found"
+            exit 1
+          fi
+          executed=0
+          while IFS= read -r f; do
+            rc=0
+            PYTHONUNBUFFERED=1 python3 "$f" > "$RUNNER_TEMP/py-unit.out" 2>&1 || rc=$?
+            cat "$RUNNER_TEMP/py-unit.out"
+            if [ "$rc" -ne 0 ]; then
+              echo "ERROR: $f failed (exit $rc)"
+              exit 1
+            fi
+            ran=$(sed -n 's/^Ran \([0-9][0-9]*\) test.*/\1/p' "$RUNNER_TEMP/py-unit.out" | tail -n 1)
+            if [ -z "$ran" ]; then
+              echo "ERROR: $f printed no unittest summary (\"Ran N tests\")"
+              exit 1
+            fi
+            # The verdict line is the OK/FAILED line after the summary; other
+            # prints may follow it, so the last line of output is not it.
+            verdict=$(sed -n '/^Ran [0-9][0-9]* test/,$p' "$RUNNER_TEMP/py-unit.out" | grep -E '^(OK|FAILED)' | tail -n 1 || true)
+            if [ -z "$verdict" ]; then
+              echo "ERROR: $f printed no unittest verdict line (OK/FAILED)"
+              exit 1
+            fi
+            skipped=$(printf '%s\n' "$verdict" | sed -n 's/.*skipped=\([0-9][0-9]*\).*/\1/p')
+            executed=$((executed + ran - ${skipped:-0}))
+            echo "$f: ran=$ran skipped=${skipped:-0}"
+          done < "$RUNNER_TEMP/py-files.txt"
+          if [ "$executed" -lt 1 ]; then
+            echo "ERROR: zero Python runner tests executed (all skipped)"
+            exit 1
+          fi
+          echo "Python runner tests executed: $executed"
+
+  # Integration: real Postgres with the production migrations applied.
+  integration:
+    name: integration
+    runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: pgvector/pgvector:pg18
+        env:
+          POSTGRES_USER: skein
+          POSTGRES_PASSWORD: qwerty12 # throwaway database of the CI job
+          POSTGRES_DB: skein
+          # The locale the production database and the local test harness use
+          # (docker-compose.test.yml), pinned explicitly so the integration
+          # suite exercises the same collation and pg_trgm behaviour.
+          POSTGRES_INITDB_ARGS: "--locale-provider=builtin --builtin-locale=C.UTF-8 --lc-collate=C.UTF-8 --lc-ctype=C.UTF-8"
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U skein -d skein"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 30
+    env:
+      TEST_DATABASE_URL: postgres://skein:qwerty12@localhost:5432/skein?sslmode=disable
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version-file: src/go.mod
+          cache-dependency-path: src/go.sum
+      - name: Create extensions
+        run: |
+          command -v psql >/dev/null || { sudo apt-get update && sudo apt-get install -y --no-install-recommends postgresql-client; }
+          psql "$TEST_DATABASE_URL" -v ON_ERROR_STOP=1 -c "CREATE EXTENSION IF NOT EXISTS pg_trgm;"
+          psql "$TEST_DATABASE_URL" -v ON_ERROR_STOP=1 -c "CREATE EXTENSION IF NOT EXISTS vector;"
+      - name: Apply production migrations
+        run: |
+          mkdir -p "$RUNNER_TEMP/bin"
+          curl -fsSL "https://github.com/golang-migrate/migrate/releases/download/${MIGRATE_VERSION}/migrate.linux-amd64.tar.gz" \
+            | tar -xz -C "$RUNNER_TEMP/bin" migrate
+          "$RUNNER_TEMP/bin/migrate" -path=src/migrations -database "$TEST_DATABASE_URL" up
+      - name: Integration tests
+        working-directory: src
+        run: |
+          rc=0
+          go test -v -p 1 -count=1 ./... > "$RUNNER_TEMP/go-int.out" 2>&1 || rc=$?
+          cat "$RUNNER_TEMP/go-int.out"
+          pass_n=$(grep -cE '^--- PASS:' "$RUNNER_TEMP/go-int.out" || true)
+          if [ "$pass_n" -lt 1 ]; then
+            echo "ERROR: zero integration tests passed (silent skip or empty run)"
+            exit 1
+          fi
+          echo "integration PASS count: $pass_n"
+          if [ "$rc" -ne 0 ] || grep -qE '^FAIL\s' "$RUNNER_TEMP/go-int.out"; then
+            echo "ERROR: go test reported failures"
+            exit 1
+          fi
+          if ! grep -qE '^ok\s' "$RUNNER_TEMP/go-int.out"; then
+            echo "ERROR: no package ok lines"
+            exit 1
+          fi

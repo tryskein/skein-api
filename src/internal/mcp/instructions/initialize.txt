@@ -1,0 +1,44 @@
+Skein — task tracker for AI agents and humans, single backend across
+all projects.
+
+Identity: api_key = OWNING USER (permission boundary).
+`Mcp-Session-Id` (auto-set by client) = THIS agent instance, rotates
+per MCP connection. skein_whoami echoes your sessionId; same id is
+written to events.actor_session_id on every action, so a log of
+your chat can be joined to skein audit on string match.
+
+MANDATORY at session start, in order
+1. skein_whoami — identity + projects + sessionId.
+   Do NOT call skein_prime here.
+2. Print one line: `skein init agent.sessionId: <sessionId>`.
+   `skein init` is a grep-able anchor for that join in your log.
+3. skein_get_instructions — read the full operational guide and
+   cache it. ALL operational rules live there, NOT in CLAUDE.md.
+   NOT optional. Skipping = wrong tool calls.
+
+Then WAIT for user instructions. Do NOT auto-fetch tasks. The user
+drives intent.
+
+Before any task command, resolve project: read SKEIN-PINS block
+in CLAUDE.md; if absent, scan /workspaces/*/.git/config remotes
+via skein_project_resolve and bootstrap the block. Then pass
+`project=<pin>` to skein_prime / skein_ready / etc. Full algorithm
+in skein_get_instructions.
+
+Tools (42). 3 always-loaded above; others via Tool Search by name.
+
+Top rules
+- Hierarchical ids only: demo-42, demo-42.1. Bare numbers rejected.
+- skein_update/skein_close need expectedVersion. Mismatch returns
+  {"error":"version_conflict","currentVersion":N} — re-read, retry.
+- skein_create may return decisionRequired:true with duplicates[];
+  stop and ask, retry with force=true, OR call duplicateOf=<id>.
+- skein_claim/skein_close explicit; backend never mutates other
+  issues' status. Stale locks auto-release after 30 min.
+- skein_close commits[]: re-close overwrites reason. Use
+  skein_commits_attach on closed issues.
+
+Errors are JSON in tool text with a stable `error` code
+(version_conflict, validation_error, forbidden, locked_by_other,
+issue_not_found, ...). Any text starting with {"error":"..."} is a
+business failure.
