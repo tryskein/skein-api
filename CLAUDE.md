@@ -42,7 +42,8 @@ scripts/measure-*.sh       size of MCP tools/list and of tool responses
 Inside the umbrella stack (from the top of `skein/`):
 
 ```bash
-docker compose -f docker-compose.local.yml up -d --build postgres skein-api
+docker compose --env-file versions.env -f docker-compose.local.yml \
+  -f docker-compose.local.build.yml up -d --build postgres skein-api
 ```
 
 Standalone, against a Postgres that has the `pg_trgm` and `vector` extensions:

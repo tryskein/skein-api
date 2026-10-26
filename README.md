@@ -48,13 +48,16 @@ skein/                    umbrella: compose files, test harnesses
 The easiest way is the whole local stack, from the top of `skein/`:
 
 ```bash
-docker compose -f docker-compose.local.yml up -d --build
+docker compose --env-file versions.env -f docker-compose.local.yml \
+  -f docker-compose.local.build.yml up -d --build
 ```
 
-To run only the backend and its database:
+The second `-f` is the build overlay that builds the services from `projects/`; without it the stack
+runs the published images. To run only the backend and its database:
 
 ```bash
-docker compose -f docker-compose.local.yml up -d --build postgres skein-api
+docker compose --env-file versions.env -f docker-compose.local.yml \
+  -f docker-compose.local.build.yml up -d --build postgres skein-api
 ```
 
 Standalone, from this repository, against a PostgreSQL that has the `pg_trgm`
