@@ -167,6 +167,7 @@ func TestCreateIssue_SerializationFailure_Exhausted(t *testing.T) {
 	pid, prefix := seedProject(t, pool, creator)
 	t.Cleanup(func() { releaseOutboxBacklog(t, pool, pid) })
 	opStore := NewStore(opPool)
+	input := CreateIssueInput{Title: "sk-350.3 exhaustion repro", Type: "task", Priority: 2}
 
 	type createResult struct {
 		dto *IssueDetail
@@ -181,10 +182,8 @@ func TestCreateIssue_SerializationFailure_Exhausted(t *testing.T) {
 	start := func() {
 		go func() {
 			defer close(done)
-			dto, err := opStore.CreateIssue(opCtx, pid, prefix, "counter",
-				CreateIssueInput{Title: "sk-350.3 exhaustion repro", Type: "task", Priority: 2},
-				creator, HumanActor(creator, creatorName),
-			)
+			dto, err := opStore.CreateIssue(opCtx, pid, prefix, "counter", input,
+				creator, HumanActor(creator, creatorName))
 			resCh <- createResult{dto, err}
 		}()
 	}
@@ -216,6 +215,33 @@ func TestCreateIssue_SerializationFailure_Exhausted(t *testing.T) {
 		t.Fatalf("CreateIssue error = %v, want errors.Is(err, ErrSerializationRetry) — "+
 			"an exhausted retry budget must surface as a business error, not a raw pgError "+
 			"that the MCP/REST layers map to internal_error", got.err)
+	}
+
+	// The public refusal promises no durable change and a safe verbatim
+	// replay. Prove both against real aborted transactions, including the
+	// counter and event that would expose a partially committed create.
+	var count, counter int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM issues WHERE project_id = $1`, pid).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT counter FROM project_counters WHERE project_id = $1`, pid).Scan(&counter); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 || counter != 0 {
+		t.Fatalf("exhausted create left %d issues and counter %d; want no durable change", count, counter)
+	}
+	replayed, err := opStore.CreateIssue(ctx, pid, prefix, "counter", input, creator, HumanActor(creator, creatorName))
+	if err != nil {
+		t.Fatalf("replay refused create: %v", err)
+	}
+	if replayed.ID != prefix+"-1" || replayed.Version != 1 || replayed.Title != input.Title {
+		t.Errorf("replayed create = id %q version %d title %q; want first unchanged issue", replayed.ID, replayed.Version, replayed.Title)
+	}
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM events WHERE entity_id = $1 AND type = 'issue.created'`, replayed.ID).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Errorf("replayed create wrote %d issue.created events, want exactly one", count)
 	}
 }
 

@@ -24,11 +24,13 @@ import (
 // its budget, degradeSerializationAbort turns the exhausted budget into the
 // false conflict.
 //
-// The expected outcome is the contract of each operation, not a reading of
-// the code: every write of an issue whose version the caller holds — and
-// that nobody else is modifying — succeeds and is applied, and every
-// concurrent create succeeds too. A false version_conflict, any other
-// error, or a write that "succeeded" without its effect fails the test.
+// Every tested write of an issue whose version the caller holds — and that
+// nobody else is modifying — succeeds in ONE call and is applied. The
+// background creates follow their separate public contract: serialization_retry
+// means nothing committed and the caller can replay the same input. Every
+// logical background create must still commit exactly once; any other error
+// fails the test. TestCreateIssue_SerializationFailure_Exhausted independently
+// verifies that replaying this refusal creates no duplicate or counter gap.
 //
 // Contention shape: one user creates issues in creatorProjects projects
 // from as many sessions at once while writers sessions of the same user
@@ -83,7 +85,12 @@ func runConcurrentCreatesElsewhere(
 	applied func(d *IssueDetail, status, title string) bool,
 ) {
 	pool := newTestPool(t)
-	ctx := context.Background()
+	deadline, ok := t.Deadline()
+	if !ok {
+		t.Fatal("the contention fixture requires a finite go test timeout")
+	}
+	ctx, cancel := context.WithDeadline(t.Context(), deadline)
+	defer cancel()
 	user := seedUser(t, pool)
 	actor := HumanActor(user, readUsername(t, pool, user))
 	store := NewStore(pool)
@@ -136,9 +143,18 @@ func runConcurrentCreatesElsewhere(
 			defer wg.Done()
 			<-start
 			for i := range createsPerProject {
-				_, err := store.CreateIssue(context.Background(), p.id, p.prefix, "counter",
-					CreateIssueInput{Title: fmt.Sprintf("elsewhere %d", i), Type: "task", Priority: 2},
-					user, actor)
+				input := CreateIssueInput{Title: fmt.Sprintf("elsewhere %d", i), Type: "task", Priority: 2}
+				var err error
+				for {
+					_, err = store.CreateIssue(ctx, p.id, p.prefix, "counter", input, user, actor)
+					if !errors.Is(err, ErrSerializationRetry) {
+						break
+					}
+					if ctx.Err() != nil {
+						err = ctx.Err()
+						break
+					}
+				}
 				if err != nil {
 					mu.Lock()
 					createErr = append(createErr, err)
@@ -153,7 +169,7 @@ func runConcurrentCreatesElsewhere(
 			defer wg.Done()
 			<-start
 			for _, d := range issues {
-				if err := write(context.Background(), store, d, actor); err != nil {
+				if err := write(ctx, store, d, actor); err != nil {
 					mu.Lock()
 					writeErrs = append(writeErrs, fmt.Errorf("write %s (version %d): %w", d.ID, d.Version, err))
 					mu.Unlock()
@@ -174,6 +190,19 @@ func runConcurrentCreatesElsewhere(
 	}
 	for _, err := range createErr {
 		t.Errorf("concurrent create failed: %v", err)
+	}
+	for _, p := range others {
+		var count, titles int
+		var initialVersions bool
+		if err := pool.QueryRow(ctx, `
+SELECT count(*), count(DISTINCT title), COALESCE(bool_and(version = 1), false)
+  FROM issues WHERE project_id = $1`, p.id).Scan(&count, &titles, &initialVersions); err != nil {
+			t.Fatalf("read background creates in %s: %v", p.prefix, err)
+		}
+		if count != createsPerProject || titles != createsPerProject || !initialVersions {
+			t.Errorf("background creates in %s: rows=%d distinct titles=%d initial versions=%v; want %d unique unchanged issues",
+				p.prefix, count, titles, initialVersions, createsPerProject)
+		}
 	}
 	for _, issues := range toWrite {
 		for _, d := range issues {
