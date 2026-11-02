@@ -68,8 +68,9 @@ var (
 		[]string{"entity", "reason"},
 	)
 
-	// SearchRequestsTotal counts /search calls. `degraded` separates the
-	// hybrid-OK path from the FTS-only fallback (Ollama down). `kind` is
+	// SearchRequestsTotal counts /search calls. `degraded` is true when the
+	// response uses FTS ranking, including warm FTS pools and continuations
+	// after the embedder recovers; hybrid ranking uses false. `kind` is
 	// `all` when no kind filter, otherwise the comma-joined sorted set
 	// (e.g. `issue,project`) so cardinality stays bounded at <= 16.
 	SearchRequestsTotal = promauto.NewCounterVec(

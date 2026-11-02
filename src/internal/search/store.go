@@ -204,22 +204,24 @@ func (s *Store) SearchIssues(ctx context.Context, in SearchInput) ([]Item, error
 		query = fmt.Sprintf(`
 WITH vec_candidates AS (
     SELECT i.id,
-           ROW_NUMBER() OVER (ORDER BY i.embedding <=> %s::halfvec) AS vec_rank
+           ROW_NUMBER() OVER (ORDER BY i.embedding <=> %s::halfvec, i.id) AS vec_rank
       FROM issues i
      WHERE i.embedding IS NOT NULL AND %s
-     ORDER BY i.embedding <=> %s::halfvec
+     ORDER BY i.embedding <=> %s::halfvec, i.id
      LIMIT %d
 ),
 fts_candidates AS (
     SELECT i.id,
            ROW_NUMBER() OVER (
                ORDER BY ts_rank(i.tsv_ru, plainto_tsquery('russian',  %s)) +
-                        ts_rank(i.tsv_en, plainto_tsquery('english', %s)) DESC
+                        ts_rank(i.tsv_en, plainto_tsquery('english', %s)) DESC, i.id
            ) AS fts_rank
       FROM issues i
      WHERE (i.tsv_ru @@ plainto_tsquery('russian',  %s)
          OR i.tsv_en @@ plainto_tsquery('english', %s))
        AND %s
+     ORDER BY ts_rank(i.tsv_ru, plainto_tsquery('russian',  %s)) +
+              ts_rank(i.tsv_en, plainto_tsquery('english', %s)) DESC, i.id
      LIMIT %d
 ),
 rrf_scores AS (
@@ -245,10 +247,10 @@ SELECT i.id, i.project_id, p.name AS project_name,
   FROM rrf_scores rs
   JOIN issues   i ON i.id = rs.id
   JOIN projects p ON p.id = i.project_id
- ORDER BY rs.score DESC
+ ORDER BY rs.score DESC, i.updated_at DESC, i.id
  LIMIT %s`,
 			vecRef, whereCommon, vecRef, candidateLimit,
-			qRef, qRef, qRef, qRef, whereCommon, candidateLimit,
+			qRef, qRef, qRef, qRef, whereCommon, qRef, qRef, candidateLimit,
 			rrfK, rrfK,
 			qRef, qRef, limitRef)
 	} else {
@@ -262,7 +264,7 @@ WITH fts_candidates AS (
      WHERE (i.tsv_ru @@ plainto_tsquery('russian',  %s)
          OR i.tsv_en @@ plainto_tsquery('english', %s))
        AND %s
-     ORDER BY rrf_score DESC
+     ORDER BY rrf_score DESC, i.updated_at DESC, i.id
      LIMIT %d
 )
 SELECT i.id, i.project_id, p.name,
@@ -280,7 +282,7 @@ SELECT i.id, i.project_id, p.name,
   FROM fts_candidates f
   JOIN issues   i ON i.id = f.id
   JOIN projects p ON p.id = i.project_id
- ORDER BY f.rrf_score DESC
+ ORDER BY f.rrf_score DESC, i.updated_at DESC, i.id
  LIMIT %s`,
 			qRef, qRef, qRef, qRef, whereCommon, candidateLimit,
 			qRef, qRef, limitRef)
@@ -346,24 +348,26 @@ func (s *Store) SearchComments(ctx context.Context, in SearchInput) ([]Item, err
 		query = fmt.Sprintf(`
 WITH vec_candidates AS (
     SELECT c.id,
-           ROW_NUMBER() OVER (ORDER BY c.embedding <=> %s::halfvec) AS vec_rank
+           ROW_NUMBER() OVER (ORDER BY c.embedding <=> %s::halfvec, c.id) AS vec_rank
       FROM comments c
       JOIN issues   i ON i.id = c.issue_id
      WHERE c.embedding IS NOT NULL AND %s
-     ORDER BY c.embedding <=> %s::halfvec
+     ORDER BY c.embedding <=> %s::halfvec, c.id
      LIMIT %d
 ),
 fts_candidates AS (
     SELECT c.id,
            ROW_NUMBER() OVER (
                ORDER BY ts_rank(c.tsv_ru, plainto_tsquery('russian',  %s)) +
-                        ts_rank(c.tsv_en, plainto_tsquery('english', %s)) DESC
+                        ts_rank(c.tsv_en, plainto_tsquery('english', %s)) DESC, c.id
            ) AS fts_rank
       FROM comments c
       JOIN issues   i ON i.id = c.issue_id
      WHERE (c.tsv_ru @@ plainto_tsquery('russian',  %s)
          OR c.tsv_en @@ plainto_tsquery('english', %s))
        AND %s
+     ORDER BY ts_rank(c.tsv_ru, plainto_tsquery('russian',  %s)) +
+              ts_rank(c.tsv_en, plainto_tsquery('english', %s)) DESC, c.id
      LIMIT %d
 ),
 rrf_scores AS (
@@ -388,10 +392,10 @@ SELECT c.id::text, i.project_id, p.name,
   JOIN issues   i ON i.id = c.issue_id
   JOIN projects p ON p.id = i.project_id
   LEFT JOIN users u ON u.id = c.author_user_id
- ORDER BY rs.score DESC
+ ORDER BY rs.score DESC, c.updated_at DESC, c.id
  LIMIT %s`,
 			vecRef, whereCommon, vecRef, candidateLimit,
-			qRef, qRef, qRef, qRef, whereCommon, candidateLimit,
+			qRef, qRef, qRef, qRef, whereCommon, qRef, qRef, candidateLimit,
 			rrfK, rrfK,
 			qRef, qRef, limitRef)
 	} else {
@@ -405,7 +409,7 @@ WITH fts_candidates AS (
      WHERE (c.tsv_ru @@ plainto_tsquery('russian',  %s)
          OR c.tsv_en @@ plainto_tsquery('english', %s))
        AND %s
-     ORDER BY rrf_score DESC
+     ORDER BY rrf_score DESC, c.updated_at DESC, c.id
      LIMIT %d
 )
 SELECT c.id::text, i.project_id, p.name,
@@ -422,7 +426,7 @@ SELECT c.id::text, i.project_id, p.name,
   JOIN issues   i ON i.id = c.issue_id
   JOIN projects p ON p.id = i.project_id
   LEFT JOIN users u ON u.id = c.author_user_id
- ORDER BY f.rrf_score DESC
+ ORDER BY f.rrf_score DESC, c.updated_at DESC, c.id
  LIMIT %s`,
 			qRef, qRef, qRef, qRef, whereCommon, candidateLimit,
 			qRef, qRef, limitRef)
@@ -472,22 +476,24 @@ func (s *Store) SearchProjects(ctx context.Context, in SearchInput) ([]Item, err
 		query = fmt.Sprintf(`
 WITH vec_candidates AS (
     SELECT p.id,
-           ROW_NUMBER() OVER (ORDER BY p.embedding <=> %s::halfvec) AS vec_rank
+           ROW_NUMBER() OVER (ORDER BY p.embedding <=> %s::halfvec, p.id) AS vec_rank
       FROM projects p
      WHERE p.embedding IS NOT NULL AND %s
-     ORDER BY p.embedding <=> %s::halfvec
+     ORDER BY p.embedding <=> %s::halfvec, p.id
      LIMIT %d
 ),
 fts_candidates AS (
     SELECT p.id,
            ROW_NUMBER() OVER (
                ORDER BY ts_rank(p.tsv_ru, plainto_tsquery('russian',  %s)) +
-                        ts_rank(p.tsv_en, plainto_tsquery('english', %s)) DESC
+                        ts_rank(p.tsv_en, plainto_tsquery('english', %s)) DESC, p.id
            ) AS fts_rank
       FROM projects p
      WHERE (p.tsv_ru @@ plainto_tsquery('russian',  %s)
          OR p.tsv_en @@ plainto_tsquery('english', %s))
        AND %s
+     ORDER BY ts_rank(p.tsv_ru, plainto_tsquery('russian',  %s)) +
+              ts_rank(p.tsv_en, plainto_tsquery('english', %s)) DESC, p.id
      LIMIT %d
 ),
 rrf_scores AS (
@@ -510,10 +516,10 @@ SELECT p.id::text, p.name, (p.archived_at IS NOT NULL) AS archived,
            'StartSel=<b>,StopSel=</b>,MaxFragments=2,MaxWords=20,MinWords=8') AS snippet_en
   FROM rrf_scores rs
   JOIN projects p ON p.id = rs.id::uuid
- ORDER BY rs.score DESC
+ ORDER BY rs.score DESC, p.updated_at DESC, p.id
  LIMIT %s`,
 			vecRef, whereCommon, vecRef, candidateLimit,
-			qRef, qRef, qRef, qRef, whereCommon, candidateLimit,
+			qRef, qRef, qRef, qRef, whereCommon, qRef, qRef, candidateLimit,
 			rrfK, rrfK, qRef, qRef, limitRef)
 	} else {
 		query = fmt.Sprintf(`
@@ -525,7 +531,7 @@ WITH fts_candidates AS (
      WHERE (p.tsv_ru @@ plainto_tsquery('russian',  %s)
          OR p.tsv_en @@ plainto_tsquery('english', %s))
        AND %s
-     ORDER BY rrf_score DESC
+     ORDER BY rrf_score DESC, p.updated_at DESC, p.id
      LIMIT %d
 )
 SELECT p.id::text, p.name, (p.archived_at IS NOT NULL) AS archived,
@@ -540,7 +546,7 @@ SELECT p.id::text, p.name, (p.archived_at IS NOT NULL) AS archived,
            'StartSel=<b>,StopSel=</b>,MaxFragments=2,MaxWords=20,MinWords=8') AS snippet_en
   FROM fts_candidates f
   JOIN projects p ON p.id = f.id
- ORDER BY f.rrf_score DESC
+ ORDER BY f.rrf_score DESC, p.updated_at DESC, p.id
  LIMIT %s`,
 			qRef, qRef, qRef, qRef, whereCommon, candidateLimit,
 			qRef, qRef, limitRef)
@@ -588,22 +594,24 @@ func (s *Store) SearchComponents(ctx context.Context, in SearchInput) ([]Item, e
 		query = fmt.Sprintf(`
 WITH vec_candidates AS (
     SELECT c.id,
-           ROW_NUMBER() OVER (ORDER BY c.embedding <=> %s::halfvec) AS vec_rank
+           ROW_NUMBER() OVER (ORDER BY c.embedding <=> %s::halfvec, c.id) AS vec_rank
       FROM components c
      WHERE c.embedding IS NOT NULL AND %s
-     ORDER BY c.embedding <=> %s::halfvec
+     ORDER BY c.embedding <=> %s::halfvec, c.id
      LIMIT %d
 ),
 fts_candidates AS (
     SELECT c.id,
            ROW_NUMBER() OVER (
                ORDER BY ts_rank(c.tsv_ru, plainto_tsquery('russian',  %s)) +
-                        ts_rank(c.tsv_en, plainto_tsquery('english', %s)) DESC
+                        ts_rank(c.tsv_en, plainto_tsquery('english', %s)) DESC, c.id
            ) AS fts_rank
       FROM components c
      WHERE (c.tsv_ru @@ plainto_tsquery('russian',  %s)
          OR c.tsv_en @@ plainto_tsquery('english', %s))
        AND %s
+     ORDER BY ts_rank(c.tsv_ru, plainto_tsquery('russian',  %s)) +
+              ts_rank(c.tsv_en, plainto_tsquery('english', %s)) DESC, c.id
      LIMIT %d
 ),
 rrf_scores AS (
@@ -628,10 +636,10 @@ SELECT c.id::text, c.project_id, p.name AS project_name, c.name,
   FROM rrf_scores rs
   JOIN components c ON c.id = rs.id::uuid
   JOIN projects   p ON p.id = c.project_id
- ORDER BY rs.score DESC
+ ORDER BY rs.score DESC, c.updated_at DESC, c.id
  LIMIT %s`,
 			vecRef, whereCommon, vecRef, candidateLimit,
-			qRef, qRef, qRef, qRef, whereCommon, candidateLimit,
+			qRef, qRef, qRef, qRef, whereCommon, qRef, qRef, candidateLimit,
 			rrfK, rrfK, qRef, qRef, limitRef)
 	} else {
 		query = fmt.Sprintf(`
@@ -643,7 +651,7 @@ WITH fts_candidates AS (
      WHERE (c.tsv_ru @@ plainto_tsquery('russian',  %s)
          OR c.tsv_en @@ plainto_tsquery('english', %s))
        AND %s
-     ORDER BY rrf_score DESC
+     ORDER BY rrf_score DESC, c.updated_at DESC, c.id
      LIMIT %d
 )
 SELECT c.id::text, c.project_id, p.name, c.name,
@@ -660,7 +668,7 @@ SELECT c.id::text, c.project_id, p.name, c.name,
   FROM fts_candidates f
   JOIN components c ON c.id = f.id
   JOIN projects   p ON p.id = c.project_id
- ORDER BY f.rrf_score DESC
+ ORDER BY f.rrf_score DESC, c.updated_at DESC, c.id
  LIMIT %s`,
 			qRef, qRef, qRef, qRef, whereCommon, candidateLimit,
 			qRef, qRef, limitRef)

@@ -344,6 +344,53 @@ func TestSearch_Pagination_Cursor(t *testing.T) {
 	}
 }
 
+// TestSearch_Pagination_AfterCacheMiss continues the same search across
+// fresh service instances without repeating items from an earlier page.
+func TestSearch_Pagination_AfterCacheMiss(t *testing.T) {
+	pool := testsupport.NewTestPool(t)
+	owner, _ := testsupport.SeedUser(t, pool, "user")
+	projID, prefix := testsupport.SeedProject(t, pool, owner, "tsmiss")
+	tok := token(t)
+	for i := 1; i <= 5; i++ {
+		testsupport.SeedIssue(t, pool, projID, owner, prefix+"-"+itoa(i), tok+" paginated item", "open", 2)
+	}
+	params := search.Params{
+		Query: tok, Project: &projID, Kinds: []search.Kind{search.KindIssue}, Limit: 2, CallerID: owner,
+	}
+	seen := make(map[string]bool)
+	for pageIndex, wantSize := range []int{2, 2, 1} {
+		// A fresh service has no result cache, as after a restart or when
+		// another replica receives the cursor. No fixture internals or
+		// wall-clock sleeps are needed to force that public behavior.
+		page, err := newFTSService(t).Search(ctx(), params)
+		if err != nil {
+			t.Fatalf("page %d: %v", pageIndex+1, err)
+		}
+		if len(page.Items) != wantSize {
+			t.Fatalf("page %d has %d items, want %d", pageIndex+1, len(page.Items), wantSize)
+		}
+		for _, item := range page.Items {
+			if seen[item.ID] {
+				t.Errorf("page %d repeated issue %q after a cache miss", pageIndex+1, item.ID)
+			}
+			seen[item.ID] = true
+		}
+		if pageIndex == 2 {
+			if page.HasMore || page.NextCursor != nil {
+				t.Errorf("last page still advertises another page: %+v", page)
+			}
+			continue
+		}
+		if !page.HasMore || page.NextCursor == nil {
+			t.Fatalf("page %d has no continuation", pageIndex+1)
+		}
+		params.Cursor = *page.NextCursor
+	}
+	if len(seen) != 5 {
+		t.Errorf("pagination returned %d distinct issues, want all 5", len(seen))
+	}
+}
+
 // TestSearch_NonMemberVisibility asserts the permission filter: a
 // non-admin caller who is NOT a member of the seed project gets zero hits
 // for a token that only this project's issue carries.

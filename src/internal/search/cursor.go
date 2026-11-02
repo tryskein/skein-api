@@ -14,14 +14,22 @@ import (
 // matching on string content.
 var ErrInvalidCursor = errors.New("invalid cursor")
 
-// cursorPayload is the in-memory shape of a search cursor. We only need
-// the cache key (so we can re-resolve to the cached top-200) and the
-// offset within it. If the cache has expired by the time the next page
-// is requested, the service falls back to recomputing the result set
-// from scratch — same key, same content, just slower.
+type rankingMode string
+
+const (
+	rankingLegacy rankingMode = ""
+	rankingFTS    rankingMode = "fts"
+	rankingHybrid rankingMode = "hybrid"
+)
+
+// cursorPayload binds an offset to one query and ranking mode. The
+// optional mode is additive: the exported legacy codec still reads and
+// writes {k,o}. Legacy cursors can continue an owned warm pool, but cannot
+// rebuild an absent pool because their ranking mode is unknown.
 type cursorPayload struct {
-	K string `json:"k"` // cache key (SHA-256 hex)
-	O int    `json:"o"` // offset into the cached items slice
+	K string      `json:"k"` // mode-scoped cache key (SHA-256 hex)
+	O int         `json:"o"` // offset into the cached items slice
+	M rankingMode `json:"m,omitempty"`
 }
 
 // EncodeCursor returns a URL-safe base64 representation of (cacheKey, offset).
@@ -32,13 +40,17 @@ type cursorPayload struct {
 // The service should never construct a cursor in those conditions; surfacing
 // the error makes a future programmer mistake loud rather than silent.
 func EncodeCursor(cacheKey string, offset int) (string, error) {
+	return encodeSearchCursor(cacheKey, offset, rankingLegacy)
+}
+
+func encodeSearchCursor(cacheKey string, offset int, mode rankingMode) (string, error) {
 	if cacheKey == "" {
 		return "", fmt.Errorf("%w: empty cacheKey", ErrInvalidCursor)
 	}
 	if offset <= 0 {
 		return "", fmt.Errorf("%w: offset must be positive, got %d", ErrInvalidCursor, offset)
 	}
-	b, err := json.Marshal(cursorPayload{K: cacheKey, O: offset})
+	b, err := json.Marshal(cursorPayload{K: cacheKey, O: offset, M: mode})
 	if err != nil {
 		return "", fmt.Errorf("%w: marshal: %w", ErrInvalidCursor, err)
 	}
@@ -49,19 +61,30 @@ func EncodeCursor(cacheKey string, offset int) (string, error) {
 // ErrInvalidCursor on any decode failure so the handler can surface 400
 // invalid_cursor via errors.Is.
 func DecodeCursor(raw string) (cacheKey string, offset int, err error) {
+	p, err := decodeSearchCursor(raw)
+	if err != nil {
+		return "", 0, err
+	}
+	return p.K, p.O, nil
+}
+
+func decodeSearchCursor(raw string) (cursorPayload, error) {
 	if raw == "" {
-		return "", 0, fmt.Errorf("%w: empty", ErrInvalidCursor)
+		return cursorPayload{}, fmt.Errorf("%w: empty", ErrInvalidCursor)
 	}
 	b, derr := base64.RawURLEncoding.DecodeString(raw)
 	if derr != nil {
-		return "", 0, fmt.Errorf("%w: invalid base64: %w", ErrInvalidCursor, derr)
+		return cursorPayload{}, fmt.Errorf("%w: invalid base64: %w", ErrInvalidCursor, derr)
 	}
 	var p cursorPayload
 	if jerr := json.Unmarshal(b, &p); jerr != nil {
-		return "", 0, fmt.Errorf("%w: invalid json: %w", ErrInvalidCursor, jerr)
+		return cursorPayload{}, fmt.Errorf("%w: invalid json: %w", ErrInvalidCursor, jerr)
 	}
 	if p.K == "" || p.O <= 0 {
-		return "", 0, fmt.Errorf("%w: missing fields", ErrInvalidCursor)
+		return cursorPayload{}, fmt.Errorf("%w: missing fields", ErrInvalidCursor)
 	}
-	return p.K, p.O, nil
+	if p.M != rankingLegacy && p.M != rankingFTS && p.M != rankingHybrid {
+		return cursorPayload{}, fmt.Errorf("%w: unknown ranking mode", ErrInvalidCursor)
+	}
+	return p, nil
 }

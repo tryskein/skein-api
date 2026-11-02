@@ -54,8 +54,7 @@ func RegisterSearch(s *server.MCPServer, pool *pgxpool.Pool, svc *search.Service
 				"skein_show for an issue, skein_comment_get for a comment. "+
 				"Use this for free-form questions / fuzzy matches; use "+
 				"skein_list when you have a specific project + filter "+
-				"combination. Response includes `degraded:true` when the "+
-				"vector retriever was unavailable.",
+				"combination. Response includes `degraded:true` for FTS-only ranking.",
 		),
 		mcpgo.WithString("query",
 			mcpgo.Required(),
@@ -110,7 +109,7 @@ func RegisterSearch(s *server.MCPServer, pool *pgxpool.Pool, svc *search.Service
 			mcpgo.Max(search.MaxPageLimit),
 		),
 		mcpgo.WithString("cursor",
-			mcpgo.Description("Opaque cursor returned by a previous call's `nextCursor` field."),
+			mcpgo.Description("Opaque nextCursor from the same query. Missing pools rebuild at the saved offset and ranking mode. Legacy cursors need a warm pool; unavailable hybrid ranking is refused. On a cursor validation_error, restart without cursor. Data changes may alter later pages."),
 		),
 		mcpgo.WithReadOnlyHintAnnotation(true),
 		mcpgo.WithDestructiveHintAnnotation(false),

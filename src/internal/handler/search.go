@@ -36,7 +36,8 @@ func NewSearchHandler(svc *search.Service) *SearchHandler {
 //	kind      CSV  — restrict to {issue,comment,project,component}.
 //	                 Default: all four.
 //	limit     int  — page size, 1..100 (default 50)
-//	cursor    str  — opaque, returned by previous response
+//	cursor    str  — opaque continuation for the same query, caller,
+//	                 visibility and ranking mode; returned by the previous response
 //	status    CSV  — issue status filter (only honoured when kind = issue)
 //	priority  CSV  — issue priority filter (0..4)
 //	type      CSV  — issue type filter
@@ -52,14 +53,21 @@ func NewSearchHandler(svc *search.Service) *SearchHandler {
 //
 // Responses:
 //
-//	200 — search.Result JSON.  `degraded: true` means Ollama was
-//	      unavailable and results came from the FTS-only fallback.
-//	400 — invalid query / cursor / filter
+//	200 — search.Result JSON. `degraded: true` identifies an FTS-only
+//	      ranking, including continuation after the embedder recovers.
+//	400 — invalid query / cursor / filter; invalid_cursor also covers
+//	      a legacy cursor whose cached pool expired, or a hybrid cursor
+//	      whose missing pool cannot be rebuilt during an embedder outage.
+//	      Start again without cursor in those cases.
 //	401 — caller not authenticated (RequireUser)
 //	422 — business validation (q too long, q empty)
 //
-// We never return 5xx for an Ollama outage — `degraded` carries the
-// signal.
+// Mode-aware cursors rebuild a missing pool at their saved offset. FTS
+// continuations keep FTS ranking; hybrid continuations never silently switch
+// ranking. Legacy {key,offset} cursors remain usable while their pool is
+// warm. These are continuations over current data, not database snapshots:
+// edits between pages may still change membership or rank. No 5xx is returned
+// for an Ollama outage.
 func (h *SearchHandler) Search(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	c, ok := caller(r)

@@ -16,8 +16,9 @@ import (
 // resultCacheCapacity bounds the in-process cache. 256 distinct queries
 // over a 60-second TTL fit a small team comfortably; under heavier load
 // the LRU evicts coldest entries. The cache is a *latency optimisation*
-// for cursor pagination — a miss simply re-runs the same query, so the
-// upper bound here is about CPU cost, not correctness.
+// for mode-aware cursor pagination: a miss rebuilds the query in its saved
+// ranking mode. Legacy cursors and unavailable hybrid rankings require a
+// fresh search when the pool is gone.
 const resultCacheCapacity = 256
 
 // resultCacheTTL is how long a cached top-K stays warm. Sixty seconds
@@ -36,6 +37,7 @@ type resultEntry struct {
 	expiresAt time.Time
 	caller    uuid.UUID
 	scope     string
+	mode      rankingMode
 }
 
 // resultCache is the result-set LRU. It maps cacheKey → ordered slice of
@@ -83,7 +85,7 @@ func (e resultEntry) ownedBy(caller uuid.UUID, scope string) bool {
 // Put stores a result-set under key, owned by caller with scope.
 // Subsequent reads within ttl return the same slice, in the same order, so
 // cursor offsets stay stable.
-func (c *resultCache) Put(key string, items []Item, caller uuid.UUID, scope string) {
+func (c *resultCache) Put(key string, items []Item, caller uuid.UUID, scope string, mode rankingMode) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.cache.Add(key, resultEntry{
@@ -91,13 +93,22 @@ func (c *resultCache) Put(key string, items []Item, caller uuid.UUID, scope stri
 		expiresAt: time.Now().Add(c.ttl),
 		caller:    caller,
 		scope:     scope,
+		mode:      mode,
 	})
 }
 
-// CacheKey is a deterministic SHA-256 hex digest of every input that
-// influences the result set. Two requests with the same key are
-// guaranteed to yield the same items — which is what makes cursor
-// pagination work.
+// rankedCacheKey partitions a query's pool by the ranking that produced
+// it. A recovered embedder must not make an FTS cursor slice a hybrid
+// pool, or an outage make a hybrid cursor slice an FTS pool.
+func rankedCacheKey(queryKey string, mode rankingMode) string {
+	sum := sha256.Sum256([]byte(queryKey + "|ranking=" + string(mode)))
+	return hex.EncodeToString(sum[:])
+}
+
+// CacheKey is a deterministic SHA-256 fingerprint of the query and its
+// visibility. The service adds the actual ranking mode with rankedCacheKey
+// before storing a pool or issuing a cursor. Data edits can still change a
+// rebuilt pool: cursors are continuations of a search, not database snapshots.
 //
 // The inputs:
 //   - normalized query (lowercased, trimmed)

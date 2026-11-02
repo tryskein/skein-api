@@ -101,16 +101,19 @@ func (s *Service) Search(ctx context.Context, p Params) (*Result, error) {
 		return nil, err
 	}
 	p.visibility = fp
+	queryKey := CacheKey(p)
 
 	// Cursor pagination: if the caller supplied one, slice an existing
 	// cache entry — K-5 (sk-674.18 T031): only an entry of THIS caller with
 	// THIS scope answers; anything else (another user's cursor, a forged
 	// key, a cursor that outlived a change of access) is ErrInvalidCursor.
-	// On expiry we fall through to a full re-run with the current Params —
-	// items materialise in the same order, so the offset stays meaningful,
-	// and the re-run is the caller's own view.
+	// On expiry a mode-aware cursor rebuilds the caller's current view with
+	// its original ranking mode. A legacy cursor needs the original warm
+	// pool: without it the service cannot know which ranking to reproduce.
+	pageOffset := 0
+	continuationMode := rankingLegacy
 	if p.Cursor != "" {
-		cacheKey, offset, err := DecodeCursor(p.Cursor)
+		cursor, err := decodeSearchCursor(p.Cursor)
 		if err != nil {
 			return nil, err
 		}
@@ -119,23 +122,43 @@ func (s *Service) Search(ctx context.Context, p Params) (*Result, error) {
 		// Under other parameters — space= changed, say — it is refused
 		// rather than answered with the rows of the old query,
 		// and never re-run at its offset under the new ones.
-		if cacheKey != CacheKey(p) {
+		keyMatches := cursor.K == rankedCacheKey(queryKey, cursor.M)
+		if cursor.M == rankingLegacy {
+			// Admit legacy wire-format keys. Only an actual owned warm
+			// cache entry proves which ranking a legacy cursor can continue.
+			keyMatches = cursor.K == queryKey ||
+				cursor.K == rankedCacheKey(queryKey, rankingFTS) ||
+				cursor.K == rankedCacheKey(queryKey, rankingHybrid)
+		}
+		if !keyMatches {
 			return nil, fmt.Errorf("%w: the cursor belongs to another query", ErrInvalidCursor)
 		}
-		if entry, ok := s.cache.Get(cacheKey); ok {
+		if entry, ok := s.cache.Get(cursor.K); ok {
 			if !entry.ownedBy(p.CallerID, fp) {
 				return nil, fmt.Errorf("%w: the cursor is not the caller's", ErrInvalidCursor)
 			}
-			SearchRequestsTotal.WithLabelValues("false", kindLabel(p.Kinds)).Inc()
-			return s.makeResult(ctx, entry.items, cacheKey, offset, p.Limit, false, start), nil
+			if cursor.M != rankingLegacy && cursor.M != entry.mode {
+				return nil, fmt.Errorf("%w: the cursor's ranking does not match its pool", ErrInvalidCursor)
+			}
+			SearchRequestsTotal.WithLabelValues(boolStr(entry.mode == rankingFTS), kindLabel(p.Kinds)).Inc()
+			return s.makeResult(ctx, entry.items, cursor.K, cursor.O, p.Limit, entry.mode, start), nil
 		}
+		if cursor.M == rankingLegacy {
+			return nil, fmt.Errorf("%w: the legacy cursor's pool expired; restart the search", ErrInvalidCursor)
+		}
+		// Rebuilding an expired or missing pool must continue this page,
+		// including when another replica receives the cursor.
+		pageOffset = cursor.O
+		continuationMode = cursor.M
 	}
 
-	cacheKey := CacheKey(p)
 	if p.Cursor == "" {
-		if entry, ok := s.cache.Get(cacheKey); ok && entry.ownedBy(p.CallerID, fp) {
-			SearchRequestsTotal.WithLabelValues("false", kindLabel(p.Kinds)).Inc()
-			return s.makeResult(ctx, entry.items, cacheKey, 0, p.Limit, false, start), nil
+		// Prefer a warm hybrid ranking when both modes are present.
+		for _, key := range []string{rankedCacheKey(queryKey, rankingHybrid), rankedCacheKey(queryKey, rankingFTS), queryKey} {
+			if entry, ok := s.cache.Get(key); ok && entry.ownedBy(p.CallerID, fp) {
+				SearchRequestsTotal.WithLabelValues(boolStr(entry.mode == rankingFTS), kindLabel(p.Kinds)).Inc()
+				return s.makeResult(ctx, entry.items, key, 0, p.Limit, entry.mode, start), nil
+			}
 		}
 	}
 
@@ -155,7 +178,7 @@ func (s *Service) Search(ctx context.Context, p Params) (*Result, error) {
 	// Vec for that path.
 	var qVec []float32
 	degraded := false
-	if s.embedder != nil {
+	if continuationMode != rankingFTS && s.embedder != nil {
 		v, err := s.embedder.EmbedSingle(ctx, p.Query)
 		if err != nil {
 			if errors.Is(err, ErrEmbedderUnavailable) {
@@ -172,6 +195,14 @@ func (s *Service) Search(ctx context.Context, p Params) (*Result, error) {
 	} else {
 		degraded = true
 	}
+	if continuationMode == rankingHybrid && qVec == nil {
+		return nil, fmt.Errorf("%w: hybrid ranking is unavailable; restart the search", ErrInvalidCursor)
+	}
+	mode := rankingFTS
+	if qVec != nil {
+		mode = rankingHybrid
+	}
+	cacheKey := rankedCacheKey(queryKey, mode)
 
 	in := SearchInput{
 		Query:    p.Query,
@@ -339,7 +370,9 @@ func (s *Service) Search(ctx context.Context, p Params) (*Result, error) {
 	// Materialise + sort. Three-tier ordering (Req 2): exact id-code
 	// (tierCode) leads, then exact id-number (tierNumber), then everything
 	// from the RRF hybrid path (tierFuzzy). Within a tier we fall back to
-	// the RRF/score axis, then most-recently-updated.
+	// the RRF/score axis, then most-recently-updated, kind and identity.
+	// A total order is required when another replica rebuilds this pool:
+	// stable sorting alone would preserve arbitrary map iteration order.
 	pool := make([]Item, 0, len(merged))
 	for _, it := range merged {
 		pool = append(pool, it)
@@ -351,7 +384,13 @@ func (s *Service) Search(ctx context.Context, p Params) (*Result, error) {
 		if pool[i].Score != pool[j].Score {
 			return pool[i].Score > pool[j].Score
 		}
-		return pool[i].UpdatedAt.After(pool[j].UpdatedAt)
+		if !pool[i].UpdatedAt.Equal(pool[j].UpdatedAt) {
+			return pool[i].UpdatedAt.After(pool[j].UpdatedAt)
+		}
+		if pool[i].Kind != pool[j].Kind {
+			return pool[i].Kind < pool[j].Kind
+		}
+		return pool[i].ID < pool[j].ID
 	})
 
 	if len(pool) > resultCachePoolLimit {
@@ -361,15 +400,15 @@ func (s *Service) Search(ctx context.Context, p Params) (*Result, error) {
 	if err := s.store.fillSpaceIDs(ctx, pool); err != nil {
 		return nil, err
 	}
-	s.cache.Put(cacheKey, pool, p.CallerID, fp)
+	s.cache.Put(cacheKey, pool, p.CallerID, fp, mode)
 	SearchRequestsTotal.WithLabelValues(boolStr(degraded), kindLabel(p.Kinds)).Inc()
 
-	return s.makeResult(ctx, pool, cacheKey, 0, p.Limit, degraded, start), nil
+	return s.makeResult(ctx, pool, cacheKey, pageOffset, p.Limit, mode, start), nil
 }
 
 // makeResult slices `items` from offset for `limit`, computes the
 // next cursor, and assembles the wire response.
-func (s *Service) makeResult(ctx context.Context, items []Item, cacheKey string, offset, limit int, degraded bool, start time.Time) *Result {
+func (s *Service) makeResult(ctx context.Context, items []Item, cacheKey string, offset, limit int, mode rankingMode, start time.Time) *Result {
 	if offset < 0 {
 		offset = 0
 	}
@@ -382,7 +421,7 @@ func (s *Service) makeResult(ctx context.Context, items []Item, cacheKey string,
 	hasMore := end < len(items)
 	var nextCursor *string
 	if hasMore {
-		c, err := EncodeCursor(cacheKey, end)
+		c, err := encodeSearchCursor(cacheKey, end, mode)
 		if err != nil {
 			// Should not happen — hasMore implies end > 0 and we always have
 			// a non-empty cacheKey at this point. Log and continue without a
@@ -401,7 +440,7 @@ func (s *Service) makeResult(ctx context.Context, items []Item, cacheKey string,
 		Items:      out,
 		NextCursor: nextCursor,
 		HasMore:    hasMore,
-		Degraded:   degraded,
+		Degraded:   mode == rankingFTS,
 		TookMs:     took,
 	}
 }

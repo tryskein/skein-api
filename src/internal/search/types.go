@@ -172,7 +172,7 @@ type Params struct {
 	Space    string     // optional space short id (sk-674.18 T031); "" = every space
 	Kinds    []Kind     // resolved set (default = AllKinds)
 	Limit    int        // 1..100
-	Cursor   string     // base64-encoded {cacheKey, offset}
+	Cursor   string     // opaque query/ranking continuation; legacy {cacheKey, offset} needs a warm pool
 	Filters  Filters    // issue-only filters
 	CallerID uuid.UUID
 

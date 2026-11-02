@@ -260,8 +260,15 @@ rows present, `auth.Bootstrap` is a no-op regardless of what is set here.
 #### `SEARCH_RESULT_CACHE_TTL`
 
 - **Purpose:** time-to-live of the in-process LRU cache of search result sets.
-  Cursor pagination reads from this cache, so it also bounds how long a search
-  cursor stays usable.
+  Pools are partitioned by query, visibility and ranking mode. After expiry,
+  mode-aware cursors rebuild the current results at their saved offset: FTS
+  remains FTS, and hybrid needs an available embedder. Legacy cursors without
+  ranking metadata need a warm pool; an expired legacy cursor or unavailable
+  hybrid continuation returns `invalid_cursor`, so restart without a cursor.
+  A deployment can discard warm pools. During a rolling upgrade, replicas
+  on different versions may reject each other's cursors; restart the query
+  without a cursor when that happens. Search cursors do not snapshot data;
+  changes between pages may still alter membership or ordering.
 - **Required:** no · **Default:** `60s` · **Format:** duration.
 - **If unset:** 60s.
 
