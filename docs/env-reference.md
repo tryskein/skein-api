@@ -1077,7 +1077,7 @@ These are read by `_test.go` files, never by the running service.
   database-backed tests run against.
 - **If unset:** those tests call `t.Skip` instead of failing. That is why a
   green `go test ./...` with no database proves less than it seems — see the
-  root `CLAUDE.md` section on testing.
+  root `AGENTS.md` section on testing.
 
 #### `SKEIN_TEST_PARALLEL_PKGS`
 

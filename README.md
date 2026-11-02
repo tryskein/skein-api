@@ -137,7 +137,7 @@ cd src && go test -count=1 ./...          # unit tests (database tests skip)
 ```
 
 All test kinds, narrowed runs, prerequisites and pitfalls are in the
-`## Testing` section of [`CLAUDE.md`](CLAUDE.md).
+`## Testing` section of [`AGENTS.md`](AGENTS.md).
 
 ## Known limitations
 
