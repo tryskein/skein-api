@@ -46,6 +46,7 @@ func RegisterUpdateMany(s *server.MCPServer, pool *pgxpool.Pool, issuesStore *is
 				"sourceContext / estimatedMinutes). The N patches are "+
 				"independent — passing the same value in every "+
 				"item gives mass-edit semantics. "+
+				patchTextContractNote+" Refusal applies only to the offending row. "+
 				"Each row runs the full skein_update chain in its own "+
 				"SERIALIZABLE sub-transactions per step; mid-chain "+
 				"failure on one row leaves THAT row in partial state "+

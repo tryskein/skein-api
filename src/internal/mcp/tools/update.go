@@ -63,6 +63,7 @@ func RegisterUpdate(s *server.MCPServer, pool *pgxpool.Pool, issuesStore *issues
 				"partial state and you should re-fetch with skein_show "+
 				"before retrying.\n\n"+
 				"closeOutcome is required when transitioning to closed; repeating a close without it preserves the previous outcome.\n\n"+
+				patchTextContractNote+"\n\n"+
 				fieldBleedNote,
 		)),
 		mcpgo.WithString("id",
@@ -498,6 +499,24 @@ func buildPatchInput(req mcpgo.CallToolRequest, expectedVersion int) (issues.Pat
 	return buildPatchInputFromArgs(req.GetArguments(), expectedVersion)
 }
 
+const patchTextContractNote = "Text patches (description, design, acceptanceCriteria, notes, externalRef, sourceContext): " +
+	"omitted leaves unchanged; null or an empty string clears. Other non-string values are refused " +
+	"before any write with validation_error, code text_field_not_string and field naming the argument."
+
+// patchTextValue preserves explicit null as a clear while refusing other
+// non-string values before either update surface can write a field patch.
+func patchTextValue(field string, raw any) (string, *mcpgo.CallToolResult) {
+	s, isString := raw.(string)
+	if raw != nil && !isString {
+		return "", skmcp.ToolError(ErrCodeValidationError, field+" must be a string or null",
+			map[string]any{"code": "text_field_not_string", "field": field})
+	}
+	if err := issues.ValidateProse(field, s); err != nil {
+		return "", validationToolError(err)
+	}
+	return s, nil
+}
+
 // buildPatchInputFromArgs is the args-map variant of buildPatchInput.
 // Used by skein_update (via the wrapper above) and skein_update_many
 // (which only has the per-item map[string]any in hand). Behaviour is
@@ -521,9 +540,9 @@ func buildPatchInputFromArgs(args map[string]any, expectedVersion int) (issues.P
 		has = true
 	}
 	if v, ok := args["description"]; ok {
-		s, _ := v.(string)
-		if vErr := issues.ValidateProse("description", s); vErr != nil {
-			return input, false, validationToolError(vErr)
+		s, vErr := patchTextValue("description", v)
+		if vErr != nil {
+			return input, false, vErr
 		}
 		input.Description = &s
 		has = true
@@ -562,25 +581,25 @@ func buildPatchInputFromArgs(args map[string]any, expectedVersion int) (issues.P
 		has = true
 	}
 	if v, ok := args["design"]; ok {
-		s, _ := v.(string)
-		if vErr := issues.ValidateProse("design", s); vErr != nil {
-			return input, false, validationToolError(vErr)
+		s, vErr := patchTextValue("design", v)
+		if vErr != nil {
+			return input, false, vErr
 		}
 		input.Design = &s
 		has = true
 	}
 	if v, ok := args["acceptanceCriteria"]; ok {
-		s, _ := v.(string)
-		if vErr := issues.ValidateProse("acceptanceCriteria", s); vErr != nil {
-			return input, false, validationToolError(vErr)
+		s, vErr := patchTextValue("acceptanceCriteria", v)
+		if vErr != nil {
+			return input, false, vErr
 		}
 		input.AcceptanceCriteria = &s
 		has = true
 	}
 	if v, ok := args["notes"]; ok {
-		s, _ := v.(string)
-		if vErr := issues.ValidateProse("notes", s); vErr != nil {
-			return input, false, validationToolError(vErr)
+		s, vErr := patchTextValue("notes", v)
+		if vErr != nil {
+			return input, false, vErr
 		}
 		input.Notes = &s
 		has = true
@@ -613,17 +632,17 @@ func buildPatchInputFromArgs(args map[string]any, expectedVersion int) (issues.P
 		has = true
 	}
 	if v, ok := args["externalRef"]; ok {
-		s, _ := v.(string)
-		if vErr := issues.ValidateProse("externalRef", s); vErr != nil {
-			return input, false, validationToolError(vErr)
+		s, vErr := patchTextValue("externalRef", v)
+		if vErr != nil {
+			return input, false, vErr
 		}
 		input.ExternalRef = &s
 		has = true
 	}
 	if v, ok := args["sourceContext"]; ok {
-		s, _ := v.(string)
-		if vErr := issues.ValidateProse("sourceContext", s); vErr != nil {
-			return input, false, validationToolError(vErr)
+		s, vErr := patchTextValue("sourceContext", v)
+		if vErr != nil {
+			return input, false, vErr
 		}
 		input.SourceContext = &s
 		has = true
