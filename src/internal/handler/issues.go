@@ -2691,6 +2691,22 @@ func (h *IssuesHandler) CheckDuplicates(w http.ResponseWriter, r *http.Request) 
 //   - 422 serialization_retry   — write rolled back while the declared version still matches; retry unchanged
 //   - 401 unauthenticated       — cookie missing
 //   - 500 internal_error        — DB / store fault
+//
+// @Summary Accept an assigned issue
+// @Description Only the current assignee may accept. Reads visibility, then records accepted_at/accepted_by and an issue.accepted event in a SERIALIZABLE transaction. An already accepted issue is a silent no-op. Optional expectedVersion enforces optimistic concurrency; a true mismatch returns version_conflict, while exhausted transaction retries with an unchanged declared version return serialization_retry and leave the issue unchanged.
+// @Tags Issues
+// @Accept json
+// @Produce json
+// @Security ApiKeyAuth
+// @Param issueID path string true "Hierarchical issue id"
+// @Param body body acceptIssueRequest false "Optional observed version; an empty body is allowed"
+// @Success 200 {object} issues.IssueDetail "Accepted card, or the unchanged card when already accepted"
+// @Failure 400 {object} map[string]any "missing_issue_id; invalid_json"
+// @Failure 401 {object} map[string]any "unauthenticated"
+// @Failure 404 {object} map[string]any "issue_not_found — missing or invisible"
+// @Failure 422 {object} map[string]any "cannot_accept_closed; forbidden; version_conflict; serialization_retry"
+// @Failure 500 {object} map[string]any "internal_error"
+// @Router /api/v1/issues/{issueID}/accept [post]
 func (h *IssuesHandler) Accept(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	c, ok := caller(r)

@@ -76,21 +76,15 @@ const cardUnavailableNote = " If the write applied but its card could not be rea
 	"the answer is the acknowledgement plus `cardUnavailable: true` — read the card " +
 	"with skein_show; do not repeat the write."
 
-// contextStop classifies an error raised because a context ended while a
-// SINGLE-transaction write was in progress, i.e. before it reported a
-// commit. ok is false when err is not a context error, or when neither the
-// caller's context (parent) nor the batch loop's (loop) has ended — a
-// context error from somewhere else is a failure, not a stop of ours.
+// contextStop classifies cancellation/deadline errors using the batch tools'
+// existing codes. It does not establish whether a commit landed. An atomic
+// version-checked close may be resent with the old expectedVersion: a landed
+// close refuses that replay. force=true requires a re-read first.
 //
-// The codes are the batch tools' existing pair (batch_deadline.go). They
-// fit an attempted write as well as a row that never started: neither
-// applied anything the caller has to account for, and both are recovered
-// the same way — re-read, or resend with the same expectedVersion, which a
-// close that did land after all (a context cut while COMMIT was in flight
-// leaves the outcome unknown) refuses with version_conflict. Not under
-// force=true, which skips the version check: there a re-read comes first. This is not
-// used for the skein_update chain: its steps commit one by one, so a stop
-// in the middle has already applied the steps before it.
+// Single-tool update also uses this classifier. Its cancellation message
+// requires a re-read because earlier sub-transactions may have committed;
+// resend only missing changes. Batch update uses updateRowContextStop for
+// its partial-step message.
 func contextStop(parent, loop context.Context, err error) (code, message string, ok bool) {
 	if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
 		return "", "", false

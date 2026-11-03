@@ -5895,21 +5895,11 @@ func (s *Store) mapClaimTxError(ctx context.Context, err error, sessionID, issue
 
 // mapSerializationExhausted classifies the error withSerializableRetry
 // returns after its FINAL attempt still failed (sk-303.17 review fix).
-// A retryable abort that survived the whole budget (SQLSTATE 40001 or
-// 40P01 — see isRetryableTxError) means Postgres rolled the transaction
-// back WHOLE on every attempt: nothing durable changed, so unlike
-// PatchIssue / setPinned / etc. — where the abort is degraded to
-// &ErrVersionConflict{CurrentVersion: cv} because the row genuinely has a
-// version a re-read can quote — the callers this helper serves have no
-// truthful "current version" to blame it on. AddComment and
-// CreateEpicWithChildren are INSERTs: nothing was ever written, so there
-// is no row to re-read a version from. UpdateComment/DeleteComment DO
-// touch an existing comments row, but mapping their exhaustion to
-// issues.ErrVersionConflict would still be a lie: that sentinel is
-// defined (and every caller assumes) version conflict against an ISSUE,
-// not a comment, and the row's version genuinely did not change — a
-// compliant caller who re-reads and retries on "the same version it
-// already had" walks straight back into nothing new.
+// A retryable abort that survived the whole budget (40001 or 40P01) rolled
+// back the whole transaction. These insert/comment writers report retry
+// directly: an issue-version conflict is not a truthful description of
+// their failed transaction. Version-aware issue writers instead compare
+// the live version in degradeSerializationAbort before choosing a code.
 //
 // The honest terminal is ErrSerializationRetry — the SAME sentinel
 // Claim's mapClaimTxError returns for the identical situation: "no
