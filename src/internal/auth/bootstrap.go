@@ -21,6 +21,8 @@ import (
 // the bootstrap insert and the second one loses on the unique index.
 const pgUniqueViolationCode = "23505"
 
+const bootstrapMaxAttempts = 3
+
 // BootstrapConfig is the small slice of skein-api configuration needed by
 // the admin-bootstrap path. It is decoupled from internal/config so this
 // package can be reused (and tested) without dragging in the whole config
@@ -57,7 +59,8 @@ type BootstrapConfig struct {
 // Race protection on multi-replica deployments is two-layered:
 //  1. The check-and-insert runs inside a SERIALIZABLE transaction so two
 //     replicas observing an empty table at the same instant cannot both
-//     succeed.
+//     succeed. Serialization failures and deadlocks are retried with a fresh
+//     snapshot, up to three attempts; the winner's user is then observed.
 //  2. As a backstop, a unique-violation on the email index (23505) is
 //     treated as "another replica already bootstrapped" — logged at INFO
 //     and returned as nil rather than escalating to a fatal startup error.
@@ -108,36 +111,51 @@ func Bootstrap(ctx context.Context, pool *pgxpool.Pool, cfg BootstrapConfig) err
 	}
 	pgID := pgtype.UUID{Bytes: id, Valid: true}
 
-	// SERIALIZABLE protects against the multi-replica race where N replicas
-	// observe count==0 simultaneously: at most one COMMITs, the others get
-	// a serialization failure (40001) on commit and we surface that.
-	err = pgx.BeginTxFunc(ctx, pool, pgx.TxOptions{IsoLevel: pgx.Serializable}, func(tx pgx.Tx) error {
-		txq := generated.New(tx)
-		// Re-check inside the txn — without this, two replicas can both
-		// pass the outer count() check and only collide at INSERT time.
-		c, err := txq.CountUsers(ctx)
-		if err != nil {
-			return fmt.Errorf("re-counting users in bootstrap tx: %w", err)
-		}
-		if c > 0 {
+	// Reuse the hash and candidate id, but replay the complete transaction:
+	// every losing replica must re-read users in a fresh snapshot.
+	created := false
+	for attempt := 1; attempt <= bootstrapMaxAttempts; attempt++ {
+		created = false
+		err = pgx.BeginTxFunc(ctx, pool, pgx.TxOptions{IsoLevel: pgx.Serializable}, func(tx pgx.Tx) error {
+			txq := generated.New(tx)
+			// Re-check inside the txn — without this, two replicas can both
+			// pass the outer count() check and only collide at INSERT time.
+			c, err := txq.CountUsers(ctx)
+			if err != nil {
+				return fmt.Errorf("re-counting users in bootstrap tx: %w", err)
+			}
+			if c > 0 {
+				return nil
+			}
+			_, err = txq.CreateUser(ctx, generated.CreateUserParams{
+				ID:           pgID,
+				Email:        cfg.AdminEmail,
+				Username:     username,
+				Name:         name,
+				Role:         "admin",
+				PasswordHash: &hash,
+			})
+			if err != nil {
+				return err
+			}
+			// sk-674.18 T020: the bootstrap admin gets its "Personal" like every
+			// new account (INV-8); main creates the common space right after
+			// (accounts.EnsureCommonSpace).
+			if err := accounts.ProvisionInTx(ctx, tx, id, accounts.Provision{EmailConfirmed: true}); err != nil {
+				return err
+			}
+			created = true
 			return nil
-		}
-		_, err = txq.CreateUser(ctx, generated.CreateUserParams{
-			ID:           pgID,
-			Email:        cfg.AdminEmail,
-			Username:     username,
-			Name:         name,
-			Role:         "admin",
-			PasswordHash: &hash,
 		})
-		if err != nil {
-			return err
+		var pgErr *pgconn.PgError
+		if !errors.As(err, &pgErr) || (pgErr.Code != "40001" && pgErr.Code != "40P01") || attempt == bootstrapMaxAttempts {
+			break
 		}
-		// sk-674.18 T020: the bootstrap admin gets its "Personal" like every
-		// new account (INV-8); main creates the common space right after
-		// (accounts.EnsureCommonSpace).
-		return accounts.ProvisionInTx(ctx, tx, id, accounts.Provision{EmailConfirmed: true})
-	})
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		slog.DebugContext(ctx, "retrying admin bootstrap after a transaction abort", "attempt", attempt, "sqlState", pgErr.Code)
+	}
 	if err != nil {
 		// Unique violation on email or username = another replica won the
 		// race. Log and continue — not a startup failure.
@@ -149,6 +167,10 @@ func Bootstrap(ctx context.Context, pool *pgxpool.Pool, cfg BootstrapConfig) err
 			return nil
 		}
 		return fmt.Errorf("bootstrap insert: %w", err)
+	}
+	if !created {
+		slog.DebugContext(ctx, "bootstrap skipped: another replica created the administrator")
+		return nil
 	}
 
 	slog.InfoContext(ctx, "bootstrap admin created",
