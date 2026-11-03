@@ -139,6 +139,7 @@ func RegisterCloseMany(s *server.MCPServer, pool *pgxpool.Pool, issuesStore *iss
 				"Inspect results[i].ok per row to find the failures and "+
 				"results[i].error.code to branch on the cause. "+
 				"Result rows preserve input order. "+
+				"A row returning serialization_retry rolled back its close without a version change; resend that row unchanged.\n\n"+
 				"Caps at 100 items per call (matches the REST bulk "+
 				"endpoint). For >100 issues, split client-side. "+
 				"`force=true` needs force_unlock on each row's project and bypasses lock + version "+

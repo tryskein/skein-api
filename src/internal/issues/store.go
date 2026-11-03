@@ -68,21 +68,9 @@ const pgSerializationFailure = "40001"
 // loser's transaction back whole, leaving no partial write behind.
 const pgDeadlockDetected = "40P01"
 
-// isSerializationFailure reports whether the error is Postgres SQLSTATE
-// 40001 (serialization_failure) — that code and no other.
-//
-// sk-202: the 40P01 omission is deliberate, and this predicate must not be
-// widened to include it. Every caller answers a hit by re-reading the live
-// version and returning &ErrVersionConflict{CurrentVersion: cv}, i.e. it
-// tells the agent "someone else modified this issue — re-read and retry on
-// the bumped version". That is true for 40001, where a concurrent writer
-// really did commit. It is false for a deadlock: nothing about the row
-// changed, so the agent would be handed a version_conflict quoting the
-// same version it already held, and a compliant retry would walk straight
-// back into the deadlock.
-//
-// Callers that replay the transaction themselves instead of blaming the
-// version want isRetryableTxError — see its doc for the split.
+// isSerializationFailure identifies SQLSTATE 40001 only. Keep this distinct
+// from isRetryableTxError: callers outside the terminal version-aware mapper
+// also use this predicate, so widening it would change their classification.
 func isSerializationFailure(err error) bool {
 	var pgErr *pgconn.PgError
 	return errors.As(err, &pgErr) && pgErr.Code == pgSerializationFailure
@@ -98,7 +86,7 @@ func isSerializationFailure(err error) bool {
 // sk-202: this exists alongside isSerializationFailure above rather than
 // replacing it because the two answer different questions.
 //
-//   - isSerializationFailure: "should this become ErrVersionConflict?"
+//   - isSerializationFailure: "is this SQLSTATE 40001?"
 //     → 40001 only. Used by Patch / UpdateStatus / ReplaceComponents /
 //     AddLabel / RemoveLabel / Close.
 //   - isRetryableTxError: "should this transaction be replayed?"
@@ -174,11 +162,12 @@ var ErrPinnedNoForce = errors.New("pinned issue cannot be closed without force=t
 // errors.As.
 var ErrAlreadyClaimed = errors.New("issue is already claimed by another session")
 
-// ErrSerializationRetry is returned by Claim when its SERIALIZABLE
+// ErrSerializationRetry is returned by Claim and other issue writes when a SERIALIZABLE
 // transaction exhausted its retries against a retryable abort (SQLSTATE
 // 40001 serialization_failure or 40P01 deadlock_detected — see
 // isRetryableTxError). The transaction rolled back, so the issue is
-// untouched and the call is safe to repeat verbatim. Mirrors
+// untouched by that transaction. A multi-step update may have committed earlier
+// transactions and must re-read before resending. Mirrors
 // dependencies.ErrSerializationRetry; maps to the "serialization_retry"
 // tool code.
 //
@@ -188,7 +177,7 @@ var ErrAlreadyClaimed = errors.New("issue is already claimed by another session"
 // the snapshot (and, under SSI, for read/write dependency cycles that need
 // not touch the row at all), so that assumption produced a false
 // "already claimed by another session" on issues nobody held.
-var ErrSerializationRetry = errors.New("claim lost a serialization race — safe to retry")
+var ErrSerializationRetry = errors.New("write transaction lost a serialization race — safe to retry")
 
 // AlreadyClaimedError carries the observed row state that made Claim
 // reject, so the MCP layer can log WHY without re-reading the row (and
@@ -3718,7 +3707,7 @@ UPDATE issues
 				decision.Outcome, *input.DependenciesCaller, actor)
 			if lerr != nil {
 				if errors.Is(lerr, errCloseLinkRaceLost) {
-					return &ErrVersionConflict{CurrentVersion: old.Version}
+					return ErrSerializationRetry
 				}
 				return lerr
 			}
@@ -3788,43 +3777,39 @@ func (s *Store) currentVersion(ctx context.Context, id string) (int, error) {
 	return v, err
 }
 
-// degradeSerializationAbort is the shared fallback that turns a class-40
-// abort of a SERIALIZABLE write path into version_conflict. Since sk-622.21
-// (R17) it is reached in two ways: on the paths still without a retry
-// wrapper (ReplaceComponents, AttachCommits, DetachCommits, ResumeDelegated)
-// a single 40001 lands here; on PatchIssue, UpdateStatus, Close, AddLabel,
-// RemoveLabel, Accept and DismissDelegated, which replay through
-// withSerializableRetry, only an EXHAUSTED retry budget does — so for them
-// versionConflictOriginTotal counts budget exhaustion, not a lone abort (see
-// its doc comment in metrics.go). Behaviour is UNCHANGED from before
-// sk-354: any error that is not a class-40 abort passes through verbatim;
-// a class-40 abort still degrades to the exact same
-// &ErrVersionConflict{CurrentVersion: cv} every caller of these ten
-// already received. sk-354's only addition is classifying and counting
-// that degradation via versionConflictOriginTotal — consolidated here,
-// once, instead of duplicated at each of the ten call sites, so the
-// classification is unit-tested in one place (classifyVersionConflictOrigin)
-// rather than trusted to be copied correctly ten times.
+// degradeSerializationAbort reports a failed SERIALIZABLE transaction without
+// inventing a version mismatch. A deadlock, an unreadable live version, or
+// a live version equal to the caller's expectedVersion is retryable. A
+// genuinely different version retains ErrVersionConflict. Operations whose
+// input has no expectedVersion retain their existing conflict contract.
 //
-// expectedVersion is the caller-declared version to compare the freshly
-// re-read live version against, or nil when the operation's input has no
-// such field at all (ReplaceComponents / AddLabel / RemoveLabel /
-// AttachCommits / DismissDelegated / ResumeDelegated never took one;
-// Accept's is optional and a nil here also covers a caller who omitted
-// it) — see classifyVersionConflictOrigin.
-//
-// The live-version read reuses currentVersion, which best-effort swallows
-// its own read error and returns 0 — the exact same value this function
-// already handed callers as CurrentVersion before sk-354 existed, so a
-// failed read does not introduce a new failure mode, only (rarely) an
-// inaccurate origin label on top of an already-approximate currentVersion.
+// The origin metric still classifies observed serialization aborts; its
+// serialization_derived bucket now corresponds to ErrSerializationRetry.
+// The failed transaction is rolled back. A higher-level multi-step update
+// may have committed earlier transactions and must re-read before replaying.
 func (s *Store) degradeSerializationAbort(ctx context.Context, err error, op, id string, expectedVersion *int) error {
+	if expectedVersion != nil && isRetryableTxError(err) && !isSerializationFailure(err) {
+		return ErrSerializationRetry
+	}
 	if !isSerializationFailure(err) {
 		return err
 	}
-	cv, _ := s.currentVersion(ctx, id)
+	cv, readErr := s.currentVersion(ctx, id)
+	if readErr != nil && expectedVersion != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		// The failed transaction made no change, but a failed version read
+		// gives us no evidence for a version-conflict response.
+		slog.WarnContext(ctx, "cannot read issue version after a serialization abort",
+			"op", op, "issueId", id, "error", readErr.Error())
+		return ErrSerializationRetry
+	}
 	origin := classifyVersionConflictOrigin(cv, expectedVersion)
 	versionConflictOriginTotal.WithLabelValues(op, origin).Inc()
+	if origin == originSerializationDerived {
+		return ErrSerializationRetry
+	}
 	return &ErrVersionConflict{CurrentVersion: cv}
 }
 
@@ -4304,7 +4289,7 @@ UPDATE issues
 				if _, lerr := linkCloseTargetInTx(ctx, tx, id, target,
 					decision.Outcome, *input.DependenciesCaller, actor); lerr != nil {
 					if errors.Is(lerr, errCloseLinkRaceLost) {
-						return &ErrVersionConflict{CurrentVersion: old.Version}
+						return ErrSerializationRetry
 					}
 					return lerr
 				}
@@ -6715,7 +6700,7 @@ UPDATE issues
 				decision.Outcome, *input.DependenciesCaller, input.Actor)
 			if lerr != nil {
 				if errors.Is(lerr, errCloseLinkRaceLost) {
-					return &ErrVersionConflict{CurrentVersion: old.Version}
+					return ErrSerializationRetry
 				}
 				return lerr
 			}

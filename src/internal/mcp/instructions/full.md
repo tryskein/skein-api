@@ -885,6 +885,10 @@ also where the obligation to walk it lives.
   `expectedVersion`. Mismatch → `{"error":"version_conflict",
   "currentVersion":N}` — re-read with `skein_show`, reconcile,
   retry. Never pass an `expectedVersion` you didn't just observe.
+  A rolled-back write whose declared version is unchanged answers
+  `serialization_retry`, not `version_conflict`: retry a close/accept unchanged.
+  A multi-step update may have committed earlier sub-operations — re-read its
+  current state and resend only missing changes, including for a batch row.
 - **Write-tools answer with an acknowledgement, not with the issue.**
   `skein_create`, `skein_close`, `skein_claim`, `skein_unclaim`,
   `skein_accept`, `skein_update`, `skein_reparent`,

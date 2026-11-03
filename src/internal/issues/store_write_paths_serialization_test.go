@@ -17,10 +17,10 @@ package issues
 //     notification at all);
 //   - (b) exhaustion: the writer is renewed for every attempt
 //     (forceSerializationExhaustion with the path's own *MaxAttempts) — the
-//     path answers with its previous classification (ErrVersionConflict and
-//     the versionConflictOriginTotal series of that path, or
-//     ErrNotLockHolder for Unclaim), and nothing of the operation was
-//     written.
+//     version-aware paths answer ErrSerializationRetry when the declared
+//     version did not move; the origin metric still classifies the abort.
+//     Other paths keep their existing terminal contract. Nothing of the
+//     failed transaction is written.
 //
 // Expected values are the contract of each path (spec K2/R17, plan T012),
 // never read back from the code under test. dependencies.Store#Reparent and
@@ -322,6 +322,18 @@ func conflictWith(origin string) func(t *testing.T, err error, standVersion int)
 	}
 }
 
+func retryWithoutVersionConflict(t *testing.T, err error, _ int) string {
+	t.Helper()
+	if !errors.Is(err, ErrSerializationRetry) {
+		t.Fatalf("error = %v, want ErrSerializationRetry when the version did not change", err)
+	}
+	var conflict *ErrVersionConflict
+	if errors.As(err, &conflict) {
+		t.Fatalf("retryable abort was also classified as version_conflict: %v", err)
+	}
+	return originSerializationDerived
+}
+
 // --- PatchIssue: a priority edit (issue.updated; the watcher's «other
 // edits» feed is switched on so the fan-out has a recipient).
 
@@ -344,7 +356,7 @@ var patchIssueCase = writePathCase{
 			t.Errorf("priority = %d, want 1", p)
 		}
 	},
-	exhausted: conflictWith(originSerializationDerived),
+	exhausted: retryWithoutVersionConflict,
 	notApplied: func(t *testing.T, e *writePathEnv, st *writePathState) {
 		if p := readIssueCol[int](t, e, st.id, "priority"); p != 2 {
 			t.Errorf("priority = %d after exhaustion, want 2", p)
@@ -383,7 +395,7 @@ var patchOutcomeCase = writePathCase{
 			t.Errorf("close_outcome = %q, want %q", o, CloseOutcomeWontDo)
 		}
 	},
-	exhausted: conflictWith(originSerializationDerived),
+	exhausted: retryWithoutVersionConflict,
 	notApplied: func(t *testing.T, e *writePathEnv, st *writePathState) {
 		if o := readIssueCol[string](t, e, st.id, "close_outcome"); o != CloseOutcomeDone {
 			t.Errorf("close_outcome = %q after exhaustion, want %q", o, CloseOutcomeDone)
@@ -416,7 +428,7 @@ var updateStatusCase = writePathCase{
 			t.Errorf("status = %q, want %q", s, StatusInProgress)
 		}
 	},
-	exhausted: conflictWith(originSerializationDerived),
+	exhausted: retryWithoutVersionConflict,
 	notApplied: func(t *testing.T, e *writePathEnv, st *writePathState) {
 		if s := readIssueCol[string](t, e, st.id, "status"); s != StatusOpen {
 			t.Errorf("status = %q after exhaustion, want %q", s, StatusOpen)
@@ -448,7 +460,7 @@ var closeCase = writePathCase{
 			t.Errorf("status = %q, want %q", s, StatusClosed)
 		}
 	},
-	exhausted: conflictWith(originSerializationDerived),
+	exhausted: retryWithoutVersionConflict,
 	notApplied: func(t *testing.T, e *writePathEnv, st *writePathState) {
 		if s := readIssueCol[string](t, e, st.id, "status"); s != StatusOpen {
 			t.Errorf("status = %q after exhaustion, want %q", s, StatusOpen)
@@ -549,7 +561,7 @@ var acceptCase = writePathCase{
 			t.Errorf("accepted_at is NULL after a successful accept")
 		}
 	},
-	exhausted: conflictWith(originSerializationDerived),
+	exhausted: retryWithoutVersionConflict,
 	notApplied: func(t *testing.T, e *writePathEnv, st *writePathState) {
 		if at := readIssueCol[*time.Time](t, e, st.id, "accepted_at"); at != nil {
 			t.Errorf("accepted_at = %v after exhaustion, want NULL", *at)

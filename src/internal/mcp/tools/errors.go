@@ -182,7 +182,7 @@ const (
 	// parent_already_set    — a parent-child edge was requested for an
 	//                         issue that already has a (different) parent;
 	//                         use skein_reparent to move it.
-	// serialization_retry   — a dependency write lost a SERIALIZABLE race
+	// serialization_retry   — a write transaction lost a SERIALIZABLE race
 	//                         (SQLSTATE 40001); no durable change, safe to
 	//                         retry verbatim.
 	// dependency_target_not_visible_yet — the to_id FK tripped because the

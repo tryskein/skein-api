@@ -657,8 +657,8 @@ func TestCloseTarget_RaceWithManualDependency(t *testing.T) {
 			} else {
 				err := closeErr.Load().(error)
 				var vc *ErrVersionConflict
-				if !errors.As(err, &vc) {
-					t.Fatalf("the close lost the race with error %v — want a version conflict "+
+				if !errors.Is(err, ErrSerializationRetry) && !errors.As(err, &vc) {
+					t.Fatalf("the close lost the race with error %v — want serialization_retry or a genuine version conflict "+
 						"(ErrDependencyExists and internal_error must not come out of the close)", err)
 				}
 				stamps := readCloseStamps(t, env.pool, iss.ID)
@@ -706,7 +706,7 @@ func TestCloseTarget_RaceWithManualDependency(t *testing.T) {
 // there yet" and the insert, and the test hangs on it an insert of THE SAME edge from another
 // connection. Then the close transaction's insert must run into
 // uniqueness (dependencies.classifyInsertError → ErrDependencyExists),
-// the writer must translate that into a version conflict, and the state must stay
+// the writer must translate that into ErrSerializationRetry, and the state must stay
 // untouched (INV-1: no close, so no outcome). Exactly
 // three outcomes of row 10 are forbidden: internal_error out, ErrDependencyExists out
 // and "closed without an edge".
@@ -764,9 +764,8 @@ VALUES ($1, $2, $3, $4)`, fromID, toID, depType, env.author); err != nil {
 					})
 				})
 
-				var vc *ErrVersionConflict
-				if !errors.As(err, &vc) {
-					t.Fatalf("the close lost the race with error %v — want a version conflict "+
+				if !errors.Is(err, ErrSerializationRetry) {
+					t.Fatalf("the close lost the race with error %v — want serialization_retry "+
 						"(ErrDependencyExists and internal_error must not come out of the close)", err)
 				}
 				if errors.Is(err, dependencies.ErrDependencyExists) {
@@ -820,9 +819,8 @@ VALUES ($1, $2, $3, $4)`, fromID, toID, depType, env.author); err != nil {
 			err = patchOutcome(t, env, iss.ID, before.Version, CloseOutcomeDuplicate, target.ID, env.actor)
 		})
 
-		var vc *ErrVersionConflict
-		if !errors.As(err, &vc) {
-			t.Fatalf("the edit lost the race with error %v — want a version conflict", err)
+		if !errors.Is(err, ErrSerializationRetry) {
+			t.Fatalf("the edit lost the race with error %v — want serialization_retry", err)
 		}
 		if errors.Is(err, dependencies.ErrDependencyExists) {
 			t.Fatalf("ErrDependencyExists came out: %v", err)

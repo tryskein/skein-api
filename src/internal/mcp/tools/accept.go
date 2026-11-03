@@ -52,6 +52,7 @@ func RegisterAccept(s *server.MCPServer, pool *pgxpool.Pool, issuesStore *issues
 				"you've seen the issue, understood its scope and are taking it. "+
 				"Sets accepted_at = now() and accepted_by = caller. The issue's "+
 				"creator and watchers receive a notification.\n\n"+
+				"When an abort survives retries while expectedVersion still matches, serialization_retry means no acceptance was written; retry unchanged.\n\n"+
 				"Use this when the issue lands in your inbox (assigned to you, "+
 				"accepted_at IS NULL). Without acceptance, the creator has no "+
 				"guarantee you've actually seen the issue — Skein's inbox model "+
@@ -170,32 +171,7 @@ func handleAccept(pool *pgxpool.Pool, issuesStore *issues.Store) server.ToolHand
 			Actor:           actor,
 		})
 		if err != nil {
-			if errors.Is(err, issues.ErrNotFound) {
-				return skmcp.ToolError(ErrCodeIssueNotFound,
-					"issue does not exist or is not visible",
-					map[string]any{"id": id}), nil
-			}
-			if errors.Is(err, issues.ErrCannotAcceptClosed) {
-				return skmcp.ToolError(ErrCodeCannotAcceptClosed,
-					"cannot accept a closed issue — reopen it first",
-					map[string]any{"id": id}), nil
-			}
-			if errors.Is(err, issues.ErrForbidden) {
-				return skmcp.ToolError(ErrCodeForbidden,
-					"only the issue's assignee can accept",
-					map[string]any{"id": id}), nil
-			}
-			var verr *issues.ErrVersionConflict
-			if errors.As(err, &verr) {
-				return skmcp.ToolError(ErrCodeVersionConflict,
-					"the issue was modified by another writer",
-					map[string]any{"currentVersion": verr.CurrentVersion}), nil
-			}
-			slog.ErrorContext(ctx, "mcp tool error",
-				"tool", "skein_accept",
-				"reason", "store call failed",
-				"userId", userID.String(), "issueId", id, "error", err.Error())
-			return skmcp.ToolError(ErrCodeInternalError, "accept failed", nil), nil
+			return mapAcceptError(ctx, err, userID, id), nil
 		}
 
 		slog.InfoContext(ctx, "mcp tool ok",
@@ -210,4 +186,40 @@ func handleAccept(pool *pgxpool.Pool, issuesStore *issues.Store) server.ToolHand
 		return writeIssueAcceptanceAck(ctx, "skein_accept", userID.String(), id,
 			dto, req.GetBool("verbose", false))
 	}
+}
+
+// mapAcceptError preserves the distinction between a transient abort and a
+// genuine optimistic-version mismatch for the acceptance surface.
+func mapAcceptError(ctx context.Context, err error, userID uuid.UUID, id string) *mcpgo.CallToolResult {
+	if errors.Is(err, issues.ErrNotFound) {
+		return skmcp.ToolError(ErrCodeIssueNotFound,
+			"issue does not exist or is not visible",
+			map[string]any{"id": id})
+	}
+	if errors.Is(err, issues.ErrCannotAcceptClosed) {
+		return skmcp.ToolError(ErrCodeCannotAcceptClosed,
+			"cannot accept a closed issue — reopen it first",
+			map[string]any{"id": id})
+	}
+	if errors.Is(err, issues.ErrForbidden) {
+		return skmcp.ToolError(ErrCodeForbidden,
+			"only the issue's assignee can accept",
+			map[string]any{"id": id})
+	}
+	if errors.Is(err, issues.ErrSerializationRetry) {
+		return skmcp.ToolError(ErrCodeSerializationRetry,
+			"the write transaction lost a serialization race and made no change; retry the request",
+			map[string]any{"id": id})
+	}
+	var verr *issues.ErrVersionConflict
+	if errors.As(err, &verr) {
+		return skmcp.ToolError(ErrCodeVersionConflict,
+			"the issue was modified by another writer",
+			map[string]any{"currentVersion": verr.CurrentVersion})
+	}
+	slog.ErrorContext(ctx, "mcp tool error",
+		"tool", "skein_accept",
+		"reason", "store call failed",
+		"userId", userID.String(), "issueId", id, "error", err.Error())
+	return skmcp.ToolError(ErrCodeInternalError, "accept failed", nil)
 }

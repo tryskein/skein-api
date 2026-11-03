@@ -57,6 +57,7 @@ func RegisterUpdateMany(s *server.MCPServer, pool *pgxpool.Pool, issuesStore *is
 				"request_cancelled while in progress may have committed "+
 				"earlier steps: re-read it and resend only what is missing, "+
 				"with the live version. "+
+				"A row may return serialization_retry after a sub-operation rolls back; earlier changes in that row may have committed. Re-read and resend only missing changes.\n\n"+
 				"closeOutcome is required when transitioning to closed; repeating a close without it preserves the previous outcome. "+
 				"No per-row `closeTarget`: close an OPEN issue as duplicate / "+
 				"superseded with skein_close / skein_update. "+
@@ -491,6 +492,13 @@ func classifyUpdateError(ctx context.Context, err error, tool, userID, issueID s
 		}
 	}
 	var verr *issues.ErrVersionConflict
+	if errors.Is(err, issues.ErrSerializationRetry) {
+		return &batchErrorDTO{
+			Code:    ErrCodeSerializationRetry,
+			Message: "the write transaction lost a serialization race; re-read the issue and retry only unapplied changes",
+			Details: map[string]any{"id": issueID},
+		}
+	}
 	if errors.As(err, &verr) {
 		return &batchErrorDTO{
 			Code:    ErrCodeVersionConflict,

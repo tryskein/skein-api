@@ -62,6 +62,7 @@ func RegisterUpdate(s *server.MCPServer, pool *pgxpool.Pool, issuesStore *issues
 				"is committed independently — a failure mid-way leaves a "+
 				"partial state and you should re-fetch with skein_show "+
 				"before retrying.\n\n"+
+				"A transaction abort with an unchanged declared version returns serialization_retry. Earlier sub-operations may have committed: re-read and resend only unapplied changes.\n\n"+
 				"closeOutcome is required when transitioning to closed; repeating a close without it preserves the previous outcome.\n\n"+
 				patchTextContractNote+"\n\n"+
 				fieldBleedNote,
@@ -715,6 +716,11 @@ func mapUpdateError(ctx context.Context, err error, userID uuid.UUID, issueID, c
 			map[string]any{"label": labelErr.Label})
 	}
 	var verr *issues.ErrVersionConflict
+	if errors.Is(err, issues.ErrSerializationRetry) {
+		return skmcp.ToolError(ErrCodeSerializationRetry,
+			"the write transaction lost a serialization race; re-read the issue before retrying a multi-step update",
+			map[string]any{"id": issueID})
+	}
 	if errors.As(err, &verr) {
 		return skmcp.ToolError(ErrCodeVersionConflict,
 			"the issue was modified by another writer",

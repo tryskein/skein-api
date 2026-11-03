@@ -191,6 +191,13 @@ func classifyCloseError(ctx context.Context, pool *pgxpool.Pool, projectID uuid.
 		}
 	}
 	var verr *issues.ErrVersionConflict
+	if errors.Is(err, issues.ErrSerializationRetry) {
+		return closeErrorClassification{
+			Code:    ErrCodeSerializationRetry,
+			Message: "the write transaction lost a serialization race and made no change; retry the request",
+			Details: map[string]any{"id": issueID},
+		}
+	}
 	if errors.As(err, &verr) {
 		return closeErrorClassification{
 			Code:    ErrCodeVersionConflict,

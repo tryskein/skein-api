@@ -1537,7 +1537,7 @@ func (h *IssuesHandler) Unlock(w http.ResponseWriter, r *http.Request) {
 // @Failure 401 {object} map[string]any "unauthenticated"
 // @Failure 403 {object} map[string]any "forbidden — the project is visible but the caller may not act on it (mapAccessErr)"
 // @Failure 404 {object} map[string]any "issue_not_found — absent, invisible, or in another project; nothing written"
-// @Failure 422 {object} map[string]any "version_conflict — the presented version is stale; validation and domain refusals; review_forbidden — only the author may change the review flag; close_target_required — duplicate/superseded without closeTarget and without an existing matching edge; assignee_not_allowed — the assignee given as a user id names nobody who may work in this project now (INV-30), nothing is written"
+// @Failure 422 {object} map[string]any "version_conflict — the presented version is stale; serialization_retry — the write transaction rolled back without a changed declared version; validation and domain refusals; review_forbidden — only the author may change the review flag; close_target_required — duplicate/superseded without closeTarget and without an existing matching edge; assignee_not_allowed — the assignee given as a user id names nobody who may work in this project now (INV-30), nothing is written"
 // @Failure 428 {object} map[string]any "If-Match is missing"
 // @Failure 500 {object} map[string]any "internal_error"
 // @Router /api/v1/projects/{projectID}/issues/{issueID} [patch]
@@ -1726,7 +1726,7 @@ func (h *IssuesHandler) Patch(w http.ResponseWriter, r *http.Request) {
 // @Failure 401 {object} map[string]any "unauthenticated"
 // @Failure 403 {object} map[string]any "forbidden — the project is visible but the caller may not act on it (mapAccessErr)"
 // @Failure 404 {object} map[string]any "issue_not_found — absent, invisible, or in another project; nothing written"
-// @Failure 422 {object} map[string]any "force_unlock_forbidden — force=true without the right to release another holder's claim, nothing written; version_conflict — the presented version is stale; pinned_no_force; locked_by_other; standing lifecycle refusals; close_target_required — duplicate/superseded without closeTarget where no exception applies; target_not_found — closeTarget does not exist OR is in a project this caller cannot see, answered identically on purpose"
+// @Failure 422 {object} map[string]any "force_unlock_forbidden — force=true without the right to release another holder's claim, nothing written; version_conflict — the presented version is stale; serialization_retry — the write transaction rolled back without a changed declared version; pinned_no_force; locked_by_other; standing lifecycle refusals; close_target_required — duplicate/superseded without closeTarget where no exception applies; target_not_found — closeTarget does not exist OR is in a project this caller cannot see, answered identically on purpose"
 // @Failure 428 {object} map[string]any "If-Match is missing"
 // @Failure 500 {object} map[string]any "internal_error"
 // @Router /api/v1/projects/{projectID}/issues/{issueID}/transitions [post]
@@ -2688,6 +2688,7 @@ func (h *IssuesHandler) CheckDuplicates(w http.ResponseWriter, r *http.Request) 
 //   - 422 forbidden             — caller is not the assignee (owner
 //     rights and role=admin do not count)
 //   - 422 version_conflict      — expectedVersion mismatch
+//   - 422 serialization_retry   — write rolled back while the declared version still matches; retry unchanged
 //   - 401 unauthenticated       — cookie missing
 //   - 500 internal_error        — DB / store fault
 func (h *IssuesHandler) Accept(w http.ResponseWriter, r *http.Request) {

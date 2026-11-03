@@ -51,6 +51,7 @@ func RegisterClose(s *server.MCPServer, pool *pgxpool.Pool, issuesStore *issues.
 				"is required; pinned issues require force=true. Optionally "+
 				"attach the git commits that close the issue via "+
 				"`commits[]`.\n\n"+
+				"If a retried transaction aborts while the declared version still matches, serialization_retry means the close rolled back; retry unchanged.\n\n"+
 				"closeOutcome is required when transitioning to closed; repeating a close without it preserves the previous outcome. "+
 				"Target, refusals and outcome edits: skein_get_instructions, \"Close outcome\".\n\n"+
 				"Re-close is NOT idempotent: every call overwrites "+

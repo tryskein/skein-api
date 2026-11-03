@@ -641,14 +641,13 @@ func closeLinkEdge(issueID, targetID, outcome string) (fromID, toID, depType str
 
 // errCloseLinkRaceLost — the edge insert was intercepted by a competitor.
 //
-// It does not go outside: the writers turn it into a version conflict. The reason
+// It does not go outside: the writers turn it into ErrSerializationRetry. The reason
 // is this. A uniqueness violation aborts the whole Postgres transaction,
 // so "the link already existed" is caught BEFORE the insert by a separate SELECT EXISTS, and
 // only the case where between that SELECT and the insert somebody else
 // created the edge gets here. The close transaction is no longer usable at that moment:
 // everything rolls back — both the close and the edge. The honest answer to the caller is
-// "the state went out from under you, re-read and repeat", i.e. exactly a version
-// conflict; the repeat will see the edge and answer `existed` (R-5: there is no closed
+// "the transaction rolled back, repeat the request"; the repeat will see the edge and answer `existed` (R-5: there is no closed
 // duplicate without a link). ErrDependencyExists cannot be handed out — the close
 // is not "already existing" — and internal_error would be a lie about the cause.
 var errCloseLinkRaceLost = errors.New("close target link lost a race with a concurrent writer")
@@ -657,7 +656,7 @@ var errCloseLinkRaceLost = errors.New("close target link lost a race with a conc
 // production it is nil, and then the check standing on it costs exactly zero: one
 // pointer comparison with nil per close-with-target path.
 //
-// Why the seam exists. Turning errCloseLinkRaceLost into a version conflict is
+// Why the seam exists. Turning errCloseLinkRaceLost into a retryable error is
 // the only thing holding the three outcomes forbidden by row 10 of the matrix
 // (internal_error and ErrDependencyExists out of the close, a closed duplicate
 // without a link). It is reachable ONLY if a competitor inserts the edge in the window between
