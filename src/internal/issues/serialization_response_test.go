@@ -28,11 +28,43 @@ func TestVersionAwareAbort_WithoutVersionEvidenceDoesNotInventConflict(t *testin
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if got := store.degradeSerializationAbort(ctx, &pgconn.PgError{Code: "40001"}, "close", "demo-1", &version); !errors.Is(got, context.Canceled) {
-		t.Fatalf("cancelled read = %v, want context.Canceled", got)
+	for _, sqlstate := range []string{"40001", "40P01"} {
+		if got := store.degradeSerializationAbort(ctx, &pgconn.PgError{Code: sqlstate}, "close", "demo-1", &version); !errors.Is(got, context.Canceled) {
+			t.Fatalf("cancelled %s = %v, want context.Canceled", sqlstate, got)
+		}
 	}
 	other := errors.New("unrelated failure")
 	if got := store.degradeSerializationAbort(context.Background(), other, "close", "demo-1", &version); !errors.Is(got, other) {
 		t.Fatalf("unrelated error changed: %v", got)
+	}
+}
+
+func TestVersionAwareAbort_ClassifiesTheObservedVersion(t *testing.T) {
+	e := newWritePathEnv(t)
+	issue := e.newIssue(t, nil)
+	if _, err := e.pool.Exec(t.Context(), "UPDATE issues SET version=2 WHERE id=$1", issue.ID); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name       string
+		expected   int
+		wantsRetry bool
+	}{
+		{"genuine change", 1, false},
+		{"unchanged version", 2, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := e.store.degradeSerializationAbort(t.Context(), &pgconn.PgError{Code: "40001"}, "close", issue.ID, &tc.expected)
+			if tc.wantsRetry {
+				if !errors.Is(got, ErrSerializationRetry) {
+					t.Fatalf("unchanged version error = %v, want ErrSerializationRetry", got)
+				}
+				return
+			}
+			var mismatch *ErrVersionConflict
+			if !errors.As(got, &mismatch) || mismatch.CurrentVersion != 2 || errors.Is(got, ErrSerializationRetry) {
+				t.Fatalf("genuine version change error = %v, want ErrVersionConflict with currentVersion 2", got)
+			}
+		})
 	}
 }

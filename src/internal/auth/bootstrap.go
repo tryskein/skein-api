@@ -21,6 +21,9 @@ import (
 // the bootstrap insert and the second one loses on the unique index.
 const pgUniqueViolationCode = "23505"
 
+const pgSerializationFailureCode = "40001"
+const pgDeadlockDetectedCode = "40P01"
+
 const bootstrapMaxAttempts = 3
 
 // BootstrapConfig is the small slice of skein-api configuration needed by
@@ -148,7 +151,7 @@ func Bootstrap(ctx context.Context, pool *pgxpool.Pool, cfg BootstrapConfig) err
 			return nil
 		})
 		var pgErr *pgconn.PgError
-		if !errors.As(err, &pgErr) || (pgErr.Code != "40001" && pgErr.Code != "40P01") || attempt == bootstrapMaxAttempts {
+		if !errors.As(err, &pgErr) || (pgErr.Code != pgSerializationFailureCode && pgErr.Code != pgDeadlockDetectedCode) || attempt == bootstrapMaxAttempts {
 			break
 		}
 		if ctx.Err() != nil {

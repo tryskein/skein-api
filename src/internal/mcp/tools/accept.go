@@ -191,6 +191,9 @@ func handleAccept(pool *pgxpool.Pool, issuesStore *issues.Store) server.ToolHand
 // mapAcceptError preserves the distinction between a transient abort and a
 // genuine optimistic-version mismatch for the acceptance surface.
 func mapAcceptError(ctx context.Context, err error, userID uuid.UUID, id string) *mcpgo.CallToolResult {
+	if code, message, ok := contextStop(ctx, ctx, err); ok {
+		return skmcp.ToolError(code, message, map[string]any{"id": id})
+	}
 	if errors.Is(err, issues.ErrNotFound) {
 		return skmcp.ToolError(ErrCodeIssueNotFound,
 			"issue does not exist or is not visible",

@@ -692,6 +692,9 @@ func standingTransitionCode(vCode string) (string, bool) {
 }
 
 func mapUpdateError(ctx context.Context, err error, userID uuid.UUID, issueID, closeTarget string) *mcpgo.CallToolResult {
+	if code, message, ok := contextStop(ctx, ctx, err); ok {
+		return skmcp.ToolError(code, message, map[string]any{"id": issueID})
+	}
 	if errors.Is(err, issues.ErrAssigneeNotAllowed) {
 		return assigneeNotAllowedResult(map[string]any{"id": issueID})
 	}

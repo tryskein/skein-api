@@ -117,6 +117,7 @@ type bulkResponse struct {
 // @Description
 // @Description Algorithm: authenticate -> validate the path project id -> verify project visibility -> decode the body -> refuse an empty id list or one over 100 -> refuse an unknown action (delete is rejected by name: the product has no hard delete) -> validate the batch-wide close outcome and target, refusing the WHOLE request before anything is written -> for archive without an outcome, read the statuses of the batch rows in this project and refuse the WHOLE request if any is unclosed and not standing -> then, per id in order: gate the id against the path project, read its current version, and run the single-issue writer. A cancelled client connection stops the loop where it is.
 // @Description
+// @Description A row whose write transaction rolls back without a changed declared version carries serialization_retry in failed[]; retry that item. A genuine version mismatch remains version_conflict. Successful items of the batch remain committed.
 // @Description Two layers of refusal, and the difference is the contract: a bad REQUEST (unknown action, an outcome on a non-closing action, an unknown outcome value, a target that does not exist or is invisible, an archive without an outcome over an unclosed row) refuses everything and applies nothing; a bad ROW (not in this project, stale version, pinned without force, a row that IS the close target, duplicate/superseded without a target on a row the exceptions do not cover) fails only that row and the rest still run.
 // @Description
 // @Description Close outcome (sk-489): `closeOutcome` and `closeTarget` are ONE outcome and ONE target for the whole batch, accepted only on close and archive. `close` without an outcome gives unclosed rows `done`; an already closed row keeps the outcome it had, and an explicit outcome re-closes it with the new value. duplicate and superseded without a target (sk-540.2) are judged PER ROW, because the exceptions depend on the row: an unclosed row fails with close_target_required, an already closed row passes when it keeps that outcome or already has the matching edge (`duplicates` from it, `supersedes` to it) and fails with close_target_required otherwise.
@@ -521,6 +522,9 @@ func mapBulkError(id string, err error) bulkFailureItem {
 	case errors.Is(err, issues.ErrPinnedNoForce):
 		return bulkFailureItem{ID: id, Code: "pinned_no_force",
 			Message: "pinned issue requires force=true to close"}
+	case errors.Is(err, issues.ErrSerializationRetry):
+		return bulkFailureItem{ID: id, Code: "serialization_retry",
+			Message: "the write transaction rolled back; retry this item"}
 	}
 	var verr *issues.ErrVersionConflict
 	if errors.As(err, &verr) {

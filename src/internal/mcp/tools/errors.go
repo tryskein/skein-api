@@ -183,8 +183,9 @@ const (
 	//                         issue that already has a (different) parent;
 	//                         use skein_reparent to move it.
 	// serialization_retry   — a write transaction lost a SERIALIZABLE race
-	//                         (SQLSTATE 40001); no durable change, safe to
-	//                         retry verbatim.
+	//                         (40001 or 40P01). That transaction rolled back;
+	//                         a multi-step update may have earlier commits,
+	//                         so re-read it before resending missing changes.
 	// dependency_target_not_visible_yet — the to_id FK tripped because the
 	//                         target row was not visible in this snapshot
 	//                         (created in a still-uncommitted concurrent

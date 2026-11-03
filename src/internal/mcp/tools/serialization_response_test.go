@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	mcpgo "github.com/mark3labs/mcp-go/mcp"
 
 	"skein-api/internal/issues"
 )
@@ -49,6 +50,24 @@ func TestIssueWriteErrors_DistinguishRetryFromVersionConflict(t *testing.T) {
 			code, details = surface.call(&issues.ErrVersionConflict{CurrentVersion: 9})
 			if code != "version_conflict" || fmt.Sprint(details["currentVersion"]) != "9" {
 				t.Fatalf("genuine mismatch = %s %v, want version_conflict with currentVersion 9", code, details)
+			}
+		})
+	}
+}
+
+func TestIssueWriteErrors_PreserveContextCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err := fmt.Errorf("write stopped: %w", ctx.Err())
+	for name, result := range map[string]*mcpgo.CallToolResult{
+		"close":  mapCloseError(ctx, nil, uuid.Nil, err, "skein_close", "user", "demo-1", ""),
+		"update": mapUpdateError(ctx, err, uuid.Nil, "demo-1", ""),
+		"accept": mapAcceptError(ctx, err, uuid.Nil, "demo-1"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			body := extractToolJSON(t, result)
+			if body["error"] != "request_cancelled" {
+				t.Fatalf("code = %v, want request_cancelled", body["error"])
 			}
 		})
 	}

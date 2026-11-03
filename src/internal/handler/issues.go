@@ -2763,11 +2763,7 @@ func (h *IssuesHandler) Accept(w http.ResponseWriter, r *http.Request) {
 				"only the issue's assignee can accept", nil)
 			return
 		}
-		var verr *issues.ErrVersionConflict
-		if errors.As(err, &verr) {
-			writeProblem(w, http.StatusUnprocessableEntity, "version_conflict",
-				"the resource was modified by another writer",
-				map[string]any{"currentVersion": verr.CurrentVersion})
+		if mapIssueErr(w, err) {
 			return
 		}
 		slog.ErrorContext(ctx, "accept failed", "issueId", issueID, "error", err.Error())

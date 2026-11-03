@@ -56,11 +56,9 @@ const MaxCommitsPerClose = 10
 // dep solely for one constant).
 const pgUniqueViolation = "23505"
 
-// pgSerializationFailure is SQLSTATE 40001, raised when a SERIALIZABLE
-// transaction loses to a concurrent writer. We map it to
-// ErrVersionConflict (with currentVersion=0 since we never read the
-// winner's row) — semantically, "another writer modified this issue
-// while you were trying to". The agent retries with the fresh version.
+// pgSerializationFailure is SQLSTATE 40001: a SERIALIZABLE transaction was
+// rolled back. It does not prove that this issue's version changed; the
+// terminal mapper compares the live version before reporting a mismatch.
 const pgSerializationFailure = "40001"
 
 // pgDeadlockDetected is SQLSTATE 40P01, raised when Postgres breaks a
@@ -3759,9 +3757,8 @@ UPDATE issues
 		return signalPatch(ctx, tx, id, changes, rolesBefore, decision.Changed)
 	}))
 	if err != nil {
-		// SERIALIZABLE serialization failure → re-read the live version
-		// and surface it as ErrVersionConflict so callers can retry on
-		// the bumped value rather than seeing an opaque internal error.
+		// Compare the live version before reporting a mismatch; an unchanged
+		// declared version is a retryable transaction abort.
 		return CommittedState{}, CloseLinkNone, s.degradeSerializationAbort(ctx, err, "patchIssue", id, &input.ExpectedVersion)
 	}
 	afterCommit(ctx, "patch", id)
@@ -3769,8 +3766,8 @@ UPDATE issues
 }
 
 // currentVersion best-effort reads the live version for a follow-up
-// ErrVersionConflict payload. Errors are swallowed — the caller will get
-// a 0 currentVersion which still beats no info.
+// ErrVersionConflict payload. It returns read errors to the caller; the
+// version-aware terminal mapper reports a retry instead of inventing version 0.
 func (s *Store) currentVersion(ctx context.Context, id string) (int, error) {
 	var v int
 	err := s.pool.QueryRow(ctx, `SELECT version FROM issues WHERE id = $1`, id).Scan(&v)
@@ -3788,8 +3785,13 @@ func (s *Store) currentVersion(ctx context.Context, id string) (int, error) {
 // The failed transaction is rolled back. A higher-level multi-step update
 // may have committed earlier transactions and must re-read before replaying.
 func (s *Store) degradeSerializationAbort(ctx context.Context, err error, op, id string, expectedVersion *int) error {
-	if expectedVersion != nil && isRetryableTxError(err) && !isSerializationFailure(err) {
-		return ErrSerializationRetry
+	if expectedVersion != nil && isRetryableTxError(err) {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if !isSerializationFailure(err) {
+			return ErrSerializationRetry
+		}
 	}
 	if !isSerializationFailure(err) {
 		return err
@@ -4377,10 +4379,9 @@ UPDATE issues SET pinned = $2, version = version + 1, updated_at = now()
 		return signalRowFields(ctx, tx, id)
 	})
 	if err != nil {
-		// Exhausted the retry budget on a genuine abort — degrade to the
-		// same business error every other write path in this file uses
-		// (ErrVersionConflict with the live version), not a raw
-		// internal_error. Mirrors PatchIssue / ReplaceComponents / etc.
+		// This pin-specific terminal contract is unchanged by sk-648: a
+		// serialization abort still returns the observed version, unlike the
+		// version-aware mapper used by patch/status/close/accept.
 		if isSerializationFailure(err) {
 			cv, _ := s.currentVersion(ctx, id)
 			return nil, &ErrVersionConflict{CurrentVersion: cv}
@@ -6027,10 +6028,10 @@ const epicCreateMaxAttempts = 10
 // handful of incidental touchers of one issue row and of its watchers'
 // rows, not a structural fan-out — so each starts at 3; they are separate
 // constants so that a measurement on one path can move its budget alone.
-// On exhaustion each path keeps its previous classification: PatchIssue,
-// UpdateStatus, Close, Accept and the label paths degrade to version_conflict
-// (degradeSerializationAbort, counted by versionConflictOriginTotal),
-// DismissDelegated likewise, Unclaim answers ErrNotLockHolder.
+// On exhaustion version-aware paths compare the live version: an unchanged
+// declared version is retryable, a different one remains version_conflict.
+// Paths without a declared version keep their existing conflict contract;
+// Unclaim has its own lock-holder classification.
 //
 // sk-303.73 moved PatchIssue, UpdateStatus and Close to 10, by measurement.
 // Their contention is NOT only the issue row: SSI also aborts them against
