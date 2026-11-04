@@ -73,7 +73,9 @@ func RegisterReady(s *server.MCPServer, pool *pgxpool.Pool, depsStore *dependenc
 			mcpgo.Description("Project handle: alias, name, or UUID."),
 		),
 		mcpgo.WithString("assignee",
-			mcpgo.Description("Exact assignee match."),
+			mcpgo.Description("Exact assignee match; whitespace is trimmed. "+
+				"Omitted, null or blank means no filter; non-string values return "+
+				"validation_error with code assignee_not_string."),
 		),
 		mcpgo.WithNumber("priorityMax",
 			mcpgo.Description("Upper bound on priority — issues with priority <= N are returned."),
@@ -129,9 +131,11 @@ func handleReady(pool *pgxpool.Pool, depsStore *dependencies.Store, projectsStor
 		}
 
 		filters := dependencies.ReadyFilters{}
-		if a := strings.TrimSpace(req.GetString("assignee", "")); a != "" {
-			filters.Assignee = &a
+		assignee, aerr := assigneeFromArgs(req.GetArguments(), "", nil)
+		if aerr != nil {
+			return aerr, nil
 		}
+		filters.Assignee = assignee
 		if v, ok := req.GetArguments()["priorityMax"]; ok && v != nil {
 			p := req.GetInt("priorityMax", -1)
 			if p < 0 || p > 4 {

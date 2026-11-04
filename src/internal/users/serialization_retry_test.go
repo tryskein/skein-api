@@ -15,39 +15,119 @@ package users
 // do their reads and their users UPDATE and then wait on their event
 // INSERT. Only when both wait is the holder released: each has read the
 // row the other wrote, and SERIALIZABLE aborts one of them (write skew).
+// The loser's next BEGIN waits for the peer mutation to commit. Without
+// that second barrier, it can exhaust all three attempts while the winning
+// commit is still pending, which is allowed by the bounded-retry contract.
 
 import (
 	"context"
+	"errors"
+	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+type userMutationRaceKey struct{}
+
+type userMutationRaceParticipant struct {
+	begins        atomic.Int32
+	committed     chan struct{}
+	peerCommitted <-chan struct{}
+}
+
+type userMutationRaceTracer struct {
+	serializationFailures atomic.Int32
+}
+
+func (tr *userMutationRaceTracer) TraceQueryStart(ctx context.Context, _ *pgx.Conn, data pgx.TraceQueryStartData) context.Context {
+	p, _ := ctx.Value(userMutationRaceKey{}).(*userMutationRaceParticipant)
+	if p != nil && strings.HasPrefix(data.SQL, "begin") && p.begins.Add(1) > 1 {
+		// This runs before the new transaction's first statement and after
+		// the failed attempt has rolled back, so it holds no loser locks
+		// and cannot capture a snapshot that predates the peer's commit.
+		select {
+		case <-p.peerCommitted:
+		case <-ctx.Done():
+		}
+	}
+	return ctx
+}
+
+func (tr *userMutationRaceTracer) TraceQueryEnd(ctx context.Context, _ *pgx.Conn, data pgx.TraceQueryEndData) {
+	if ctx.Value(userMutationRaceKey{}) == nil {
+		return
+	}
+	var pgErr *pgconn.PgError
+	if errors.As(data.Err, &pgErr) && pgErr.Code == "40001" {
+		tr.serializationFailures.Add(1)
+	}
+}
+
 // raceBehindEventsLock runs a and b concurrently while the events table is
-// held, releases it once both wait behind it, and returns their errors.
-func raceBehindEventsLock(t *testing.T, pool *pgxpool.Pool, a, b func() error) (error, error) {
+// held, then permits a retry only after the peer mutation commits. The
+// observer pool never carries the worker tracer or a participant context.
+func raceBehindEventsLock(t *testing.T, pool *pgxpool.Pool, a, b func(context.Context, *Store) error) (error, error) {
 	t.Helper()
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	tracer := &userMutationRaceTracer{}
+	cfg := pool.Config()
+	cfg.MaxConns = 2
+	cfg.ConnConfig.Tracer = tracer
+	workers, err := pgxpool.NewWithConfig(ctx, cfg)
+	if err != nil {
+		t.Fatalf("worker pool: %v", err)
+	}
+	defer func() {
+		cancel()
+		workers.Close()
+	}()
+	store := newTestStore(t, workers)
 	holder, err := pool.Begin(ctx)
 	if err != nil {
 		t.Fatalf("holder begin: %v", err)
 	}
-	defer func() { _ = holder.Rollback(ctx) }()
-	var pid int
-	if err := holder.QueryRow(ctx, `SELECT pg_backend_pid()`).Scan(&pid); err != nil {
-		t.Fatalf("holder pid: %v", err)
-	}
+	var wg sync.WaitGroup
+	defer func() {
+		cancel()
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cleanupCancel()
+		// The holder may already be rolled back; release its lock before
+		// joining workers on every failure path.
+		_ = holder.Rollback(cleanupCtx)
+		wg.Wait()
+	}()
+	pid := holder.Conn().PgConn().PID()
 	if _, err := holder.Exec(ctx, `LOCK TABLE events IN EXCLUSIVE MODE`); err != nil {
 		t.Fatalf("holder lock: %v", err)
 	}
 
+	pa := &userMutationRaceParticipant{committed: make(chan struct{})}
+	pb := &userMutationRaceParticipant{committed: make(chan struct{})}
+	pa.peerCommitted, pb.peerCommitted = pb.committed, pa.committed
 	errA, errB := make(chan error, 1), make(chan error, 1)
-	go func() { errA <- a() }()
-	go func() { errB <- b() }()
+	run := func(p *userMutationRaceParticipant, mutate func(context.Context, *Store) error, result chan<- error) {
+		defer wg.Done()
+		err := mutate(context.WithValue(ctx, userMutationRaceKey{}, p), store)
+		if err == nil {
+			close(p.committed)
+		}
+		result <- err
+	}
+	wg.Add(2)
+	go run(pa, a, errA)
+	go run(pb, b, errB)
 
-	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(20 * time.Millisecond) {
+	ticker := time.NewTicker(20 * time.Millisecond)
+	defer ticker.Stop()
+	for {
 		var waiting int
 		if err := pool.QueryRow(ctx, `SELECT count(*) FROM pg_stat_activity
  WHERE wait_event_type = 'Lock' AND $1::int = ANY(pg_blocking_pids(pid))`, pid).Scan(&waiting); err != nil {
@@ -56,14 +136,30 @@ func raceBehindEventsLock(t *testing.T, pool *pgxpool.Pool, a, b func() error) (
 		if waiting >= 2 {
 			break
 		}
-		if time.Now().After(deadline) {
+		select {
+		case <-ticker.C:
+		case <-ctx.Done():
 			t.Fatalf("%d of the 2 mutations wait behind the events lock; want both", waiting)
 		}
 	}
 	if err := holder.Rollback(ctx); err != nil {
 		t.Fatalf("holder release: %v", err)
 	}
-	return <-errA, <-errB
+	var ea, eb error
+	select {
+	case ea = <-errA:
+	case <-ctx.Done():
+		t.Fatalf("first mutation did not finish: %v", ctx.Err())
+	}
+	select {
+	case eb = <-errB:
+	case <-ctx.Done():
+		t.Fatalf("second mutation did not finish: %v", ctx.Err())
+	}
+	if tracer.serializationFailures.Load() == 0 {
+		t.Fatal("concurrent mutations did not produce a real serialization failure")
+	}
+	return ea, eb
 }
 
 // threeActiveAdmins leaves exactly three active admins — the seeded ones —
@@ -99,12 +195,12 @@ func TestUserMutations_SerializationConflictIsRetriedNotLastAdmin(t *testing.T) 
 
 	cases := []struct {
 		name   string
-		mutate func(actor Actor, target uuid.UUID) error
+		mutate func(context.Context, *Store, Actor, uuid.UUID) error
 	}{
-		{"deactivate", func(actor Actor, target uuid.UUID) error {
+		{"deactivate", func(ctx context.Context, store *Store, actor Actor, target uuid.UUID) error {
 			return store.Deactivate(ctx, target, actor)
 		}},
-		{"demote", func(actor Actor, target uuid.UUID) error {
+		{"demote", func(ctx context.Context, store *Store, actor Actor, target uuid.UUID) error {
 			_, err := store.UpdateUser(ctx, target, UpdateUserInput{Role: &demote}, actor)
 			return err
 		}},
@@ -115,8 +211,8 @@ func TestUserMutations_SerializationConflictIsRetriedNotLastAdmin(t *testing.T) 
 			actor := adminActor(admins[0].id, admins[0].name)
 
 			errB, errC := raceBehindEventsLock(t, pool,
-				func() error { return tc.mutate(actor, admins[1].id) },
-				func() error { return tc.mutate(actor, admins[2].id) },
+				func(ctx context.Context, store *Store) error { return tc.mutate(ctx, store, actor, admins[1].id) },
+				func(ctx context.Context, store *Store) error { return tc.mutate(ctx, store, actor, admins[2].id) },
 			)
 			if errB != nil || errC != nil {
 				t.Fatalf("two of three admins %s at once: got %v / %v, want both to apply (one admin stays)", tc.name, errB, errC)

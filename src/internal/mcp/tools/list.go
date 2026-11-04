@@ -136,8 +136,10 @@ func RegisterList(s *server.MCPServer, pool *pgxpool.Pool, issuesStore *issues.S
 		mcpgo.WithString("assignee",
 			mcpgo.Description("Assignee filter. Use the literal \"me\" to match issues "+
 				"assigned to the calling user (resolved via users.id, case-insensitive "+
-				"username join — same path as the Inbox view). Any other value is "+
-				"treated as a free-form username equality match."),
+				"username join — same path as the Inbox view). Any other string is "+
+				"treated as a free-form username equality match. Whitespace is trimmed. "+
+				"Omitted, null or blank means no filter; non-string values return "+
+				"validation_error with code assignee_not_string."),
 		),
 		mcpgo.WithString("createdBy",
 			mcpgo.Description("Created-by filter. \"me\" selects issues the caller "+
@@ -284,12 +286,16 @@ func handleList(pool *pgxpool.Pool, issuesStore *issues.Store, projectsStore *pr
 			args.Priorities = []int{p}
 		}
 
-		if a := strings.TrimSpace(req.GetString("assignee", "")); a != "" {
-			if a == "me" {
+		assignee, aerr := assigneeFromArgs(req.GetArguments(), "", nil)
+		if aerr != nil {
+			return aerr, nil
+		}
+		if assignee != nil {
+			if *assignee == "me" {
 				id := userID
 				args.AssigneeUserID = &id
 			} else {
-				args.Assignee = &a
+				args.Assignee = assignee
 			}
 		}
 		// Phase 2 ui-redesign — B5/sk-30: createdBy=me filter for Outbox,
@@ -499,12 +505,16 @@ func handleListCrossProject(
 				"origin must be one of human-driven, agent-autonomous, all", nil), nil
 		}
 	}
-	if a := strings.TrimSpace(req.GetString("assignee", "")); a != "" {
-		if a == "me" {
+	assignee, aerr := assigneeFromArgs(req.GetArguments(), "", nil)
+	if aerr != nil {
+		return aerr, nil
+	}
+	if assignee != nil {
+		if *assignee == "me" {
 			id := userID
 			args.AssigneeUserID = &id
 		} else {
-			args.Assignee = &a
+			args.Assignee = assignee
 		}
 	}
 	if cb := strings.TrimSpace(req.GetString("createdBy", "")); cb != "" {

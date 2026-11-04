@@ -24,6 +24,8 @@ package tools
 // Reading it with GetString (or a bare type assertion) took a number,
 // array, object or boolean for «not passed», and after sk-565 that put the
 // issue on the key owner instead of telling the caller about the mistake.
+// skein_list (both modes) and skein_ready share this parser for their optional
+// filter: absent, null or blank means no filter; other types are refused.
 // skein_claim reads `assignee` through the same function (sk-621): a
 // non-string value used to mean «not passed» there too, and the issue went
 // to the caller. skein_update / skein_update_many keep their own reading —
@@ -68,7 +70,7 @@ func assigneeFromArgs(obj map[string]any, field string, details map[string]any) 
 // assigneeNotStringError is the refusal of a non-string, non-null
 // `assignee` (sk-605, sk-621): validation_error with code
 // assignee_not_string and the offending value under "got". Shared by
-// assigneeFromArgs (create tools, skein_claim) and the skein_update /
+// assigneeFromArgs (create tools, skein_claim, list/ready filters) and the skein_update /
 // skein_update_many patch parser, whose null and "" keep their own meaning
 // («clear the assignee») and therefore cannot go through assigneeFromArgs.
 func assigneeNotStringError(raw any, field string, details map[string]any) *mcpgo.CallToolResult {
