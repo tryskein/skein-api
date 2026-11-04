@@ -29,10 +29,11 @@ import (
 // Service is goroutine-safe — it owns no per-request state outside of
 // the function frames.
 type Service struct {
-	store      *Store
-	embedder   *Embedder
-	cache      *resultCache
-	pageMaxLim int
+	store       *Store
+	embedder    *Embedder
+	cache       *resultCache
+	scopedCache *resultCache // Independent bounded namespace: generations never evict legacy pools.
+	pageMaxLim  int
 }
 
 // NewService wires the dependencies. cacheTTL is the result-cache TTL.
@@ -41,11 +42,16 @@ func NewService(store *Store, embedder *Embedder, cacheTTL time.Duration) (*Serv
 	if err != nil {
 		return nil, err
 	}
+	scopedCache, err := newResultCache(cacheTTL)
+	if err != nil {
+		return nil, err
+	}
 	return &Service{
-		store:      store,
-		embedder:   embedder,
-		cache:      cache,
-		pageMaxLim: MaxPageLimit,
+		store:       store,
+		embedder:    embedder,
+		cache:       cache,
+		scopedCache: scopedCache,
+		pageMaxLim:  MaxPageLimit,
 	}, nil
 }
 
@@ -112,17 +118,37 @@ func (s *Service) Search(ctx context.Context, p Params) (*Result, error) {
 	// pool: without it the service cannot know which ranking to reproduce.
 	pageOffset := 0
 	continuationMode := rankingLegacy
+	scoped := false
+	if p.Filters.mutableIssueSelection() {
+		for _, kind := range p.Kinds {
+			if kind == KindIssue {
+				scoped = true
+				break
+			}
+		}
+	}
+	snapshot := ""
 	if p.Cursor != "" {
 		cursor, err := decodeSearchCursor(p.Cursor)
 		if err != nil {
 			return nil, err
+		}
+		if scoped && cursor.S == "" {
+			return nil, fmt.Errorf("%w: issue selection requires its scoped snapshot", ErrInvalidCursor)
 		}
 		// The cursor continues the query it was issued for: its key is that
 		// query's key (query, project, kinds, space, filters, caller, scope).
 		// Under other parameters — space= changed, say — it is refused
 		// rather than answered with the rows of the old query,
 		// and never re-run at its offset under the new ones.
-		keyMatches := cursor.K == rankedCacheKey(queryKey, cursor.M)
+		expectedKey := rankedCacheKey(queryKey, cursor.M)
+		if cursor.S != "" {
+			if !scoped {
+				return nil, fmt.Errorf("%w: scoped snapshot requires its issue selection", ErrInvalidCursor)
+			}
+			expectedKey = snapshotCacheKey(expectedKey, cursor.S)
+		}
+		keyMatches := cursor.K == expectedKey
 		if cursor.M == rankingLegacy {
 			// Admit legacy wire-format keys. Only an actual owned warm
 			// cache entry proves which ranking a legacy cursor can continue.
@@ -133,7 +159,11 @@ func (s *Service) Search(ctx context.Context, p Params) (*Result, error) {
 		if !keyMatches {
 			return nil, fmt.Errorf("%w: the cursor belongs to another query", ErrInvalidCursor)
 		}
-		if entry, ok := s.cache.Get(cursor.K); ok {
+		poolCache := s.cache
+		if cursor.S != "" {
+			poolCache = s.scopedCache
+		}
+		if entry, ok := poolCache.Get(cursor.K); ok {
 			if !entry.ownedBy(p.CallerID, fp) {
 				return nil, fmt.Errorf("%w: the cursor is not the caller's", ErrInvalidCursor)
 			}
@@ -141,7 +171,10 @@ func (s *Service) Search(ctx context.Context, p Params) (*Result, error) {
 				return nil, fmt.Errorf("%w: the cursor's ranking does not match its pool", ErrInvalidCursor)
 			}
 			SearchRequestsTotal.WithLabelValues(boolStr(entry.mode == rankingFTS), kindLabel(p.Kinds)).Inc()
-			return s.makeResult(ctx, entry.items, cursor.K, cursor.O, p.Limit, entry.mode, start), nil
+			return s.makeResult(ctx, entry.items, cursor.K, cursor.O, p.Limit, entry.mode, cursor.S, start), nil
+		}
+		if cursor.S != "" {
+			return nil, fmt.Errorf("%w: scoped snapshot expired or was evicted; restart the search", ErrInvalidCursor)
 		}
 		if cursor.M == rankingLegacy {
 			return nil, fmt.Errorf("%w: the legacy cursor's pool expired; restart the search", ErrInvalidCursor)
@@ -152,12 +185,12 @@ func (s *Service) Search(ctx context.Context, p Params) (*Result, error) {
 		continuationMode = cursor.M
 	}
 
-	if p.Cursor == "" {
+	if p.Cursor == "" && !scoped {
 		// Prefer a warm hybrid ranking when both modes are present.
 		for _, key := range []string{rankedCacheKey(queryKey, rankingHybrid), rankedCacheKey(queryKey, rankingFTS), queryKey} {
 			if entry, ok := s.cache.Get(key); ok && entry.ownedBy(p.CallerID, fp) {
 				SearchRequestsTotal.WithLabelValues(boolStr(entry.mode == rankingFTS), kindLabel(p.Kinds)).Inc()
-				return s.makeResult(ctx, entry.items, key, 0, p.Limit, entry.mode, start), nil
+				return s.makeResult(ctx, entry.items, key, 0, p.Limit, entry.mode, "", start), nil
 			}
 		}
 	}
@@ -203,6 +236,10 @@ func (s *Service) Search(ctx context.Context, p Params) (*Result, error) {
 		mode = rankingHybrid
 	}
 	cacheKey := rankedCacheKey(queryKey, mode)
+	if scoped {
+		snapshot = uuid.NewString()
+		cacheKey = snapshotCacheKey(cacheKey, snapshot)
+	}
 
 	in := SearchInput{
 		Query:    p.Query,
@@ -296,7 +333,7 @@ func (s *Service) Search(ctx context.Context, p Params) (*Result, error) {
 			if !LooksLikeID(p.Query) {
 				return nil
 			}
-			items, err := s.store.LookupIDPrefix(gctx, p.Query, p.CallerID, p.Project, spaceFilter)
+			items, err := s.store.lookupIDPrefix(gctx, p.Query, p.CallerID, p.Project, spaceFilter, p.Filters)
 			if err != nil {
 				return err
 			}
@@ -400,15 +437,23 @@ func (s *Service) Search(ctx context.Context, p Params) (*Result, error) {
 	if err := s.store.fillSpaceIDs(ctx, pool); err != nil {
 		return nil, err
 	}
-	s.cache.Put(cacheKey, pool, p.CallerID, fp, mode)
+	// A scoped single-page response issues no cursor, so retaining its
+	// otherwise unreachable generation would only pressure the bounded LRU.
+	if scoped {
+		if len(pool) > pageOffset+p.Limit {
+			s.scopedCache.Put(cacheKey, pool, p.CallerID, fp, mode)
+		}
+	} else {
+		s.cache.Put(cacheKey, pool, p.CallerID, fp, mode)
+	}
 	SearchRequestsTotal.WithLabelValues(boolStr(degraded), kindLabel(p.Kinds)).Inc()
 
-	return s.makeResult(ctx, pool, cacheKey, pageOffset, p.Limit, mode, start), nil
+	return s.makeResult(ctx, pool, cacheKey, pageOffset, p.Limit, mode, snapshot, start), nil
 }
 
 // makeResult slices `items` from offset for `limit`, computes the
 // next cursor, and assembles the wire response.
-func (s *Service) makeResult(ctx context.Context, items []Item, cacheKey string, offset, limit int, mode rankingMode, start time.Time) *Result {
+func (s *Service) makeResult(ctx context.Context, items []Item, cacheKey string, offset, limit int, mode rankingMode, snapshot string, start time.Time) *Result {
 	if offset < 0 {
 		offset = 0
 	}
@@ -421,7 +466,7 @@ func (s *Service) makeResult(ctx context.Context, items []Item, cacheKey string,
 	hasMore := end < len(items)
 	var nextCursor *string
 	if hasMore {
-		c, err := encodeSearchCursor(cacheKey, end, mode)
+		c, err := encodeSnapshotCursor(cacheKey, end, mode, snapshot)
 		if err != nil {
 			// Should not happen — hasMore implies end > 0 and we always have
 			// a non-empty cacheKey at this point. Log and continue without a

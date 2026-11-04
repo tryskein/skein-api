@@ -30,7 +30,7 @@ func NewSearchHandler(svc *search.Service) *SearchHandler {
 //
 // Query parameters:
 //
-//	q         (required, 1..500 chars) — search query string
+//	q         (required, 1..500 UTF-8 bytes) — search query string
 //	project   UUID — narrow to a single project (caller still must
 //	                 have access)
 //	kind      CSV  — restrict to {issue,comment,project,component}.
@@ -38,7 +38,7 @@ func NewSearchHandler(svc *search.Service) *SearchHandler {
 //	limit     int  — page size, 1..100 (default 50)
 //	cursor    str  — opaque continuation for the same query, caller,
 //	                 visibility and ranking mode; returned by the previous response
-//	status    CSV  — issue status filter (only honoured when kind = issue)
+//	status    CSV  — issue status filter (issue results only)
 //	priority  CSV  — issue priority filter (0..4)
 //	type      CSV  — issue type filter
 //	label     CSV  — issue label filter (any-of)
@@ -50,6 +50,14 @@ func NewSearchHandler(svc *search.Service) *SearchHandler {
 //	                 COMMENT results; any-of {human, agent_directed,
 //	                 agent_autonomous}). Independent of `source` — it
 //	                 never affects issue results.
+//	assignee  str  — literal me resolves the caller; other handles match
+//	                 case-insensitively (issue results only)
+//	createdBy str  — me selects the existing Delegated lens; not-me excludes
+//	                 issues created by the caller
+//	acceptedAt str — null or not-null (issue results only)
+//	isBlocked bool — reader-visible blockedness (issue results only)
+//	componentId UUID — issue has this component (issue results only)
+//	origin CSV — human-driven, agent-autonomous, all; independent of source
 //
 // Responses:
 //
@@ -68,6 +76,47 @@ func NewSearchHandler(svc *search.Service) *SearchHandler {
 // warm. These are continuations over current data, not database snapshots:
 // edits between pages may still change membership or rank. No 5xx is returned
 // for an Ollama outage.
+// Queries including issues with the new ownership/assignee/acceptance/blocked/
+// component/origin constraints instead refresh cursorless membership and issue
+// an opaque snapshot cursor. An old warm snapshot remains unchanged by a new
+// first page; on its expiry or eviction the caller gets invalid_cursor and
+// restarts at the first page with the same filters. Other kinds alone and
+// legacy queries without those selectors retain their existing cache policy.
+//
+// @Summary Search visible issues, comments, projects and components
+// @Description Runs ID/numeric lookup and hybrid full-text/vector retrieval over the caller's visible projects. Scope and issue filters are applied before each candidate limit; ranking is never replaced by client-side filtering.
+// @Description Status, priority, type, label, source, origin, assignee, createdBy, acceptedAt, isBlocked and componentId restrict only issue results; other kinds retain their own selection. human-driven includes human and agent_directed. source and origin intersect when both are present. Blockedness counts only open, in-progress or deferred blockers the caller can see. An unknown component UUID yields no matching issues.
+// @Description createdBy=me preserves the ordinary list's Delegated selection: the assignee is set and is not delivered to the caller, and the caller either created the issue or is a previous assignee who did not dismiss it. Dismissal narrows only the previous-assignee branch; authors keep their existing branch. As on the ordinary list, a principal without a username uses the strict creator-only fallback. createdBy=not-me strictly excludes the caller as creator; combine it with assignee=me and acceptedAt=not-null for On me.
+// @Description Cursors continue the same caller, visibility, query, filters and ranking. A changed filter refuses the cursor. On an embedding outage a new search degrades to FTS; a hybrid continuation whose pool cannot be rebuilt returns invalid_cursor. This is a pure read with no events or other side effects.
+// @Description When issue results use ownership, assignee, acceptance, blocked, component or origin selectors, a cursorless request reads fresh membership and paged results carry an opaque snapshot generation. New first pages never replace already-issued warm pools. A scoped snapshot that expires, is evicted or is missing on another replica returns 400 invalid_cursor: restart from the first page with the same query and filters. Legacy queries without those issue selectors retain mode-aware cache-miss rebuilding.
+// @Tags Search
+// @Produce json
+// @Security ApiKeyAuth
+// @Param q query string true "Search text, 1..500 UTF-8 bytes"
+// @Param project query string false "Project UUID; caller visibility still applies"
+// @Param space query string false "Space short id; unknown or invisible matches nothing"
+// @Param kind query string false "CSV of issue, comment, project, component; omitted means all"
+// @Param status query string false "Issue statuses, CSV"
+// @Param priority query string false "Issue priorities 0..4, CSV"
+// @Param type query string false "Issue types, CSV"
+// @Param label query string false "Issue labels, CSV, any-of"
+// @Param source query string false "Exact issue source" Enums(human, agent_directed, agent_autonomous)
+// @Param origin query string false "Issue origin groups, CSV: human-driven, agent-autonomous, all"
+// @Param assignee query string false "me resolves the caller; any other handle is a case-insensitive text match"
+// @Param createdBy query string false "me: existing Delegated selection; not-me: caller is not the creator" Enums(me, not-me)
+// @Param acceptedAt query string false "Issue acceptance: null or not-null" Enums(null, not-null)
+// @Param isBlocked query bool false "Issue blockedness within the reader's visibility horizon"
+// @Param componentId query string false "Issue component UUID; unknown or nonmatching returns no issues"
+// @Param commentAuthorKind query string false "Comment author kinds, CSV: human, agent_directed, agent_autonomous; does not filter issues"
+// @Param limit query int false "Page size 1..100, default 50"
+// @Param cursor query string false "Opaque continuation from the previous response"
+// @Success 200 {object} search.Result "Ranked page with cursor and degraded flag"
+// @Failure 400 {object} map[string]any "invalid_project, invalid_limit, invalid_priority, invalid_source, invalid_origin, invalid_created_by, invalid_accepted_at, invalid_isBlocked, invalid_component_id, invalid_comment_author_kind or invalid_cursor"
+// @Failure 401 {object} map[string]any "unauthenticated"
+// @Failure 408 {object} map[string]any "request_cancelled"
+// @Failure 422 {object} map[string]any "invalid_query or invalid_kind"
+// @Failure 500 {object} map[string]any "internal_error"
+// @Router /api/v1/search [get]
 func (h *SearchHandler) Search(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	c, ok := caller(r)
@@ -160,6 +209,76 @@ func (h *SearchHandler) Search(w http.ResponseWriter, r *http.Request) {
 			writeProblem(w, http.StatusBadRequest, "invalid_source",
 				"source must be one of: human, agent_directed, agent_autonomous", nil)
 			return
+		}
+	}
+	if raw := strings.TrimSpace(q.Get("assignee")); raw != "" {
+		if raw == "me" {
+			id := c.UserID
+			filters.AssigneeUserID = &id
+		} else {
+			filters.Assignee = &raw
+		}
+	}
+	if raw := strings.TrimSpace(q.Get("createdBy")); raw != "" {
+		id := c.UserID
+		switch raw {
+		case "me":
+			filters.CreatedBy = &id
+			filters.DelegatedLens = c.Username != ""
+		case "not-me":
+			filters.CreatedByExclude = &id
+		default:
+			writeProblem(w, http.StatusBadRequest, "invalid_created_by", "createdBy must be me or not-me", nil)
+			return
+		}
+	}
+	if raw := strings.TrimSpace(q.Get("acceptedAt")); raw != "" {
+		yes := true
+		switch raw {
+		case "null":
+			filters.AcceptedAtNull = &yes
+		case "not-null":
+			filters.AcceptedAtNotNull = &yes
+		default:
+			writeProblem(w, http.StatusBadRequest, "invalid_accepted_at", "acceptedAt must be null or not-null", nil)
+			return
+		}
+	}
+	if raw := strings.TrimSpace(q.Get("isBlocked")); raw != "" {
+		var blocked bool
+		switch raw {
+		case "true":
+			blocked = true
+		case "false":
+			blocked = false
+		default:
+			writeProblem(w, http.StatusBadRequest, "invalid_isBlocked", "isBlocked must be true or false", nil)
+			return
+		}
+		filters.IsBlocked = &blocked
+	}
+	if raw := strings.TrimSpace(q.Get("componentId")); raw != "" {
+		id, err := uuid.Parse(raw)
+		if err != nil {
+			writeProblem(w, http.StatusBadRequest, "invalid_component_id", "componentId must be a UUID", nil)
+			return
+		}
+		filters.ComponentID = &id
+	}
+	if raw := strings.TrimSpace(q.Get("origin")); raw != "" {
+		var groups []string
+		for _, part := range strings.Split(raw, ",") {
+			group := strings.TrimSpace(part)
+			switch group {
+			case issues.OriginHumanDriven, issues.OriginAgentAutonomous, issues.OriginAll:
+				groups = append(groups, group)
+			default:
+				writeProblem(w, http.StatusBadRequest, "invalid_origin", "origin must be a CSV of human-driven, agent-autonomous, all", nil)
+				return
+			}
+		}
+		if sources, noFilter := issues.OriginGroupsToSources(groups); !noFilter {
+			filters.OriginSources = sources
 		}
 	}
 	// commentAuthorKind: CSV closed set {human, agent_directed,

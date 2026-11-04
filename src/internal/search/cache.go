@@ -2,18 +2,20 @@ package search
 
 import (
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	lru "github.com/hashicorp/golang-lru/v2"
 )
 
-// resultCacheCapacity bounds the in-process cache. 256 distinct queries
+// resultCacheCapacity bounds each in-process cache namespace. 256 distinct queries
 // over a 60-second TTL fit a small team comfortably; under heavier load
 // the LRU evicts coldest entries. The cache is a *latency optimisation*
 // for mode-aware cursor pagination: a miss rebuilds the query in its saved
@@ -65,15 +67,23 @@ func newResultCache(ttl time.Duration) (*resultCache, error) {
 func (c *resultCache) Get(key string) (resultEntry, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.removeExpired(time.Now())
 	entry, ok := c.cache.Get(key)
 	if !ok {
 		return resultEntry{}, false
 	}
-	if time.Now().After(entry.expiresAt) {
-		c.cache.Remove(key)
-		return resultEntry{}, false
-	}
 	return entry, true
+}
+
+// removeExpired sweeps the bounded LRU on activity, not only when an expired
+// generation's own key is read again. No background goroutine is required.
+// The caller holds mu; Peek leaves the surviving entries' recency unchanged.
+func (c *resultCache) removeExpired(now time.Time) {
+	for _, key := range c.cache.Keys() {
+		if entry, ok := c.cache.Peek(key); ok && now.After(entry.expiresAt) {
+			c.cache.Remove(key)
+		}
+	}
 }
 
 // ownedBy reports whether the entry was filled for caller with scope — the
@@ -88,9 +98,11 @@ func (e resultEntry) ownedBy(caller uuid.UUID, scope string) bool {
 func (c *resultCache) Put(key string, items []Item, caller uuid.UUID, scope string, mode rankingMode) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	now := time.Now()
+	c.removeExpired(now)
 	c.cache.Add(key, resultEntry{
 		items:     items,
-		expiresAt: time.Now().Add(c.ttl),
+		expiresAt: now.Add(c.ttl),
 		caller:    caller,
 		scope:     scope,
 		mode:      mode,
@@ -105,10 +117,19 @@ func rankedCacheKey(queryKey string, mode rankingMode) string {
 	return hex.EncodeToString(sum[:])
 }
 
+// snapshotCacheKey binds a fresh scoped pool to the same query/ranking key
+// plus its opaque generation. A new first page cannot replace an old pool.
+func snapshotCacheKey(rankedKey, snapshot string) string {
+	sum := sha256.Sum256([]byte(rankedKey + "|snapshot=" + snapshot))
+	return hex.EncodeToString(sum[:])
+}
+
 // CacheKey is a deterministic SHA-256 fingerprint of the query and its
 // visibility. The service adds the actual ranking mode with rankedCacheKey
 // before storing a pool or issuing a cursor. Data edits can still change a
 // rebuilt pool: cursors are continuations of a search, not database snapshots.
+// Additive mutable issue selectors use scopedQueryKey's typed, versioned
+// domain. Requests without them keep the legacy identity below unchanged.
 //
 // The inputs:
 //   - normalized query (lowercased, trimmed)
@@ -122,10 +143,14 @@ func rankedCacheKey(queryKey string, mode rankingMode) string {
 //   - sorted joined statuses, priorities, types, labels
 //   - source filter (human/agent) when set
 //   - sorted comment-author-kinds filter when set
+//   - optional issue assignee, authorship, acceptance, blocked, component and origin selectors
 //
 // We deliberately do NOT include the limit or cursor — the cache stores a
 // fixed top-200 superset, so the same key serves any page-size up to 200.
 func CacheKey(p Params) string {
+	if p.Filters.mutableIssueSelection() {
+		return scopedQueryKey(p)
+	}
 	var b strings.Builder
 	b.Grow(128)
 	b.WriteString("q=")
@@ -191,5 +216,96 @@ func CacheKey(p Params) string {
 	}
 
 	sum := sha256.Sum256([]byte(b.String()))
+	return hex.EncodeToString(sum[:])
+}
+
+// scopedQueryKey uses a separate typed, length-prefixed hash domain for
+// the additive issue selectors. No caller text can impersonate another
+// field boundary, and optional values remain distinct from absent values.
+// The legacy CacheKey branch is kept unchanged for existing continuations.
+func scopedQueryKey(p Params) string {
+	payload := []byte("scoped-search-query-v1\x00")
+	writeString := func(value string) {
+		payload = binary.AppendUvarint(payload, uint64(len(value)))
+		payload = append(payload, value...)
+	}
+	writeStrings := func(values []string) {
+		values = append([]string(nil), values...)
+		sort.Strings(values)
+		payload = binary.AppendUvarint(payload, uint64(len(values)))
+		for _, value := range values {
+			writeString(value)
+		}
+	}
+	writeUUID := func(value *uuid.UUID) {
+		if value == nil {
+			payload = append(payload, 0)
+			return
+		}
+		payload = append(payload, 1)
+		payload = append(payload, value[:]...)
+	}
+	writeOptionalString := func(value *string) {
+		if value == nil {
+			payload = append(payload, 0)
+			return
+		}
+		payload = append(payload, 1)
+		writeString(*value)
+	}
+	writeBool := func(value *bool) {
+		if value == nil {
+			payload = append(payload, 0)
+		} else if *value {
+			payload = append(payload, 2)
+		} else {
+			payload = append(payload, 1)
+		}
+	}
+	fold := func(value string) string {
+		if utf8.ValidString(value) {
+			return strings.ToLower(value)
+		}
+		// Preserve invalid input bytes instead of aliasing a valid replacement
+		// character; input validation/database errors keep their own meaning.
+		return value
+	}
+	writeString(fold(strings.TrimSpace(p.Query)))
+	writeUUID(p.Project)
+	writeString(p.Space)
+	kinds := make([]string, len(p.Kinds))
+	for i, kind := range p.Kinds {
+		kinds[i] = string(kind)
+	}
+	writeStrings(kinds)
+	payload = append(payload, p.CallerID[:]...)
+	writeString(p.visibility)
+	f := p.Filters
+	writeStrings(f.Statuses)
+	priorities := append([]int(nil), f.Priorities...)
+	sort.Ints(priorities)
+	payload = binary.AppendUvarint(payload, uint64(len(priorities)))
+	for _, priority := range priorities {
+		payload = binary.AppendVarint(payload, int64(priority))
+	}
+	writeStrings(f.Types)
+	writeStrings(f.Labels)
+	writeOptionalString(f.Source)
+	writeStrings(f.CommentAuthorKinds)
+	writeUUID(f.AssigneeUserID)
+	if f.Assignee != nil {
+		value := fold(*f.Assignee)
+		f.Assignee = &value
+	}
+	writeOptionalString(f.Assignee)
+	writeUUID(f.CreatedBy)
+	writeBool(&f.DelegatedLens)
+	writeUUID(f.CreatedByExclude)
+	writeBool(f.AcceptedAtNull)
+	writeBool(f.AcceptedAtNotNull)
+	writeBool(f.IsBlocked)
+	writeUUID(f.ComponentID)
+	writeStrings(f.OriginSources)
+	sum := sha256.Sum256(payload)
 	return hex.EncodeToString(sum[:])
 }

@@ -161,6 +161,31 @@ type Filters struct {
 	Labels             []string
 	Source             *string
 	CommentAuthorKinds []string
+	// The remaining selectors are issue-only, just like Statuses and Source.
+	// AssigneeUserID is the resolved literal "me"; Assignee matches a raw
+	// handle case-insensitively. Nil pointers mean no restriction.
+	AssigneeUserID    *uuid.UUID // Literal me: resolve delivery to the caller.
+	Assignee          *string    // Case-insensitive raw handle equality.
+	CreatedBy         *uuid.UUID // Existing Delegated selection for this caller.
+	DelegatedLens     bool       // Caller has a username: enable the existing chain rule.
+	CreatedByExclude  *uuid.UUID // Strict exclusion of this issue creator.
+	AcceptedAtNull    *bool      // True restricts to unaccepted issues.
+	AcceptedAtNotNull *bool      // True restricts to accepted issues.
+	IsBlocked         *bool      // Derived blockedness inside the reader's horizon.
+	ComponentID       *uuid.UUID // Membership in issue_components.
+	// OriginSources is the validated expansion of the origin groups. It is
+	// independent of Source, so specifying both intersects their selections.
+	OriginSources []string
+}
+
+// mutableIssueSelection identifies the new task-column constraints whose
+// cursorless requests must read current membership after a live invalidation.
+// Legacy filters alone retain their existing cache and cursor behaviour.
+func (f Filters) mutableIssueSelection() bool {
+	return f.AssigneeUserID != nil || f.Assignee != nil || f.CreatedBy != nil ||
+		f.CreatedByExclude != nil || f.IsBlocked != nil || f.ComponentID != nil ||
+		(f.AcceptedAtNull != nil && *f.AcceptedAtNull) ||
+		(f.AcceptedAtNotNull != nil && *f.AcceptedAtNotNull) || len(f.OriginSources) > 0
 }
 
 // Params bundles the parsed query string into one struct so the service

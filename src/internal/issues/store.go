@@ -20,6 +20,7 @@ import (
 
 	"skein-api/internal/assignee"
 	"skein-api/internal/authz"
+	"skein-api/internal/delegation"
 	"skein-api/internal/dependencies"
 	"skein-api/internal/eventbus"
 	"skein-api/internal/idorder"
@@ -2877,30 +2878,7 @@ func (s *Store) ListIssues(ctx context.Context, args ListIssuesArgs) (*ListResul
 		// we degrade to the strict predicate so the lens never widens
 		// without a username to compare against.
 		callerPh := addParam(*args.CreatedBy)
-		if args.CallerUsername != "" {
-			// Both branches of the OR-chain share the trailing
-			// `assignee != me` predicate — Delegated is the "tasks
-			// not currently on my plate" lens. A creator who got
-			// the task reassigned back to themselves drops out of
-			// Delegated (sk-34 T6).
-			//
-			// Unassigned issues (i.assignee IS NULL) are NOT in
-			// Delegated: a task with no assignee isn't actually
-			// delegated to anyone — it's just unowned. Treating it
-			// as Delegated put a creator's own un-assigned tasks
-			// into their Outbox (demo-5 surfaced this). The strict
-			// `assignee IS NOT NULL AND LOWER(assignee) <> me`
-			// matches the user-visible semantics of "delegated to
-			// someone else who is currently holding it".
-			clauses = append(clauses, fmt.Sprintf(
-				"(i.assignee IS NOT NULL AND NOT %[2]s "+
-					"AND (i.created_by = %[1]s "+
-					"OR (%[1]s = ANY(i.previous_assignees) "+
-					"AND NOT %[1]s = ANY(i.dismissed_by))))",
-				callerPh, assignee.MatchesCaller("i", callerPh)))
-		} else {
-			clauses = append(clauses, fmt.Sprintf("i.created_by = %s", callerPh))
-		}
+		clauses = append(clauses, delegation.Predicate("i", callerPh, args.CallerUsername != ""))
 	}
 	if args.CreatedByExclude != nil {
 		// "On me" predicate: tasks I did NOT originate. Pairs with

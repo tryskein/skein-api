@@ -10,6 +10,7 @@ import (
 
 	"skein-api/internal/assignee"
 	"skein-api/internal/authz"
+	"skein-api/internal/delegation"
 	"skein-api/internal/review"
 	"skein-api/internal/status"
 )
@@ -182,19 +183,7 @@ func (s *Store) ListByUser(ctx context.Context, args ListByUserArgs) (*ListResul
 		// so the lens never widens without a username to compare
 		// against.
 		callerPh := addParam(args.UserID)
-		if args.CallerUsername != "" {
-			// Trailing `assignee != me` applies to BOTH branches —
-			// Delegated is the "tasks not currently on my plate"
-			// lens (sk-34 T6).
-			clauses = append(clauses, fmt.Sprintf(
-				"(i.assignee IS NOT NULL AND NOT %[2]s "+
-					"AND (i.created_by = %[1]s "+
-					"OR (%[1]s = ANY(i.previous_assignees) "+
-					"AND NOT %[1]s = ANY(i.dismissed_by))))",
-				callerPh, assignee.MatchesCaller("i", callerPh)))
-		} else {
-			clauses = append(clauses, fmt.Sprintf("i.created_by = %s", callerPh))
-		}
+		clauses = append(clauses, delegation.Predicate("i", callerPh, args.CallerUsername != ""))
 	case ModeAssignedTo:
 		// assignee is free-form text on the issue; the issues delivered to
 		// the user are those assignee.MatchesCaller names — the same person

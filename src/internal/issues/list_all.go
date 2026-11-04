@@ -14,6 +14,7 @@ import (
 
 	"skein-api/internal/assignee"
 	"skein-api/internal/authz"
+	"skein-api/internal/delegation"
 )
 
 // QueryEmbedder is the minimal embedder interface for the optional
@@ -641,19 +642,7 @@ func buildAllIssuesWhere(h, sh readerHorizon, args ListAllIssuesArgs) ([]string,
 		// to "created_by = me OR me ∈ previous_assignees AND ...";
 		// otherwise we degrade to the strict pre-sk-34 predicate.
 		callerPh := addParam(*args.CreatedBy)
-		if args.CallerUsername != "" {
-			// Trailing `assignee != me` applies to BOTH branches —
-			// Delegated is the "tasks not currently on my plate"
-			// lens (sk-34 T6).
-			clauses = append(clauses, fmt.Sprintf(
-				"(i.assignee IS NOT NULL AND NOT %[2]s "+
-					"AND (i.created_by = %[1]s "+
-					"OR (%[1]s = ANY(i.previous_assignees) "+
-					"AND NOT %[1]s = ANY(i.dismissed_by))))",
-				callerPh, assignee.MatchesCaller("i", callerPh)))
-		} else {
-			clauses = append(clauses, fmt.Sprintf("i.created_by = %s", callerPh))
-		}
+		clauses = append(clauses, delegation.Predicate("i", callerPh, args.CallerUsername != ""))
 	}
 	if args.CreatedByExclude != nil {
 		clauses = append(clauses, fmt.Sprintf("i.created_by <> %s", addParam(*args.CreatedByExclude)))

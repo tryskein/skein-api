@@ -166,7 +166,8 @@ func (s *Store) SearchIssues(ctx context.Context, in SearchInput) ([]Item, error
 	if vErr != nil {
 		return nil, vErr
 	}
-	permFrag := authz.VisibleSetExpr("i.project_id", addArg(visible))
+	visibleRef := addArg(visible)
+	permFrag := authz.VisibleSetExpr("i.project_id", visibleRef)
 
 	// Optional project narrowing.
 	projectFrag := ""
@@ -177,25 +178,9 @@ func (s *Store) SearchIssues(ctx context.Context, in SearchInput) ([]Item, error
 		projectFrag += fmt.Sprintf(" AND i.project_id IN (SELECT sp_p.id FROM projects sp_p WHERE sp_p.space_id = %s)", addArg(*in.Space))
 	}
 
-	// Issue-only filters (only applied when caller scoped to KindIssue).
-	filterFrag := ""
-	if len(in.Filters.Statuses) > 0 {
-		filterFrag += fmt.Sprintf(" AND i.status = ANY(%s)", addArg(in.Filters.Statuses))
-	}
-	if len(in.Filters.Priorities) > 0 {
-		filterFrag += fmt.Sprintf(" AND i.priority = ANY(%s)", addArg(in.Filters.Priorities))
-	}
-	if len(in.Filters.Types) > 0 {
-		filterFrag += fmt.Sprintf(" AND i.type = ANY(%s)", addArg(in.Filters.Types))
-	}
-	if len(in.Filters.Labels) > 0 {
-		filterFrag += fmt.Sprintf(
-			` AND EXISTS (SELECT 1 FROM issue_labels il WHERE il.issue_id = i.id AND il.label = ANY(%s))`,
-			addArg(in.Filters.Labels))
-	}
-	if in.Filters.Source != nil {
-		filterFrag += fmt.Sprintf(" AND i.source = %s", addArg(*in.Filters.Source))
-	}
+	// Issue-only filters apply to issue results in every requested kind set,
+	// before either retriever ranks or limits its candidate pool.
+	filterFrag := issueFilterSQL(in.Filters, visibleRef, addArg)
 
 	whereCommon := fmt.Sprintf("%s%s%s", permFrag, projectFrag, filterFrag)
 
@@ -956,7 +941,7 @@ func pickSnippet(ru, en string) string {
 }
 
 // LookupIDPrefix is the fast-path for queries that look like a typed-out
-// entity ID. Returns up to 5 items (issues + projects). The caller decides
+// entity ID. Returns up to 5 items per kind (issues + projects). The caller decides
 // whether to flag exactMatch based on whether exactly one item came back.
 //
 // We do NOT include comments/components here — components are looked up
@@ -971,6 +956,13 @@ func (s *Store) LookupIDPrefix(
 	// nothing. nil — every space.
 	space *uuid.UUID,
 ) ([]Item, error) {
+	// Direct-jump callers deliberately do not inherit task-column filters.
+	return s.lookupIDPrefix(ctx, rawQuery, callerID, project, space, Filters{})
+}
+
+// lookupIDPrefix is the search-only variant: issue constraints are applied
+// before the issue branch's LIMIT, while projects keep their own selection.
+func (s *Store) lookupIDPrefix(ctx context.Context, rawQuery string, callerID uuid.UUID, project, space *uuid.UUID, filters Filters) ([]Item, error) {
 	q := strings.ToLower(strings.TrimSpace(rawQuery))
 	if !idPrefixPattern.MatchString(q) || len(q) < 2 {
 		// One exception to the len<2 floor: a bare single-digit number
@@ -982,7 +974,7 @@ func (s *Store) LookupIDPrefix(
 	}
 
 	if bareNumberPattern.MatchString(q) {
-		return s.lookupByNumber(ctx, q, callerID, project, space)
+		return s.lookupByNumber(ctx, q, callerID, project, space, filters)
 	}
 
 	args := make([]any, 0, 4)
@@ -999,7 +991,8 @@ func (s *Store) LookupIDPrefix(
 	if vErr != nil {
 		return nil, vErr
 	}
-	issuesPerm := authz.VisibleExpr("i.project_id", "false", addArg(visible))
+	visibleRef := addArg(visible)
+	issuesPerm := authz.VisibleExpr("i.project_id", "false", visibleRef)
 	issuesProjFrag := ""
 	if project != nil {
 		issuesProjFrag = fmt.Sprintf(" AND i.project_id = %s", addArg(*project))
@@ -1007,6 +1000,7 @@ func (s *Store) LookupIDPrefix(
 	if space != nil {
 		issuesProjFrag += fmt.Sprintf(" AND p.space_id = %s", addArg(*space))
 	}
+	issueFilters := issueFilterSQL(filters, visibleRef, addArg)
 
 	projectsPerm := authz.VisibleExpr("p.id", "false", addArg(visible))
 	projectsProjFrag := ""
@@ -1037,7 +1031,7 @@ SELECT * FROM (
       FROM issues i
       JOIN projects p ON p.id = i.project_id
      WHERE (lower(i.id) = %s OR lower(i.id) LIKE %s)
-       AND %s%s
+       AND %s%s%s
      ORDER BY exact DESC, length(i.id), i.id
      LIMIT 5
 ) AS issues_hit
@@ -1055,7 +1049,7 @@ SELECT * FROM (
      ORDER BY exact DESC, length(p.id_prefix), p.id_prefix
      LIMIT 5
 ) AS projects_hit`,
-		exactRef, exactRef, likeRef, issuesPerm, issuesProjFrag,
+		exactRef, exactRef, likeRef, issuesPerm, issuesProjFrag, issueFilters,
 		exactRef, exactRef, likeRef, projectsPerm, projectsProjFrag,
 	)
 
@@ -1265,6 +1259,7 @@ func (s *Store) lookupByNumber(
 	callerID uuid.UUID,
 	project *uuid.UUID,
 	space *uuid.UUID,
+	filters Filters,
 ) ([]Item, error) {
 	args := make([]any, 0, 4)
 	addArg := func(v any) string {
@@ -1289,7 +1284,8 @@ func (s *Store) lookupByNumber(
 	if vErr != nil {
 		return nil, vErr
 	}
-	perm := authz.VisibleExpr("i.project_id", "false", addArg(visible))
+	visibleRef := addArg(visible)
+	perm := authz.VisibleExpr("i.project_id", "false", visibleRef)
 	projFrag := ""
 	if project != nil {
 		projFrag = fmt.Sprintf(" AND i.project_id = %s", addArg(*project))
@@ -1297,6 +1293,7 @@ func (s *Store) lookupByNumber(
 	if space != nil {
 		projFrag += fmt.Sprintf(" AND p.space_id = %s", addArg(*space))
 	}
+	filterFrag := issueFilterSQL(filters, visibleRef, addArg)
 
 	query := fmt.Sprintf(`
 SELECT i.id, i.project_id::text AS pid, p.name AS pname,
@@ -1305,9 +1302,9 @@ SELECT i.id, i.project_id::text AS pid, p.name AS pname,
   FROM issues i
   JOIN projects p ON p.id = i.project_id
  WHERE lower(i.id) ~ ('[-.]' || %s || '$')
-   AND %s%s
+   AND %s%s%s
  ORDER BY length(i.id), i.id
- LIMIT 5`, nRef, perm, projFrag)
+ LIMIT 5`, nRef, perm, projFrag, filterFrag)
 
 	rows, err := s.pool.Query(ctx, query, args...)
 	if err != nil {
