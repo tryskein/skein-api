@@ -228,9 +228,20 @@ type ScoringResult struct {
 	Leaderboards map[string][]LeaderboardEntry `json:"leaderboards"`
 	// MatrixUsers carries the per-user breakdown driving the bottom
 	// "metrics matrix" zone of the dashboard. One row per active user
-	// in the window, sorted by closed_human_driven DESC. The frontend
+	// in the window, sorted by closed_human_driven DESC (ties by
+	// username) and capped at the first 50 such users. The frontend
 	// can re-sort client-side without an extra round trip.
 	MatrixUsers []MatrixUserRow `json:"matrixUsers"`
+	// LeaderboardUsers (sk-192) carries the same per-user breakdown as
+	// MatrixUsers for every person named on ANY of the Leaderboards of
+	// this response, computed over the same window and project scope.
+	// MatrixUsers is capped at 50 rows by closed_human_driven, so a person
+	// who leads closed_with_commits on autonomous tasks (closed_human_driven
+	// 0) can be missing from it; this list is where a surface looks up the
+	// breakdown of a leaderboard entry. One row per distinct username, in
+	// the MatrixUsers order (closedHumanDriven DESC, then username); a
+	// person may appear in both lists. Empty when every leaderboard is.
+	LeaderboardUsers []MatrixUserRow `json:"leaderboardUsers"`
 }
 
 // MatrixUserRow is one row of the per-user matrix. Columns hold the same
@@ -479,6 +490,10 @@ func cloneScoringResult(src *ScoringResult) *ScoringResult {
 		out.MatrixUsers = make([]MatrixUserRow, len(src.MatrixUsers))
 		copy(out.MatrixUsers, src.MatrixUsers)
 	}
+	if src.LeaderboardUsers != nil {
+		out.LeaderboardUsers = make([]MatrixUserRow, len(src.LeaderboardUsers))
+		copy(out.LeaderboardUsers, src.LeaderboardUsers)
+	}
 	return out
 }
 
@@ -659,8 +674,11 @@ func (s *Store) Scoring(
 	}
 
 	// ---------- matrix per-user ----------
-	matrixUsers, err := s.matrixPerUser(ctx,
-		since, visibilityClause, visibilityArgs)
+	// The leaderboard names go in so the same query also returns the rows
+	// of people the 50-row matrix cap leaves out (sk-192).
+	matrixUsers, leaderboardUsers, err := s.matrixPerUser(ctx,
+		since, visibilityClause, visibilityArgs,
+		leaderboardUsernames(closedHumanDriven, closedDoneHumanDriven, closedWithCommits))
 	if err != nil {
 		return nil, fmt.Errorf("scoring matrix_per_user: %w", err)
 	}
@@ -684,7 +702,8 @@ func (s *Store) Scoring(
 			"closed_done_human_driven": closedDoneHumanDriven,
 			"closed_with_commits":      closedWithCommits,
 		},
-		MatrixUsers: matrixUsers,
+		MatrixUsers:      matrixUsers,
+		LeaderboardUsers: leaderboardUsers,
 	}
 
 	if window == WindowAllTime {
@@ -1286,21 +1305,56 @@ func (s *Store) scanLeaderboard(ctx context.Context, sql string, args []any) ([]
 	return out, rows.Err()
 }
 
-// matrixPerUser returns the per-user breakdown used by the bottom
-// "metrics matrix" zone. One row per active user (≥1 event in the
-// window across the metric set), sorted by ClosedHumanDriven DESC.
+// matrixRowCap is the number of rows of ScoringResult.MatrixUsers: the
+// most active users by closed_human_driven (ties by username).
+const matrixRowCap = 50
+
+// leaderboardUsernames returns the distinct usernames of the supplied
+// leaderboards, in first-seen order.
+func leaderboardUsernames(boards ...[]LeaderboardEntry) []string {
+	seen := make(map[string]struct{})
+	out := make([]string, 0, scoringLeaderboardLimit*len(boards))
+	for _, board := range boards {
+		for _, e := range board {
+			if _, ok := seen[e.Username]; ok {
+				continue
+			}
+			seen[e.Username] = struct{}{}
+			out = append(out, e.Username)
+		}
+	}
+	return out
+}
+
+// matrixPerUser returns the per-user breakdown in two partitions of ONE
+// result set:
+//
+//   - matrix — the bottom "metrics matrix" zone: the first matrixRowCap
+//     active users (≥1 event in the window across the metric set) by
+//     ClosedHumanDriven DESC, username ASC;
+//   - boards — the rows of the users named in `leaderboardUsers` (sk-192),
+//     whether or not they made the cap, in the same order. A name with no
+//     activity in the window has no row (the leaderboards are computed
+//     over the same window and scope, so every name on them has one).
 //
 // One query, one round-trip — the per-user grouping makes the planner
 // pick a hash aggregate over the events index scan which is what we
-// want even on busy projects.
+// want even on busy projects. The rank is taken over every active user,
+// so the cap selects exactly the rows the former `LIMIT 50` did.
 func (s *Store) matrixPerUser(
 	ctx context.Context,
 	since time.Time,
 	visibilityClause string, visibilityArgs []any,
-) ([]MatrixUserRow, error) {
+	leaderboardUsers []string,
+) (matrix []MatrixUserRow, boards []MatrixUserRow, err error) {
 	args := []any{since}
 	args = append(args, visibilityArgs...)
 	visClause, _ := renderPlaceholders(visibilityClause, len(args)-len(visibilityArgs))
+	if leaderboardUsers == nil {
+		leaderboardUsers = []string{}
+	}
+	args = append(args, leaderboardUsers)
+	boardsIdx := len(args)
 	// We use one query with FILTER clauses per metric × axis cell.
 	// The events table is joined LEFT to issues / comments so a row
 	// for a non-matching event_type passes through with NULL i/c
@@ -1403,32 +1457,57 @@ all_actors AS (
     UNION SELECT actor FROM closed
     UNION SELECT actor FROM closed_commits
     UNION SELECT actor FROM comments
+),
+per_actor AS (
+    SELECT a.actor,
+           COALESCE(cr.h, 0) AS cr_h, COALESCE(cr.d, 0) AS cr_d, COALESCE(cr.a, 0) AS cr_a,
+           COALESCE(cl.h, 0) AS cl_h, COALESCE(cl.d, 0) AS cl_d, COALESCE(cl.a, 0) AS cl_a,
+           COALESCE(cd.h, 0) AS cd_h, COALESCE(cd.d, 0) AS cd_d, COALESCE(cd.a, 0) AS cd_a,
+           COALESCE(cc.h, 0) AS cc_h, COALESCE(cc.d, 0) AS cc_d, COALESCE(cc.a, 0) AS cc_a,
+           COALESCE(cm.h, 0) AS cm_h, COALESCE(cm.d, 0) AS cm_d, COALESCE(cm.a, 0) AS cm_a,
+           (COALESCE(cl.h, 0) + COALESCE(cl.d, 0)) AS closed_hd,
+           (COALESCE(cd.h, 0) + COALESCE(cd.d, 0)) AS closed_done_hd
+      FROM all_actors a
+      LEFT JOIN created        cr USING (actor)
+      LEFT JOIN closed         cl USING (actor)
+      LEFT JOIN closed_done    cd USING (actor)
+      LEFT JOIN closed_commits cc USING (actor)
+      LEFT JOIN comments       cm USING (actor)
+),
+ranked AS (
+    -- sk-192: the rank the matrix cap is taken on, over EVERY active
+    -- actor, so rn <= cap is exactly the set the former
+    -- "ORDER BY closed_hd DESC, actor ASC LIMIT 50" returned.
+    SELECT p.*,
+           ROW_NUMBER() OVER (ORDER BY p.closed_hd DESC, p.actor ASC) AS rn,
+           (p.actor = ANY($%[3]d::text[])) AS on_board
+      FROM per_actor p
 )
-SELECT a.actor,
-       COALESCE(cr.h, 0), COALESCE(cr.d, 0), COALESCE(cr.a, 0),
-       COALESCE(cl.h, 0), COALESCE(cl.d, 0), COALESCE(cl.a, 0),
-       COALESCE(cd.h, 0), COALESCE(cd.d, 0), COALESCE(cd.a, 0),
-       COALESCE(cc.h, 0), COALESCE(cc.d, 0), COALESCE(cc.a, 0),
-       COALESCE(cm.h, 0), COALESCE(cm.d, 0), COALESCE(cm.a, 0),
-       (COALESCE(cl.h, 0) + COALESCE(cl.d, 0)) AS closed_hd,
-       (COALESCE(cd.h, 0) + COALESCE(cd.d, 0)) AS closed_done_hd
-  FROM all_actors a
-  LEFT JOIN created        cr USING (actor)
-  LEFT JOIN closed         cl USING (actor)
-  LEFT JOIN closed_done    cd USING (actor)
-  LEFT JOIN closed_commits cc USING (actor)
-  LEFT JOIN comments       cm USING (actor)
- ORDER BY closed_hd DESC, a.actor ASC
- LIMIT 50`, visClause, closeOutcomeExpr)
+SELECT actor,
+       cr_h, cr_d, cr_a,
+       cl_h, cl_d, cl_a,
+       cd_h, cd_d, cd_a,
+       cc_h, cc_d, cc_a,
+       cm_h, cm_d, cm_a,
+       closed_hd, closed_done_hd,
+       rn <= %[4]d AS in_matrix,
+       on_board
+  FROM ranked
+ WHERE rn <= %[4]d OR on_board
+ ORDER BY rn`, visClause, closeOutcomeExpr, boardsIdx, matrixRowCap)
 
 	rows, err := s.pool.Query(ctx, sql, reachPlanned(args)...)
 	if err != nil {
-		return nil, fmt.Errorf("running matrix query: %w", err)
+		return nil, nil, fmt.Errorf("running matrix query: %w", err)
 	}
 	defer rows.Close()
-	out := make([]MatrixUserRow, 0, 50)
+	matrix = make([]MatrixUserRow, 0, matrixRowCap)
+	boards = make([]MatrixUserRow, 0, len(leaderboardUsers))
 	for rows.Next() {
-		var r MatrixUserRow
+		var (
+			r                 MatrixUserRow
+			inMatrix, onBoard bool
+		)
 		if err := rows.Scan(
 			&r.Username,
 			&r.IssuesCreatedHuman, &r.IssuesCreatedDirected, &r.IssuesCreatedAutonomous,
@@ -1437,12 +1516,21 @@ SELECT a.actor,
 			&r.ClosedWithCommitsHuman, &r.ClosedWithCommitsDir, &r.ClosedWithCommitsAuto,
 			&r.CommentsHuman, &r.CommentsDirected, &r.CommentsAutonomous,
 			&r.ClosedHumanDriven, &r.ClosedDoneHumanDriven,
+			&inMatrix, &onBoard,
 		); err != nil {
-			return nil, fmt.Errorf("scanning matrix row: %w", err)
+			return nil, nil, fmt.Errorf("scanning matrix row: %w", err)
 		}
-		out = append(out, r)
+		if inMatrix {
+			matrix = append(matrix, r)
+		}
+		if onBoard {
+			boards = append(boards, r)
+		}
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, nil, fmt.Errorf("reading matrix rows: %w", err)
+	}
+	return matrix, boards, nil
 }
 
 // InProgress returns up to `limit` issues currently being worked on.
