@@ -14,11 +14,10 @@ const metaSearchHint = "anthropic/searchHint"
 
 // searchHints maps tool name → anthropic/searchHint.
 //
-// The server exposes 41 tools. With server-side alwaysLoad off, the
-// client keeps only the names in the prompt and pulls a schema through
-// Tool Search on demand — so a tool that nobody's query matches is a
-// tool that effectively does not exist. The hint is what closes that
-// gap.
+// For every tool not marked anthropic/alwaysLoad, the client keeps only
+// the name in the prompt and pulls the schema through Tool Search on
+// demand — so a tool that nobody's query matches is a tool that
+// effectively does not exist. The hint is what closes that gap.
 //
 // Writing rules (they are what keeps the table useful, not decorative):
 //
@@ -150,8 +149,8 @@ var searchHints = map[string]string{
 // the usage counters (see metrics.go), and then hands the tool to the
 // server. Register* functions call this instead of s.AddTool so neither
 // the hint nor the instrumentation can be forgotten in one file and
-// present in the next 32 (the eight consolidated tools go through
-// addActionTool instead — 33 of the 41 land here).
+// present in the others. Every tool without an `action` enum lands here;
+// the consolidated ones go through addActionTool instead.
 //
 // A tool with no table entry is registered without a hint rather than
 // failing at startup — the missing-entry case is a build-time bug, and

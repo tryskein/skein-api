@@ -143,7 +143,9 @@ type ackRow struct {
 	// issue's, and a different type here would mean the two forms had
 	// diverged about the same fact.
 	//
-	// Set by ackFromClosedIssue ONLY — the three surfaces that can close.
+	// Set by ackFromClosedIssue ONLY — skein_close and skein_update.
+	// skein_close_many reports the same key through its own row
+	// (close_many.go#closeManyResultRow), not through this one.
 	// On every other acknowledgement the key is absent, which is honest
 	// rather than economical: those tools do not close, so «this issue's
 	// outcome» is not part of what they applied.
@@ -194,9 +196,9 @@ var ackForbiddenTextFields = []string{
 // beside it is a failure with no reason — the very shape this file
 // declares the reference form for.
 //
-// The condition it names is real, not defensive: G-A4 wires six surfaces
-// to this helper, and the way each of them can go wrong is skipping the
-// post-write load. That mistake must reach the caller as a tool error, not
+// The condition it names is real, not defensive: every write-tool of the
+// US-5 class reaches this helper, and the way each of them can go wrong
+// is skipping the post-write load. That mistake must reach the caller as a tool error, not
 // as a confirmation that the write applied.
 var ErrAckNilIssue = errors.New("acknowledgement requires the post-write issue state, got nil")
 
@@ -308,16 +310,19 @@ func ackFromDelegatedIssue(caller uuid.UUID) func(*issues.IssueDetail) (ackRow, 
 }
 
 // ackFromClosedIssue is ackFromIssue plus the close outcome and the
-// close-target link state — the acknowledgement for the three surfaces
-// that can close an issue or edit its outcome (sk-489, US-9):
-// skein_close, skein_close_many and skein_update.
+// close-target link state — the acknowledgement for the single-issue
+// surfaces that can close an issue or edit its outcome (sk-489, US-9):
+// skein_close and skein_update. The third closing surface,
+// skein_close_many, answers in the batch form and carries the same two
+// keys on its own row type (close_many.go#closeManyResultRow).
 //
 // # Why a third exception rather than two more fields on the common row
 //
 // The precedent is ackFromAcceptedIssue / ackFromDelegatedIssue, and the
 // rule those two established is «the row carries what THIS write moved».
-// Eight of the eleven write-tools cannot close anything: skein_claim,
-// skein_reparent, skein_commits_attach and the rest would carry
+// Of the write-tools this file serves, only skein_close and skein_update
+// can close anything; the others — skein_claim, skein_reparent,
+// skein_commits_attach and the rest — would carry
 // `closeOutcome` as a fact about the issue's past, not about what they
 // just applied — and on an issue that is not closed they would carry the
 // key as absent, which reads as «this tool did not tell me» rather than
@@ -325,8 +330,9 @@ func ackFromDelegatedIssue(caller uuid.UUID) func(*issues.IssueDetail) (ackRow, 
 //
 // The limit of the precedent is stated because it is exceeded here:
 // ackFromDelegatedIssue adds ONE field to ONE pair of tools, this adds TWO
-// to THREE. The shape is the same and the justification is the same; the
-// count is not, and a fourth such builder would be the point to ask
+// fields to another pair. The shape is the same and the justification is
+// the same; the field count is not, and a fourth such builder would be the
+// point to ask
 // whether the row wants a variant mechanism instead of a fourth closure.
 //
 // `link` is an argument rather than something read off the issue because
@@ -350,7 +356,8 @@ func ackFromClosedIssue(link issues.CloseLinkState) func(*issues.IssueDetail) (a
 // Its signature was chosen to match the card-shaped helper it replaced, so
 // that G-A4 could convert the class one call site at a time instead of
 // rewriting each; that helper is gone now, and the shape stays because
-// every write-tool of the class calls through here.
+// every single-issue acknowledgement goes through here or through
+// ackPayloadWith (the group form is ackBatchPayload).
 //
 // `verbose=true` returns the untouched IssueDetail: INV-4 requires a named
 // way to the full data, and a "full" mode that is itself narrowed would
@@ -362,7 +369,7 @@ func ackPayload(d *issues.IssueDetail, verbose bool) (any, error) {
 // ackPayloadWith is ackPayload with the row builder chosen by the caller,
 // so the one surface that owes its caller the acceptance stamp
 // (skein_accept) can say so at its own call site instead of widening the
-// row for all eleven.
+// row for every write-tool of the class.
 func ackPayloadWith(d *issues.IssueDetail, verbose bool, build func(*issues.IssueDetail) (ackRow, error)) (any, error) {
 	// The nil check comes before the verbose split on purpose: a nil
 	// detail serialised as the "full" response is the JSON literal `null`,

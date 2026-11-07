@@ -23,8 +23,8 @@ import (
 // picks them up automatically.
 //
 // Why they exist (sk-256): the surface — 67 tools when these counters
-// were added, 41 today — is being trimmed, consolidated and selectively
-// promoted to _meta["anthropic/alwaysLoad"].
+// were added, fewer since — is being trimmed, consolidated and
+// selectively promoted to _meta["anthropic/alwaysLoad"].
 // Until now those calls were made on impression. These two counters are
 // the evidence:
 //
@@ -54,7 +54,7 @@ var (
 	//
 	// @metric description Total MCP tool invocations, one increment per tools/call dispatch, labelled by tool name, the action within a consolidated tool, and coarse outcome. Answers which registered tools are never called over a window (missing series or zero rate — consolidation and removal candidates) and which are called in nearly every session (alwaysLoad candidates: divide by the skein_whoami series, which the server instructions make a mandatory once-per-session call). Counts calls, not work items — a batch tool that updated twenty issues increments by one.
 	// @metric calculation Incremented in the deferred observation inside instrumentTool (and instrumentActionTool for consolidated tools), the wrapper internal/mcp/tools.addTool / addActionTool puts around every registered handler, so it fires exactly once per call including the panic path. outcome is derived from the handler return in classifyToolCall, which requires CallToolResult.IsError and the JSON error envelope to agree: nil error, IsError false and no envelope is "ok"; IsError true plus an envelope carrying any business code is "business_error"; a non-nil error return, a nil result, or IsError true plus the internal_error envelope code is "internal_error"; a result where only one of the two error signals is present is "contract_violation"; a handler that panicked is "panic" (the panic is re-raised untouched, never recovered).
-	// @label tool MCP tool name exactly as registered, for example "skein_create". Bounded by the registered surface (41 tools today).
+	// @label tool MCP tool name exactly as registered, for example "skein_create". Bounded by the registered surface.
 	// @label action Sub-action of a consolidated tool, taken from that tool's action enum, for example "upload_url" on skein_attachments. Empty string for the tools that are not consolidated, so sum by (tool) reads exactly as it did before the label existed. Bounded: the value is matched against the tool's action allowlist and anything outside it — a typo, a stale name, a missing parameter — collapses to "__invalid__" rather than minting a series from caller-controlled text.
 	// @label outcome Coarse call outcome. Values: "ok", "business_error", "internal_error", "contract_violation", "panic"
 	toolCallsTotal = promauto.NewCounterVec(
@@ -69,7 +69,7 @@ var (
 	//
 	// @metric description MCP tool calls that were not a clean success, broken down by the stable error code the tool returned. The code is what makes an error rate actionable: a tool with a high validation_error share has a schema or a description agents mis-read and is a rewrite candidate, issue_not_found concentrates where agents guess identifiers, while version_conflict is write contention and says nothing about the tool description. Divide by skein_mcp_tool_calls_total for the same tool to get its error ratio.
 	// @metric calculation Incremented in the same deferred observation as skein_mcp_tool_calls_total, once per call, only when the outcome is not "ok". code is the top-level error field of the JSON envelope produced by mcp.ToolError, passed through the closed knownErrCodes allowlist mirroring the ErrCode constants in internal/mcp/tools/errors.go; a code outside the allowlist collapses to "other", a handler that returned a transport-level error becomes "transport_error", a nil result becomes "nil_result", and a panicking handler becomes "panic". A result carrying only one of the two error signals is recorded as "envelope_without_flag" (JSON envelope present, CallToolResult.IsError false) or "flag_without_envelope" (IsError true, no parsable envelope); both are defects in this package rather than caller errors. That allowlist is what keeps the label bounded.
-	// @label tool MCP tool name exactly as registered, for example "skein_create". Bounded by the registered surface (41 tools today).
+	// @label tool MCP tool name exactly as registered, for example "skein_create". Bounded by the registered surface.
 	// @label action Sub-action of a consolidated tool, taken from that tool's action enum, for example "delete" on skein_attachments. Empty string for tools that are not consolidated; "__invalid__" for anything outside the tool's action allowlist, which is what keeps the label bounded — the raw string an agent sent is in the WARN line the dispatcher writes, not in the label.
 	// @label code Stable business error code from the closed ErrCode set in internal/mcp/tools/errors.go, for example "validation_error", "version_conflict", "forbidden", "issue_not_found". Plus the synthetic values "transport_error", "nil_result", "panic", "envelope_without_flag", "flag_without_envelope" and "other" for anything off the allowlist.
 	toolErrorsTotal = promauto.NewCounterVec(
@@ -283,16 +283,19 @@ func instrumentTool(name string, h server.ToolHandlerFunc) server.ToolHandlerFun
 // The label comes from actionSet.label, never from the raw argument —
 // see actionInvalid. Cardinality stays bounded by the registered surface,
 // but it is not unchanged by the fold and this comment used to claim it
-// was: the 41 tools produce 33 (tool, "") pairs for the unfolded ones, 39
-// (tool, action) pairs across the eight action tables, and 8 more
-// (tool, "__invalid__") buckets — 80 pairs, against the 67 the pre-fold
-// surface had. The 39 exceeds the 34 tools that were folded because three
-// discriminators that used to live INSIDE a tool became actions of their
-// own (skein_filter_watch's `op`, skein_project_watch's `unwatch`,
-// skein_mark_read's presence-based one-of). Multiplied by the five
-// `outcome` values that is 400 potential series where the old surface had
-// 335 — bounded and small either way, which is the property that matters;
-// exact parity was never true.
+// was. Counted against cmd/api/mcp_tools.go and the action tables at the
+// time of writing: the 42 tools produce 34 (tool, "") pairs for the
+// unfolded ones, 42 (tool, action) pairs across the eight action tables,
+// and 8 more (tool, "__invalid__") buckets — 84 pairs, against the 67 the
+// pre-fold surface had. The action pairs exceed the 34 tools that were
+// folded because three discriminators that used to live INSIDE a tool
+// became actions of their own (skein_filter_watch's `op`,
+// skein_project_watch's `unwatch`, skein_mark_read's presence-based
+// one-of), and because the action tables have grown since the fold.
+// Multiplied by the five `outcome` values that is 420 potential series
+// where the old surface had 335 — bounded and small either way, which is
+// the property that matters; exact parity was never true. The numbers
+// move with the surface; the bound is what this comment vouches for.
 func instrumentActionTool(name string, actions actionSet, h server.ToolHandlerFunc) server.ToolHandlerFunc {
 	return observeToolCall(name, actions.label, h)
 }
@@ -449,9 +452,9 @@ func classifyToolCall(res *mcpgo.CallToolResult, err error) (outcome, code strin
 //
 // The probe is intentionally strict — object at the top level, `error`
 // present and a JSON string — so a successful payload that merely
-// contains a nested `error` object (skein_dep_add_many and
-// skein_close_many both have per-row `error` fields) is not mistaken for
-// a failed call.
+// contains a nested `error` object (the batch tools — skein_close_many,
+// skein_update_many, skein_dep_add_many — all have per-row `error`
+// fields) is not mistaken for a failed call.
 func toolErrorCode(res *mcpgo.CallToolResult) string {
 	for _, content := range res.Content {
 		text, ok := content.(mcpgo.TextContent)

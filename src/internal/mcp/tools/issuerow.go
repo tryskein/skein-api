@@ -6,9 +6,10 @@ package tools
 // # What a "row" is and why it needs a projection
 //
 // Three MCP surfaces emit issue rows — the issue list, the ready board,
-// and session priming — and today each of them serialises a shared struct
-// whole. Measured on the reference issue, that row is 615 characters, and
-// about 45% of it is three identifiers and two timestamps no agent reads.
+// and session priming — and before sk-282 each of them serialised a shared
+// struct whole. Measured on the reference issue, that row was 615
+// characters, and about 45% of it was three identifiers and two timestamps
+// no agent reads.
 // US-2 replaces "whatever the struct happens to hold" with a NAMED default
 // set, plus an explicit per-call selection for narrow queries.
 //
@@ -46,9 +47,14 @@ package tools
 //
 // # What this file deliberately does NOT do
 //
-//   - It wires itself into no tool. Consumers are T014 (list), T017
-//     (ready), T018 (prime) and, for the counter slot, T012. The plan
-//     promises no change on the wire.
+//   - It is not a tool and registers nothing. ProjectIssueRow is called by
+//     skein_list (list_rows.go#projectListPage) and skein_prime
+//     (prime_rows.go#projectPrimeIssueRows, #projectPrimeReadyRows), both
+//     with the child-counter slot filled; IssueRowDefaultFieldsSentence
+//     renders the default set into the skein_list and skein_prime
+//     descriptions. skein_ready does not re-project its rows
+//     (ready_rows.go): it only drops the keys its carrier never loads,
+//     spelled with this file's field-name constants.
 //   - It does not implement the drift-guard. That is T006, and it lives in
 //     the test file so a new unclassified field fails a test rather than
 //     changing a response.

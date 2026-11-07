@@ -43,11 +43,12 @@ package tools
 //   - It does not truncate anything in storage. The cut is on the wire
 //     only — INV-3: no change may make text stop being stored or stop
 //     being reachable through a reading tool.
-//   - It does not wire itself into any tool. The consumers are T011
-//     (thread-index preview), T016 (project description in a list row) and
-//     T019 (inbox values), each in its own group. The plan promises "not one
-//     change on the wire beyond the truncation rule being available", and
-//     that promise is kept here by shipping the mechanism unattached.
+//   - It is not a tool and registers nothing. The consumers call
+//     TruncateRunes themselves: skein_show's thread index
+//     (show_comments.go#buildCommentIndex), skein_project_list's rows
+//     (project_rows.go#projectListRow) and the inbox rows of
+//     skein_notifications (inbox_rows.go#truncateInboxValue,
+//     #applyPairBudget).
 //
 // # Logging
 //
@@ -72,11 +73,13 @@ const (
 	// conclusion is unchanged — «read the index, then fetch what you need»
 	// still beats the 64 672 characters the same thread cost whole — but
 	// the margin is a fifth of what the old number implied, and the index
-	// at its 200-entry cap is 44 400, not ≈18 000. Consumer: T011.
+	// at its 200-entry cap is 44 400, not ≈18 000. Consumer: skein_show's
+	// thread index (show_comments.go#buildCommentIndex).
 	ThreadIndexPreviewMaxRunes = 80
 
 	// ProjectDescriptionPreviewMaxRunes is how much of a project's
-	// description survives into a project-list row. Consumer: T016.
+	// description survives into a project-list row. Consumer:
+	// skein_project_list (project_rows.go#projectListRow).
 	ProjectDescriptionPreviewMaxRunes = 200
 
 	// InboxValuePreviewMaxRunes is the ceiling for an old/new value in an
@@ -89,6 +92,8 @@ const (
 	// nothing to do with notifications must not inherit that package just
 	// to learn a length. TestInboxValuePreviewMatchesMonitorPreview binds
 	// the two numbers together so they cannot drift apart silently.
+	// Consumer: skein_notifications inbox rows
+	// (inbox_rows.go#truncateInboxValue).
 	InboxValuePreviewMaxRunes = 1024
 )
 

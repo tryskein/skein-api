@@ -130,12 +130,13 @@ func issueWithoutDescription(d *issues.IssueDetail) (map[string]any, error) {
 // US-10's finding is that a model optimises for completeness unless the
 // cheap path is the first thing it reads — so a tool whose answer changed
 // shape has to say so before the reader stops, not in a parameter blurb
-// halfway down the schema. These eleven descriptions all opened by
+// halfway down the schema. The descriptions of the class all opened by
 // describing the ACTION and never said what comes back; an agent reading
 // one of them still expected an issue card.
 //
-// Deliberately short: it is inlined into eleven schemas, so every
-// character is paid eleven times in tools/list. The parameter blurb
+// Deliberately short: it is inlined into the description of every tool
+// of the class (the callers of withAckAnswerNote), so every character is
+// paid once per such tool in tools/list. The parameter blurb
 // (ackVerboseDescription) carries the field-level detail.
 const ackAnswerNote = " ANSWERS WITH AN ACKNOWLEDGEMENT by default — the id, " +
 	"the applied state and the new version, no issue card and no prose — so " +
@@ -172,7 +173,7 @@ func withAckAnswerNote(description string) string {
 // the last tool converted the old wording had no user left and went.
 //
 // Economy rule: this string is inlined into every converted tool's
-// schema, so every character is paid eleven times in the tools/list
+// schema, so every character is paid once per such tool in the tools/list
 // payload. It says what comes back and how to reach the rest, and leaves
 // the reasoning to the agent guide.
 const ackVerboseDescription = "Return the full IssueDetail, prose " +
@@ -189,13 +190,17 @@ const ackVerboseDescription = "Return the full IssueDetail, prose " +
 // It began as the sibling of writeIssueResult — the sk-233 helper that
 // returned the issue card minus its prose — with the same signature so
 // that G-A4 could convert the class one call site at a time instead of
-// rewriting each. That conversion is finished: every write-tool of the
-// US-5 class now answers here, including the four that used to build
-// their own response (create, the close warning branch, the claim batch,
-// epic_create), and writeIssueResult was removed with its last caller.
+// rewriting each. That conversion is finished, and writeIssueResult was
+// removed with its last caller. Every write-tool of the US-5 class now
+// answers through the acknowledgement builders: the single-issue tools
+// through writeIssueAck and its siblings in this file (the close warning
+// branch through writeIssueCloseAck), the claim batch through
+// writeIssueBatchAck, and create and epic_create through
+// ack.go#ackPayload / ack.go#ackBatchFromIssues directly, because their
+// envelope carries keys of its own around the acknowledgement.
 //
-// It is deliberately the ONLY way an issue post-state reaches the wire
-// from a write-tool (D-6). Leaving the old helper in place would have
+// The acknowledgement is deliberately the ONLY way an issue post-state
+// reaches the wire from a write-tool (D-6). Leaving the old helper in place would have
 // left a second, card-shaped serialisation point sitting ready for the
 // next tool to pick up — which is the partial application FP-2 and FP-9
 // describe, arriving a release later.
@@ -212,15 +217,18 @@ func writeIssueAck(
 // writeIssueAckWith is writeIssueAck plus a slot for keys that belong at
 // the TOP LEVEL of the response, beside the acknowledgement's own.
 //
-// The slot exists because three of D-6's four named bypasses need it. The
-// close warning branch (close.go) is the concrete one: it does not call
-// the common helper at all, it builds the response map itself and injects
-// `warning` and `openChildList` flat — an agent parses them at the top
-// level in both lean and verbose mode, and wrapping them would be a wire
-// change. Without a slot here, G-A4 could bring every OTHER write-tool to
-// the acknowledgement and would have to leave that branch on its own
-// serialisation path — "the class applied only in part", which is exactly the
-// outcome FP-2 and FP-9 name as a failure.
+// The slot exists for the callers whose response carries top-level keys
+// of its own: skein_close's warning branch (close.go, through
+// writeIssueCloseAck) and skein_commits_detach's detach report
+// (commits_detach.go#detachReportKeys). The close warning branch is the
+// one that forced it: before G-A4 it did not call the common helper at
+// all, it built the response map itself and injected `warning` and
+// `openChildList` flat — an agent parses them at the top level in both
+// lean and verbose mode, and wrapping them would be a wire change. Without
+// a slot here, G-A4 could bring every OTHER write-tool to the
+// acknowledgement and would have to leave that branch on its own
+// serialisation path — "the class applied only in part", which is exactly
+// the outcome FP-2 and FP-9 name as a failure.
 //
 // The default form does not move by a byte: with no extra keys the
 // payload is serialised exactly as writeIssueAck serialises it, struct and
@@ -244,7 +252,9 @@ func writeIssueAckWith(
 
 // writeIssueCloseAck is writeIssueAckWith for the three surfaces whose
 // acknowledgement carries the close outcome and the close-target link
-// state — skein_close, skein_close_many and skein_update (sk-489, US-9).
+// state — skein_close and skein_update (sk-489, US-9). skein_close_many,
+// the third closing surface, answers in the batch form with its own row
+// type (close_many.go#closeManyResultRow) and does not come through here.
 //
 // Same shape of exception as writeIssueAcceptanceAck, and here for the
 // same reason the delegation pair needed one: `link` is not a field of
@@ -272,8 +282,9 @@ func writeIssueCloseAck(
 //
 // It exists as its own entry point rather than as a flag on the shared
 // one so that the exception is visible where it applies (accept.go) and
-// nowhere else: a boolean threaded through eleven call sites would be
-// `false` at ten of them and would invite the twelfth to guess. See
+// nowhere else: a boolean threaded through every acknowledgement call site
+// would be `false` at all but one of them and would invite the next new
+// site to guess. See
 // ackFromAcceptedIssue for why the stamp is not on the common row.
 func writeIssueAcceptanceAck(
 	ctx context.Context,
@@ -291,8 +302,9 @@ func writeIssueAcceptanceAck(
 //
 // Same shape of exception as writeIssueAcceptanceAck, and here for the
 // same reason: the caller's id is needed to build the row, and threading
-// it through the shared entry point would put a parameter on eleven call
-// sites that only two of them can answer. See ackFromDelegatedIssue for
+// it through the shared entry point would put a parameter on every
+// acknowledgement call site that only the two delegation tools can
+// answer. See ackFromDelegatedIssue for
 // why these two tools cannot acknowledge with the common row.
 func writeIssueDelegationAck(
 	ctx context.Context,
