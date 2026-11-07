@@ -134,7 +134,7 @@ const assigneeDefaultNote = "Assignee default: without `assignee`, the issue is 
 	"YOU (the API key's owner) and accepted, if your personal setting \"Assign issues my " +
 	"agent creates to me\" is on (the default; switch it in the web UI notification settings). Not " +
 	"for standing tasks, and not under someone else's parent: when the nearest assigned " +
-	"ancestor is another person, or one you cannot see, the issue stays unassigned — " +
-	"see skein_get_instructions. Pass `unassigned: true` when the user " +
+	"ancestor is another person, or one you cannot see, the issue stays unassigned. " +
+	"Pass `unassigned: true` when the user " +
 	"asks for an unassigned issue; to drop the assignee later, clear it with skein_update " +
 	"(assignee=\"\"). Being the assignee is not a lock: skein_claim is still needed to start work."

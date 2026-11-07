@@ -122,5 +122,5 @@ const fieldBleedNote = "⚠ Field bleed: tool-call wrapper literals (`<invoke`, 
 	"acceptanceCriteria / notes / design) are rejected with " +
 	"`validation_error` (`code: tool_call_syntax_leaked`) — a hit means you " +
 	"closed a parameter block with the wrong tag. Closed set + the " +
-	"look-alikes that are NOT rejected and corrupt silently: " +
+	"look-alikes that are NOT rejected: " +
 	"skein_get_instructions (\"Text fields — forbidden literals\")."

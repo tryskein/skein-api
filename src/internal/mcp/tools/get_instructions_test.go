@@ -269,7 +269,25 @@ func TestGetInstructions_SearchHintSet(t *testing.T) {
 // skein_update_many row cut inside its chain may have committed earlier
 // steps, so the recovery is split per tool (never started / dep edge /
 // update chain / close). Guide 76920 bytes, margin 80.
-const fullGuideBudgetBytes = 77000
+//
+// ⚠ LOWERED, 77000 → 15000 (sk-908, after the audit of sk-905). The guide
+// was rewritten to under a fifth of its size (the guard below prints the
+// exact number on every run; this comment does not repeat it, so it
+// cannot go stale) under one principle: it keeps only the Skein-specific
+// contract an agent cannot learn from a tool schema, a server answer or
+// common sense, plus the rules agents actually got wrong — claim and
+// close discipline (own subagents, epic close), expectedVersion /
+// serialization_retry, «absent key ≠ empty» with the truncation markers,
+// the monitor's self-skip by actorSessionId, mentions, no free-text
+// dependencies, no closing another agent's work. Everything that
+// restated initialize.txt or a tool description, every rationale
+// paragraph, the per-tool defaults table, the lifecycle and standing
+// code tables, post-action summaries, identity model, tool discovery,
+// theme and feedback sections left. The budget follows the file down so
+// the recovered bytes are not quietly re-spent: the margin is under the
+// 10% TestGetInstructions_BudgetIsNotSlackDressedAsABudget allows — room
+// for a paragraph, not for a section.
+const fullGuideBudgetBytes = 15000
 
 // TestGetInstructions_PayloadFitsCap is the TRUNCATION guard: whatever
 // the tool can return must fit the anthropic/maxResultSizeChars it

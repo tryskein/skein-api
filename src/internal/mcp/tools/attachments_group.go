@@ -56,7 +56,7 @@ func RegisterAttachments(s *server.MCPServer, deps attachmentDeps) {
 			mcpgo.Enum(attachmentActions.enum()...),
 			mcpgo.Description(
 				"What to do:\n"+
-					"  - \"upload_url\" → mint a presigned upload URL and create a pending attachment row.\n"+
+					"  - \"upload_url\" → mint a presigned upload URL and create a pending attachment row. The size limit is per instance and is returned as `maxSizeBytes` (over it: attachment_too_large); executable files are refused by extension (attachment_mime_blocked).\n"+
 					"  - \"confirm\" → mark an uploaded file ready (idempotent; re-emits no event on a second call).\n"+
 					"  - \"list\" → list every confirmed attachment on an issue.\n"+
 					"  - \"metadata\" → filename, contentType, sizeBytes, status and uploader of one attachment.\n"+

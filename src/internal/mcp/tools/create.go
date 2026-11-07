@@ -27,8 +27,8 @@ import (
 //   - If the title fuzzy-matches one or more open issues in the project
 //     and `force` is not set and `duplicateOf` is not set, the tool
 //     short-circuits with `created:false, duplicates:[...], decisionRequired:true`.
-//     The agent reads that and decides: stop and ask the user, retry with
-//     force=true, or call again with duplicateOf=<existing-id>.
+//     The agent reads that and decides: retry with force=true, or call
+//     again with duplicateOf=<existing-id>.
 //   - If `force` is true, or no duplicates were found, or `duplicateOf` is
 //     set, the issue is created. When `duplicateOf` is set the tool also
 //     auto-creates a `duplicates` dependency edge from the new issue to
@@ -91,9 +91,9 @@ func RegisterCreate(s *server.MCPServer, pool *pgxpool.Pool, issuesStore *issues
 				"natively — do NOT preflight with skein_search or "+
 				"skein_prime to 'check for duplicates'. On a match returns "+
 				"`{created:false, duplicates:[...], decisionRequired:true}`: "+
-				"stop and ask the user, or retry with `force:true`, or call "+
-				"again with `duplicateOf:\"demo-42\"` (links a `duplicates` "+
-				"edge). Layers, thresholds and the three-way rubric: "+
+				"decide yourself — retry with `force:true` if it is distinct, "+
+				"or call again with `duplicateOf:\"demo-42\"` (links a "+
+				"`duplicates` edge). `degraded` semantics: "+
 				"skein_get_instructions (\"Duplicate detection\").\n\n"+
 				"`kind` (REQUIRED for agent callers) sets the issue's "+
 				"`source` column — see the parameter. The optional "+

@@ -55,8 +55,8 @@ func RegisterDepAdd(s *server.MCPServer, pool *pgxpool.Pool, depsStore *dependen
 				"can see both projects; a target of another space or of a "+
 				"project you cannot see answers issue_not_found, exactly "+
 				"as a nonexistent one; a cycle "+
-				"returns dependency_cycle. Type table, direction semantics "+
-				"and error codes: skein_get_instructions.",
+				"returns dependency_cycle. Type table and direction semantics: "+
+				"skein_get_instructions (\"Dependency edge types\").",
 		),
 		mcpgo.WithString("fromId",
 			mcpgo.Required(),

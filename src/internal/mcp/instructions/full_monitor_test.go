@@ -18,33 +18,24 @@ func TestFullGuide_HasMonitorSection(t *testing.T) {
 }
 
 // TestFullGuide_MonitorOperationalFacts asserts the guide carries the
-// load-bearing facts an agent needs to actually run a monitor correctly:
-// the setup tool, the 0600 token-file hygiene, running under the Monitor
-// tool, the stop protocol (sk-579), and the related subscribe/filter tools. Each string is a
-// contiguous substring of the section — an edit that silently drops one of
-// these breaks the workflow without failing any other test.
+// facts an agent cannot take from the tool description — the runner's
+// line protocol and stop protocol (sk-579) — plus the setup tool and the
+// token-file step the description also names, because they are what the
+// steps below hang on. Credential lifetime (renewal window, hard cap) and
+// the token's read-only scope are carried by the skein_get_monitor_script
+// description and are deliberately NOT pinned here since sk-908. Each
+// string is a contiguous substring of the section.
 func TestFullGuide_MonitorOperationalFacts(t *testing.T) {
 	wants := []string{
 		"skein_get_monitor_script", // the setup MCP tool
 		"tokenFilePath",            // write the token to the 0600 file
 		"Claude Code `Monitor`",    // run the bootstrap under Claude Code's Monitor
 		"one JSON object",          // the stdout line protocol
-		// Subscribe without the runner. sk-255.3 folded skein_watch into
-		// skein_watchers(action="watch") and renamed its id to issueId;
-		// the pin moves with the tool because full.md is what an agent
-		// actually executes, not documentation about it.
-		"skein_watchers(action=\"watch\", issueId, subtree=true)",
-		"skein_search(commentAuthorKinds=[…])", // filter comments by author kind
-		// credential lifetime + security posture (must not be silently dropped)
-		"read-only",        // token capability
-		"renewal window",   // sliding window (sk-579: configurable, default 6h)
-		"12-hour hard cap", // absolute cap
 		// runner behavior facts
 		"live-start",       // no historical backlog
 		"same `bootstrap`", // sk-579: a paused monitor restarts on the same bootstrap
 		"token_expired",    // the stop reason of a dead credential
-		// sk-157: completion-by-default; sk-579: the runner ends itself on root close
-		"issue.closed", // closure is in the default event set
+		// sk-579: the runner ends itself on root close
 		"root_closed",  // the runner's own stop on the root closing
 		"ROOT task",    // ... only when the ROOT id closes
 		"monitor_stop", // the agent's explicit stop by monitorId

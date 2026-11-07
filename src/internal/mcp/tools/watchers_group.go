@@ -84,7 +84,9 @@ func RegisterWatchers(
 		mcpgo.WithDescription(
 			"The caller's own notification subscriptions, at three scopes: one "+
 				"issue, a whole project, or a saved filter (custom watcher). "+
-				"Automatic subscriptions: the assignee of an issue; its creator "+
+				"Automatic subscriptions: the assignee of an issue (except one "+
+				"filled in at create by the \"assign agent-created issues to me\" "+
+				"setting); its creator "+
 				"(the human who owns the API key) only for issues created by "+
 				"hand or as a TOP-LEVEL agent_directed issue — an issue your "+
 				"agent files under a parent, or with source=agent_autonomous, "+

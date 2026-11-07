@@ -53,7 +53,7 @@ func RegisterClose(s *server.MCPServer, pool *pgxpool.Pool, issuesStore *issues.
 				"`commits[]`.\n\n"+
 				"If a retried transaction aborts while the declared version still matches, serialization_retry means the close rolled back; retry unchanged.\n\n"+
 				"closeOutcome is required when transitioning to closed; repeating a close without it preserves the previous outcome. "+
-				"Target, refusals and outcome edits: skein_get_instructions, \"Close outcome\".\n\n"+
+				"Target and outcome edits: skein_get_instructions, \"Close outcome\".\n\n"+
 				"Re-close is NOT idempotent: every call overwrites "+
 				"`closed_reason` / `closed_at` and bumps `version`. To add "+
 				"commit hashes to an already-closed issue without losing "+

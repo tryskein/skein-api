@@ -59,7 +59,7 @@ const getInstructionsMaxResultChars = 150000
 const getInstructionsPrefixMaxBytes = len("Project: ") + projects.NameMaxLen + len("\n\n")
 
 // RegisterGetInstructions wires the skein_get_instructions tool. Returns
-// the embedded long-form guide (~50 KB markdown). Optional `project`
+// the embedded long-form guide (~15 KB markdown). Optional `project`
 // argument prepends a "Project: <alias>" line so the agent has the
 // resolved project name visible at the top of the doc; full per-project
 // rule overrides arrive in R2.2.
@@ -88,7 +88,7 @@ func RegisterGetInstructions(s *server.MCPServer, pool *pgxpool.Pool, store *pro
 	tool := mcpgo.NewTool(
 		"skein_get_instructions",
 		mcpgo.WithDescription(
-			"Returns the long-form Skein agent guide (~50 KB markdown). "+
+			"Returns the long-form Skein agent guide (~15 KB markdown). "+
 				"Call once at session start, cache for the session — content "+
 				"does not change between calls. Pass `project` (alias or UUID) "+
 				"to receive a project-tagged copy.",
@@ -125,7 +125,7 @@ func handleGetInstructions(pool *pgxpool.Pool, store *projects.Store) server.Too
 
 		// Optional project arg. mcp-go's GetArguments returns map[string]any;
 		// missing key → nil → empty string after the type-assertion. We
-		// trim because callers commonly send "  demo-api  " from CLAUDE.md
+		// trim because callers commonly send "  demo-api  " from AGENTS.md
 		// templates with stray whitespace.
 		var projectArg string
 		if v, ok := req.GetArguments()["project"]; ok {

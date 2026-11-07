@@ -68,7 +68,7 @@ func RegisterGetMonitorScript(s *server.MCPServer, pool *pgxpool.Pool, notifStor
 			"Set up a live notification monitor on an issue for a headless "+
 				"agent. One call: (1) subscribes you as a watcher of the issue "+
 				"(subtree=true also covers every current and future subtask); "+
-				"(2) mints a scoped skm_ monitor token tied to your calling API "+
+				"(2) mints a scoped, read-only skm_ monitor token (it can only poll) tied to your calling API "+
 				"key — it stays valid while the runner keeps polling, lapses "+
 				"after "+formatMonitorWindow(idleTTL)+" without a successful "+
 				"check (the renewal window, configurable on the server) and "+

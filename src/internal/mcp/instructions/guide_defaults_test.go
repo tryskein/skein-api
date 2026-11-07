@@ -5,7 +5,10 @@ import (
 	"testing"
 )
 
-// guide_defaults_test.go — sk-282 T027, matrix rows 99 and 100.
+// guide_defaults_test.go — sk-282 T027, matrix rows 99 and 100; reduced
+// in sk-908 when the per-tool defaults table left the guide (the tool
+// descriptions carry those defaults; the guide keeps only the reading
+// rules an agent needs before any call).
 //
 // Row 100: "US-10: the guide no longer describes the old defaults (list
 // page, 'the whole thread as a dump', search page default, project list
@@ -15,8 +18,8 @@ import (
 // sentence here that teaches a retired contract is not documentation drift
 // — it is a wrong instruction delivered by the server, to every agent, at
 // session start, with the authority of the tool that serves it. This run
-// found such a sentence four times in a row; these two tests are what
-// stops the fifth.
+// found such a sentence four times in a row; these tests are what stops
+// the fifth.
 
 // retiredGuideClaims are statements the guide is forbidden to make, each
 // paired with what the wire actually does now.
@@ -62,6 +65,11 @@ var retiredGuideClaims = []struct {
 		why: "the list ceiling is 100 and the applied default 25; the 500-row page " +
 			"was the defect T014 closed.",
 	},
+	{
+		literal: "stop and ask the user",
+		why: "since sk-908 the agent decides a duplicate match itself (force / " +
+			"duplicateOf); the mandatory ask-the-user rubric is retired.",
+	},
 }
 
 // TestFullGuide_TeachesNoRetiredDefault is matrix row 100.
@@ -76,14 +84,14 @@ func TestFullGuide_TeachesNoRetiredDefault(t *testing.T) {
 	}
 }
 
-// TestFullGuide_StatesTheCurrentDefaults is the positive half of row 100.
+// TestFullGuide_StatesTheCurrentReadingRules is the positive half of row
+// 100, narrowed in sk-908 to the rules that stayed in the guide.
 //
 // Forbidding the old sentences is only half the job: a guide that simply
 // deleted them would pass the test above and still leave an agent with no
-// idea what it gets by default. Each fact below is one an agent needs
-// BEFORE it calls anything, and each is checked as a fact, not as a phrase
-// — the numbers are what matter.
-func TestFullGuide_StatesTheCurrentDefaults(t *testing.T) {
+// idea what it gets back. Each fact below is one an agent needs BEFORE it
+// calls anything, and each is checked as a fact, not as a phrase.
+func TestFullGuide_StatesTheCurrentReadingRules(t *testing.T) {
 	facts := []struct {
 		what  string
 		needs []string
@@ -97,20 +105,12 @@ func TestFullGuide_StatesTheCurrentDefaults(t *testing.T) {
 			needs: []string{"commentsLimit: 0", "index", "last 3"},
 		},
 		{
-			what:  "list and search page defaults",
-			needs: []string{"25 rows", "25 hits"},
-		},
-		{
-			what:  "project list page default and its cut description",
-			needs: []string{"50 rows", "descriptionTruncated"},
-		},
-		{
 			what:  "the write-tools answer with an acknowledgement",
 			needs: []string{"acknowledgement", "`version`"},
 		},
 		{
-			what:  "absent keys are not empty values",
-			needs: []string{"absent", "valuesTruncated"},
+			what:  "absent keys are not empty values; cut values carry a marker",
+			needs: []string{"absent", "valuesTruncated", "descriptionTruncated"},
 		},
 	}
 	for _, fact := range facts {
@@ -158,43 +158,5 @@ func TestFullGuide_ObligationTriggersOnTheIncompletenessField(t *testing.T) {
 		t.Errorf("full.md mentions %s %d times. The rule is that this count does NOT "+
 			"participate; every mention beyond the one rejection is a place it can be "+
 			"read as participating.", rawCount, occurrences)
-	}
-}
-
-// TestFullGuide_ListHopForAnAbsentKeyNamesTheSpelling guards the OTHER
-// half of a narrowing: not the inventory of what is missing, but the
-// route back.
-//
-// An earlier fix corrected the inventory first — the guide stopped claiming
-// `componentIds` rides on a default row — and left the route alone, so it
-// still sent an agent to a bare `skein_list` for a key that row does not
-// carry either. That is the same defect from the other side: the agent
-// walks the named route, meets a second absence with no explanation, and
-// reads it as "this issue has no components".
-//
-// So: any "way to more" cell that names `componentIds` AND `skein_list`
-// must also name `fields`, because that is the only spelling of the hop
-// that answers. `labels` needs no such qualifier — it IS in the default
-// row — which is why the rule keys on the field, not on the tool.
-func TestFullGuide_ListHopForAnAbsentKeyNamesTheSpelling(t *testing.T) {
-	checked := 0
-	for _, line := range strings.Split(FullGuide, "\n") {
-		if !strings.HasPrefix(strings.TrimSpace(line), "| `skein_") {
-			continue
-		}
-		if !strings.Contains(line, "componentIds") || !strings.Contains(line, "skein_list") {
-			continue
-		}
-		checked++
-		if !strings.Contains(line, "fields") {
-			t.Errorf("this defaults-table row sends the reader to skein_list for "+
-				"componentIds without naming `fields`, and the default row does not "+
-				"carry that key either — the route ends on a second absence:\n%s", line)
-		}
-	}
-	if checked == 0 {
-		t.Error("no defaults-table row mentions componentIds and skein_list together — " +
-			"either the table lost the rows this guards, or the guard's anchor rotted; " +
-			"a guard that checks nothing is worse than no guard")
 	}
 }
