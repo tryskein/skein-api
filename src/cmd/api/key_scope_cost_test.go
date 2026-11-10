@@ -13,12 +13,18 @@ package main
 // per-call lookup of the scope, a second read of the visible set, a check
 // of the key's projects outside the statements of the tool.
 //
-// Only the statements of the caller's own request are counted (the request
-// context names him), so a background worker of the router does not move
-// the count.
+// Every statement of the counted request is counted — the authentication of
+// the key (its lookup, grant and scope), the MCP middleware and the tool —
+// and nothing else: the request carries a marker in its context, which
+// every statement it makes inherits, so a background worker of the router
+// does not move the count (review R8-08).
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"sync"
 	"testing"
@@ -32,37 +38,75 @@ import (
 	"skein-api/internal/testsupport"
 )
 
-// callerStatements counts the statements run on behalf of one user.
-type callerStatements struct {
-	mu     sync.Mutex
-	caller uuid.UUID
-	n      int
+// countedRequest marks the context of the request whose statements count.
+type countedRequest struct{}
+
+// requestStatements counts the statements of the marked request: queries,
+// and the queries of a batch.
+type requestStatements struct {
+	mu sync.Mutex
+	n  int
 }
 
-func (c *callerStatements) TraceQueryStart(ctx context.Context, _ *pgx.Conn, _ pgx.TraceQueryStartData) context.Context {
-	if u, ok := auth.UserIDFrom(ctx); ok {
+func (c *requestStatements) count(ctx context.Context, k int) {
+	if on, _ := ctx.Value(countedRequest{}).(bool); on {
 		c.mu.Lock()
-		if c.caller != uuid.Nil && u == c.caller {
-			c.n++
-		}
+		c.n += k
 		c.mu.Unlock()
+	}
+}
+
+func (c *requestStatements) TraceQueryStart(ctx context.Context, _ *pgx.Conn, _ pgx.TraceQueryStartData) context.Context {
+	c.count(ctx, 1)
+	return ctx
+}
+
+func (c *requestStatements) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {}
+
+func (c *requestStatements) TraceBatchStart(ctx context.Context, _ *pgx.Conn, d pgx.TraceBatchStartData) context.Context {
+	if d.Batch != nil {
+		c.count(ctx, d.Batch.Len())
 	}
 	return ctx
 }
 
-func (c *callerStatements) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {}
+func (c *requestStatements) TraceBatchQuery(context.Context, *pgx.Conn, pgx.TraceBatchQueryData) {}
 
-// during counts the statements of caller while fn runs.
-func (c *callerStatements) during(caller uuid.UUID, fn func()) int {
+func (c *requestStatements) TraceBatchEnd(context.Context, *pgx.Conn, pgx.TraceBatchEndData) {}
+
+// call is the statements of one marked tools/call of k.
+func (c *requestStatements) call(t *testing.T, k *scopedKey, name string, args map[string]any) int {
+	t.Helper()
+	raw, err := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+		"params": map[string]any{"name": name, "arguments": args}})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewReader(raw))
+	req = req.WithContext(context.WithValue(req.Context(), countedRequest{}, true))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json, text/event-stream")
+	req.Header.Set(auth.HeaderInternalSecret, wiringInternalSecret)
+	req.Header.Set(auth.HeaderAPIKey, k.plain)
+	req.Header.Set(auth.HeaderSurface, auth.SurfaceInternal)
+	req.Header.Set("Mcp-Session-Id", k.sid)
 	c.mu.Lock()
-	c.caller, c.n = caller, 0
+	c.n = 0
 	c.mu.Unlock()
-	fn()
+	rec := httptest.NewRecorder()
+	k.s.router.ServeHTTP(rec, req)
+	var out struct {
+		Error  any `json:"error"`
+		Result struct {
+			IsError bool `json:"isError"`
+		} `json:"result"`
+	}
+	if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &out) != nil || out.Error != nil || out.Result.IsError {
+		t.Fatalf("tools/call %s: %d %s", name, rec.Code, rec.Body.String())
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	n := c.n
-	c.caller = uuid.Nil
-	return n
+	return c.n
 }
 
 func TestKeyScope_ProjectsCostsNoMoreStatementsThanAll(t *testing.T) {
@@ -74,7 +118,7 @@ func TestKeyScope_ProjectsCostsNoMoreStatementsThanAll(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse config: %v", err)
 	}
-	counter := &callerStatements{}
+	counter := &requestStatements{}
 	cfg.ConnConfig.Tracer = counter
 	cfg.MaxConns = 16
 	pool, err := pgxpool.NewWithConfig(context.Background(), cfg)
@@ -87,7 +131,6 @@ func TestKeyScope_ProjectsCostsNoMoreStatementsThanAll(t *testing.T) {
 	P := s.f.ASpace
 	all := mintScopedKey(t, s, testsupport.ActorBoth, apikeys.Scope{Mode: apikeys.ScopeAll})
 	projects := mintScopedKey(t, s, testsupport.ActorBoth, apikeys.Scope{Mode: apikeys.ScopeProjects, Projects: []uuid.UUID{P.ID}})
-	caller := s.f.User(t, testsupport.ActorBoth).ID
 
 	calls := []struct {
 		name string
@@ -107,16 +150,11 @@ func TestKeyScope_ProjectsCostsNoMoreStatementsThanAll(t *testing.T) {
 				if res := k.tool(t, c.tool, c.args()); res.isError {
 					t.Fatalf("%s: %s", c.tool, res.text)
 				}
-				args := c.args()
-				return counter.during(caller, func() {
-					if res := k.tool(t, c.tool, args); res.isError {
-						t.Fatalf("%s: %s", c.tool, res.text)
-					}
-				})
+				return counter.call(t, k, c.tool, c.args())
 			}
 			withAll, withProjects := cost(all), cost(projects)
 			if withAll == 0 {
-				t.Fatalf("%s with scope all ran no statement of the caller — the count sees nothing", c.tool)
+				t.Fatalf("%s with scope all ran no statement — the count sees nothing", c.tool)
 			}
 			if withProjects > withAll {
 				t.Errorf("%s: scope projects runs %d statements, scope all %d — the scope must cost no round-trip of its own",
