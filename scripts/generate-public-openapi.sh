@@ -39,8 +39,9 @@ go tool github.com/swaggo/swag/v2/cmd/swag init --v3.1 --quiet \
 # with "null"). A field the server answers as null (a Go pointer without
 # omitempty) is tagged extensions:"x-nullable" instead; here each such
 # property becomes its 3.1 form: "type": [<type>, "null"], or, for a
-# reference, "anyOf": [<the reference>, {"type": "null"}]. x-nullable on any
-# other shape stops the script: the tag would otherwise be silently lost.
+# reference, "anyOf": [<the reference>, {"type": "null"}]; an enum of the
+# property gets null as well. x-nullable with a value other than true, or on
+# any other shape, stops the script: the tag would otherwise be silently lost.
 python3 -I - "$tmp_dir/public_swagger.json" <<'PY'
 import json
 import sys
@@ -53,6 +54,8 @@ if doc.get("externalDocs") == {"description": "", "url": ""}:
 
 
 def nullable(prop, where):
+    if "enum" in prop and None not in prop["enum"]:
+        prop["enum"].append(None)
     if isinstance(prop.get("type"), str):
         prop["type"] = [prop["type"], "null"]
         return prop
@@ -65,7 +68,10 @@ def nullable(prop, where):
 
 def walk(node, where):
     if isinstance(node, dict):
-        if node.pop("x-nullable", False) is True:
+        if "x-nullable" in node:
+            mark = node.pop("x-nullable")
+            if mark is not True:
+                sys.exit(f"x-nullable on {where} is {mark!r}: the tag is extensions:\"x-nullable\", without a value")
             nullable(node, where)
         for k, v in node.items():
             walk(v, f"{where}/{k}")
