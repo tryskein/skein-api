@@ -92,7 +92,7 @@ func TestReaper_RESTHolders(t *testing.T) {
 
 	t.Run("the activity of worker A keeps A's lock and not B's", func(t *testing.T) {
 		key := seedGrantKey(t, pool, owner, apikeys.LevelWrite, writeAll)
-		a, b := agents.RESTHolder(key, "worker-a"), agents.RESTHolder(key, "worker-b")
+		a, b := restHolder(t, key, "worker-a"), restHolder(t, key, "worker-b")
 		seedKeyedAgent(t, pool, owner, a, key, "worker-a", time.Minute)
 		seedKeyedAgent(t, pool, owner, b, key, "worker-b", 2*time.Hour)
 		idA, idB := issue(a), issue(b)
@@ -105,7 +105,7 @@ func TestReaper_RESTHolders(t *testing.T) {
 
 	t.Run("the key itself lives only on requests without a worker id", func(t *testing.T) {
 		key := seedGrantKey(t, pool, owner, apikeys.LevelWrite, writeAll)
-		self, worker := agents.RESTHolder(key, ""), agents.RESTHolder(key, "busy")
+		self, worker := restHolder(t, key, ""), restHolder(t, key, "busy")
 		// The key's own row is silent; a worker of the same key is busy.
 		seedKeyedAgent(t, pool, owner, self, key, "", 2*time.Hour)
 		seedKeyedAgent(t, pool, owner, worker, key, "busy", time.Minute)
@@ -118,7 +118,7 @@ func TestReaper_RESTHolders(t *testing.T) {
 
 	t.Run("the key itself keeps its lock while it calls without a worker id", func(t *testing.T) {
 		key := seedGrantKey(t, pool, owner, apikeys.LevelWrite, writeAll)
-		self := agents.RESTHolder(key, "")
+		self := restHolder(t, key, "")
 		seedKeyedAgent(t, pool, owner, self, key, "", time.Minute)
 		id := issue(self)
 
@@ -129,7 +129,7 @@ func TestReaper_RESTHolders(t *testing.T) {
 
 	t.Run("a key that lost write keeps no lock however active", func(t *testing.T) {
 		key := seedGrantKey(t, pool, owner, apikeys.LevelRead, writeAll)
-		holder := agents.RESTHolder(key, "reader")
+		holder := restHolder(t, key, "reader")
 		seedKeyedAgent(t, pool, owner, holder, key, "reader", time.Minute)
 		id := issue(holder)
 
@@ -142,7 +142,7 @@ func TestReaper_RESTHolders(t *testing.T) {
 		otherPID, _ := seedProject(t, pool, owner)
 		key := seedGrantKey(t, pool, owner, apikeys.LevelWrite,
 			apikeys.Scope{Mode: apikeys.ScopeProjects, Projects: []uuid.UUID{otherPID}})
-		holder := agents.RESTHolder(key, "elsewhere")
+		holder := restHolder(t, key, "elsewhere")
 		seedKeyedAgent(t, pool, owner, holder, key, "elsewhere", time.Minute)
 		id := issue(holder)
 
@@ -165,7 +165,7 @@ func TestReaper_RESTHolders(t *testing.T) {
 	// Review C5-05: a revoked key, an expired key, and a key scoped by spaces.
 	t.Run("a revoked key keeps no lock however active", func(t *testing.T) {
 		key := seedGrantKey(t, pool, owner, apikeys.LevelWrite, writeAll)
-		holder := agents.RESTHolder(key, "revoked")
+		holder := restHolder(t, key, "revoked")
 		seedKeyedAgent(t, pool, owner, holder, key, "revoked", time.Minute)
 		if _, err := pool.Exec(context.Background(), `UPDATE api_keys SET revoked_at = now() WHERE id = $1`, key); err != nil {
 			t.Fatalf("revoke the key: %v", err)
@@ -179,7 +179,7 @@ func TestReaper_RESTHolders(t *testing.T) {
 
 	t.Run("an expired key keeps no lock however active", func(t *testing.T) {
 		key := seedGrantKey(t, pool, owner, apikeys.LevelWrite, writeAll)
-		holder := agents.RESTHolder(key, "expired")
+		holder := restHolder(t, key, "expired")
 		seedKeyedAgent(t, pool, owner, holder, key, "expired", time.Minute)
 		if _, err := pool.Exec(context.Background(),
 			`UPDATE api_keys SET expires_at = now() - interval '1 minute' WHERE id = $1`, key); err != nil {
@@ -199,7 +199,7 @@ func TestReaper_RESTHolders(t *testing.T) {
 	t.Run("a key scoped to the issue's space keeps the lock of an active holder", func(t *testing.T) {
 		key := seedGrantKey(t, pool, owner, apikeys.LevelWrite,
 			apikeys.Scope{Mode: apikeys.ScopeSpaces, Spaces: []uuid.UUID{issueSpace}})
-		holder := agents.RESTHolder(key, "in-space")
+		holder := restHolder(t, key, "in-space")
 		seedKeyedAgent(t, pool, owner, holder, key, "in-space", time.Minute)
 		id := issue(holder)
 
@@ -212,7 +212,7 @@ func TestReaper_RESTHolders(t *testing.T) {
 		other := testsupport.SeedSpace(t, pool, owner)
 		key := seedGrantKey(t, pool, owner, apikeys.LevelWrite,
 			apikeys.Scope{Mode: apikeys.ScopeSpaces, Spaces: []uuid.UUID{other}})
-		holder := agents.RESTHolder(key, "out-of-space")
+		holder := restHolder(t, key, "out-of-space")
 		seedKeyedAgent(t, pool, owner, holder, key, "out-of-space", time.Minute)
 		id := issue(holder)
 
@@ -223,7 +223,7 @@ func TestReaper_RESTHolders(t *testing.T) {
 
 	t.Run("a lock younger than the threshold stays whatever the key", func(t *testing.T) {
 		key := seedGrantKey(t, pool, owner, apikeys.LevelRead, writeAll)
-		holder := agents.RESTHolder(key, "fresh")
+		holder := restHolder(t, key, "fresh")
 		seedKeyedAgent(t, pool, owner, holder, key, "fresh", time.Minute)
 		id := prefix + "-" + uuid.NewString()[:8]
 		seedLockedIssue(t, pool, pid, owner, id, holder, time.Minute)
@@ -232,4 +232,14 @@ func TestReaper_RESTHolders(t *testing.T) {
 
 		kept(t, id, holder)
 	})
+}
+
+// restHolder is agents.RESTHolder for a worker id the test knows is valid.
+func restHolder(t *testing.T, key uuid.UUID, worker string) string {
+	t.Helper()
+	h, err := agents.RESTHolder(key, worker)
+	if err != nil {
+		t.Fatalf("RESTHolder(%s, %q): %v", key, worker, err)
+	}
+	return h
 }

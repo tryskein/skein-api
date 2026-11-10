@@ -33,11 +33,11 @@ func TestReleaseLock_OwnerReleasesAnyOfHisHolders(t *testing.T) {
 	// The owner calls from yet another executor of yet another key: the
 	// one that lost the id of the executor that took the lock.
 	releaser := Actor{UserID: owner, Username: ownerName, Role: "agent",
-		SessionID: agents.RESTHolder(uuid.New(), "")}
+		SessionID: restHolder(t, uuid.New(), "")}
 
 	holders := []string{
-		agents.RESTHolder(keyA, "worker-1"),
-		agents.RESTHolder(keyB, ""),
+		restHolder(t, keyA, "worker-1"),
+		restHolder(t, keyB, ""),
 		"mcp-session-owner",
 	}
 	for i, holder := range holders {
@@ -80,7 +80,7 @@ SELECT actor_session_id FROM events
 		other := seedUser(t, pool)
 		id := prefix + "-99"
 		seedIssue(t, pool, pid, owner, id, "held by another user")
-		holder := agents.RESTHolder(uuid.New(), "theirs")
+		holder := restHolder(t, uuid.New(), "theirs")
 		if _, err := pool.Exec(ctx, `
 UPDATE issues SET locked_by = $2, locked_by_user_id = $3, locked_at = now(), status = 'in_progress'
  WHERE id = $1`, id, holder, other); err != nil {
@@ -96,4 +96,14 @@ UPDATE issues SET locked_by = $2, locked_by_user_id = $3, locked_at = now(), sta
 			t.Errorf("version %d → %d after the refusal, want unchanged", before, after)
 		}
 	})
+}
+
+// restHolder is agents.RESTHolder for a worker id the test knows is valid.
+func restHolder(t *testing.T, key uuid.UUID, worker string) string {
+	t.Helper()
+	h, err := agents.RESTHolder(key, worker)
+	if err != nil {
+		t.Fatalf("RESTHolder(%s, %q): %v", key, worker, err)
+	}
+	return h
 }

@@ -563,7 +563,7 @@ func TestStalled_RESTExecutorRowIsNotAClock(t *testing.T) {
 		f.exec(t, `
 INSERT INTO agents (user_id, session_id, first_seen_at, last_seen_at, api_key_id, worker_id)
 VALUES ($1, $2, now() - $3::interval, now() - $3::interval, $4, $5)`,
-			f.owner, agents.RESTHolder(f.key, worker), ago, f.key, worker)
+			f.owner, restHolder(t, f.key, worker), ago, f.key, worker)
 	}
 	mcpSeen := func(t *testing.T, f *stallFixture, session string, ago time.Duration) {
 		f.exec(t, `
@@ -589,4 +589,14 @@ VALUES ($1, $2, now() - $3::interval, now() - $3::interval)`, f.owner, session, 
 			t.Fatalf("shown to another session while the issuing session is active")
 		}
 	})
+}
+
+// restHolder is agents.RESTHolder for a worker id the test knows is valid.
+func restHolder(t *testing.T, key uuid.UUID, worker string) string {
+	t.Helper()
+	h, err := agents.RESTHolder(key, worker)
+	if err != nil {
+		t.Fatalf("RESTHolder(%s, %q): %v", key, worker, err)
+	}
+	return h
 }

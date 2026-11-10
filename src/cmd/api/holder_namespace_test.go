@@ -37,7 +37,7 @@ func TestMCPSessionIDCannotTakeTheRESTNamespace(t *testing.T) {
 		u.ID).Scan(&keyID); err != nil {
 		t.Fatalf("the actor's key: %v", err)
 	}
-	restHolder := agents.RESTHolder(keyID, "w")
+	restHolder := restHolder(t, keyID, "w")
 
 	var n int
 	if err := s.pool.QueryRow(ctx, `UPDATE project_counters SET counter = counter + 1
@@ -89,4 +89,14 @@ func TestMCPSessionIDCannotTakeTheRESTNamespace(t *testing.T) {
 	if !errors.As(err, &other) {
 		t.Errorf("write as the REST executor %s = %v, want ErrLockedByOther", restHolder, err)
 	}
+}
+
+// restHolder is agents.RESTHolder for a worker id the test knows is valid.
+func restHolder(t *testing.T, key uuid.UUID, worker string) string {
+	t.Helper()
+	h, err := agents.RESTHolder(key, worker)
+	if err != nil {
+		t.Fatalf("RESTHolder(%s, %q): %v", key, worker, err)
+	}
+	return h
 }

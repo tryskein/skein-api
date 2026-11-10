@@ -134,7 +134,7 @@ func TestWhoami_RESTExecutorRowIsTheOwnersSession(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create key: %v", err)
 	}
-	holder := agents.RESTHolder(k.ID, "worker-1")
+	holder := restHolder(t, k.ID, "worker-1")
 	t.Cleanup(func() {
 		_, _ = pool.Exec(context.Background(), `DELETE FROM agents WHERE session_id = $1`, holder)
 		_, _ = pool.Exec(context.Background(), `DELETE FROM api_keys WHERE id = $1`, k.ID)
@@ -173,4 +173,14 @@ RETURNING last_seen_at`, owner, holder, k.ID).Scan(&lastSeen); err != nil {
 	if got, _ := b["lastSeenAt"].(string); got != "" && strings.HasPrefix(got, lastSeen.UTC().Format("2006-01-02T15:04:05")) {
 		t.Errorf("another user sees the owner's executor stamps: %v", b)
 	}
+}
+
+// restHolder is agents.RESTHolder for a worker id the test knows is valid.
+func restHolder(t *testing.T, key uuid.UUID, worker string) string {
+	t.Helper()
+	h, err := agents.RESTHolder(key, worker)
+	if err != nil {
+		t.Fatalf("RESTHolder(%s, %q): %v", key, worker, err)
+	}
+	return h
 }

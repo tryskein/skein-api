@@ -16,7 +16,9 @@ package agents
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -43,13 +45,25 @@ const RESTHolderPrefix = "api:"
 // own that no REST executor shares.
 const mcpForeignPrefix = "mcp:"
 
+// ErrInvalidWorkerID refuses a worker id outside the X-Skein-Worker-Id
+// format (US-5): 1–64 characters of [A-Za-z0-9._-]. A colon would make the
+// holder api:<keyId>:<workerId> ambiguous.
+var ErrInvalidWorkerID = errors.New("worker id must be 1-64 characters of A-Z, a-z, 0-9, '.', '_' or '-'")
+
+var workerIDPattern = regexp.MustCompile(`^[A-Za-z0-9._-]{1,64}$`)
+
 // RESTHolder is the lock holder and agents.session_id of a REST executor:
-// api:<keyId> without a worker id, api:<keyId>:<workerId> with one.
-func RESTHolder(keyID uuid.UUID, workerID string) string {
+// api:<keyId> for the key itself (workerID empty: no X-Skein-Worker-Id),
+// api:<keyId>:<workerId> with one. A worker id outside the header's format
+// is refused with ErrInvalidWorkerID.
+func RESTHolder(keyID uuid.UUID, workerID string) (string, error) {
 	if workerID == "" {
-		return RESTHolderPrefix + keyID.String()
+		return RESTHolderPrefix + keyID.String(), nil
 	}
-	return RESTHolderPrefix + keyID.String() + ":" + workerID
+	if !workerIDPattern.MatchString(workerID) {
+		return "", ErrInvalidWorkerID
+	}
+	return RESTHolderPrefix + keyID.String() + ":" + workerID, nil
 }
 
 // IsRESTHolder reports whether a lock holder or agents.session_id belongs
@@ -129,12 +143,15 @@ func TouchRESTExecutor(ctx context.Context, pool *pgxpool.Pool, userID, keyID uu
 	if keyID == uuid.Nil {
 		return "", fmt.Errorf("touching a REST executor of user %s: no key", userID)
 	}
-	holder := RESTHolder(keyID, workerID)
+	holder, err := RESTHolder(keyID, workerID)
+	if err != nil {
+		return "", err
+	}
 	var worker any
 	if workerID != "" {
 		worker = workerID
 	}
-	_, err := pool.Exec(ctx, `
+	_, err = pool.Exec(ctx, `
 INSERT INTO agents (user_id, session_id, first_seen_at, last_seen_at, api_key_id, worker_id)
 VALUES ($1, $2, now(), now(), $4, $5)
 ON CONFLICT (user_id, session_id) DO UPDATE
