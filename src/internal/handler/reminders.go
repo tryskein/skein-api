@@ -97,7 +97,7 @@ type dismissReminderRequest struct {
 // @Failure 403 {object} map[string]any "forbidden — the project is visible but the caller may not act on it (mapAccessErr)"
 // @Failure 404 {object} map[string]any "Issue not found or project not visible"
 // @Failure 500 {object} map[string]any "internal_error — the request could not be served"
-// @Router /api/v1/projects/{projectID}/issues/{issueID}/reminders [post]
+// @Router /ui/v1/projects/{projectID}/issues/{issueID}/reminders [post]
 func (h *RemindersHandler) Create(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	c, ok := caller(r)
@@ -183,7 +183,7 @@ func (h *RemindersHandler) Create(w http.ResponseWriter, r *http.Request) {
 // @Failure 401 {object} map[string]any "Missing / invalid auth"
 // @Failure 404 {object} map[string]any "Reminder not found or not owned by caller"
 // @Failure 500 {object} map[string]any "internal_error — the request could not be served"
-// @Router /api/v1/reminders/{reminderID}/snooze [post]
+// @Router /ui/v1/reminders/{reminderID}/snooze [post]
 func (h *RemindersHandler) Snooze(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	c, ok := caller(r)
@@ -244,7 +244,7 @@ func (h *RemindersHandler) Snooze(w http.ResponseWriter, r *http.Request) {
 // @Failure 401 {object} map[string]any "Missing / invalid auth"
 // @Failure 404 {object} map[string]any "Reminder not found or not owned by caller"
 // @Failure 500 {object} map[string]any "internal_error — the request could not be served"
-// @Router /api/v1/reminders/{reminderID} [delete]
+// @Router /ui/v1/reminders/{reminderID} [delete]
 func (h *RemindersHandler) Dismiss(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	c, ok := caller(r)
@@ -301,7 +301,7 @@ func (h *RemindersHandler) Dismiss(w http.ResponseWriter, r *http.Request) {
 // @Failure 400 {object} map[string]any "invalid_state"
 // @Failure 401 {object} map[string]any "Missing / invalid auth"
 // @Failure 500 {object} map[string]any "internal_error — the request could not be served"
-// @Router /api/v1/reminders [get]
+// @Router /ui/v1/reminders [get]
 func (h *RemindersHandler) List(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	c, ok := caller(r)

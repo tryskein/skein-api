@@ -81,7 +81,7 @@ func NewIssuesMeHandler(pool *pgxpool.Pool, issuesStore *issues.Store) *IssuesMe
 // @Failure 401 {object} map[string]any "unauthenticated"
 // @Failure 422 {object} map[string]any "blocked_is_derived — status=blocked is a DERIVED state and cannot be selected as a status; use isBlocked=true. Raised by issues.ValidateStatus inside the shared runMine driver, through mapIssueValidation"
 // @Failure 500 {object} map[string]any "internal_error"
-// @Router /api/v1/me/assigned-by [get]
+// @Router /ui/v1/me/assigned-by [get]
 func (h *IssuesMeHandler) AssignedBy(w http.ResponseWriter, r *http.Request) {
 	h.runMine(w, r, issues.ModeAssignedBy)
 }
@@ -126,7 +126,7 @@ func (h *IssuesMeHandler) AssignedBy(w http.ResponseWriter, r *http.Request) {
 // @Failure 401 {object} map[string]any "unauthenticated"
 // @Failure 422 {object} map[string]any "blocked_is_derived — status=blocked is a DERIVED state and cannot be selected as a status; use isBlocked=true. Raised by issues.ValidateStatus inside the shared runMine driver, through mapIssueValidation"
 // @Failure 500 {object} map[string]any "internal_error"
-// @Router /api/v1/me/assigned-to [get]
+// @Router /ui/v1/me/assigned-to [get]
 func (h *IssuesMeHandler) AssignedTo(w http.ResponseWriter, r *http.Request) {
 	h.runMine(w, r, issues.ModeAssignedTo)
 }
@@ -172,7 +172,7 @@ func (h *IssuesMeHandler) AssignedTo(w http.ResponseWriter, r *http.Request) {
 // @Failure 401 {object} map[string]any "unauthenticated"
 // @Failure 422 {object} map[string]any "blocked_is_derived — status=blocked is a DERIVED state and cannot be selected as a status; use isBlocked=true. Raised by issues.ValidateStatus inside the shared runMine driver, through mapIssueValidation"
 // @Failure 500 {object} map[string]any "internal_error"
-// @Router /api/v1/me/created-by [get]
+// @Router /ui/v1/me/created-by [get]
 func (h *IssuesMeHandler) CreatedBy(w http.ResponseWriter, r *http.Request) {
 	h.runMine(w, r, issues.ModeCreatedBy)
 }

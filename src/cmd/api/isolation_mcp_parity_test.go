@@ -4,9 +4,9 @@ package main
 // REST and MCP answer the same request with the same set, on the actors of
 // row 22 (fixture testsupport.SeedTenancy, T003):
 //
-//	skein_list crossProject ≡ GET /api/v1/issues
-//	skein_search            ≡ GET /api/v1/search
-//	skein_show              ≡ GET /api/v1/projects/{projectID}/issues/{issueID}
+//	skein_list crossProject ≡ GET /ui/v1/issues
+//	skein_search            ≡ GET /ui/v1/search
+//	skein_show              ≡ GET /ui/v1/projects/{projectID}/issues/{issueID}
 //
 // The property is the EQUALITY of the channels, so it is asserted for every
 // actor, admins included (since T017 both channels show an admin every
@@ -390,7 +390,7 @@ func decodeResolve(t *testing.T, raw []byte) resolveAnswer {
 // reads a project through the list and resolve), so it has no MCP cell.
 func (s *parityStack) projectParity(t *testing.T, a testsupport.Actor, sid string) {
 	restIDs := pageIDs(t, func(cursor string) []byte {
-		path := "/api/v1/projects?limit=100"
+		path := "/ui/v1/projects?limit=100"
 		if cursor != "" {
 			path += "&cursor=" + url.QueryEscape(cursor)
 		}
@@ -421,7 +421,7 @@ func (s *parityStack) projectParity(t *testing.T, a testsupport.Actor, sid strin
 	for _, p := range s.f.Projects() {
 		for via, q := range map[string]string{"name": p.Name, "prefix": p.IDPrefix, "alias": p.Alias} {
 			t.Run("resolve/"+p.Key()+"/"+via, func(t *testing.T) {
-				code, body := s.rest(a, http.MethodGet, "/api/v1/projects/resolve?q="+url.QueryEscape(q), nil)
+				code, body := s.rest(a, http.MethodGet, "/ui/v1/projects/resolve?q="+url.QueryEscape(q), nil)
 				if code != http.StatusOK {
 					t.Fatalf("REST resolve: %d %s", code, body)
 				}
@@ -456,7 +456,7 @@ func (s *parityStack) projectParity(t *testing.T, a testsupport.Actor, sid strin
 // cell is the guard for T017, when the relation's body changes.
 func (s *parityStack) whoamiParity(t *testing.T, a testsupport.Actor, sid string) {
 	restIDs := pageIDs(t, func(cursor string) []byte {
-		path := "/api/v1/projects?limit=100"
+		path := "/ui/v1/projects?limit=100"
 		if cursor != "" {
 			path += "&cursor=" + url.QueryEscape(cursor)
 		}
@@ -521,7 +521,7 @@ func TestIsolationParity_RESTEqualsMCP(t *testing.T) {
 				}
 				// REST (T036, K-16): the session of a deactivated user is
 				// refused on every path of the production router.
-				for _, path := range []string{"/api/v1/projects", "/api/v1/issues?limit=5", "/api/v1/search?q=" + url.QueryEscape(s.word)} {
+				for _, path := range []string{"/ui/v1/projects", "/ui/v1/issues?limit=5", "/ui/v1/search?q=" + url.QueryEscape(s.word)} {
 					code, body := s.rest(a, http.MethodGet, path, nil)
 					if code != http.StatusUnauthorized || !strings.Contains(string(body), auth.CodeSessionRevoked) {
 						t.Errorf("deactivated actor's REST %s: %d %s, want 401 %s", path, code, body, auth.CodeSessionRevoked)
@@ -532,7 +532,7 @@ func TestIsolationParity_RESTEqualsMCP(t *testing.T) {
 			sid := s.session(a)
 
 			t.Run("list", func(t *testing.T) {
-				code, rest := s.rest(a, http.MethodGet, "/api/v1/issues?limit=500&q="+url.QueryEscape(s.word), nil)
+				code, rest := s.rest(a, http.MethodGet, "/ui/v1/issues?limit=500&q="+url.QueryEscape(s.word), nil)
 				if code != http.StatusOK {
 					t.Fatalf("REST /issues: %d %s", code, rest)
 				}
@@ -550,7 +550,7 @@ func TestIsolationParity_RESTEqualsMCP(t *testing.T) {
 			})
 
 			t.Run("search", func(t *testing.T) {
-				code, rest := s.rest(a, http.MethodGet, "/api/v1/search?limit=100&q="+url.QueryEscape(s.word), nil)
+				code, rest := s.rest(a, http.MethodGet, "/ui/v1/search?limit=100&q="+url.QueryEscape(s.word), nil)
 				if code != http.StatusOK {
 					t.Fatalf("REST /search: %d %s", code, rest)
 				}
@@ -572,11 +572,11 @@ func TestIsolationParity_RESTEqualsMCP(t *testing.T) {
 
 			missingShow := s.tool(a, sid, "skein_show", map[string]any{"id": missingIssue})
 			missingMint := s.tool(a, sid, "skein_get_monitor_script", map[string]any{"id": missingIssue})
-			missingCode, missingCard := s.rest(a, http.MethodGet, "/api/v1/projects/"+uuid.NewString()+"/issues/"+missingIssue+"/", nil)
+			missingCode, missingCard := s.rest(a, http.MethodGet, "/ui/v1/projects/"+uuid.NewString()+"/issues/"+missingIssue+"/", nil)
 
 			for _, p := range s.f.Projects() {
 				t.Run("show/"+p.IssueID, func(t *testing.T) {
-					code, card := s.rest(a, http.MethodGet, "/api/v1/projects/"+p.ID.String()+"/issues/"+p.IssueID+"/", nil)
+					code, card := s.rest(a, http.MethodGet, "/ui/v1/projects/"+p.ID.String()+"/issues/"+p.IssueID+"/", nil)
 					show := s.tool(a, sid, "skein_show", map[string]any{"id": p.IssueID})
 					restOK := code == http.StatusOK
 					if restOK == show.isError {

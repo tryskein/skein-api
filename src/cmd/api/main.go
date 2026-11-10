@@ -389,7 +389,7 @@ func operatorServer(cfg *config.Config, ops operator.Operations) *http.Server {
 // @securityDefinitions.apikey InternalSecretAuth
 // @in header
 // @name X-Skein-Internal-Secret
-// @description Service secret shared by skein-web and skein-api. Service-only endpoints (POST /api/v1/hub/project-access, GET /api/v1/internal/instance-config) are authorized by it alone, with no user headers.
+// @description Service secret shared by skein-web and skein-api. Service-only endpoints (POST /ui/v1/hub/project-access, GET /ui/v1/internal/instance-config) are authorized by it alone, with no user headers.
 func main() {
 	cfg, err := config.Load()
 	if err != nil {
@@ -1376,37 +1376,10 @@ func buildRouter(
 		}
 	}
 
-	// R5.1 — OIDC provision endpoint. Mounted OUTSIDE the /api/v1 group
-	// because that group applies ParseUserHeaders to every request, and
-	// the provision call has no user yet (it's the call that establishes
-	// one). Channel auth (RequireInternalSecret) is sufficient: only the
-	// skein-web BFF holds the secret, and the BFF is the only legitimate
-	// caller. The handler itself short-circuits with 410 oidc_disabled
-	// when the provisioner is nil (defensive — wiring always sets it).
-	r.With(handler.RequireInternalSecret(cfg.InternalSecret, "")).
-		Post("/api/v1/auth/oidc/provision", authH.OIDCProvision)
-
-	// sk-622.21 T006 — service-only batch project access check for
-	// skein-web's SignalR hub (contract: projects/access_contract.go).
-	// Mounted OUTSIDE the /api/v1 group for the same reason as the provision
-	// route: that group applies ParseUserHeaders, and this call is made by
-	// the BFF for many users at once, not for one logged-in user — whose
-	// access is checked is named in the body. Channel auth
-	// (RequireInternalSecret) is the whole authorization.
-	r.With(handler.RequireInternalSecret(cfg.InternalSecret, "")).
-		Post("/api/v1/hub/project-access", handler.NewHubAccessHandler(pool).ProjectAccess)
-
-	// sk-674.18 T012 — installation settings for skein-web (contract:
-	// accounts/contract.go#InstanceConfig). Service-only, outside the /api/v1
-	// group like the two routes above: skein-web calls it at startup with no
-	// user at all, and the channel secret is the whole authorization.
-	r.With(handler.RequireInternalSecret(cfg.InternalSecret, "")).
-		Get("/api/v1/internal/instance-config", handler.NewInstanceConfigHandler(cfg).Get)
-
 	// sk-674.18 T038 — the public account routes of a visitor without a
-	// session (contract: accounts/contract.go). Outside the /api/v1 group
-	// like the routes above: there is no user, the channel secret is the
-	// whole authorization, the client address comes in X-Skein-Client-Ip.
+	// session (contract: accounts/contract.go), mounted by mountInternalAPI
+	// below. The services are built once here: both prefixes of the
+	// transitional release share them, and with them the rate limits.
 	turnstile := accounts.NewTurnstile(cfg.TurnstileSecret, accounts.TurnstileVerifyURL)
 	accountsSvc := accounts.NewService(
 		accounts.ServiceConfig{
@@ -1426,23 +1399,6 @@ func buildRouter(
 	})
 	accountsSvc.UseInvitations(invitationsSvc)
 	accountsH := handler.NewAccountsHandler(accountsSvc)
-	r.With(handler.RequireInternalSecret(cfg.InternalSecret, "")).
-		Post("/api/v1/auth/signup", accountsH.Signup)
-	r.With(handler.RequireInternalSecret(cfg.InternalSecret, "")).
-		Get("/api/v1/auth/username-suggestions", accountsH.UsernameSuggestions)
-	// T039 — password reset and email confirmation by link.
-	r.With(handler.RequireInternalSecret(cfg.InternalSecret, "")).
-		Post("/api/v1/auth/password-reset", accountsH.PasswordReset)
-	r.With(handler.RequireInternalSecret(cfg.InternalSecret, "")).
-		Post("/api/v1/auth/password-reset/{token}", accountsH.PasswordResetComplete)
-	r.With(handler.RequireInternalSecret(cfg.InternalSecret, "")).
-		Post("/api/v1/auth/confirm-email/{token}", accountsH.ConfirmEmail)
-	// T040 — the invitation link without a session: its view and signup
-	// by invitation.
-	r.With(handler.RequireInternalSecret(cfg.InternalSecret, "")).
-		Get("/api/v1/auth/invitations/{token}", accountsH.InvitationPreview)
-	r.With(handler.RequireInternalSecret(cfg.InternalSecret, "")).
-		Post("/api/v1/auth/invitations/{token}/signup", accountsH.InvitationSignup)
 
 	// R2.1 — MCP Streamable HTTP endpoint. Sits at the root, NOT under
 	// /api/v1/*: MCP clients are not browser-cookie-authenticated and
@@ -1570,7 +1526,19 @@ func buildRouter(
 		r.Get("/monitor-script", agentScriptHandler.Script)
 	})
 
-	r.Route("/api/v1", func(r chi.Router) {
+	// The internal API of the frontend (contract for skein-web: the BFF
+	// proxies the browser's /api/v1/* here as /ui/v1/* and makes its service
+	// calls on /ui/v1/*). mountInternalAPI is the one place these routes are
+	// registered; it is mounted on both prefixes below.
+	hubAccessH := handler.NewHubAccessHandler(pool)
+	instanceConfigH := handler.NewInstanceConfigHandler(cfg)
+	spacesH := handler.NewSpacesHandler(spacesSvc)
+	invitationsH := handler.NewInvitationsHandler(invitationsSvc)
+	accountDeletionH := handler.NewAccountDeletionHandler(usersStore, cfg.SignupEnabled)
+
+	// mountUserAPI is the user group of the internal API: every route below
+	// is reached with the BFF's user headers.
+	mountUserAPI := func(r chi.Router) {
 		r.Use(handler.RequireInternalSecret(cfg.InternalSecret, ""))
 		r.Use(handler.ParseUserHeaders)
 		// sk-674.18 K-16: a session whose epoch was raised (password reset,
@@ -1745,18 +1713,15 @@ func buildRouter(
 		// route needs a user; who may do what is spaces.Service's decision
 		// (owner, member, the effective admin read from the database). The
 		// two admin-only routes also sit behind RequireAdmin, whose refusal
-		// (403 not_admin) is the contract's.
-		spacesH := handler.NewSpacesHandler(spacesSvc)
-		// T040 — invitations (spaces/contract.go): sending, the Inbox
-		// answers and the link with a session.
-		invitationsH := handler.NewInvitationsHandler(invitationsSvc)
+		// (403 not_admin) is the contract's. T040 — invitations
+		// (spaces/contract.go): sending, the Inbox answers and the link with
+		// a session.
 		// R1.6 — per-user notification preferences. /me/* lives under
 		// auth conceptually but the prefs are notification-domain.
 		// R2.1 added /me/api-keys/* under the same group — same gate
 		// (RequireUser), same scoping ("the calling user's own data").
 		// sk-674.18 T041 — the account deletes itself (open registration
 		// only; the operator's deletion of T042 uses the same store).
-		accountDeletionH := handler.NewAccountDeletionHandler(usersStore, cfg.SignupEnabled)
 		r.Route("/me", func(r chi.Router) {
 			r.Use(handler.RequireUser)
 			r.Delete("/", accountDeletionH.DeleteMe)
@@ -2154,10 +2119,79 @@ func buildRouter(
 				r.Get("/activity", activityH.ListProjectActivity)
 			})
 		})
-	})
+	}
+
+	// mountInternalAPI registers the whole internal API under one prefix.
+	mountInternalAPI := func(r chi.Router) {
+		// R5.1 — OIDC provision endpoint. Outside the user group because
+		// that group applies ParseUserHeaders to every request, and the
+		// provision call has no user yet (it's the call that establishes
+		// one). Channel auth (RequireInternalSecret) is sufficient: only the
+		// skein-web BFF holds the secret, and the BFF is the only legitimate
+		// caller. The handler itself short-circuits with 410 oidc_disabled
+		// when the provisioner is nil (defensive — wiring always sets it).
+		r.With(handler.RequireInternalSecret(cfg.InternalSecret, "")).
+			Post("/auth/oidc/provision", authH.OIDCProvision)
+
+		// sk-622.21 T006 — service-only batch project access check for
+		// skein-web's SignalR hub (contract: projects/access_contract.go).
+		// Outside the user group for the same reason as the provision route:
+		// this call is made by the BFF for many users at once, not for one
+		// logged-in user — whose access is checked is named in the body.
+		// Channel auth (RequireInternalSecret) is the whole authorization.
+		r.With(handler.RequireInternalSecret(cfg.InternalSecret, "")).
+			Post("/hub/project-access", hubAccessH.ProjectAccess)
+
+		// sk-674.18 T012 — installation settings for skein-web (contract:
+		// accounts/contract.go#InstanceConfig). Service-only, outside the
+		// user group like the two routes above: skein-web calls it at startup
+		// with no user at all, and the channel secret is the whole
+		// authorization.
+		r.With(handler.RequireInternalSecret(cfg.InternalSecret, "")).
+			Get("/internal/instance-config", instanceConfigH.Get)
+
+		// sk-674.18 T038 — the public account routes of a visitor without a
+		// session (contract: accounts/contract.go). Outside the user group
+		// like the routes above: there is no user, the channel secret is the
+		// whole authorization, the client address comes in X-Skein-Client-Ip.
+		r.With(handler.RequireInternalSecret(cfg.InternalSecret, "")).
+			Post("/auth/signup", accountsH.Signup)
+		r.With(handler.RequireInternalSecret(cfg.InternalSecret, "")).
+			Get("/auth/username-suggestions", accountsH.UsernameSuggestions)
+		// T039 — password reset and email confirmation by link.
+		r.With(handler.RequireInternalSecret(cfg.InternalSecret, "")).
+			Post("/auth/password-reset", accountsH.PasswordReset)
+		r.With(handler.RequireInternalSecret(cfg.InternalSecret, "")).
+			Post("/auth/password-reset/{token}", accountsH.PasswordResetComplete)
+		r.With(handler.RequireInternalSecret(cfg.InternalSecret, "")).
+			Post("/auth/confirm-email/{token}", accountsH.ConfirmEmail)
+		// T040 — the invitation link without a session: its view and signup
+		// by invitation.
+		r.With(handler.RequireInternalSecret(cfg.InternalSecret, "")).
+			Get("/auth/invitations/{token}", accountsH.InvitationPreview)
+		r.With(handler.RequireInternalSecret(cfg.InternalSecret, "")).
+			Post("/auth/invitations/{token}/signup", accountsH.InvitationSignup)
+
+		r.Group(mountUserAPI)
+	}
+
+	// /ui/v1 is the prefix of the internal API. /api/v1 is accepted as well
+	// for one transitional release, so skein-api and skein-web can be rolled
+	// out in any order; the next release of skein-api removes it, and /api/v1
+	// then belongs to the public API only.
+	r.Route(internalAPIPrefix, mountInternalAPI)
+	r.Route(transitionalInternalAPIPrefix, mountInternalAPI)
 
 	return r, drainMCPStreams
 }
+
+const (
+	// internalAPIPrefix is the prefix of the frontend's internal API.
+	internalAPIPrefix = "/ui/v1"
+	// transitionalInternalAPIPrefix is the former prefix of the internal
+	// API, still accepted for one transitional release.
+	transitionalInternalAPIPrefix = "/api/v1"
+)
 
 // spacesOptions are the installation settings of the spaces surface
 // (sk-674.18 T023), shared by REST and MCP.

@@ -60,7 +60,7 @@ type setThemePrefRequest struct {
 // @Success 200 {object} themes.UserThemePrefDTO "Active preference"
 // @Failure 401 {object} map[string]any "Missing / invalid auth"
 // @Failure 500 {object} map[string]any "Internal error"
-// @Router /api/v1/me/theme [get]
+// @Router /ui/v1/me/theme [get]
 func (h *MeThemeHandler) GetTheme(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	c, ok := caller(r)
@@ -98,7 +98,7 @@ func (h *MeThemeHandler) GetTheme(w http.ResponseWriter, r *http.Request) {
 // @Failure 401 {object} map[string]any "Missing / invalid auth"
 // @Failure 404 {object} map[string]any "customThemeId points at a theme that does not exist or is another user's — one answer"
 // @Failure 500 {object} map[string]any "Internal error"
-// @Router /api/v1/me/theme [put]
+// @Router /ui/v1/me/theme [put]
 func (h *MeThemeHandler) SetTheme(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	c, ok := caller(r)
@@ -200,7 +200,7 @@ type inspectRequest struct {
 // @Failure 400 {object} map[string]any "invalid_json | invalid_selector"
 // @Failure 401 {object} map[string]any "Missing / invalid auth"
 // @Failure 500 {object} map[string]any "internal_error — the request could not be served"
-// @Router /api/v1/me/theme/inspect [post]
+// @Router /ui/v1/me/theme/inspect [post]
 func (h *MeThemeHandler) Inspect(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	c, ok := caller(r)

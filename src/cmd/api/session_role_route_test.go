@@ -95,11 +95,11 @@ func TestSessionRole_DatabaseOverridesStaleHeaders(t *testing.T) {
 
 	t.Run("a header claiming admin for a user", func(t *testing.T) {
 		admin, _ := testsupport.SeedUser(t, pool, "admin")
-		if code, body := request(http.MethodGet, "/api/v1/users", admin, "admin", false); code != http.StatusOK {
+		if code, body := request(http.MethodGet, "/ui/v1/users", admin, "admin", false); code != http.StatusOK {
 			t.Fatalf("control: the admin on an admin route: %d %v", code, body)
 		}
 		demoted, _ := testsupport.SeedUser(t, pool, "user")
-		code, body := request(http.MethodGet, "/api/v1/users", demoted, "admin", false)
+		code, body := request(http.MethodGet, "/ui/v1/users", demoted, "admin", false)
 		if code != http.StatusForbidden || body["error"] != "not_admin" {
 			t.Errorf("a user with a stale admin header on an admin route: %d %v, want 403 not_admin", code, body)
 		}
@@ -119,7 +119,7 @@ func TestSessionRole_DatabaseOverridesStaleHeaders(t *testing.T) {
 		}
 		lists := func(user uuid.UUID) bool {
 			t.Helper()
-			code, body := request(http.MethodGet, "/api/v1/users/directory?q="+strangerName, user, "user", false)
+			code, body := request(http.MethodGet, "/ui/v1/users/directory?q="+strangerName, user, "user", false)
 			if code != http.StatusOK {
 				t.Fatalf("directory: %d %v", code, body)
 			}

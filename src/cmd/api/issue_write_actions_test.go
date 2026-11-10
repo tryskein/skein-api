@@ -31,7 +31,7 @@ func TestIssueWritePaths_FollowTheActionTable(t *testing.T) {
 	s := newParityStack(t)
 	ctx := context.Background()
 	p := s.f.AMembers
-	base := "/api/v1/projects/" + p.ID.String() + "/issues"
+	base := "/ui/v1/projects/" + p.ID.String() + "/issues"
 	testsupport.SeedRepo(t, s.pool, p.ID, "t066", "https://git.example.test/t066.git")
 
 	// fresh takes the next number of the project's counter, as a create

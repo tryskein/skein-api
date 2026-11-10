@@ -133,7 +133,7 @@ func readSingleJSONValue(r *http.Request) (json.RawMessage, error) {
 // @Success 200 {object} notifications.IssueCreatePrefsDTO "The caller's issue-create settings"
 // @Failure 401 {object} map[string]any "unauthenticated — missing or invalid session / API key"
 // @Failure 500 {object} map[string]any "internal_error — the request could not be served"
-// @Router /api/v1/me/issue-create-prefs [get]
+// @Router /ui/v1/me/issue-create-prefs [get]
 func (h *NotificationsHandler) GetIssueCreatePrefs(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	c, ok := caller(r)
@@ -170,7 +170,7 @@ func (h *NotificationsHandler) GetIssueCreatePrefs(w http.ResponseWriter, r *htt
 // @Failure 400 {object} map[string]any "invalid_json — empty or malformed body, trailing data after the JSON value, body not an object, unknown key (case-sensitive), assignAgentIssuesToMe null or not a boolean; nothing was written"
 // @Failure 401 {object} map[string]any "unauthenticated — missing or invalid session / API key"
 // @Failure 500 {object} map[string]any "internal_error — the request could not be served"
-// @Router /api/v1/me/issue-create-prefs [put]
+// @Router /ui/v1/me/issue-create-prefs [put]
 func (h *NotificationsHandler) PutIssueCreatePrefs(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	c, ok := caller(r)

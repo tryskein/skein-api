@@ -239,7 +239,7 @@ type notificationCountsResponse struct {
 // @Success 200 {object} notificationCountsResponse "Header counters"
 // @Failure 401 {object} map[string]any "unauthenticated — cookie missing or malformed"
 // @Failure 500 {object} map[string]any "internal_error"
-// @Router /api/v1/me/notification-counts [get]
+// @Router /ui/v1/me/notification-counts [get]
 func (h *MeHandler) NotificationCounts(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	c, ok := caller(r)
@@ -493,7 +493,7 @@ func sortWatchingReasons(rs []string) []string {
 // @Failure 400 {object} map[string]any "validation_error — unknown state"
 // @Failure 401 {object} map[string]any "Missing / invalid auth"
 // @Failure 500 {object} map[string]any "internal_error"
-// @Router /api/v1/me/watching [get]
+// @Router /ui/v1/me/watching [get]
 func (h *MeHandler) GetWatching(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	c, ok := caller(r)
@@ -600,7 +600,7 @@ func (h *MeHandler) GetWatching(w http.ResponseWriter, r *http.Request) {
 // @Success 200 {object} notifications.MarkCardReadResult "How many notifications were flipped to read"
 // @Failure 401 {object} map[string]any "Missing / invalid auth"
 // @Failure 500 {object} map[string]any "internal_error"
-// @Router /api/v1/me/watching/{issueId}/read [post]
+// @Router /ui/v1/me/watching/{issueId}/read [post]
 func (h *MeHandler) MarkCardRead(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	c, ok := caller(r)
@@ -664,7 +664,7 @@ type bulkUnwatchRequest struct {
 // @Failure 400 {object} map[string]any "invalid_json / validation_error — neither or both selectors, empty issueIds, unknown state, more than 500 ids"
 // @Failure 401 {object} map[string]any "Missing / invalid auth"
 // @Failure 500 {object} map[string]any "internal_error — a DB fault, or a serialization conflict that outlived the 3 attempts"
-// @Router /api/v1/me/watching/unwatch [post]
+// @Router /ui/v1/me/watching/unwatch [post]
 func (h *MeHandler) BulkUnwatch(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	c, ok := caller(r)

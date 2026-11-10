@@ -264,7 +264,7 @@ type createProjectRequest struct {
 // @Failure 404 {object} map[string]any "space_not_found"
 // @Failure 422 {object} map[string]any "space_required (spaces), not_space_member (spaceId), project_quota (spaceId, projectCount, projectQuota — archived projects count), external_cannot_create_project, prefix_invalid (a digit first, pattern, shorter than SKEIN_PROJECT_PREFIX_MIN_LENGTH), prefix_taken (suggestions: 2–3 free prefixes; neutral — taken anywhere on the installation or reserved by a deleted project), project_name_taken (names are unique per space), concurrent_change"
 // @Failure 500 {object} map[string]any "Internal error"
-// @Router /api/v1/projects [post]
+// @Router /ui/v1/projects [post]
 func (h *ProjectsHandler) Create(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	c, ok := caller(r)
@@ -426,7 +426,7 @@ func (h *ProjectsHandler) Create(w http.ResponseWriter, r *http.Request) {
 // @Failure 400 {object} map[string]any "invalid_cursor, invalid_limit, invalid_lens"
 // @Failure 401 {object} map[string]any "Missing or invalid auth"
 // @Failure 500 {object} map[string]any "Internal error"
-// @Router /api/v1/projects [get]
+// @Router /ui/v1/projects [get]
 func (h *ProjectsHandler) List(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	c, ok := caller(r)
@@ -567,7 +567,7 @@ type patchProjectRequest struct {
 // @Failure 404 {object} map[string]any "not_found"
 // @Failure 422 {object} map[string]any "space_change_forbidden, project_name_taken, concurrent_change"
 // @Failure 500 {object} map[string]any "Internal error"
-// @Router /api/v1/projects/{projectID} [patch]
+// @Router /ui/v1/projects/{projectID} [patch]
 func (h *ProjectsHandler) Patch(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	c, ok := caller(r)
@@ -764,7 +764,7 @@ func (h *ProjectsHandler) prefixAdmitted(w http.ResponseWriter, route string, c 
 // @Failure 401 {object} map[string]any "Missing or invalid auth"
 // @Failure 429 {object} map[string]any "rate_limited"
 // @Failure 500 {object} map[string]any "Internal error"
-// @Router /api/v1/projects/prefix-suggestions [get]
+// @Router /ui/v1/projects/prefix-suggestions [get]
 func (h *ProjectsHandler) PrefixSuggestions(w http.ResponseWriter, r *http.Request) {
 	c, ok := caller(r)
 	if !ok {
@@ -803,7 +803,7 @@ func (h *ProjectsHandler) PrefixSuggestions(w http.ResponseWriter, r *http.Reque
 // @Failure 401 {object} map[string]any "Missing or invalid auth"
 // @Failure 429 {object} map[string]any "rate_limited"
 // @Failure 500 {object} map[string]any "Internal error"
-// @Router /api/v1/projects/prefix-check [get]
+// @Router /ui/v1/projects/prefix-check [get]
 func (h *ProjectsHandler) PrefixCheck(w http.ResponseWriter, r *http.Request) {
 	c, ok := caller(r)
 	if !ok {
@@ -854,7 +854,7 @@ func (h *ProjectsHandler) PrefixCheck(w http.ResponseWriter, r *http.Request) {
 // @Failure 401 {object} map[string]any "Missing or invalid auth"
 // @Failure 422 {object} map[string]any "ambiguous_project (q, candidates)"
 // @Failure 500 {object} map[string]any "Internal error"
-// @Router /api/v1/projects/resolve [get]
+// @Router /ui/v1/projects/resolve [get]
 func (h *ProjectsHandler) Resolve(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	c, ok := caller(r)

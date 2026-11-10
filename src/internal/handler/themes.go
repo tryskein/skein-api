@@ -70,7 +70,7 @@ type patchThemeRequest struct {
 // @Success 200 {array} themes.ThemeDTO "Theme list (newest update first)"
 // @Failure 401 {object} map[string]any "Missing / invalid auth"
 // @Failure 500 {object} map[string]any "Internal error"
-// @Router /api/v1/themes [get]
+// @Router /ui/v1/themes [get]
 func (h *ThemesHandler) List(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	c, ok := caller(r)
@@ -101,7 +101,7 @@ func (h *ThemesHandler) List(w http.ResponseWriter, r *http.Request) {
 // @Failure 401 {object} map[string]any "Missing / invalid auth"
 // @Failure 404 {object} map[string]any "theme_not_found — absent or another user's, one answer"
 // @Failure 500 {object} map[string]any "Internal error"
-// @Router /api/v1/themes/{id} [get]
+// @Router /ui/v1/themes/{id} [get]
 func (h *ThemesHandler) Get(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	c, ok := caller(r)
@@ -142,7 +142,7 @@ func (h *ThemesHandler) Get(w http.ResponseWriter, r *http.Request) {
 // @Failure 401 {object} map[string]any "Missing / invalid auth"
 // @Failure 422 {object} map[string]any "invalid_name | invalid_base | invalid_variables | name_taken"
 // @Failure 500 {object} map[string]any "Internal error"
-// @Router /api/v1/themes [post]
+// @Router /ui/v1/themes [post]
 func (h *ThemesHandler) Create(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	c, ok := caller(r)
@@ -212,7 +212,7 @@ func (h *ThemesHandler) Create(w http.ResponseWriter, r *http.Request) {
 // @Failure 404 {object} map[string]any "theme_not_found — absent or another user's, one answer"
 // @Failure 422 {object} map[string]any "invalid_name | invalid_base | invalid_variables | name_taken"
 // @Failure 500 {object} map[string]any "Internal error"
-// @Router /api/v1/themes/{id} [patch]
+// @Router /ui/v1/themes/{id} [patch]
 func (h *ThemesHandler) Patch(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	c, ok := caller(r)
@@ -290,7 +290,7 @@ func (h *ThemesHandler) Patch(w http.ResponseWriter, r *http.Request) {
 // @Failure 401 {object} map[string]any "Missing / invalid auth"
 // @Failure 404 {object} map[string]any "theme_not_found — absent or another user's, one answer"
 // @Failure 500 {object} map[string]any "Internal error"
-// @Router /api/v1/themes/{id} [delete]
+// @Router /ui/v1/themes/{id} [delete]
 func (h *ThemesHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	c, ok := caller(r)

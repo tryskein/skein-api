@@ -127,7 +127,7 @@ func (h *IssuesHandler) setReviewRequired(
 // @Failure 404 {object} map[string]any "issue_not_found — absent, invisible, or living in another project (deliberately indistinguishable)"
 // @Failure 422 {object} map[string]any "review_forbidden — the caller is not the author (admins are refused identically); review_issue_not_closed; review_flag_cleared; version_conflict"
 // @Failure 500 {object} map[string]any "internal_error"
-// @Router /api/v1/projects/{projectID}/issues/{issueID}/review [post]
+// @Router /ui/v1/projects/{projectID}/issues/{issueID}/review [post]
 func (h *IssuesHandler) MarkReviewed(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	c, ok := caller(r)

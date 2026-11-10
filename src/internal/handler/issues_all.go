@@ -98,7 +98,7 @@ func NewIssuesAllHandler(pool *pgxpool.Pool, issuesStore *issues.Store, embedder
 // @Failure 401 {object} map[string]any "unauthenticated"
 // @Failure 422 {object} map[string]any "blocked_is_derived — status=blocked is a derived state and cannot be selected; use isBlocked=true"
 // @Failure 500 {object} map[string]any "internal_error — includes a malformed cursor"
-// @Router /api/v1/issues [get]
+// @Router /ui/v1/issues [get]
 func (h *IssuesAllHandler) List(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	c, ok := caller(r)
@@ -311,7 +311,7 @@ func (h *IssuesAllHandler) List(w http.ResponseWriter, r *http.Request) {
 // @Failure 401 {object} map[string]any "unauthenticated"
 // @Failure 422 {object} map[string]any "tree_too_large — the walk exceeded the node limit (extra: limit)"
 // @Failure 500 {object} map[string]any "internal_error"
-// @Router /api/v1/issues/tree [get]
+// @Router /ui/v1/issues/tree [get]
 func (h *IssuesAllHandler) Tree(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	c, ok := caller(r)

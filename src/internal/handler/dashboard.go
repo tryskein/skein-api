@@ -137,7 +137,7 @@ func NewDashboardHandler(
 // @Failure 403 {object} map[string]any "forbidden — the project is visible but the caller may not act on it (mapAccessErr; not actually reachable through EnsureProjectVisible today, but the shared mapper can write it)"
 // @Failure 404 {object} map[string]any "not_found — the given project does not exist or the caller cannot see it"
 // @Failure 500 {object} map[string]any "internal_error"
-// @Router /api/v1/dashboard/scoring [get]
+// @Router /ui/v1/dashboard/scoring [get]
 func (h *DashboardHandler) Scoring(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	c, ok := caller(r)
@@ -329,7 +329,7 @@ func (h *DashboardHandler) Feed(w http.ResponseWriter, r *http.Request) {
 // @Failure 401 {object} map[string]any "unauthenticated"
 // @Failure 404 {object} map[string]any "project_not_found — the given project does not exist or the caller cannot see it"
 // @Failure 500 {object} map[string]any "internal_error"
-// @Router /api/v1/dashboard/in-progress [get]
+// @Router /ui/v1/dashboard/in-progress [get]
 func (h *DashboardHandler) InProgress(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	c, ok := caller(r)
@@ -444,7 +444,7 @@ func (h *DashboardHandler) InProgress(w http.ResponseWriter, r *http.Request) {
 // @Failure 403 {object} map[string]any "forbidden — the project is visible but the caller may not act on it (mapAccessErr; not actually reachable through EnsureProjectVisible today, but the shared mapper can write it)"
 // @Failure 404 {object} map[string]any "not_found — the given project does not exist or the caller cannot see it"
 // @Failure 500 {object} map[string]any "internal_error"
-// @Router /api/v1/dashboard/race [get]
+// @Router /ui/v1/dashboard/race [get]
 func (h *DashboardHandler) Race(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	c, ok := caller(r)
@@ -574,7 +574,7 @@ func (h *DashboardHandler) Race(w http.ResponseWriter, r *http.Request) {
 // @Success 200 {object} dashboard.ProjectsResult
 // @Failure 401 {object} map[string]any "unauthenticated"
 // @Failure 500 {object} map[string]any "internal_error"
-// @Router /api/v1/dashboard/projects [get]
+// @Router /ui/v1/dashboard/projects [get]
 func (h *DashboardHandler) Projects(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	c, ok := caller(r)

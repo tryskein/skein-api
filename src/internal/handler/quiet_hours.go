@@ -57,7 +57,7 @@ type putQuietHoursRequest struct {
 // @Success 200 {object} notifications.TimezoneDTO "Time zone and its source"
 // @Failure 401 {object} map[string]any "Missing / invalid auth"
 // @Failure 500 {object} map[string]any "internal_error — the request could not be served"
-// @Router /api/v1/me/timezone [get]
+// @Router /ui/v1/me/timezone [get]
 func (h *NotificationsHandler) GetTimezone(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	c, ok := caller(r)
@@ -90,7 +90,7 @@ func (h *NotificationsHandler) GetTimezone(w http.ResponseWriter, r *http.Reques
 // @Failure 401 {object} map[string]any "Missing / invalid auth"
 // @Failure 422 {object} map[string]any "invalid_timezone — unknown IANA zone; invalid_source — source is neither manual nor detected"
 // @Failure 500 {object} map[string]any "internal_error — the request could not be served"
-// @Router /api/v1/me/timezone [put]
+// @Router /ui/v1/me/timezone [put]
 func (h *NotificationsHandler) PutTimezone(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	c, ok := caller(r)
@@ -138,7 +138,7 @@ func (h *NotificationsHandler) PutTimezone(w http.ResponseWriter, r *http.Reques
 // @Success 200 {object} notifications.QuietHoursDTO "Quiet window plus the zone it is read in"
 // @Failure 401 {object} map[string]any "Missing / invalid auth"
 // @Failure 500 {object} map[string]any "internal_error — the request could not be served"
-// @Router /api/v1/me/quiet-hours [get]
+// @Router /ui/v1/me/quiet-hours [get]
 func (h *NotificationsHandler) GetQuietHours(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	c, ok := caller(r)
@@ -173,7 +173,7 @@ func (h *NotificationsHandler) GetQuietHours(w http.ResponseWriter, r *http.Requ
 // @Failure 401 {object} map[string]any "Missing / invalid auth"
 // @Failure 422 {object} map[string]any "invalid_time — not HH:MM; quiet_hours_half_set — one boundary without the other; quiet_hours_degenerate — start equals end; timezone_required — no time zone stored"
 // @Failure 500 {object} map[string]any "internal_error — the request could not be served"
-// @Router /api/v1/me/quiet-hours [put]
+// @Router /ui/v1/me/quiet-hours [put]
 func (h *NotificationsHandler) PutQuietHours(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	c, ok := caller(r)

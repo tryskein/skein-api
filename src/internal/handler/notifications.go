@@ -91,7 +91,7 @@ func NewNotificationsHandler(pool *pgxpool.Pool) *NotificationsHandler {
 // @Failure 403 {object} map[string]any "forbidden — the caller is not a member of the issue's project"
 // @Failure 404 {object} map[string]any "issue_not_found / not_found — no such issue or project"
 // @Failure 500 {object} map[string]any "internal_error — a DB fault, or a serialization conflict that outlived the 3 attempts"
-// @Router /api/v1/issues/{issueID}/watch [post]
+// @Router /ui/v1/issues/{issueID}/watch [post]
 func (h *NotificationsHandler) WatchIssue(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	c, ok := caller(r)
@@ -149,7 +149,7 @@ func (h *NotificationsHandler) WatchIssue(w http.ResponseWriter, r *http.Request
 // @Failure 403 {object} map[string]any "forbidden — the caller is not a member of the issue's project"
 // @Failure 404 {object} map[string]any "issue_not_found / not_found — no such issue or project"
 // @Failure 500 {object} map[string]any "internal_error — a DB fault, or a serialization conflict that outlived the 3 attempts"
-// @Router /api/v1/issues/{issueID}/watch [delete]
+// @Router /ui/v1/issues/{issueID}/watch [delete]
 func (h *NotificationsHandler) UnwatchIssue(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	c, ok := caller(r)
@@ -355,7 +355,7 @@ func (h *NotificationsHandler) ListProjectWatchers(w http.ResponseWriter, r *htt
 // @Failure 400 {object} map[string]any "invalid_scope | invalid_project | invalid_cursor | invalid_limit"
 // @Failure 401 {object} map[string]any "unauthenticated — cookie or api key missing or malformed"
 // @Failure 500 {object} map[string]any "internal_error"
-// @Router /api/v1/notifications [get]
+// @Router /ui/v1/notifications [get]
 func (h *NotificationsHandler) ListNotifications(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	c, ok := caller(r)
@@ -967,7 +967,7 @@ type putPushPrefsRequest struct {
 // @Success 200 {object} pushPrefsResponse "Disabled categories + registry"
 // @Failure 401 {object} map[string]any "Missing / invalid auth"
 // @Failure 500 {object} map[string]any "internal_error — the request could not be served"
-// @Router /api/v1/me/push-prefs [get]
+// @Router /ui/v1/me/push-prefs [get]
 func (h *NotificationsHandler) GetPushPrefs(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	c, ok := caller(r)
@@ -1001,7 +1001,7 @@ func (h *NotificationsHandler) GetPushPrefs(w http.ResponseWriter, r *http.Reque
 // @Failure 401 {object} map[string]any "Missing / invalid auth"
 // @Failure 422 {object} map[string]any "unknown_category"
 // @Failure 500 {object} map[string]any "internal_error — the request could not be served"
-// @Router /api/v1/me/push-prefs [put]
+// @Router /ui/v1/me/push-prefs [put]
 func (h *NotificationsHandler) PutPushPrefs(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	c, ok := caller(r)
@@ -1080,7 +1080,7 @@ type putReasonPrefsRequest struct {
 // @Success 200 {object} notifications.ReasonPrefsDTO "Active reasons with the caller's channel states"
 // @Failure 401 {object} map[string]any "Missing / invalid auth"
 // @Failure 500 {object} map[string]any "internal_error — the request could not be served"
-// @Router /api/v1/me/notification-reasons [get]
+// @Router /ui/v1/me/notification-reasons [get]
 func (h *NotificationsHandler) GetReasonPrefs(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	c, ok := caller(r)
@@ -1111,7 +1111,7 @@ func (h *NotificationsHandler) GetReasonPrefs(w http.ResponseWriter, r *http.Req
 // @Failure 401 {object} map[string]any "Missing / invalid auth"
 // @Failure 422 {object} map[string]any "unknown_reason / reason_not_settable / channel_not_applicable"
 // @Failure 500 {object} map[string]any "internal_error — the request could not be served"
-// @Router /api/v1/me/notification-reasons [put]
+// @Router /ui/v1/me/notification-reasons [put]
 func (h *NotificationsHandler) PutReasonPrefs(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	c, ok := caller(r)
@@ -1178,7 +1178,7 @@ type subscriptionEventTypesResponse struct {
 // @Security ApiKeyAuth
 // @Success 200 {object} subscriptionEventTypesResponse "Deliverable subscription event types"
 // @Failure 401 {object} map[string]any "Missing / invalid auth"
-// @Router /api/v1/notification-event-types [get]
+// @Router /ui/v1/notification-event-types [get]
 func (h *NotificationsHandler) GetSubscriptionEventTypes(w http.ResponseWriter, r *http.Request) {
 	if _, ok := caller(r); !ok {
 		writeProblem(w, http.StatusUnauthorized, "unauthenticated", "", nil)

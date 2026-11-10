@@ -76,7 +76,7 @@ func TestProjectActions_TableIsOneInRESTAndMCP(t *testing.T) {
 		t.Fatal(err)
 	}
 	member := s.f.User(t, testsupport.ActorOnlyA) // an existing member of A.members
-	base := "/api/v1/projects/" + p.ID.String()
+	base := "/ui/v1/projects/" + p.ID.String()
 	version := func(issueID string) int {
 		var v int
 		if err := s.pool.QueryRow(ctx, `SELECT version FROM issues WHERE id = $1`, issueID).Scan(&v); err != nil {
@@ -218,7 +218,7 @@ func TestProjectActions_TableIsOneInRESTAndMCP(t *testing.T) {
 		}, cell{
 			rest: func(a testsupport.Actor) bool {
 				prefix := "r92r" + strings.ReplaceAll(uuid.NewString()[:6], "-", "")
-				code, raw := s.rest(a, http.MethodPost, "/api/v1/projects",
+				code, raw := s.rest(a, http.MethodPost, "/ui/v1/projects",
 					map[string]any{"name": prefix, "idPrefix": prefix, "spaceId": spaceShort})
 				if ok(code) {
 					forget(raw, "")

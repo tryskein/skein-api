@@ -138,7 +138,7 @@ func TestWatchingWindowWiring_ConfiguredWindowReachesTheReads(t *testing.T) {
 	seedAgedNotification(t, pool, user, actor, pid, fiveDays, "issue.status_changed", fiveDays, 5)
 	seedAgedNotification(t, pool, user, actor, pid, mentioned, "issue.mention", "", 40)
 
-	counts := serveMe(t, router, user, "/api/v1/me/notification-counts")
+	counts := serveMe(t, router, user, "/ui/v1/me/notification-counts")
 	if got := counts["watching"]; got != float64(1) {
 		t.Errorf("header watching = %v, want 1 — only the 5-day row is inside the configured 7-day window", got)
 	}
@@ -146,7 +146,7 @@ func TestWatchingWindowWiring_ConfiguredWindowReachesTheReads(t *testing.T) {
 		t.Errorf("header mentions = %v, want 1 — a 40-day mention has no window", got)
 	}
 
-	watching := serveMe(t, router, user, "/api/v1/me/watching")
+	watching := serveMe(t, router, user, "/ui/v1/me/watching")
 	if got := watching["unreadTotal"]; got != float64(1) {
 		t.Errorf("/me/watching unreadTotal = %v, want 1", got)
 	}

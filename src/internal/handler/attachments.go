@@ -116,7 +116,7 @@ func mapAttachmentValidation(w http.ResponseWriter, err error) bool {
 // @Failure 422 {object} map[string]any "file_too_large | mime_blocked | attachment_limit_exceeded | comment_wrong_issue"
 // @Failure 503 {object} map[string]any "Attachments subsystem disabled (S3 not configured)"
 // @Failure 500 {object} map[string]any "internal_error — the request could not be served"
-// @Router /api/v1/issues/{issueID}/attachments/upload-url [post]
+// @Router /ui/v1/issues/{issueID}/attachments/upload-url [post]
 func (h *AttachmentsHandler) UploadURL(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	if !h.attachmentsAvailable(w) {
@@ -260,7 +260,7 @@ func (h *AttachmentsHandler) UploadURL(w http.ResponseWriter, r *http.Request) {
 // @Failure 422 {object} map[string]any "object_not_uploaded — the file never landed in storage; storage_quota — the space's attachment storage reached SKEIN_QUOTA_*_STORAGE_BYTES (soft: confirmed while used < quota, even if this file takes it over; reading, downloading and deleting stay allowed; spaceId, storageUsedBytes, storageQuotaBytes only for a participant of the space, an external user gets the code alone — INV-28 (3))"
 // @Failure 503 {object} map[string]any "Attachments subsystem disabled (S3 not configured)"
 // @Failure 500 {object} map[string]any "internal_error — the request could not be served"
-// @Router /api/v1/attachments/{id}/confirm [post]
+// @Router /ui/v1/attachments/{id}/confirm [post]
 func (h *AttachmentsHandler) Confirm(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	if !h.attachmentsAvailable(w) {
@@ -358,7 +358,7 @@ func (h *AttachmentsHandler) Confirm(w http.ResponseWriter, r *http.Request) {
 // @Failure 403 {object} map[string]any "forbidden — the project is visible but the caller may not act on it (mapAccessErr; project ownership)"
 // @Failure 404 {object} map[string]any "Issue not found or not visible"
 // @Failure 500 {object} map[string]any "internal_error — the request could not be served"
-// @Router /api/v1/issues/{issueID}/attachments [get]
+// @Router /ui/v1/issues/{issueID}/attachments [get]
 func (h *AttachmentsHandler) List(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	c, ok := caller(r)
@@ -417,7 +417,7 @@ func (h *AttachmentsHandler) List(w http.ResponseWriter, r *http.Request) {
 // @Failure 422 {object} map[string]any "not_ready — attachment still in pending state"
 // @Failure 503 {object} map[string]any "Attachments subsystem disabled (S3 not configured)"
 // @Failure 500 {object} map[string]any "internal_error — the request could not be served"
-// @Router /api/v1/attachments/{id}/download-url [get]
+// @Router /ui/v1/attachments/{id}/download-url [get]
 func (h *AttachmentsHandler) DownloadURL(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	if !h.attachmentsAvailable(w) {
@@ -483,7 +483,7 @@ func (h *AttachmentsHandler) DownloadURL(w http.ResponseWriter, r *http.Request)
 // @Failure 403 {object} map[string]any "forbidden — the project is visible but the caller may not act on it (mapAccessErr; project ownership)"
 // @Failure 404 {object} map[string]any "Attachment not found or project not visible"
 // @Failure 500 {object} map[string]any "internal_error — the request could not be served"
-// @Router /api/v1/attachments/{id} [delete]
+// @Router /ui/v1/attachments/{id} [delete]
 func (h *AttachmentsHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	c, ok := caller(r)

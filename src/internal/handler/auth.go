@@ -470,7 +470,7 @@ func (h *AuthHandler) Logout(w http.ResponseWriter, r *http.Request) {
 // @Failure 401 {object} map[string]any "unauthenticated, session_revoked"
 // @Failure 422 {object} map[string]any "user not found (the session outlived the account)"
 // @Failure 500 {object} map[string]any "Internal error"
-// @Router /api/v1/auth/me [get]
+// @Router /ui/v1/auth/me [get]
 func (h *AuthHandler) Me(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 

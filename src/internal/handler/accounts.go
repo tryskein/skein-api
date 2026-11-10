@@ -96,7 +96,7 @@ func writeAccountsError(w http.ResponseWriter, r *http.Request, route string, er
 // @Failure 422 {object} accounts.UsernameTakenError "signup_disabled, captcha_failed, terms_required, username_invalid, password_weak, password_pwned, email_taken; username_taken carries suggestions"
 // @Failure 429 {object} map[string]any "rate_limited"
 // @Failure 500 {object} map[string]any "internal_error"
-// @Router /api/v1/auth/signup [post]
+// @Router /ui/v1/auth/signup [post]
 func (h *AccountsHandler) Signup(w http.ResponseWriter, r *http.Request) {
 	var req accounts.SignupRequest
 	if err := decodeAccountsBody(r, &req); err != nil {
@@ -135,7 +135,7 @@ func (h *AccountsHandler) Signup(w http.ResponseWriter, r *http.Request) {
 // @Failure 422 {object} map[string]any "signup_disabled"
 // @Failure 429 {object} map[string]any "rate_limited"
 // @Failure 500 {object} map[string]any "internal_error"
-// @Router /api/v1/auth/username-suggestions [get]
+// @Router /ui/v1/auth/username-suggestions [get]
 func (h *AccountsHandler) UsernameSuggestions(w http.ResponseWriter, r *http.Request) {
 	resp, err := h.svc.UsernameSuggestions(r.Context(), r.URL.Query().Get("email"), loginClientIP(r))
 	if err != nil {
@@ -165,7 +165,7 @@ func (h *AccountsHandler) UsernameSuggestions(w http.ResponseWriter, r *http.Req
 // @Failure 422 {object} map[string]any "password_login_disabled, email_disabled"
 // @Failure 429 {object} map[string]any "rate_limited"
 // @Failure 500 {object} map[string]any "internal_error"
-// @Router /api/v1/auth/password-reset [post]
+// @Router /ui/v1/auth/password-reset [post]
 func (h *AccountsHandler) PasswordReset(w http.ResponseWriter, r *http.Request) {
 	var req accounts.PasswordResetRequest
 	if err := decodeAccountsBody(r, &req); err != nil {
@@ -205,7 +205,7 @@ func (h *AccountsHandler) PasswordReset(w http.ResponseWriter, r *http.Request) 
 // @Failure 422 {object} map[string]any "password_login_disabled, email_disabled, token_invalid, password_weak, password_pwned"
 // @Failure 429 {object} map[string]any "rate_limited"
 // @Failure 500 {object} map[string]any "internal_error"
-// @Router /api/v1/auth/password-reset/{token} [post]
+// @Router /ui/v1/auth/password-reset/{token} [post]
 func (h *AccountsHandler) PasswordResetComplete(w http.ResponseWriter, r *http.Request) {
 	var req accounts.PasswordResetCompleteRequest
 	if err := decodeAccountsBody(r, &req); err != nil {
@@ -242,7 +242,7 @@ func (h *AccountsHandler) PasswordResetComplete(w http.ResponseWriter, r *http.R
 // @Failure 422 {object} map[string]any "email_disabled, token_invalid"
 // @Failure 429 {object} map[string]any "rate_limited"
 // @Failure 500 {object} map[string]any "internal_error"
-// @Router /api/v1/auth/confirm-email/{token} [post]
+// @Router /ui/v1/auth/confirm-email/{token} [post]
 func (h *AccountsHandler) ConfirmEmail(w http.ResponseWriter, r *http.Request) {
 	if err := h.svc.ConfirmEmail(r.Context(), chi.URLParam(r, "token"), loginClientIP(r)); err != nil {
 		writeAccountsError(w, r, "confirm-email", err)
@@ -270,7 +270,7 @@ func (h *AccountsHandler) ConfirmEmail(w http.ResponseWriter, r *http.Request) {
 // @Failure 422 {object} map[string]any "email_disabled"
 // @Failure 429 {object} map[string]any "rate_limited"
 // @Failure 500 {object} map[string]any "internal_error"
-// @Router /api/v1/me/email/confirmation [post]
+// @Router /ui/v1/me/email/confirmation [post]
 func (h *AccountsHandler) RequestConfirmationEmail(w http.ResponseWriter, r *http.Request) {
 	userID, ok := auth.UserIDFrom(r.Context())
 	if !ok {
@@ -350,7 +350,7 @@ func writeDeletionError(w http.ResponseWriter, r *http.Request, op string, err e
 // @Failure 401 {object} map[string]any "Missing or invalid auth"
 // @Failure 422 {object} map[string]any "account_deletion_disabled"
 // @Failure 500 {object} map[string]any "Internal error"
-// @Router /api/v1/me/deletion-preview [get]
+// @Router /ui/v1/me/deletion-preview [get]
 func (h *AccountDeletionHandler) DeletionPreview(w http.ResponseWriter, r *http.Request) {
 	c, ok := caller(r)
 	if !ok {
@@ -389,7 +389,7 @@ func (h *AccountDeletionHandler) DeletionPreview(w http.ResponseWriter, r *http.
 // @Failure 401 {object} map[string]any "Missing or invalid auth; session_revoked — the account was deleted meanwhile"
 // @Failure 422 {object} map[string]any "account_deletion_disabled, invalid_credentials, owns_spaces_with_members (spaces), owns_common_space (spaces), last_admin_cannot_demote, concurrent_change"
 // @Failure 500 {object} map[string]any "Internal error"
-// @Router /api/v1/me [delete]
+// @Router /ui/v1/me [delete]
 func (h *AccountDeletionHandler) DeleteMe(w http.ResponseWriter, r *http.Request) {
 	c, ok := caller(r)
 	if !ok {

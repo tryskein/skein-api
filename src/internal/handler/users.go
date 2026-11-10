@@ -285,7 +285,7 @@ func (h *UsersHandler) mapStoreErr(w http.ResponseWriter, err error) bool {
 // @Failure 404 {object} map[string]any "space_not_found (a spaceId)"
 // @Failure 422 {object} map[string]any "admin_role_disabled, email_taken, username_taken, external_cannot_be_admin, external_user (spaceIds for an external account), personal_space, no_seats (spaceId), concurrent_change"
 // @Failure 500 {object} map[string]any "Internal error"
-// @Router /api/v1/users [post]
+// @Router /ui/v1/users [post]
 func (h *UsersHandler) Create(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	actor, ok := h.adminActor(r)
@@ -422,7 +422,7 @@ func (h *UsersHandler) Get(w http.ResponseWriter, r *http.Request) {
 // @Failure 403 {object} map[string]any "not_admin, local_password_disabled"
 // @Failure 422 {object} map[string]any "admin_role_disabled, concurrent_change, external_cannot_be_admin, last_admin_cannot_demote, user_not_found, username_taken"
 // @Failure 500 {object} map[string]any "Internal error"
-// @Router /api/v1/users/{id} [patch]
+// @Router /ui/v1/users/{id} [patch]
 func (h *UsersHandler) Update(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	actor, ok := h.adminActor(r)
@@ -483,7 +483,7 @@ func (h *UsersHandler) Update(w http.ResponseWriter, r *http.Request) {
 // @Failure 403 {object} map[string]any "not_admin"
 // @Failure 422 {object} map[string]any "concurrent_change, last_admin_cannot_demote, user_not_found"
 // @Failure 500 {object} map[string]any "Internal error"
-// @Router /api/v1/users/{id}/deactivate [post]
+// @Router /ui/v1/users/{id}/deactivate [post]
 func (h *UsersHandler) Deactivate(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	actor, ok := h.adminActor(r)
@@ -530,7 +530,7 @@ func (h *UsersHandler) Deactivate(w http.ResponseWriter, r *http.Request) {
 // @Failure 403 {object} map[string]any "not_admin"
 // @Failure 422 {object} map[string]any "concurrent_change, user_not_found"
 // @Failure 500 {object} map[string]any "Internal error"
-// @Router /api/v1/users/{id}/reactivate [post]
+// @Router /ui/v1/users/{id}/reactivate [post]
 func (h *UsersHandler) Reactivate(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	actor, ok := h.adminActor(r)
@@ -578,7 +578,7 @@ func (h *UsersHandler) Reactivate(w http.ResponseWriter, r *http.Request) {
 // @Failure 422 {object} map[string]any "invalid_credentials — current password did not verify (or the account is deactivated / SSO-only, collapsed into the same code to avoid account-state enumeration); password_pwned — new password found in the Pwned Passwords breach corpus (only when SKEIN_PWNED_PASSWORDS_ENABLED=true); password_change_conflict — another request rotated the password between the read and the write (retry with the new current password)"
 // @Failure 429 {object} map[string]any "rate_limited — defense-in-depth throttle (sk-350.2): more than 5 calls from this caller within the current 1-minute window. Consulted before the body is even read, so a throttled caller never pays for JSON decode, bcrypt, or the pwned-passwords network call. Retry after the window elapses."
 // @Failure 500 {object} map[string]any "internal_error"
-// @Router /api/v1/me/password [post]
+// @Router /ui/v1/me/password [post]
 func (h *UsersHandler) ChangeMyPassword(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	userID, ok := auth.UserIDFrom(ctx)
@@ -669,7 +669,7 @@ type passwordPolicyResponse struct {
 // @Security ApiKeyAuth
 // @Success 200 {object} passwordPolicyResponse "Current password-change policy"
 // @Failure 401 {object} map[string]any "unauthenticated — missing/invalid caller identity"
-// @Router /api/v1/me/password/policy [get]
+// @Router /ui/v1/me/password/policy [get]
 func (h *UsersHandler) PasswordPolicy(w http.ResponseWriter, r *http.Request) {
 	if _, ok := auth.UserIDFrom(r.Context()); !ok {
 		writeProblem(w, http.StatusUnauthorized, "unauthenticated", "", nil)
@@ -731,7 +731,7 @@ type PublicProfileDTO struct {
 // @Failure 404 {object} map[string]any "user_not_found — external caller: no such user, or not visible"
 // @Failure 422 {object} map[string]any "user_not_found — internal caller: no such user, or not visible"
 // @Failure 500 {object} map[string]any "Internal error"
-// @Router /api/v1/users/profile/{username} [get]
+// @Router /ui/v1/users/profile/{username} [get]
 func (h *UsersHandler) GetUserProfile(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	username := strings.TrimSpace(chi.URLParam(r, "username"))
@@ -825,7 +825,7 @@ func (h *UsersHandler) GetUserProfile(w http.ResponseWriter, r *http.Request) {
 // @Failure 400 {object} map[string]any "invalid_limit — limit is not an integer in [1, 100]; invalid_search — q is longer than 128 characters"
 // @Failure 401 {object} map[string]any "Missing / invalid auth"
 // @Failure 500 {object} map[string]any "Internal error"
-// @Router /api/v1/users/directory [get]
+// @Router /ui/v1/users/directory [get]
 func (h *UsersHandler) ListDirectory(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 

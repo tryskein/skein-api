@@ -145,7 +145,7 @@ SELECT (new_data->>'by')::uuid FROM events
 		call     func(a testsupport.Actor, p testsupport.TenancyProject, id string) forceCell
 	}
 	issuePath := func(p testsupport.TenancyProject, id string) string {
-		return "/api/v1/projects/" + p.ID.String() + "/issues/" + id
+		return "/ui/v1/projects/" + p.ID.String() + "/issues/" + id
 	}
 	paths := []path{
 		{"REST unlock", true, func(a testsupport.Actor, p testsupport.TenancyProject, id string) forceCell {
@@ -161,7 +161,7 @@ SELECT (new_data->>'by')::uuid FROM events
 				map[string]any{"status": "deferred"}, map[string]string{"If-Match": fmt.Sprint(version(id))}))
 		}},
 		{"REST bulk close force", true, func(a testsupport.Actor, p testsupport.TenancyProject, id string) forceCell {
-			c := restCell(s.rest(a, http.MethodPost, "/api/v1/projects/"+p.ID.String()+"/issues/bulk",
+			c := restCell(s.rest(a, http.MethodPost, "/ui/v1/projects/"+p.ID.String()+"/issues/bulk",
 				map[string]any{"ids": []string{id}, "action": "close", "force": true, "closeOutcome": "done"}))
 			if c.ok {
 				var body struct {

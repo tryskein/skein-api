@@ -52,7 +52,7 @@ func nonEmpty(s string) *string {
 // @Security InternalSecretAuth
 // @Success 200 {object} accounts.InstanceConfig "The installation settings"
 // @Failure 401 {object} map[string]any "Service secret missing or wrong"
-// @Router /api/v1/internal/instance-config [get]
+// @Router /ui/v1/internal/instance-config [get]
 func (h *InstanceConfigHandler) Get(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, h.body)
 }

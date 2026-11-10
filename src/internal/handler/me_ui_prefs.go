@@ -124,7 +124,7 @@ func parseViewSet(raw json.RawMessage) (*[]string, error) {
 // @Success 200 {object} uiprefs.PrefsDTO "The caller's appearance settings"
 // @Failure 401 {object} map[string]any "unauthenticated — missing or invalid session / API key"
 // @Failure 500 {object} map[string]any "internal_error — the request could not be served"
-// @Router /api/v1/me/ui-prefs [get]
+// @Router /ui/v1/me/ui-prefs [get]
 func (h *MeUIPrefsHandler) GetUIPrefs(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	c, ok := caller(r)
@@ -161,7 +161,7 @@ func (h *MeUIPrefsHandler) GetUIPrefs(w http.ResponseWriter, r *http.Request) {
 // @Failure 400 {object} map[string]any "invalid_json — malformed body, unknown key, issueModalViews null / not an array of strings, density or navLayout null / not a string; invalid_view — a view name outside cards, kanban, tree; invalid_density — a density other than normal, compact; invalid_nav_layout — a layout mode other than columns, sections"
 // @Failure 401 {object} map[string]any "unauthenticated — missing or invalid session / API key"
 // @Failure 500 {object} map[string]any "internal_error — the request could not be served"
-// @Router /api/v1/me/ui-prefs [put]
+// @Router /ui/v1/me/ui-prefs [put]
 func (h *MeUIPrefsHandler) PutUIPrefs(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	c, ok := caller(r)

@@ -116,7 +116,7 @@ func NewSearchHandler(svc *search.Service) *SearchHandler {
 // @Failure 408 {object} map[string]any "request_cancelled"
 // @Failure 422 {object} map[string]any "invalid_query or invalid_kind"
 // @Failure 500 {object} map[string]any "internal_error"
-// @Router /api/v1/search [get]
+// @Router /ui/v1/search [get]
 func (h *SearchHandler) Search(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	c, ok := caller(r)
