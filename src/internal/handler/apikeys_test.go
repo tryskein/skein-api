@@ -222,6 +222,25 @@ func TestAPIKeysCabinet_CreateAndList(t *testing.T) {
 	}
 }
 
+// TestAPIKeysCabinet_CreateWithoutExpiry — review C2-03: expiresAt is
+// optional; without it a new key lives the policy default (90 days in the
+// test policy), with it the chosen expiry (TestAPIKeysCabinet_CreateAndList).
+func TestAPIKeysCabinet_CreateWithoutExpiry(t *testing.T) {
+	pool := newMeTestPool(t)
+	user, _ := testsupport.SeedUser(t, pool, "user")
+	c := newKeysCaller(t, keysTestHandler(pool, true, keysTestPublicURL), user, "user")
+
+	created := c.create(map[string]any{
+		"label":       "default lifetime",
+		"permissions": map[string]any{"level": "read", "admin": false},
+		"scope":       scopeAll,
+	})
+	want := created.CreatedAt.Add(90 * 24 * time.Hour)
+	if created.ExpiresAt == nil || created.ExpiresAt.Sub(want).Abs() > time.Second {
+		t.Errorf("expiresAt %v, want createdAt %v + 90 days", created.ExpiresAt, created.CreatedAt)
+	}
+}
+
 func TestAPIKeysCabinet_StaleClientBody(t *testing.T) {
 	pool := newMeTestPool(t)
 	user, _ := testsupport.SeedUser(t, pool, "user")

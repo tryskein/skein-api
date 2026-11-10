@@ -200,7 +200,7 @@ type apiKeyScopeInput struct {
 }
 
 // createAPIKeyRequest is the JSON body for POST /me/api-keys. Label,
-// permissions, scope and expiresAt are all required.
+// permissions and scope are required; expiresAt is optional.
 type createAPIKeyRequest struct {
 	// Label, 1..100 characters after trimming.
 	Label string `json:"label"`
@@ -208,7 +208,7 @@ type createAPIKeyRequest struct {
 	Permissions *apiKeyPermissions `json:"permissions"`
 	// Scope of the key.
 	Scope *apiKeyScopeInput `json:"scope"`
-	// ExpiresAt — end of the lifetime, RFC 3339; after now and within the maximum lifetime.
+	// ExpiresAt — end of the lifetime, RFC 3339; after now and within the maximum lifetime. Omitted: the default lifetime of GET /settings from now.
 	ExpiresAt *time.Time `json:"expiresAt"`
 }
 
@@ -249,14 +249,14 @@ type apiKeysSettingsView struct {
 // @Summary Create an API key of the caller
 // @Description Creates an API key for the signed-in user with the chosen permissions, scope and lifetime, and returns its secret once.
 // @Description
-// @Description Algorithm: decode the body; label, permissions, scope and expiresAt are all required. A body without permissions, scope and expiresAt is the shape of a page loaded before keys had grants: 400 validation_error with details.staleClient = true, and no key is created. Then the grant is checked — at least one permission (a level or admin), admin only with scope all and only for an instance admin, the scope members visible to the caller, the expiry after now and no later than now + the maximum lifetime of GET /settings. A fresh secret is generated (crypto/rand), bcrypt-hashed and stored with the grant; only its hash and non-secret prefix are kept.
+// @Description Algorithm: decode the body; label, permissions and scope are required, expiresAt is optional. A body without permissions and scope is the shape of a page loaded before keys had grants: 400 validation_error with details.staleClient = true, and no key is created. Then the grant is checked — at least one permission (a level or admin), admin only with scope all and only for an instance admin, the scope members visible to the caller, and an expiresAt, when given, after now and no later than now + the maximum lifetime of GET /settings. Without expiresAt the key lives the default lifetime of GET /settings. A fresh secret is generated (crypto/rand), bcrypt-hashed and stored with the grant; only its hash and non-secret prefix are kept.
 // @Description
 // @Description Side effects: one api_keys row and its scope rows. The secret appears only in this response.
 // @Tags Me
 // @Accept json
 // @Produce json
 // @Security ApiKeyAuth
-// @Param body body createAPIKeyRequest true "Label, permissions, scope and expiry of the new key"
+// @Param body body createAPIKeyRequest true "Label, permissions, scope and optional expiry of the new key"
 // @Success 201 {object} createAPIKeyResponse "The new key with its secret (plainKey), shown once"
 // @Failure 400 {object} map[string]any "invalid_body — malformed JSON or an unknown field; label_required / label_too_long; validation_error — a required field is missing (details.field), an unknown level or scope mode, or the stale page shape (details.staleClient = true). Nothing is created."
 // @Failure 401 {object} map[string]any "unauthenticated — no signed-in user"
@@ -276,7 +276,7 @@ func (h *APIKeysHandler) Create(w http.ResponseWriter, r *http.Request) {
 		writeProblem(w, http.StatusBadRequest, "invalid_body", err.Error(), nil)
 		return
 	}
-	if req.Permissions == nil && req.Scope == nil && req.ExpiresAt == nil {
+	if req.Permissions == nil && req.Scope == nil {
 		writeProblem(w, http.StatusBadRequest, "validation_error",
 			"this page is out of date: refresh the page to create a key with permissions, scope and expiry",
 			map[string]any{"details": map[string]any{"staleClient": true}})
@@ -298,14 +298,12 @@ func (h *APIKeysHandler) Create(w http.ResponseWriter, r *http.Request) {
 	case req.Scope == nil:
 		writeMissingField(w, "scope")
 		return
-	case req.ExpiresAt == nil:
-		writeMissingField(w, "expiresAt")
-		return
 	}
 	grant, ok := parseGrant(w, req.Permissions, req.Scope)
 	if !ok {
 		return
 	}
+	// Nil gives the policy default in the store.
 	grant.ExpiresAt = req.ExpiresAt
 	if !h.checkGrantForOwner(w, r, userID, grant) {
 		return
