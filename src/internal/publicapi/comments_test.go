@@ -71,8 +71,10 @@ func TestComments_ParityWithMCP(t *testing.T) {
 	w := seedWriteWorld(t, pool)
 	ko := w.key(w.owner, apikeys.LevelWrite)
 	km := w.key(w.member, apikeys.LevelWrite)
-	// The member watches the project: a comment of the owner notifies him.
-	w.exec(`INSERT INTO project_watchers (project_id, user_id) VALUES ($1, $2)`, w.project, w.member)
+	// The owner's comments mention the member: a mention notifies him even
+	// of an agent's write, where a subscriber is silenced by default
+	// (suppress_agent_actions), so the notifications compared are not empty.
+	mention := " @" + w.memberNm
 
 	type twin struct {
 		name string
@@ -83,16 +85,18 @@ func TestComments_ParityWithMCP(t *testing.T) {
 		mcp   func(issue, comment string) toolAnswer
 		want  string
 		write bool
+		// notify: the success notifies somebody (the mentioned member).
+		notify bool
 	}
 	ownComment := func(issue string) string { return w.comment(issue, w.owner, "the owner's note") }
 	membersComment := func(issue string) string { return w.comment(issue, w.member, "the member's note") }
 	for _, op := range []twin{
-		{name: "createComment", write: true,
+		{name: "createComment", write: true, notify: true,
 			rest: func(issue, _ string) restCall {
-				return rg.rest(ko, http.MethodPost, issuePath(issue, "/comments"), map[string]any{"body": "hello", "kind": "directed"}, nil)
+				return rg.rest(ko, http.MethodPost, issuePath(issue, "/comments"), map[string]any{"body": "hello" + mention, "kind": "directed"}, nil)
 			},
 			mcp: func(issue, _ string) toolAnswer {
-				return rg.tool(ko, "skein_comment", map[string]any{"issueId": issue, "body": "hello", "kind": "directed"})
+				return rg.tool(ko, "skein_comment", map[string]any{"issueId": issue, "body": "hello" + mention, "kind": "directed"})
 			}},
 		{name: "createComment with an empty body", want: "validation_error",
 			rest: func(issue, _ string) restCall {
@@ -101,14 +105,14 @@ func TestComments_ParityWithMCP(t *testing.T) {
 			mcp: func(issue, _ string) toolAnswer {
 				return rg.tool(ko, "skein_comment", map[string]any{"issueId": issue, "body": "   ", "kind": "directed"})
 			}},
-		{name: "updateComment by the author", prep: ownComment, write: true,
+		{name: "updateComment by the author", prep: ownComment, write: true, notify: true,
 			rest: func(_, c string) restCall {
 				_, v := w.commentRow(c)
-				return rg.rest(ko, http.MethodPatch, commentPath(c), map[string]any{"body": "edited"}, ifMatch(v))
+				return rg.rest(ko, http.MethodPatch, commentPath(c), map[string]any{"body": "edited" + mention}, ifMatch(v))
 			},
 			mcp: func(_, c string) toolAnswer {
 				_, v := w.commentRow(c)
-				return rg.tool(ko, "skein_comment_update", map[string]any{"commentId": c, "body": "edited", "expectedVersion": v, "kind": "directed"})
+				return rg.tool(ko, "skein_comment_update", map[string]any{"commentId": c, "body": "edited" + mention, "expectedVersion": v, "kind": "directed"})
 			}},
 		{name: "updateComment by another user", prep: ownComment, want: "forbidden",
 			rest: func(_, c string) restCall {
@@ -149,7 +153,11 @@ func TestComments_ParityWithMCP(t *testing.T) {
 			}
 			if op.write {
 				sameEvents(t, op.name, w.commentEvents(r, since), w.commentEvents(m, since))
-				sameNotifications(t, op.name, w.commentNotifications(r, since), w.commentNotifications(m, since))
+				rn, mn := w.commentNotifications(r, since), w.commentNotifications(m, since)
+				if op.notify && len(rn) == 0 {
+					t.Errorf("%s: REST notified nobody — the comparison would hold on empty lists", op.name)
+				}
+				sameNotifications(t, op.name, rn, mn)
 			}
 		})
 	}
