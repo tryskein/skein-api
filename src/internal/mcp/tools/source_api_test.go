@@ -78,10 +78,13 @@ func TestSourceAPI_MCPFilters(t *testing.T) {
 	})
 
 	t.Run("skein_create kind keeps its values", func(t *testing.T) {
+		// A project of its own: the rows seeded above bypass the id counter,
+		// so a create in pid would collide with them.
+		createPID, _ := seedProject(t, pool, owner, "lsapc")
 		create := handleCreate(pool, issues.NewStore(pool), dependencies.NewStore(pool), projects.NewStore(pool))
 		for kind, want := range map[string]string{"directed": issues.SourceAgentDirected, "autonomous": issues.SourceAgentAutonomous} {
 			body := callSourceAPITool(t, ctx, create, map[string]any{
-				"project": pid.String(), "title": "kind " + kind, "type": "task", "kind": kind,
+				"project": createPID.String(), "title": "kind " + kind, "type": "task", "kind": kind,
 			})
 			id, _ := body["id"].(string)
 			var source string
