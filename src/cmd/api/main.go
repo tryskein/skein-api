@@ -659,7 +659,11 @@ func main() {
 	dashboardHandler := handler.NewDashboardHandler(pool, dashboardStore, issuesStore)
 	// R2.1 — long-lived API keys (CRUD via Settings UI). MCP middleware
 	// reuses the apikeys.Store directly; the handler is only for /me.
-	apiKeysHandler := handler.NewAPIKeysHandler(pool, cfg.BcryptCost, apikeys.TTLPolicy{Default: cfg.APIKeyDefaultTTL, Max: cfg.APIKeyMaxTTL})
+	apiKeysHandler := handler.NewAPIKeysHandler(pool, cfg.BcryptCost, handler.APIKeysSettings{
+		TTL:              apikeys.TTLPolicy{Default: cfg.APIKeyDefaultTTL, Max: cfg.APIKeyMaxTTL},
+		PublicAPIEnabled: cfg.PublicAPIEnabled,
+		PublicAPIURL:     cfg.PublicAPIURL,
+	})
 
 	// R3.1 — admin user management. usersStore wraps the users package
 	// and holds the apikeys.Store reference for the deactivation cascade
@@ -1777,10 +1781,15 @@ func buildRouter(
 			r.Get("/quiet-hours", notifH.GetQuietHours)
 			r.Put("/quiet-hours", notifH.PutQuietHours)
 
+			// sk-878.3.1 T007 — the key's grant: narrowing in place,
+			// reissue, and the page settings (public API, lifetimes).
 			r.Route("/api-keys", func(r chi.Router) {
 				r.Get("/", apiKeysH.List)
 				r.Post("/", apiKeysH.Create)
+				r.Get("/settings", apiKeysH.Settings)
+				r.Patch("/{id}", apiKeysH.Narrow)
 				r.Delete("/{id}", apiKeysH.Revoke)
+				r.Post("/{id}/reissue", apiKeysH.Reissue)
 			})
 
 			// R3.1 — self-service password change. Available to every

@@ -43,14 +43,24 @@ func New(pool *pgxpool.Pool) *Store {
 }
 
 // APIKey is the audit-safe shape of a row — never includes key_hash, never
-// includes the plain key. Handlers serialize this directly to JSON.
+// includes the plain key — with its grant and the names of its scope
+// members, for the owner's own list.
 type APIKey struct {
-	ID         uuid.UUID  `json:"id"`
-	Label      string     `json:"label"`
-	Prefix     string     `json:"prefix"`
-	CreatedAt  time.Time  `json:"createdAt"`
-	LastUsedAt *time.Time `json:"lastUsedAt"`
-	RevokedAt  *time.Time `json:"revokedAt"`
+	ID         uuid.UUID
+	Label      string
+	Prefix     string
+	CreatedAt  time.Time
+	LastUsedAt *time.Time
+	RevokedAt  *time.Time
+	Grant      Grant
+	// ReissuedFromID is the key this one was reissued from.
+	ReissuedFromID *uuid.UUID
+	// EffectiveAdmin is the admin flag as it applies now: set on the key
+	// and the owner an internal instance admin.
+	EffectiveAdmin bool
+	// ProjectNames and SpaceNames name the scope members.
+	ProjectNames map[uuid.UUID]string
+	SpaceNames   map[uuid.UUID]string
 }
 
 // LookupResult is what the MCP middleware needs to authorize a request:
@@ -308,17 +318,45 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 	return c, nil
 }
 
-// ListByUser returns every key (active + revoked) belonging to userID,
-// newest-first. Revoked keys stay in the list so the UI can show "you
-// revoked X keys this week" without a separate query — the frontend
-// styles them muted via the revokedAt field.
+// ListByUser returns every key (active, expired and revoked) belonging to
+// userID, newest-first, with its grant and the names of its scope members.
+// Revoked keys stay in the list so the UI can show them muted.
 func (s *Store) ListByUser(ctx context.Context, userID uuid.UUID) ([]APIKey, error) {
+	return s.listOwn(ctx, userID, nil)
+}
+
+// GetByUser returns the user's key id in the ListByUser shape; ErrNotFound
+// when the user has no such key.
+func (s *Store) GetByUser(ctx context.Context, userID, id uuid.UUID) (APIKey, error) {
+	keys, err := s.listOwn(ctx, userID, &id)
+	if err != nil {
+		return APIKey{}, err
+	}
+	if len(keys) == 0 {
+		return APIKey{}, ErrNotFound
+	}
+	return keys[0], nil
+}
+
+func (s *Store) listOwn(ctx context.Context, userID uuid.UUID, only *uuid.UUID) ([]APIKey, error) {
 	rows, err := s.pool.Query(ctx, `
-SELECT id, label, prefix, created_at, last_used_at, revoked_at
-  FROM api_keys
- WHERE user_id = $1
- ORDER BY created_at DESC
-`, userID)
+SELECT k.id, k.label, k.prefix, k.created_at, k.last_used_at, k.revoked_at,
+       k.level, k.is_admin, k.scope_mode, k.expires_at, k.reissued_from_id,
+       u.role = 'admin' AND NOT u.is_external,
+       ARRAY(SELECT p.id FROM api_key_scope_projects sp JOIN projects p ON p.id = sp.project_id
+              WHERE sp.api_key_id = k.id ORDER BY p.id),
+       ARRAY(SELECT p.name FROM api_key_scope_projects sp JOIN projects p ON p.id = sp.project_id
+              WHERE sp.api_key_id = k.id ORDER BY p.id),
+       ARRAY(SELECT sx.id FROM api_key_scope_spaces ss JOIN spaces sx ON sx.id = ss.space_id
+              WHERE ss.api_key_id = k.id ORDER BY sx.id),
+       ARRAY(SELECT sx.name FROM api_key_scope_spaces ss JOIN spaces sx ON sx.id = ss.space_id
+              WHERE ss.api_key_id = k.id ORDER BY sx.id)
+  FROM api_keys k
+  JOIN users u ON u.id = k.user_id
+ WHERE k.user_id = $1
+   AND ($2::uuid IS NULL OR k.id = $2)
+ ORDER BY k.created_at DESC
+`, userID, only)
 	if err != nil {
 		return nil, fmt.Errorf("listing api keys: %w", err)
 	}
@@ -327,12 +365,29 @@ SELECT id, label, prefix, created_at, last_used_at, revoked_at
 	out := make([]APIKey, 0, 8)
 	for rows.Next() {
 		var k APIKey
-		var lastUsed, revokedAt *time.Time
-		if err := rows.Scan(&k.ID, &k.Label, &k.Prefix, &k.CreatedAt, &lastUsed, &revokedAt); err != nil {
+		var level *string
+		var mode string
+		var ownerAdmin bool
+		var projectNames, spaceNames []string
+		if err := rows.Scan(&k.ID, &k.Label, &k.Prefix, &k.CreatedAt, &k.LastUsedAt, &k.RevokedAt,
+			&level, &k.Grant.Admin, &mode, &k.Grant.ExpiresAt, &k.ReissuedFromID, &ownerAdmin,
+			&k.Grant.Scope.Projects, &projectNames, &k.Grant.Scope.Spaces, &spaceNames); err != nil {
 			return nil, fmt.Errorf("scanning api key: %w", err)
 		}
-		k.LastUsedAt = lastUsed
-		k.RevokedAt = revokedAt
+		if level != nil {
+			k.Grant.Level = Level(*level)
+		}
+		k.Grant.Scope.Mode = ScopeMode(mode)
+		k.ProjectNames = make(map[uuid.UUID]string, len(projectNames))
+		for i, id := range k.Grant.Scope.Projects {
+			k.ProjectNames[id] = projectNames[i]
+		}
+		k.SpaceNames = make(map[uuid.UUID]string, len(spaceNames))
+		for i, id := range k.Grant.Scope.Spaces {
+			k.SpaceNames[id] = spaceNames[i]
+		}
+		k.Grant = k.Grant.normalized()
+		k.EffectiveAdmin = k.Grant.Admin && ownerAdmin
 		k.CreatedAt = k.CreatedAt.UTC()
 		out = append(out, k)
 	}
