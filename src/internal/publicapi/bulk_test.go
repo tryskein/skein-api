@@ -130,8 +130,11 @@ func TestBulk_Batches(t *testing.T) {
 	t.Run("force", func(t *testing.T) {
 		mine := w.issue("forced")
 		w.exec(`UPDATE issues SET locked_by = 'mcp-session-other', locked_at = now(), status = 'in_progress' WHERE id = $1`, mine)
-		// A project where the owner is a member only: no force_unlock there.
-		q, qPrefix := seedProject(t, pool, w.member, w.space, "wrf")
+		// A project where the owner is a member only, in a space he does not
+		// own: no force_unlock there.
+		qSpace, _ := seedOwnSpace(t, pool, w.member)
+		testsupport.AddSpaceMember(t, pool, qSpace, w.owner)
+		q, qPrefix := seedProject(t, pool, w.member, qSpace, "wrf")
 		addMember(t, pool, q, w.owner, "member")
 		theirs := testsupport.SeedIssue(t, pool, q, w.member, qPrefix+"-1", "theirs "+uuid.NewString()[:6], "open", 2)
 		items := func() map[string]any {
