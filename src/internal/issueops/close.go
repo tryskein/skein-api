@@ -156,6 +156,13 @@ func Close(ctx context.Context, d Deps, userID uuid.UUID, a Args) (CloseResult, 
 	res := CloseResult{IssueID: id, ProjectID: issue.ProjectID, Link: link, OpenChildren: openChildren}
 	if err != nil {
 		if rb, committed := asReadBackFailed(err); committed {
+			// The close committed, only the read of the card failed: the
+			// success line names the committed version.
+			slog.InfoContext(ctx, logMessage(ctx, "ok"),
+				"tool", "skein_close",
+				"userId", userID.String(), "issueId", id,
+				"version", rb.State.Version,
+				"latencyMs", time.Since(start).Milliseconds())
 			res.ReadBack = rb
 			return res, nil
 		}

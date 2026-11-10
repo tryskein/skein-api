@@ -276,6 +276,13 @@ func Update(ctx context.Context, d Deps, userID uuid.UUID, a Args) (UpdateResult
 	final, link, err := RunUpdateForOne(ctx, d.Issues, in)
 	if err != nil {
 		if rb, committed := asReadBackFailed(err); committed {
+			// Every step committed, only the read of the card failed: the
+			// success line names the committed version.
+			slog.InfoContext(ctx, logMessage(ctx, "ok"),
+				"tool", "skein_update",
+				"userId", userID.String(), "issueId", id,
+				"version", rb.State.Version,
+				"latencyMs", time.Since(start).Milliseconds())
 			return UpdateResult{IssueID: id, Link: link, ReadBack: rb}, nil
 		}
 		return UpdateResult{}, MapUpdateError(ctx, err, userID, id, outcome.Target)
