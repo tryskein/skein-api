@@ -80,6 +80,172 @@
                 },
                 "type": "object"
             },
+            "issueops.BatchErrorDTO": {
+                "properties": {
+                    "code": {
+                        "type": "string"
+                    },
+                    "details": {
+                        "additionalProperties": {},
+                        "type": "object"
+                    },
+                    "message": {
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
+            "issueops.BatchResponse": {
+                "properties": {
+                    "results": {
+                        "items": {
+                            "$ref": "#/components/schemas/issueops.BatchResultRow"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
+                    },
+                    "summary": {
+                        "$ref": "#/components/schemas/issueops.BatchSummary"
+                    }
+                },
+                "type": "object"
+            },
+            "issueops.BatchResultRow": {
+                "properties": {
+                    "error": {
+                        "$ref": "#/components/schemas/issueops.BatchErrorDTO"
+                    },
+                    "id": {
+                        "type": "string"
+                    },
+                    "ok": {
+                        "type": "boolean"
+                    },
+                    "version": {
+                        "type": "integer"
+                    }
+                },
+                "type": "object"
+            },
+            "issueops.BatchSummary": {
+                "properties": {
+                    "failed": {
+                        "type": "integer"
+                    },
+                    "requested": {
+                        "type": "integer"
+                    },
+                    "succeeded": {
+                        "type": "integer"
+                    }
+                },
+                "type": "object"
+            },
+            "issueops.CloseManyResponse": {
+                "properties": {
+                    "results": {
+                        "items": {
+                            "$ref": "#/components/schemas/issueops.CloseManyResultRow"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
+                    },
+                    "summary": {
+                        "$ref": "#/components/schemas/issueops.BatchSummary"
+                    }
+                },
+                "type": "object"
+            },
+            "issueops.CloseManyResultRow": {
+                "properties": {
+                    "closeLink": {
+                        "$ref": "#/components/schemas/issues.CloseLinkState",
+                        "description": "CloseLink is PER ROW, not per call: one item may create the edge and\nthe next find it already there, in the same request. A per-call flag\nwould have to pick one of those answers and be wrong about the other."
+                    },
+                    "closeOutcome": {
+                        "description": "CloseOutcome is the row's post-state outcome, same Go type and same\nwire name as on the single acknowledgement (ack.go#ackRow).",
+                        "type": "string"
+                    },
+                    "error": {
+                        "$ref": "#/components/schemas/issueops.BatchErrorDTO"
+                    },
+                    "id": {
+                        "type": "string"
+                    },
+                    "ok": {
+                        "type": "boolean"
+                    },
+                    "version": {
+                        "type": "integer"
+                    }
+                },
+                "type": "object"
+            },
+            "issueops.DepAddManyResponse": {
+                "properties": {
+                    "results": {
+                        "items": {
+                            "$ref": "#/components/schemas/issueops.DepAddManyResultRow"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
+                    },
+                    "summary": {
+                        "$ref": "#/components/schemas/issueops.BatchSummary"
+                    }
+                },
+                "type": "object"
+            },
+            "issueops.DepAddManyResultRow": {
+                "properties": {
+                    "dependency": {
+                        "$ref": "#/components/schemas/issueops.DepDTO"
+                    },
+                    "error": {
+                        "$ref": "#/components/schemas/issueops.BatchErrorDTO"
+                    },
+                    "fromId": {
+                        "type": "string"
+                    },
+                    "ok": {
+                        "type": "boolean"
+                    },
+                    "toId": {
+                        "type": "string"
+                    },
+                    "type": {
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
+            "issueops.DepDTO": {
+                "properties": {
+                    "createdAt": {
+                        "type": "string"
+                    },
+                    "from": {
+                        "type": "string"
+                    },
+                    "gate": {
+                        "type": "string"
+                    },
+                    "metadata": {
+                        "additionalProperties": {},
+                        "type": "object"
+                    },
+                    "to": {
+                        "type": "string"
+                    },
+                    "type": {
+                        "type": "string"
+                    },
+                    "version": {
+                        "type": "integer"
+                    }
+                },
+                "type": "object"
+            },
             "issues.BlockerRef": {
                 "properties": {
                     "id": {
@@ -96,6 +262,19 @@
                     }
                 },
                 "type": "object"
+            },
+            "issues.CloseLinkState": {
+                "enum": [
+                    "",
+                    "created",
+                    "existed"
+                ],
+                "type": "string",
+                "x-enum-varnames": [
+                    "CloseLinkNone",
+                    "CloseLinkCreated",
+                    "CloseLinkExisted"
+                ]
             },
             "issues.CommentDTO": {
                 "properties": {
@@ -1655,6 +1834,212 @@
                 },
                 "type": "object"
             },
+            "publicapi.bulkCloseBody": {
+                "properties": {
+                    "items": {
+                        "description": "Items are 1..100 rows.",
+                        "items": {
+                            "$ref": "#/components/schemas/publicapi.bulkCloseItem"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
+                    },
+                    "kind": {
+                        "description": "Kind of the write: directed or autonomous (checked).",
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
+            "publicapi.bulkCloseItem": {
+                "properties": {
+                    "closeOutcome": {
+                        "description": "CloseOutcome: done, duplicate, superseded or wont_do.",
+                        "type": "string"
+                    },
+                    "closeTarget": {
+                        "description": "CloseTarget of a duplicate or superseded close.",
+                        "type": "string"
+                    },
+                    "commits": {
+                        "description": "Commits of the close.",
+                        "items": {
+                            "$ref": "#/components/schemas/publicapi.commitInput"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
+                    },
+                    "expectedVersion": {
+                        "description": "ExpectedVersion of the issue. Required.",
+                        "type": "integer"
+                    },
+                    "id": {
+                        "description": "ID of the issue. Required.",
+                        "type": "string"
+                    },
+                    "reason": {
+                        "description": "Reason of the close, non-empty. Required.",
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
+            "publicapi.bulkDependenciesBody": {
+                "properties": {
+                    "items": {
+                        "description": "Items are 1..100 rows.",
+                        "items": {
+                            "$ref": "#/components/schemas/publicapi.bulkDependencyItem"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
+                    },
+                    "kind": {
+                        "description": "Kind of the write: directed or autonomous (checked).",
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
+            "publicapi.bulkDependencyItem": {
+                "properties": {
+                    "fromId": {
+                        "description": "FromID is the issue the edge goes from. Required.",
+                        "type": "string"
+                    },
+                    "gate": {
+                        "description": "Gate qualifies a waits-for edge.",
+                        "type": "string"
+                    },
+                    "toId": {
+                        "description": "ToID is the issue the edge goes to. Required.",
+                        "type": "string"
+                    },
+                    "type": {
+                        "description": "Type of the edge. Required.",
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
+            "publicapi.bulkUpdateBody": {
+                "properties": {
+                    "items": {
+                        "description": "Items are 1..100 rows.",
+                        "items": {
+                            "$ref": "#/components/schemas/publicapi.bulkUpdateItem"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
+                    },
+                    "kind": {
+                        "description": "Kind of the write: directed or autonomous (checked).",
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
+            "publicapi.bulkUpdateItem": {
+                "properties": {
+                    "acceptanceCriteria": {
+                        "description": "AcceptanceCriteria; null or \"\" clears it.",
+                        "type": "string"
+                    },
+                    "assignee": {
+                        "description": "Assignee; \"\" clears it.",
+                        "type": "string"
+                    },
+                    "closeOutcome": {
+                        "description": "CloseOutcome with status closed.",
+                        "type": "string"
+                    },
+                    "componentIds": {
+                        "description": "ComponentIDs replace the components.",
+                        "items": {
+                            "type": "string"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
+                    },
+                    "deferUntil": {
+                        "description": "DeferUntil, RFC 3339.",
+                        "type": "string"
+                    },
+                    "description": {
+                        "description": "Description; null or \"\" clears it.",
+                        "type": "string"
+                    },
+                    "design": {
+                        "description": "Design; null or \"\" clears it.",
+                        "type": "string"
+                    },
+                    "dueAt": {
+                        "description": "DueAt, RFC 3339.",
+                        "type": "string"
+                    },
+                    "estimatedMinutes": {
+                        "description": "EstimatedMinutes, >= 0.",
+                        "type": "integer"
+                    },
+                    "expectedVersion": {
+                        "description": "ExpectedVersion of the issue. Required.",
+                        "type": "integer"
+                    },
+                    "externalRef": {
+                        "description": "ExternalRef; null or \"\" clears it.",
+                        "type": "string"
+                    },
+                    "id": {
+                        "description": "ID of the issue. Required.",
+                        "type": "string"
+                    },
+                    "labelsAdd": {
+                        "description": "LabelsAdd are labels to add.",
+                        "items": {
+                            "type": "string"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
+                    },
+                    "labelsRemove": {
+                        "description": "LabelsRemove are labels to remove.",
+                        "items": {
+                            "type": "string"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
+                    },
+                    "notes": {
+                        "description": "Notes; null or \"\" clears it.",
+                        "type": "string"
+                    },
+                    "priority": {
+                        "description": "Priority 0..4.",
+                        "type": "integer"
+                    },
+                    "reason": {
+                        "description": "Reason of a status change.",
+                        "type": "string"
+                    },
+                    "sourceContext": {
+                        "description": "SourceContext; null or \"\" clears it.",
+                        "type": "string"
+                    },
+                    "status": {
+                        "description": "Status: open, in_progress, deferred, closed or standing.",
+                        "type": "string"
+                    },
+                    "title": {
+                        "description": "Title, 1..500 characters.",
+                        "type": "string"
+                    },
+                    "type": {
+                        "description": "Type of the issue.",
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
             "publicapi.childTemplate": {
                 "properties": {
                     "acceptanceCriteria": {
@@ -2831,6 +3216,270 @@
                 ]
             }
         },
+        "/api/v1/issues/bulk-close": {
+            "post": {
+                "description": "Closes each row — an issue, its expected version, the reason and optionally the outcome, the target and the commits — in a transaction of its own, the same batch as the MCP tool skein_close_many: a row's refusal does not stop the others; the answer is 207 with each row's result (id, ok, version, closeOutcome, closeLink) or error and a summary. A refusal of the whole request — the key right, the format, 0 or more than 100 rows — is answered with its own status and no row runs.\n\nforce=true (the key needs manage) bypasses another holder's claim, the version and the pin in every row; a row of a project where the owner lacks force_unlock is refused force_unlock_forbidden. A repeat of a batch with force=true applies again: read the issues before repeating. No Idempotency-Key.",
+                "operationId": "bulkCloseIssues",
+                "parameters": [
+                    {
+                        "description": "The privileged mode: manage and force_unlock",
+                        "in": "query",
+                        "name": "force",
+                        "schema": {
+                            "type": "boolean"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/publicapi.bulkCloseBody",
+                                "summary": "body",
+                                "description": "The rows"
+                            }
+                        }
+                    },
+                    "description": "The rows",
+                    "required": true
+                },
+                "responses": {
+                    "207": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/issueops.CloseManyResponse"
+                                }
+                            }
+                        },
+                        "description": "The result of each row"
+                    },
+                    "400": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Malformed body, unknown field or parameter, 0 or more than 100 rows, force not true|false (code validation_error)"
+                    },
+                    "401": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "No key, or the key is invalid, expired or revoked (code unauthenticated)"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The key lacks write, or manage for force (code insufficient_scope)"
+                    },
+                    "413": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Body over 1 MiB (code payload_too_large)"
+                    },
+                    "415": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Body is not application/json (code unsupported_media_type)"
+                    },
+                    "429": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Rate limited (code rate_limited, Retry-After)"
+                    },
+                    "500": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Internal error (code internal_error)"
+                    },
+                    "503": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The database is unavailable (code database_unavailable)"
+                    }
+                },
+                "security": [
+                    {
+                        "SkeinApiKey": [
+                            "write"
+                        ]
+                    }
+                ],
+                "summary": "Close several issues",
+                "tags": [
+                    "Issues"
+                ]
+            }
+        },
+        "/api/v1/issues/bulk-update": {
+            "post": {
+                "description": "Applies each row — an issue, its expected version and the changes of updateIssue — in a transaction of its own, the same batch as the MCP tool skein_update_many: a row's refusal (version_conflict with the current version, locked_by_other, issue_not_found, …) does not stop the others; the answer is 207 with each row's result (id, ok, version) or error (code, message, details) and a summary. A refusal of the whole request — the key right, the format, 0 or more than 100 rows — is answered with its own status and no row runs. reviewRequired and closeTarget are not accepted in a row. The batch stops at its server deadline: the rows not run answer batch_deadline_exceeded.\n\nforce=true (the key needs manage) bypasses another holder's claim, the version and the pin in every row; a row of a project where the owner lacks force_unlock is refused force_unlock_forbidden, the others run. A repeat of a batch with force=true applies its changes again: read the issues before repeating. No Idempotency-Key.",
+                "operationId": "bulkUpdateIssues",
+                "parameters": [
+                    {
+                        "description": "The privileged mode: manage and force_unlock",
+                        "in": "query",
+                        "name": "force",
+                        "schema": {
+                            "type": "boolean"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/publicapi.bulkUpdateBody",
+                                "summary": "body",
+                                "description": "The rows"
+                            }
+                        }
+                    },
+                    "description": "The rows",
+                    "required": true
+                },
+                "responses": {
+                    "207": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/issueops.BatchResponse"
+                                }
+                            }
+                        },
+                        "description": "The result of each row"
+                    },
+                    "400": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Malformed body, unknown field or parameter, 0 or more than 100 rows, force not true|false (code validation_error)"
+                    },
+                    "401": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "No key, or the key is invalid, expired or revoked (code unauthenticated)"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The key lacks write, or manage for force (code insufficient_scope)"
+                    },
+                    "413": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Body over 1 MiB (code payload_too_large)"
+                    },
+                    "415": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Body is not application/json (code unsupported_media_type)"
+                    },
+                    "429": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Rate limited (code rate_limited, Retry-After)"
+                    },
+                    "500": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Internal error (code internal_error)"
+                    },
+                    "503": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The database is unavailable (code database_unavailable)"
+                    }
+                },
+                "security": [
+                    {
+                        "SkeinApiKey": [
+                            "write"
+                        ]
+                    }
+                ],
+                "summary": "Update several issues",
+                "tags": [
+                    "Issues"
+                ]
+            }
+        },
         "/api/v1/issues/claim": {
             "post": {
                 "description": "Claims 1..100 issues in one transaction — the same operation as the MCP tool skein_claim with ids: every issue is claimed, or none (any refusal rolls every lock back, and names the issue that refused it). The answer keeps the order of the request. No version is needed: the lock is its own guard. Side effects: issue.claimed of each.",
@@ -2948,6 +3597,128 @@
                     }
                 ],
                 "summary": "Claim several issues",
+                "tags": [
+                    "Issues"
+                ]
+            }
+        },
+        "/api/v1/issues/dependencies/bulk-add": {
+            "post": {
+                "description": "Adds each edge — from, to, type and optionally a gate — on its own, the same batch as the MCP tool skein_dep_add_many: a row's refusal (an end missing or outside the key's scope — issue_not_found as MCP, dependency_already_exists, dependency_cycle, …) does not stop the others; the answer is 207 with each row's result (the edge) or error and a summary. Edges have no version. A refusal of the whole request — the key right, the format, 0 or more than 100 rows — is answered with its own status and no row runs. A repeat is safe: an existing edge answers dependency_already_exists. No Idempotency-Key.",
+                "operationId": "bulkAddDependencies",
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/publicapi.bulkDependenciesBody",
+                                "summary": "body",
+                                "description": "The rows"
+                            }
+                        }
+                    },
+                    "description": "The rows",
+                    "required": true
+                },
+                "responses": {
+                    "207": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/issueops.DepAddManyResponse"
+                                }
+                            }
+                        },
+                        "description": "The result of each row"
+                    },
+                    "400": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Malformed body, unknown field or parameter, 0 or more than 100 rows (code validation_error)"
+                    },
+                    "401": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "No key, or the key is invalid, expired or revoked (code unauthenticated)"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The key lacks write (code insufficient_scope)"
+                    },
+                    "413": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Body over 1 MiB (code payload_too_large)"
+                    },
+                    "415": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Body is not application/json (code unsupported_media_type)"
+                    },
+                    "429": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Rate limited (code rate_limited, Retry-After)"
+                    },
+                    "500": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Internal error (code internal_error)"
+                    },
+                    "503": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The database is unavailable (code database_unavailable)"
+                    }
+                },
+                "security": [
+                    {
+                        "SkeinApiKey": [
+                            "write"
+                        ]
+                    }
+                ],
+                "summary": "Add several dependencies",
                 "tags": [
                     "Issues"
                 ]

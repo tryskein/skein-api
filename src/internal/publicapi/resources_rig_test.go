@@ -103,6 +103,9 @@ func newResourceRig(t *testing.T, pool *pgxpool.Pool) *resourceRig {
 		tools.RegisterResumeDelegated(s, pool, issuesStore)
 		tools.RegisterCommitsAttach(s, pool, issuesStore)
 		tools.RegisterCommitsDetach(s, pool, issuesStore)
+		tools.RegisterUpdateMany(s, pool, issuesStore)
+		tools.RegisterCloseMany(s, pool, issuesStore)
+		tools.RegisterDepAddMany(s, pool, depsStore, issuesStore)
 	})
 	return &resourceRig{
 		t: t, pool: pool, restH: rest,

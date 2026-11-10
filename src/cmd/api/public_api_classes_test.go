@@ -114,6 +114,11 @@ var publicOps = []publicOp{
 	{id: "resumeDelegated", method: http.MethodPost, path: "issues/{issue}/resume-delegated", right: "write", body: true, noEvent: true},
 	{id: "attachCommits", method: http.MethodPost, path: "issues/{issue}/commits", right: "write", body: true},
 	{id: "detachCommit", method: http.MethodDelete, path: "issues/{issue}/commits/{hash}", right: "write", body: true},
+
+	// T025 (row 125).
+	{id: "bulkUpdateIssues", method: http.MethodPost, path: "issues/bulk-update", right: "write", body: true},
+	{id: "bulkCloseIssues", method: http.MethodPost, path: "issues/bulk-close", right: "write", body: true},
+	{id: "bulkAddDependencies", method: http.MethodPost, path: "issues/dependencies/bulk-add", right: "write", body: true},
 }
 
 // TestPublicAPIClasses_LiteralIsRoutesGo — rows 100 and 101, the literal
@@ -438,6 +443,15 @@ func (w *classWorld) call(op publicOp, p uuid.UUID, key string) opCall {
 		return opCall{http.MethodPost, issue + action, nil, nil}
 	case "attachCommits":
 		return opCall{http.MethodPost, issue + "/commits", map[string]any{"commits": []map[string]any{{"hash": w.freshHash(), "repoUrl": w.repoURL}}}, nil}
+	case "bulkUpdateIssues":
+		return opCall{http.MethodPost, base + "issues/bulk-update", map[string]any{"items": []map[string]any{
+			{"id": id, "expectedVersion": w.issueVersion(id), "title": w.fresh("bulk")}}}, nil}
+	case "bulkCloseIssues":
+		return opCall{http.MethodPost, base + "issues/bulk-close", map[string]any{"items": []map[string]any{
+			{"id": id, "expectedVersion": w.issueVersion(id), "reason": "done", "closeOutcome": "done"}}}, nil}
+	case "bulkAddDependencies":
+		return opCall{http.MethodPost, base + "issues/dependencies/bulk-add", map[string]any{"items": []map[string]any{
+			{"fromId": id, "toId": w.freshIssue(p), "type": "related"}}}, nil}
 	case "detachCommit":
 		hash := w.freshHash()
 		w.do(key, opCall{http.MethodPost, issue + "/commits", map[string]any{"commits": []map[string]any{{"hash": hash, "repoUrl": w.repoURL}}}, nil}, "", nil)

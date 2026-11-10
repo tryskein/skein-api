@@ -306,6 +306,14 @@ func ProductRoutes(d Deps) []Route {
 			routeFlags{guarded: true}),
 		writeRoute(OperationDetachCommit, http.MethodDelete, "issues/{issue}/commits/{hash}", ObjectPathIssueProject, wa.detachCommit,
 			routeFlags{guarded: true}),
+
+		// Batches (T025).
+		writeRoute(OperationBulkUpdateIssues, http.MethodPost, "issues/bulk-update", ObjectNone, wa.bulkUpdateIssues,
+			routeFlags{guarded: true, noActions: true}),
+		writeRoute(OperationBulkCloseIssues, http.MethodPost, "issues/bulk-close", ObjectNone, wa.bulkCloseIssues,
+			routeFlags{guarded: true, noActions: true}),
+		writeRoute(OperationBulkAddDependencies, http.MethodPost, "issues/dependencies/bulk-add", ObjectNone, wa.bulkAddDependencies,
+			routeFlags{noActions: true}),
 	}
 }
 

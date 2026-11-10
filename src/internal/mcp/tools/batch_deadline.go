@@ -3,7 +3,6 @@ package tools
 import (
 	"context"
 	"skein-api/internal/issueops"
-	"time"
 )
 
 // batchLoopDeadline bounds the per-row loop of a batch tool
@@ -46,7 +45,7 @@ import (
 // It is a var, not a const, for one reason: the tests shorten it to prove
 // the stop path without sleeping for twenty seconds. Production never
 // assigns it.
-var batchLoopDeadline = 20 * time.Second
+var batchLoopDeadline = issueops.BatchLoopDeadline
 
 // batchLoopContext derives the context the per-row work runs under. Callers
 // keep using the parent context for logging, so a log line still gets

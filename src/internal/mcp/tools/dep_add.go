@@ -14,6 +14,7 @@ import (
 
 	"skein-api/internal/authz"
 	"skein-api/internal/dependencies"
+	"skein-api/internal/issueops"
 	"skein-api/internal/issues"
 	skmcp "skein-api/internal/mcp"
 )
@@ -98,19 +99,6 @@ func RegisterDepAdd(s *server.MCPServer, pool *pgxpool.Pool, depsStore *dependen
 // input schema.
 type depAddResponse struct {
 	Dependency depDTO `json:"dependency"`
-}
-
-// depDTO is the wire shape returned by skein_dep_add. We hoist `gate` out
-// of metadata so the agent gets the same field shape on the way out as it
-// passed in, without having to dig into a generic map.
-type depDTO struct {
-	From      string         `json:"from"`
-	To        string         `json:"to"`
-	Type      string         `json:"type"`
-	Gate      *string        `json:"gate"`
-	Metadata  map[string]any `json:"metadata"`
-	Version   int            `json:"version"`
-	CreatedAt time.Time      `json:"createdAt"`
 }
 
 func handleDepAdd(pool *pgxpool.Pool, depsStore *dependencies.Store, issuesStore *issues.Store) server.ToolHandlerFunc {
@@ -259,82 +247,6 @@ func mapDepAddError(ctx context.Context, err error, userID uuid.UUID, fromID, to
 	return skmcp.ToolError(ErrCodeInternalError, "failed to create dependency", nil)
 }
 
-// depStoreErrorClass is the (code, message, details) triple that the
-// single-row (skein_dep_add) and batch (skein_dep_add_many) surfaces render
-// identically for a given dependencies.Store failure. Only the envelope
-// differs — mapDepAddError wraps it in a CallToolResult, classifyDepAddError
-// in a batchErrorDTO.
-type depStoreErrorClass struct {
-	Code    string
-	Message string
-	Details map[string]any
-}
-
-// classifyDepStoreError maps the dependencies.Store errors whose rendering is
-// shared by both dep-add surfaces. Returns nil when err is not one of them —
-// the caller then applies its own handling (ValidationError promotion, which
-// carries per-surface detail shapes, and the internal_error fallback, which
-// logs its own tool name).
-func classifyDepStoreError(err error, fromID, toID, depType string) *depStoreErrorClass {
-	switch {
-	case errors.Is(err, dependencies.ErrFromNotFound):
-		// Race vs the pre-check (concurrent delete): surface as
-		// issue_not_found, which is the right code regardless.
-		return &depStoreErrorClass{
-			Code:    ErrCodeIssueNotFound,
-			Message: "issue does not exist or is not visible",
-			Details: map[string]any{"fromId": fromID},
-		}
-	case errors.Is(err, dependencies.ErrTargetNotFound),
-		// INV-3 (sk-674.18 T033): a target in a project the caller cannot
-		// see answers exactly as a nonexistent one.
-		errors.Is(err, dependencies.ErrDependencyTargetNotVisible):
-		return &depStoreErrorClass{
-			Code:    ErrCodeIssueNotFound,
-			Message: "issue does not exist or is not visible",
-			Details: map[string]any{"toId": toID},
-		}
-	case errors.Is(err, dependencies.ErrDependencyExists):
-		return &depStoreErrorClass{
-			Code:    ErrCodeDependencyAlreadyExists,
-			Message: "this dependency already exists",
-			Details: map[string]any{"fromId": fromID, "toId": toID, "type": depType},
-		}
-	case errors.Is(err, dependencies.ErrParentAlreadySet):
-		// Defect 2 / sk-43: a parent-child edge cannot ADD a second parent.
-		// Re-parenting must go through skein_reparent (atomic replace).
-		return &depStoreErrorClass{
-			Code:    ErrCodeParentAlreadySet,
-			Message: "issue already has a parent — use skein_reparent to move it",
-			Details: map[string]any{"fromId": fromID},
-		}
-	case errors.Is(err, dependencies.ErrSerializationRetry):
-		// Transient SERIALIZABLE loss — no durable change; safe to retry.
-		return &depStoreErrorClass{
-			Code:    ErrCodeSerializationRetry,
-			Message: "dependency write lost a serialization race — safe to retry",
-			Details: map[string]any{"fromId": fromID, "toId": toID, "type": depType},
-		}
-	case errors.Is(err, dependencies.ErrDependencyTargetNotReady):
-		// Target row not visible in this snapshot (mid-commit elsewhere) —
-		// retry once the target has committed.
-		return &depStoreErrorClass{
-			Code:    ErrCodeDependencyTargetNotVisibleYet,
-			Message: "dependency target not visible yet — retry shortly",
-			Details: map[string]any{"toId": toID},
-		}
-	}
-	var cycle *dependencies.ErrDepCycle
-	if errors.As(err, &cycle) {
-		return &depStoreErrorClass{
-			Code:    ErrCodeDependencyCycle,
-			Message: "adding this dependency would create a cycle",
-			Details: map[string]any{"path": cycle.Path},
-		}
-	}
-	return nil
-}
-
 // depValidationToolError adapts a dependencies.ValidationError into the MCP
 // tool error envelope. Centralised so dep tools emit the same shape.
 func depValidationToolError(err error) *mcpgo.CallToolResult {
@@ -356,4 +268,13 @@ func depValidationToolError(err error) *mcpgo.CallToolResult {
 			map[string]any{"code": ve.Code})
 	}
 	return skmcp.ToolError(ErrCodeValidationError, err.Error(), nil)
+}
+
+type (
+	depDTO             = issueops.DepDTO
+	depStoreErrorClass = issueops.DepStoreErrorClass
+)
+
+func classifyDepStoreError(err error, fromID, toID, depType string) *depStoreErrorClass {
+	return issueops.ClassifyDepStoreError(err, fromID, toID, depType)
 }
