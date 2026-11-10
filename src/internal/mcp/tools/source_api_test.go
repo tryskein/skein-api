@@ -86,7 +86,8 @@ func TestSourceAPI_MCPFilters(t *testing.T) {
 			body := callSourceAPITool(t, ctx, create, map[string]any{
 				"project": createPID.String(), "title": "kind " + kind, "type": "task", "kind": kind,
 			})
-			id, _ := body["id"].(string)
+			issue, _ := body["issue"].(map[string]any)
+			id, _ := issue["id"].(string)
 			var source string
 			if err := pool.QueryRow(context.Background(), `SELECT source FROM issues WHERE id = $1`, id).Scan(&source); err != nil {
 				t.Fatalf("read source of %q (%v): %v", id, body, err)
