@@ -1207,3 +1207,139 @@ func TestLoad_EnabledFeatureRequiresItsAddressesAndKeys(t *testing.T) {
 		})
 	}
 }
+
+// publicAPIVars are every variable of the public API settings. The tests clear
+// them first, so a value left in the process environment cannot stand in for
+// a default.
+var publicAPIVars = []string{
+	"SKEIN_PUBLIC_API_ENABLED", "SKEIN_PUBLIC_API_PORT", "SKEIN_PUBLIC_API_URL",
+	"SKEIN_PUBLIC_API_RATE_LIMIT_PER_MINUTE", "SKEIN_PUBLIC_API_AUTH_FAILURES_PER_MINUTE",
+	"SKEIN_PUBLIC_API_TRUSTED_PROXIES", "SKEIN_PUBLIC_API_WRITE_TIMEOUT",
+	"SKEIN_API_KEY_DEFAULT_TTL", "SKEIN_API_KEY_MAX_TTL",
+	"PORT", "SKEIN_OPERATOR_API_ENABLED", "SKEIN_OPERATOR_API_PORT", "SKEIN_OPERATOR_API_KEY",
+}
+
+func withPublicAPIEnv(t *testing.T, overrides map[string]string) {
+	t.Helper()
+	cleared := map[string]string{}
+	for _, name := range publicAPIVars {
+		cleared[name] = ""
+	}
+	withBaseEnv(t, merge(cleared, overrides))
+}
+
+// TestLoad_PublicAPIDefaults — matrix row 4: with none of the variables set,
+// every setting of the public API takes the default the requirements name
+// (enabled, port 5103, 100 requests and 20 failed authentications a minute,
+// no trusted proxy, a 30 s write timeout, keys for 90 days and at most 365),
+// and the absent external address does not stop the start.
+func TestLoad_PublicAPIDefaults(t *testing.T) {
+	withPublicAPIEnv(t, nil)
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() = %v, want success without SKEIN_PUBLIC_API_URL", err)
+	}
+	if !cfg.PublicAPIEnabled {
+		t.Errorf("PublicAPIEnabled = false, want true")
+	}
+	if cfg.PublicAPIPort != "5103" {
+		t.Errorf("PublicAPIPort = %q, want 5103", cfg.PublicAPIPort)
+	}
+	if cfg.PublicAPIURL != "" {
+		t.Errorf("PublicAPIURL = %q, want empty", cfg.PublicAPIURL)
+	}
+	if cfg.PublicAPIRateLimitPerMinute != 100 {
+		t.Errorf("PublicAPIRateLimitPerMinute = %d, want 100", cfg.PublicAPIRateLimitPerMinute)
+	}
+	if cfg.PublicAPIAuthFailuresPerMinute != 20 {
+		t.Errorf("PublicAPIAuthFailuresPerMinute = %d, want 20", cfg.PublicAPIAuthFailuresPerMinute)
+	}
+	if len(cfg.PublicAPITrustedProxies) != 0 {
+		t.Errorf("PublicAPITrustedProxies = %v, want none", cfg.PublicAPITrustedProxies)
+	}
+	if cfg.PublicAPIWriteTimeout != 30*time.Second {
+		t.Errorf("PublicAPIWriteTimeout = %s, want 30s", cfg.PublicAPIWriteTimeout)
+	}
+	if cfg.APIKeyDefaultTTL != 90*24*time.Hour {
+		t.Errorf("APIKeyDefaultTTL = %s, want 90 days", cfg.APIKeyDefaultTTL)
+	}
+	if cfg.APIKeyMaxTTL != 365*24*time.Hour {
+		t.Errorf("APIKeyMaxTTL = %s, want 365 days", cfg.APIKeyMaxTTL)
+	}
+}
+
+// TestLoad_PublicAPIRefusals — matrix row 4: each invalid setting of the
+// public API stops the start. Every case changes one setting of a
+// configuration that loads, so the refusal is that setting's.
+func TestLoad_PublicAPIRefusals(t *testing.T) {
+	operatorOn := map[string]string{
+		"SKEIN_OPERATOR_API_ENABLED": "true",
+		"SKEIN_OPERATOR_API_KEY":     "operator-key-aaaaaaaaaa",
+	}
+	cases := []struct {
+		name    string
+		env     map[string]string
+		wantErr bool
+	}{
+		{"valid: operator on, distinct ports", operatorOn, false},
+		{"valid: external address under a path", map[string]string{"SKEIN_PUBLIC_API_URL": "https://api.example.com/skein"}, false},
+		{"valid: trusted proxies with spaces", map[string]string{"SKEIN_PUBLIC_API_TRUSTED_PROXIES": "10.0.0.0/8, 2001:db8::/32"}, false},
+		{"valid: a lower key ceiling", map[string]string{"SKEIN_API_KEY_DEFAULT_TTL": "720h", "SKEIN_API_KEY_MAX_TTL": "720h"}, false},
+
+		{"port equals PORT", map[string]string{"PORT": "5100", "SKEIN_PUBLIC_API_PORT": "5100"}, true},
+		{"port equals the operator port", merge(operatorOn, map[string]string{"SKEIN_PUBLIC_API_PORT": "5101"}), true},
+		{"port not a number", map[string]string{"SKEIN_PUBLIC_API_PORT": "api"}, true},
+		{"port out of range", map[string]string{"SKEIN_PUBLIC_API_PORT": "70000"}, true},
+		{"URL without a scheme", map[string]string{"SKEIN_PUBLIC_API_URL": "api.example.com"}, true},
+		{"URL relative", map[string]string{"SKEIN_PUBLIC_API_URL": "/api"}, true},
+		{"URL not http(s)", map[string]string{"SKEIN_PUBLIC_API_URL": "ftp://api.example.com"}, true},
+		{"max key TTL above 365 days", map[string]string{"SKEIN_API_KEY_MAX_TTL": "8761h"}, true},
+		{"default key TTL above the max", map[string]string{"SKEIN_API_KEY_DEFAULT_TTL": "2160h", "SKEIN_API_KEY_MAX_TTL": "720h"}, true},
+		{"CIDR with a bad prefix length", map[string]string{"SKEIN_PUBLIC_API_TRUSTED_PROXIES": "10.0.0.0/33"}, true},
+		{"CIDR without a prefix length", map[string]string{"SKEIN_PUBLIC_API_TRUSTED_PROXIES": "10.0.0.1"}, true},
+		{"CIDR not an address", map[string]string{"SKEIN_PUBLIC_API_TRUSTED_PROXIES": "10.0.0.0/8,proxy"}, true},
+		{"rate limit zero", map[string]string{"SKEIN_PUBLIC_API_RATE_LIMIT_PER_MINUTE": "0"}, true},
+		{"rate limit negative", map[string]string{"SKEIN_PUBLIC_API_RATE_LIMIT_PER_MINUTE": "-1"}, true},
+		{"auth failure limit zero", map[string]string{"SKEIN_PUBLIC_API_AUTH_FAILURES_PER_MINUTE": "0"}, true},
+		{"auth failure limit negative", map[string]string{"SKEIN_PUBLIC_API_AUTH_FAILURES_PER_MINUTE": "-5"}, true},
+		{"write timeout zero", map[string]string{"SKEIN_PUBLIC_API_WRITE_TIMEOUT": "0s"}, true},
+		{"write timeout negative", map[string]string{"SKEIN_PUBLIC_API_WRITE_TIMEOUT": "-1s"}, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			withPublicAPIEnv(t, c.env)
+			cfg, err := Load()
+			if c.wantErr {
+				if err == nil {
+					t.Fatalf("Load() succeeded, want a startup refusal")
+				}
+				if cfg != nil {
+					t.Errorf("Load() returned a config alongside the refusal")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Load() = %v, want success", err)
+			}
+		})
+	}
+}
+
+// TestLoad_PublicAPITrustedProxiesParsed — the CIDR list reaches the config as
+// prefixes: items trimmed, empty ones dropped, host bits masked.
+func TestLoad_PublicAPITrustedProxiesParsed(t *testing.T) {
+	withPublicAPIEnv(t, map[string]string{"SKEIN_PUBLIC_API_TRUSTED_PROXIES": " 10.1.2.3/8, ,2001:db8::/32,"})
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() = %v, want success", err)
+	}
+	want := []string{"10.0.0.0/8", "2001:db8::/32"}
+	if len(cfg.PublicAPITrustedProxies) != len(want) {
+		t.Fatalf("PublicAPITrustedProxies = %v, want %v", cfg.PublicAPITrustedProxies, want)
+	}
+	for i, p := range cfg.PublicAPITrustedProxies {
+		if p.String() != want[i] {
+			t.Errorf("PublicAPITrustedProxies[%d] = %s, want %s", i, p, want[i])
+		}
+	}
+}

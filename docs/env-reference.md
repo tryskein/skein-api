@@ -1018,6 +1018,87 @@ migration, before the HTTP listener opens:
 - **If unset:** the operator API cannot be enabled. A secret — inject from
   a secret store, never commit.
 
+#### `SKEIN_PUBLIC_API_ENABLED`
+
+- **Purpose:** whether the public REST API (`/api/v1`, authenticated by an API
+  key) is served on its own port.
+- **Required:** no · **Default:** `true` · **Format:** boolean.
+- **If unset:** `true`. With `false` none of the other `SKEIN_PUBLIC_API_*`
+  variables is validated or read.
+
+#### `SKEIN_PUBLIC_API_PORT`
+
+- **Purpose:** port of the public API server.
+- **Required:** no · **Default:** `5103` · **Format:** integer in
+  `[1, 65535]`, different from `PORT` and, while the operator API is enabled,
+  from `SKEIN_OPERATOR_API_PORT`.
+- **If unset:** `5103`. Validated only while the public API is enabled.
+
+#### `SKEIN_PUBLIC_API_URL`
+
+- **Purpose:** the external address of the public API, as clients reach it.
+  It is the `servers` entry of the OpenAPI document and the address the API
+  keys page of the web UI shows.
+- **Required:** no · **Default:** none · **Format:** absolute `http(s)` URL with
+  a host, optionally a path; no credentials, query or fragment.
+- **If unset:** the OpenAPI document has no `servers`, the API keys page says
+  the address is not set, and the service logs a warning at startup. A
+  malformed value aborts startup while the public API is enabled.
+
+#### `SKEIN_PUBLIC_API_RATE_LIMIT_PER_MINUTE`
+
+- **Purpose:** REST requests per minute one API key may make on the public
+  port. The counter lives in the memory of each replica, so the effective limit
+  is this value times the number of replicas.
+- **Required:** no · **Default:** `100` · **Format:** integer `> 0`.
+- **If unset:** `100`. Zero or negative aborts startup while the public API is
+  enabled.
+
+#### `SKEIN_PUBLIC_API_AUTH_FAILURES_PER_MINUTE`
+
+- **Purpose:** failed authentications per minute one client IP may cause on the
+  public port; they are counted before the key is checked.
+- **Required:** no · **Default:** `20` · **Format:** integer `> 0`.
+- **If unset:** `20`. Zero or negative aborts startup while the public API is
+  enabled.
+
+#### `SKEIN_PUBLIC_API_TRUSTED_PROXIES`
+
+- **Purpose:** proxies in front of the public port whose forwarding headers
+  (`X-Forwarded-For`, `X-Real-IP`) name the client IP. From any other peer the
+  headers are ignored and the client IP is the direct peer.
+- **Required:** no · **Default:** none · **Format:** comma-separated CIDR list
+  (`10.0.0.0/8,2001:db8::/32`); spaces around items are ignored. A single
+  address is written with its prefix length (`10.0.0.5/32`).
+- **If unset:** no proxy is trusted. An item that is not a CIDR aborts startup
+  while the public API is enabled.
+
+#### `SKEIN_PUBLIC_API_WRITE_TIMEOUT`
+
+- **Purpose:** write timeout of the public API server; it bounds how long one
+  request may run.
+- **Required:** no · **Default:** `30s` · **Format:** duration `> 0`.
+- **If unset:** `30s`. Zero or negative aborts startup while the public API is
+  enabled.
+
+#### `SKEIN_API_KEY_DEFAULT_TTL`
+
+- **Purpose:** lifetime of a new API key when its creator does not choose one.
+  Applies to every key (REST and MCP), whether or not the public API is
+  enabled.
+- **Required:** no · **Default:** `2160h` (90 days) · **Format:** duration,
+  `> 0` and not above `SKEIN_API_KEY_MAX_TTL`.
+- **If unset:** `2160h`. A value outside the range aborts startup.
+
+#### `SKEIN_API_KEY_MAX_TTL`
+
+- **Purpose:** the longest lifetime a new API key may get. The product ceiling
+  is 365 days; this variable may only lower it. Lowering it does not shorten
+  keys already issued.
+- **Required:** no · **Default:** `8760h` (365 days) · **Format:** duration in
+  `(0, 8760h]`.
+- **If unset:** `8760h`. A value outside the range aborts startup.
+
 #### `SKEIN_QUOTA_PERSONAL_PROJECTS`
 
 - **Purpose:** maximum number of projects in one personal space.
