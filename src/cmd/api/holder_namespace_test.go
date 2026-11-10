@@ -5,14 +5,16 @@ package main
 // Reference — the spec, written before the code: R-5 — the lock holder of
 // REST is an executor in the namespace of the key; holders of REST and MCP
 // never coincide. An Mcp-Session-Id shaped like a REST executor
-// (api:<keyId>:<workerId>) sent to /mcp therefore does not make the MCP
-// session that executor: its claim gets a holder of the MCP namespace, and
-// the REST executor of the same key does not count the lock as its own.
+// (api:<keyId>:<workerId>) sent to /mcp therefore does not make the caller
+// that executor: such a call takes no lock; a claim over /mcp gets a holder
+// of the MCP namespace, and the REST executor of the same key does not
+// count the lock as its own.
 
 import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"testing"
 
 	"github.com/google/uuid"
@@ -44,9 +46,27 @@ func TestMCPSessionIDCannotTakeTheRESTNamespace(t *testing.T) {
 	}
 	id := testsupport.SeedIssue(t, s.pool, p.ID, p.OwnerID, fmt.Sprintf("%s-%d", p.IDPrefix, n), "t016 namespace", "open", 2)
 
-	r := s.tool(actor, restHolder, "skein_claim", map[string]any{"id": id})
+	// A REST-shaped Mcp-Session-Id is not a session of this server: the
+	// call is refused and no lock is taken under that holder.
+	code, body, _ := s.mcp(actor, restHolder, "tools/call",
+		map[string]any{"name": "skein_claim", "arguments": map[string]any{"id": id}})
+	if code == http.StatusOK && body["error"] == nil {
+		if res, _ := body["result"].(map[string]any); res != nil && res["isError"] != true {
+			t.Fatalf("claim over /mcp with the session id %s was accepted: %v", restHolder, body)
+		}
+	}
+	var forged *string
+	if err := s.pool.QueryRow(ctx, `SELECT locked_by FROM issues WHERE id = $1`, id).Scan(&forged); err != nil {
+		t.Fatalf("read the lock: %v", err)
+	}
+	if forged != nil {
+		t.Fatalf("locked_by = %q after a call with the REST-shaped session id, want no lock", *forged)
+	}
+
+	// A real MCP session of the same key takes a holder of the MCP namespace.
+	r := s.tool(actor, s.session(actor), "skein_claim", map[string]any{"id": id})
 	if r.isError {
-		t.Fatalf("claim over /mcp with a REST-shaped session id: %s", r.text)
+		t.Fatalf("claim over /mcp: %s", r.text)
 	}
 
 	var lockedBy string

@@ -59,10 +59,12 @@ func IsRESTHolder(sessionID string) bool {
 }
 
 // MCPSessionHolder is the holder an MCP session gets for the
-// Mcp-Session-Id it sent. The transport does not validate the id, so a
-// client could send one shaped like a REST executor's; it is moved out of
-// that namespace (INV-10 of the holder: holders of REST and MCP never
-// coincide). Every other id is kept as it is.
+// Mcp-Session-Id it sent. The transport issues its own ids and refuses an
+// unknown one, so an id shaped like a REST executor's does not reach a tool
+// today; the auth layer still moves such an id out of that namespace, so
+// the holder rule (INV-10: holders of REST and MCP never coincide) does not
+// rest on the transport's session settings. Every other id is kept as it
+// is.
 func MCPSessionHolder(sessionID string) string {
 	if IsRESTHolder(sessionID) {
 		return mcpForeignPrefix + sessionID
