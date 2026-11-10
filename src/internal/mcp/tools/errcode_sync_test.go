@@ -150,6 +150,13 @@ func TestErrCodes_ClassAndTransience(t *testing.T) {
 		"user_not_found": nf, "member_not_found": nf, "space_not_found": nf,
 		"attachment_not_found": nf, "repo_not_found": nf, "dependency_not_found": nf,
 		"reminder_not_found": nf, "comment_not_found": nf, "monitor_not_found": nf,
+		// No operation of the public API has the path (404).
+		"route_not_found": nf,
+		// Transport refusals of the public API: method (405), body over
+		// 1 MiB (413), body not application/json (415).
+		"method_not_allowed":     {errcode.ClassMethod, false},
+		"payload_too_large":      {errcode.ClassPayloadTooLarge, false},
+		"unsupported_media_type": {errcode.ClassMediaType, false},
 		// Format (400 at the parsing layer).
 		"validation_error":         {errcode.ClassFormat, false},
 		"lock_required_session_id": {errcode.ClassFormat, false},

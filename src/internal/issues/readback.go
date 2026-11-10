@@ -10,7 +10,8 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// readBackTimeout bounds the read that follows a committed write (sk-607).
+// ReadBackTimeout bounds the read that follows a committed write (sk-607).
+// The public API server sizes its write timeout on it (publicapi.NewServer).
 //
 // That read runs DETACHED from the caller's context (ReadBackContext): the
 // write already happened, and a context that ends now must not turn a
@@ -32,14 +33,14 @@ import (
 // Three seconds also fits after a batch loop's 20 s budget
 // (tools.batchLoopDeadline) inside the proxy's window, which is 120 s by
 // default and was 30 s when this bound was chosen.
-const readBackTimeout = 3 * time.Second
+const ReadBackTimeout = 3 * time.Second
 
 // ReadBackContext derives the context for a read that follows a committed
 // write: the caller's values (request id, logging attributes) survive, its
-// cancellation and deadline do not, and readBackTimeout bounds the read.
+// cancellation and deadline do not, and ReadBackTimeout bounds the read.
 // Callers must call the returned CancelFunc.
 func ReadBackContext(ctx context.Context) (context.Context, context.CancelFunc) {
-	return context.WithTimeout(context.WithoutCancel(ctx), readBackTimeout)
+	return context.WithTimeout(context.WithoutCancel(ctx), ReadBackTimeout)
 }
 
 // CommittedState is what a writing transaction knows about one issue at the

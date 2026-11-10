@@ -45,6 +45,7 @@ import (
 	"skein-api/internal/operator"
 	"skein-api/internal/outbox"
 	"skein-api/internal/projects"
+	"skein-api/internal/publicapi"
 	"skein-api/internal/push"
 	"skein-api/internal/pwned"
 	"skein-api/internal/reminders"
@@ -378,6 +379,35 @@ func operatorServer(cfg *config.Config, ops operator.Operations) *http.Server {
 		return nil
 	}
 	return operator.NewServer(":"+cfg.OperatorAPIPort, operator.NewRouter(cfg.OperatorAPIKey, ops))
+}
+
+// publicAPIURLVariable is the variable naming the external address of the
+// public API; publicServer warns once when it is unset.
+const publicAPIURLVariable = "SKEIN_PUBLIC_API_URL"
+
+// publicServer is the public API server built from cfg (plan D-1): nil while
+// SKEIN_PUBLIC_API_ENABLED=false — nothing listens on SKEIN_PUBLIC_API_PORT
+// and nothing is logged — otherwise a server on that port whose router
+// carries only the public API's route table. Enabled without
+// SKEIN_PUBLIC_API_URL it logs one warning naming the variable: the API
+// works, but its OpenAPI document carries no servers.
+func publicServer(cfg *config.Config, logger *slog.Logger) (*http.Server, error) {
+	if !cfg.PublicAPIEnabled {
+		return nil, nil
+	}
+	if cfg.PublicAPIURL == "" {
+		logger.Warn("public API address is not set: the OpenAPI document is served without servers",
+			"variable", publicAPIURLVariable)
+	}
+	doc, err := publicapi.NewOpenAPIDocument(cfg.PublicAPIURL)
+	if err != nil {
+		return nil, err
+	}
+	router := publicapi.NewRouter(
+		publicapi.RouterOptions{OperationTimeout: cfg.PublicAPIWriteTimeout},
+		publicapi.ProductRoutes(doc),
+	)
+	return publicapi.NewServer(":"+cfg.PublicAPIPort, router, cfg.PublicAPIWriteTimeout), nil
 }
 
 // main wires and runs skein-api.
@@ -1008,9 +1038,17 @@ func main() {
 	// (nil when SKEIN_OPERATOR_API_ENABLED=false).
 	opSrv := operatorServer(cfg, operator.NewAccounts(pool, usersStore))
 
+	// The public API, its own server on its own port (nil when
+	// SKEIN_PUBLIC_API_ENABLED=false).
+	pubSrv, err := publicServer(cfg, slog.Default())
+	if err != nil {
+		slog.Error("public API setup failed", "error", err.Error())
+		os.Exit(1)
+	}
+
 	// Run the servers in goroutines so the main goroutine can wait on
 	// signals; the first failure of either stops the process.
-	serverErr := make(chan error, 2)
+	serverErr := make(chan error, 3)
 	go func() {
 		slog.Info("HTTP server listening", "addr", srv.Addr)
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -1022,6 +1060,14 @@ func main() {
 			slog.Info("operator API listening", "addr", opSrv.Addr)
 			if err := opSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 				serverErr <- fmt.Errorf("operator API: %w", err)
+			}
+		}()
+	}
+	if pubSrv != nil {
+		go func() {
+			slog.Info("public API listening", "addr", pubSrv.Addr)
+			if err := pubSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				serverErr <- fmt.Errorf("public API: %w", err)
 			}
 		}()
 	}
@@ -1055,6 +1101,19 @@ func main() {
 		}
 	}()
 	defer func() { <-opStopped }()
+
+	// The public API's server stops in the same window.
+	pubStopped := make(chan struct{})
+	go func() {
+		defer close(pubStopped)
+		if pubSrv == nil {
+			return
+		}
+		if err := pubSrv.Shutdown(shutdownCtx); err != nil {
+			slog.Error("public API shutdown error", "error", err.Error())
+		}
+	}()
+	defer func() { <-pubStopped }()
 
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		slog.Error("HTTP server shutdown error", "error", err.Error())

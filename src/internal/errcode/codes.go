@@ -21,6 +21,8 @@ var (
 	ReminderNotFound   = define("reminder_not_found", ClassNotFound, Permanent)
 	CommentNotFound    = define("comment_not_found", ClassNotFound, Permanent)
 	MonitorNotFound    = define("monitor_not_found", ClassNotFound, Permanent)
+	// RouteNotFound — no operation of the public API has this path.
+	RouteNotFound = define("route_not_found", ClassNotFound, Permanent)
 
 	// Malformed requests.
 	ValidationError       = define("validation_error", ClassFormat, Permanent)
@@ -43,6 +45,17 @@ var (
 	ForceUnlockForbidden        = define("force_unlock_forbidden", ClassPermission, Permanent)
 	InvitationAgentForbidden    = define("invitation_agent_forbidden", ClassPermission, Permanent)
 	ReviewForbidden             = define("review_forbidden", ClassPermission, Permanent)
+
+	// Transport refusals of the public API: the request does not reach any
+	// operation.
+	//
+	// MethodNotAllowed — the path exists, the method does not (the Allow
+	// header lists the methods it has).
+	MethodNotAllowed = define("method_not_allowed", ClassMethod, Permanent)
+	// PayloadTooLarge — the request body is larger than 1 MiB.
+	PayloadTooLarge = define("payload_too_large", ClassPayloadTooLarge, Permanent)
+	// UnsupportedMediaType — the request body is not application/json.
+	UnsupportedMediaType = define("unsupported_media_type", ClassMediaType, Permanent)
 
 	// Optimistic concurrency.
 	VersionConflict = define("version_conflict", ClassVersion, Permanent)

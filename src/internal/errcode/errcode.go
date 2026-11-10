@@ -38,7 +38,17 @@ const (
 	ClassInternal
 	// ClassBusiness — the domain rules refuse the operation.
 	ClassBusiness
+	// ClassMethod — the route does not accept the request's method.
+	ClassMethod
+	// ClassPayloadTooLarge — the request body exceeds the size limit.
+	ClassPayloadTooLarge
+	// ClassMediaType — the request body is not of a supported media type.
+	ClassMediaType
 )
+
+// lastClass is the last class of the closed set; define refuses any class
+// after it.
+const lastClass = ClassMediaType
 
 // String names the class.
 func (c Class) String() string {
@@ -59,6 +69,12 @@ func (c Class) String() string {
 		return "internal"
 	case ClassBusiness:
 		return "business"
+	case ClassMethod:
+		return "method"
+	case ClassPayloadTooLarge:
+		return "payload_too_large"
+	case ClassMediaType:
+		return "media_type"
 	}
 	return fmt.Sprintf("class(%d)", uint8(c))
 }
@@ -108,7 +124,7 @@ func define(name string, class Class, transience Transience) Code {
 	if name == "" {
 		panic("errcode: empty code name")
 	}
-	if class < ClassNotFound || class > ClassBusiness {
+	if class < ClassNotFound || class > lastClass {
 		panic(fmt.Sprintf("errcode: %q has no valid class", name))
 	}
 	if transience != Permanent && transience != Transient {

@@ -14,6 +14,29 @@
         "title": "Skein public API",
         "version": "1"
     },
-    "paths": {},
+    "paths": {
+        "/api/v1/openapi.json": {
+            "get": {
+                "description": "Returns the OpenAPI 3.1 document of this instance's public API: every operation, the right of an API key each one requires and the security scheme of the key.\n\nThe document is embedded in the server and is the same on every replica of a release. When the instance sets SKEIN_PUBLIC_API_URL, servers[0].url is that address; otherwise the document has no servers member.\n\nNo API key is needed; the request has no side effects.",
+                "operationId": "getOpenApi",
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object"
+                                }
+                            }
+                        },
+                        "description": "The OpenAPI 3.1 document"
+                    }
+                },
+                "summary": "Get the OpenAPI document of the public API",
+                "tags": [
+                    "Meta"
+                ]
+            }
+        }
+    },
     "openapi": "3.1.0"
 }
