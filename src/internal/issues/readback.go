@@ -218,3 +218,27 @@ func runBeforeCommit(ctx context.Context, tx pgx.Tx, state CommittedState) error
 	}
 	return nil
 }
+
+// CommentBeforeCommitHook runs inside the transaction of AddComment just
+// before it commits, with the comment as written.
+type CommentBeforeCommitHook func(ctx context.Context, tx pgx.Tx, comment *CommentDTO) error
+
+type commentBeforeCommitKey struct{}
+
+// WithCommentBeforeCommit returns ctx carrying hook: AddComment runs it
+// inside its transaction, after the comment, its event, notifications and
+// mentions, just before it commits — where the public API records the
+// outcome of a createComment with Idempotency-Key in the comment's own
+// transaction (sk-878.3.1 D-8 rule 2). An error rolls the comment back and
+// is returned as is; the hook runs again on every retried attempt.
+func WithCommentBeforeCommit(ctx context.Context, hook CommentBeforeCommitHook) context.Context {
+	return context.WithValue(ctx, commentBeforeCommitKey{}, hook)
+}
+
+// runCommentBeforeCommit runs the comment hook of ctx, if any.
+func runCommentBeforeCommit(ctx context.Context, tx pgx.Tx, comment *CommentDTO) error {
+	if hook, ok := ctx.Value(commentBeforeCommitKey{}).(CommentBeforeCommitHook); ok && hook != nil {
+		return hook(ctx, tx, comment)
+	}
+	return nil
+}

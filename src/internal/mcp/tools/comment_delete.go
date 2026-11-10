@@ -2,15 +2,12 @@ package tools
 
 import (
 	"context"
-	"log/slog"
-	"strings"
-	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 
-	"skein-api/internal/authz"
+	"skein-api/internal/issueops"
 	"skein-api/internal/issues"
 	skmcp "skein-api/internal/mcp"
 )
@@ -56,49 +53,22 @@ func RegisterCommentDelete(s *server.MCPServer, pool *pgxpool.Pool, issuesStore 
 }
 
 func handleCommentDelete(pool *pgxpool.Pool, issuesStore *issues.Store) server.ToolHandlerFunc {
+	d := issueops.Deps{Pool: pool, Issues: issuesStore}
 	return func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-		start := time.Now()
 		userID, errResp := skmcp.RequireUser(ctx)
 		if errResp != nil {
 			return errResp, nil
 		}
-		role := callerRole(ctx)
-
-		rawCommentID, err := req.RequireString("commentId")
-		if err != nil {
-			return skmcp.ToolError(ErrCodeValidationError, "commentId is required", nil), nil
+		res, f := issueops.DeleteComment(ctx, d, userID, issueops.Args(req.GetArguments()))
+		if f != nil {
+			return toolFailure(f), nil
 		}
-		reason := strings.TrimSpace(req.GetString("reason", ""))
-
-		meta, level, errRes := resolveCommentForWrite(ctx, pool, issuesStore,
-			"skein_comment_delete", userID, role, rawCommentID)
-		if errRes != nil {
-			return errRes, nil
-		}
-		// AUTHOR-OR-OWNER: the project owner's rights (an instance admin
-		// has them, US-6, sk-741).
-		isAuthor := meta.AuthorUserID != nil && *meta.AuthorUserID == userID
-		isOwner := authz.Allows(level, authz.ActionDeleteAnyComment)
-		if !isAuthor && !isOwner {
-			return skmcp.ToolError(ErrCodeForbidden,
-				"only the comment author, the project owner, the space owner or the instance admin can delete this comment", nil), nil
-		}
-
-		actor := IssuesAgentActor(ctx, pool, userID)
-		if err := issuesStore.DeleteComment(ctx, meta.CommentID, reason, actor); err != nil {
-			return mapCommentWriteError(ctx, err, "skein_comment_delete", userID.String(), meta.CommentID.String()), nil
-		}
-
-		slog.InfoContext(ctx, "mcp tool ok",
-			"tool", "skein_comment_delete",
-			"userId", userID.String(), "commentId", meta.CommentID.String(),
-			"latencyMs", time.Since(start).Milliseconds())
 		// Tombstone form — minimal ack (the row's body is already blanked
 		// in any subsequent ListComments).
 		return skmcp.ToolJSON(map[string]any{
 			"ok":      true,
-			"id":      meta.CommentID,
-			"issueId": meta.IssueID,
+			"id":      res.ID,
+			"issueId": res.IssueID,
 			"deleted": true,
 		})
 	}

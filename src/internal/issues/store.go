@@ -4941,7 +4941,7 @@ RETURNING id, issue_id, author, author_user_id, author_type, author_kind, body, 
 			return err
 		}
 		dto.Mentions = toMentionRefs(resolved)
-		return nil
+		return runCommentBeforeCommit(ctx, tx, &dto)
 	})
 	if err != nil {
 		// sk-303.17 review: exhausting commentMentionMaxAttempts against a
