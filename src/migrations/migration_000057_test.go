@@ -41,8 +41,8 @@ func seedM57Fixture(t *testing.T, pool *pgxpool.Pool, tag string) m57Fixture {
 	project, _ := seedProject(t, pool, user, tag)
 	key := uuid.Must(uuid.NewRandom())
 	if _, err := pool.Exec(ctx, `
-INSERT INTO api_keys (id, user_id, key_hash, prefix, label)
-VALUES ($1, $2, 'h', $3, 'm57')`,
+INSERT INTO api_keys (id, user_id, key_hash, prefix, label, level, is_admin, scope_mode)
+VALUES ($1, $2, 'h', $3, 'm57', 'manage', (SELECT role = 'admin' FROM users WHERE id = $2), 'all')`,
 		key, user, "ska_"+strings.ReplaceAll(key.String()[:13], "-", "")); err != nil {
 		t.Fatalf("seed api key: %v", err)
 	}

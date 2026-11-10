@@ -81,8 +81,10 @@ func (s *Store) Create(ctx context.Context, userID uuid.UUID, label, prefix, has
 	id := uuid.New()
 	createdAt := time.Now().UTC()
 	_, err := s.pool.Exec(ctx, `
-INSERT INTO api_keys (id, user_id, key_hash, prefix, label, created_at)
-VALUES ($1, $2, $3, $4, $5, $6)
+INSERT INTO api_keys (id, user_id, key_hash, prefix, label, created_at,
+                      level, is_admin, scope_mode)
+VALUES ($1, $2, $3, $4, $5, $6,
+        'manage', (SELECT role = 'admin' FROM users WHERE id = $2), 'all')
 `,
 		id, userID, hash, prefix, label, createdAt)
 	if err != nil {
