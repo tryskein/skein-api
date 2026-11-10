@@ -85,6 +85,7 @@ func NewIssuesAllHandler(pool *pgxpool.Pool, issuesStore *issues.Store, embedder
 // @Param status query string false "Exactly one known status; blocked is refused (derived — use isBlocked=true)"
 // @Param type query string false "Exactly one known issue type"
 // @Param origin query string false "Origin group of the issue's source" Enums(human-driven, agent-autonomous, all)
+// @Param source query string false "Exact issue source; intersects origin" Enums(human, agent_directed, agent_autonomous, api)
 // @Param assignee query string false "me resolves to the caller; any other value is a username equality filter. Mutually exclusive with assigneeUserId"
 // @Param assigneeUserId query string false "Assignee user UUID. Mutually exclusive with assignee"
 // @Param createdBy query string false "me — issues the caller created; not-me — issues created by somebody else" Enums(me, not-me)
@@ -147,6 +148,15 @@ func (h *IssuesAllHandler) List(w http.ResponseWriter, r *http.Request) {
 				"origin must be one of human-driven, agent-autonomous, all", nil)
 			return
 		}
+	}
+	// Exact source, the same filter as GET /projects/{id}/issues.
+	if raw := strings.TrimSpace(q.Get("source")); raw != "" {
+		canon, err := issues.ValidateSource(raw)
+		if err != nil {
+			mapIssueValidation(w, err)
+			return
+		}
+		args.Source = &canon
 	}
 
 	// assignee resolution: "me" → caller.UserID via the LEFT JOIN to

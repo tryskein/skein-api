@@ -7,12 +7,15 @@ package handler
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
 	"github.com/google/uuid"
 
+	"skein-api/internal/auth"
 	"skein-api/internal/issues"
 	"skein-api/internal/testsupport"
 )
@@ -74,4 +77,66 @@ func TestSearchREST_SourceAPIFilters(t *testing.T) {
 			t.Errorf("returned comment author_kind %q, want api", kind)
 		}
 	})
+}
+
+// TestCrossProjectListsREST_SourceFilter — the exact source filter on the
+// cross-project lists (review addendum, row 136): GET /ui/v1/issues,
+// /ui/v1/me/assigned-to and /ui/v1/me/created-by accept source=api with the
+// semantics of GET /projects/{id}/issues — only api rows, a non-empty page —
+// and refuse an unknown value with 400 invalid_source.
+func TestCrossProjectListsREST_SourceFilter(t *testing.T) {
+	pool := testsupport.NewTestPool(t)
+	ctx := context.Background()
+	owner, uname := testsupport.SeedUser(t, pool, "user")
+	projID, prefix := testsupport.SeedProject(t, pool, owner, "rsxp")
+	sources := map[string]string{prefix + "-1": issues.SourceHuman, prefix + "-2": issues.SourceAPI, prefix + "-3": issues.SourceAgentAutonomous}
+	for id, src := range sources {
+		testsupport.SeedIssue(t, pool, projID, owner, id, "row "+src, "open", 2)
+		if _, err := pool.Exec(ctx, `UPDATE issues SET source = $2, assignee = $3 WHERE id = $1`, id, src, uname); err != nil {
+			t.Fatal(err)
+		}
+	}
+	all := NewIssuesAllHandler(pool, issues.NewStore(pool), nil)
+	me := NewIssuesMeHandler(pool, issues.NewStore(pool))
+
+	call := func(surface, query string) (int, map[string]any) {
+		t.Helper()
+		if surface != "issues" {
+			res, body := callMe(t, me, surface, owner, "user", query)
+			return res.StatusCode, body
+		}
+		req := httptest.NewRequest(http.MethodGet, "/ui/v1/issues?"+query, nil)
+		rctx := auth.WithUserRole(auth.WithUserID(req.Context(), owner), "user")
+		rec := httptest.NewRecorder()
+		all.List(rec, req.WithContext(rctx))
+		var body map[string]any
+		_ = json.Unmarshal(rec.Body.Bytes(), &body)
+		return rec.Code, body
+	}
+
+	for _, surface := range []string{"issues", "assigned-to", "created-by"} {
+		t.Run(surface+" source=api returns only the api row", func(t *testing.T) {
+			code, body := call(surface, "source=api")
+			if code != http.StatusOK {
+				t.Fatalf("status %d %v, want 200", code, body)
+			}
+			items, _ := body["items"].([]any)
+			var mine []string
+			for _, raw := range items {
+				row := raw.(map[string]any)
+				if row["projectId"] == projID.String() {
+					mine = append(mine, row["id"].(string))
+				}
+			}
+			if len(mine) != 1 || mine[0] != prefix+"-2" {
+				t.Errorf("rows of the fixture %v, want exactly %s-2", mine, prefix)
+			}
+		})
+		t.Run(surface+" an unknown source is refused", func(t *testing.T) {
+			code, body := call(surface, "source=agent")
+			if code != http.StatusBadRequest || body["error"] != "invalid_source" {
+				t.Errorf("source=agent: %d %v, want 400 invalid_source", code, body)
+			}
+		})
+	}
 }
