@@ -834,10 +834,11 @@ func TestPublicAPIClasses_KeyRight(t *testing.T) {
 // differs from the literal.
 func TestPublicAPIClasses_FieldsAndPrefer(t *testing.T) {
 	w := newClassWorld(t)
-	ownerKey := w.key(w.owner, levelKey(apikeys.LevelManage))
 	for _, op := range publicOps {
 		t.Run(op.id, func(t *testing.T) {
-			key := w.keyFor(op, ownerKey)
+			// A key per operation: the run makes more requests than one key's
+			// rate limit lets through in a minute.
+			key := w.keyFor(op, w.key(w.owner, levelKey(apikeys.LevelManage)))
 			if op.read {
 				c := w.call(op, w.p, key)
 				full := w.do(key, c, "", nil).object(t)
@@ -1156,10 +1157,11 @@ VALUES ($1, $2, $3, $4, 'backfilled admin', 'manage', true, 'all', NULL) RETURNI
 // silently ignored.
 func TestPublicAPIClasses_StrictParsing(t *testing.T) {
 	w := newClassWorld(t)
-	ownerKey := w.key(w.owner, levelKey(apikeys.LevelManage))
 	for _, op := range publicOps {
 		t.Run(op.id, func(t *testing.T) {
-			key := w.keyFor(op, ownerKey)
+			// A key per operation: the run makes more requests than one key's
+			// rate limit lets through in a minute.
+			key := w.keyFor(op, w.key(w.owner, levelKey(apikeys.LevelManage)))
 			c := w.call(op, w.p, key)
 			since := w.lastEvent()
 			if a := w.do(key, c, "nosuchparam=1", nil); a.status != http.StatusBadRequest || a.code() != "validation_error" {
