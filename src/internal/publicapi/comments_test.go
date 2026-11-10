@@ -180,7 +180,10 @@ func TestComments_ParityWithMCP(t *testing.T) {
 			t.Errorf("ETag %q, want the version %d", rest.header.Get("ETag"), v)
 		}
 
-		wantOK(t, "deleteComment", rg.rest(ko, http.MethodDelete, commentPath(c), nil, nil), http.StatusOK)
+		// R8-06: every DELETE of the API answers 204 without a body.
+		if del := rg.rest(ko, http.MethodDelete, commentPath(c), nil, nil); del.status != http.StatusNoContent || len(del.body) != 0 {
+			t.Fatalf("deleteComment: %d %s, want 204 without a body", del.status, del.body)
+		}
 		tomb := rg.rest(ko, http.MethodGet, commentPath(c), nil, nil)
 		wantOK(t, "getComment of a deleted comment", tomb, http.StatusOK)
 		body := tomb.json(t)
@@ -191,8 +194,8 @@ func TestComments_ParityWithMCP(t *testing.T) {
 		if (ref["deletedAt"] == nil) != (body["deletedAt"] == nil) || ref["body"] != body["body"] {
 			t.Errorf("tombstone differs from MCP: %v / %v", body, ref)
 		}
-		if again := rg.rest(ko, http.MethodDelete, commentPath(c), nil, nil); again.status != http.StatusOK {
-			t.Errorf("deleting a deleted comment: %d %s, want 200", again.status, again.body)
+		if again := rg.rest(ko, http.MethodDelete, commentPath(c), nil, nil); again.status != http.StatusNoContent {
+			t.Errorf("deleting a deleted comment: %d %s, want 204", again.status, again.body)
 		}
 	})
 

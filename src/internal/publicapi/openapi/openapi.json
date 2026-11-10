@@ -489,17 +489,6 @@
                 },
                 "type": "object"
             },
-            "issues.DetachedCommitRef": {
-                "properties": {
-                    "hash": {
-                        "type": "string"
-                    },
-                    "repoID": {
-                        "type": "string"
-                    }
-                },
-                "type": "object"
-            },
             "issues.EpicProgress": {
                 "properties": {
                     "closed": {
@@ -1544,19 +1533,6 @@
                 },
                 "type": "object"
             },
-            "publicapi.AttachmentDeleted": {
-                "properties": {
-                    "deleted": {
-                        "description": "Deleted is always true.",
-                        "type": "boolean"
-                    },
-                    "id": {
-                        "description": "ID of the attachment.",
-                        "type": "string"
-                    }
-                },
-                "type": "object"
-            },
             "publicapi.ClaimedIssues": {
                 "properties": {
                     "items": {
@@ -1566,23 +1542,6 @@
                         },
                         "type": "array",
                         "uniqueItems": false
-                    }
-                },
-                "type": "object"
-            },
-            "publicapi.CommentDeleted": {
-                "properties": {
-                    "deleted": {
-                        "description": "Deleted is always true: the comment is a tombstone now.",
-                        "type": "boolean"
-                    },
-                    "id": {
-                        "description": "ID of the comment.",
-                        "type": "string"
-                    },
-                    "issueId": {
-                        "description": "IssueID is the issue the comment belongs to.",
-                        "type": "string"
                     }
                 },
                 "type": "object"
@@ -1619,50 +1578,6 @@
                     },
                     "version": {
                         "type": "integer"
-                    }
-                },
-                "type": "object"
-            },
-            "publicapi.DependencyRemoved": {
-                "properties": {
-                    "fromId": {
-                        "description": "FromID, ToID and Type name the edge that was removed.",
-                        "type": "string"
-                    },
-                    "removed": {
-                        "description": "Removed is always true.",
-                        "type": "boolean"
-                    },
-                    "toId": {
-                        "type": "string"
-                    },
-                    "type": {
-                        "type": "string"
-                    }
-                },
-                "type": "object"
-            },
-            "publicapi.DetachedCommits": {
-                "properties": {
-                    "detached": {
-                        "description": "Detached are the links removed.",
-                        "items": {
-                            "$ref": "#/components/schemas/issues.DetachedCommitRef"
-                        },
-                        "type": "array",
-                        "uniqueItems": false
-                    },
-                    "issue": {
-                        "$ref": "#/components/schemas/issues.IssueDetail",
-                        "description": "Issue after the detach."
-                    },
-                    "notFound": {
-                        "description": "NotFound are the hashes the issue had no link with.",
-                        "items": {
-                            "type": "string"
-                        },
-                        "type": "array",
-                        "uniqueItems": false
                     }
                 },
                 "type": "object"
@@ -2346,19 +2261,6 @@
                 },
                 "type": "object"
             },
-            "publicapi.ReminderDismissed": {
-                "properties": {
-                    "dismissed": {
-                        "description": "Dismissed is always true.",
-                        "type": "boolean"
-                    },
-                    "reminderId": {
-                        "description": "ReminderID of the reminder.",
-                        "type": "string"
-                    }
-                },
-                "type": "object"
-            },
             "publicapi.ReminderPage": {
                 "properties": {
                     "hasMore": {
@@ -2456,19 +2358,6 @@
                     },
                     "spaceId": {
                         "description": "SpaceID is the space's short id.",
-                        "type": "string"
-                    }
-                },
-                "type": "object"
-            },
-            "publicapi.WatchFilterDeleted": {
-                "properties": {
-                    "deleted": {
-                        "description": "Deleted is always true.",
-                        "type": "boolean"
-                    },
-                    "id": {
-                        "description": "ID of the filter.",
                         "type": "string"
                     }
                 },
@@ -4086,14 +3975,7 @@
                     "description": "Options"
                 },
                 "responses": {
-                    "200": {
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "$ref": "#/components/schemas/publicapi.AttachmentDeleted"
-                                }
-                            }
-                        },
+                    "204": {
                         "description": "The attachment deleted"
                     },
                     "400": {
@@ -4624,14 +4506,7 @@
                     "description": "Options"
                 },
                 "responses": {
-                    "200": {
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "$ref": "#/components/schemas/publicapi.CommentDeleted"
-                                }
-                            }
-                        },
+                    "204": {
                         "description": "The comment is a tombstone"
                     },
                     "400": {
@@ -7506,7 +7381,7 @@
         },
         "/api/v1/issues/{issue}/commits/{hash}": {
             "delete": {
-                "description": "Removes every link of the issue of the path with the commit hash of the path, whatever its repo — the same operation as the MCP tool skein_commits_detach; a hash the issue has no link with is reported in notFound. The lock guards it: only the holder detaches from a claimed issue; force=true (the key needs manage, the owner force_unlock) bypasses another holder. Side effects: issue.commits_detached when something was removed.",
+                "description": "Removes every link of the issue of the path with the commit hash of the path, whatever its repo — the same operation as the MCP tool skein_commits_detach. A hash the issue has no link with is no error. Answers 204 without a body (every DELETE of the API does); ETag is the issue's version after the detach. The lock guards it: only the holder detaches from a claimed issue; force=true (the key needs manage, the owner force_unlock) bypasses another holder. Side effects: issue.commits_detached when something was removed.",
                 "operationId": "detachCommit",
                 "parameters": [
                     {
@@ -7537,15 +7412,8 @@
                     }
                 ],
                 "responses": {
-                    "200": {
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "$ref": "#/components/schemas/publicapi.DetachedCommits"
-                                }
-                            }
-                        },
-                        "description": "What was detached"
+                    "204": {
+                        "description": "Detached"
                     },
                     "400": {
                         "content": {
@@ -7972,14 +7840,7 @@
                     "description": "Options"
                 },
                 "responses": {
-                    "200": {
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "$ref": "#/components/schemas/publicapi.DependencyRemoved"
-                                }
-                            }
-                        },
+                    "204": {
                         "description": "The edge removed"
                     },
                     "400": {
@@ -9373,14 +9234,7 @@
                     "description": "Options"
                 },
                 "responses": {
-                    "200": {
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "$ref": "#/components/schemas/publicapi.IssueWatch"
-                                }
-                            }
-                        },
+                    "204": {
                         "description": "Not watching"
                     },
                     "400": {
@@ -9901,14 +9755,7 @@
                     "description": "Options"
                 },
                 "responses": {
-                    "200": {
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "$ref": "#/components/schemas/publicapi.WatchFilterDeleted"
-                                }
-                            }
-                        },
+                    "204": {
                         "description": "Deleted"
                     },
                     "400": {
@@ -12760,14 +12607,7 @@
                     "description": "Options"
                 },
                 "responses": {
-                    "200": {
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "$ref": "#/components/schemas/publicapi.ProjectWatch"
-                                }
-                            }
-                        },
+                    "204": {
                         "description": "Not watching"
                     },
                     "400": {
@@ -13153,14 +12993,7 @@
                     "description": "Options"
                 },
                 "responses": {
-                    "200": {
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "$ref": "#/components/schemas/publicapi.ReminderDismissed"
-                                }
-                            }
-                        },
+                    "204": {
                         "description": "Dismissed"
                     },
                     "400": {

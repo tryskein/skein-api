@@ -26,6 +26,7 @@ import (
 
 	"skein-api/internal/apikeys"
 	"skein-api/internal/notifications"
+	"skein-api/internal/publicapi"
 	"skein-api/internal/testsupport"
 )
 
@@ -526,6 +527,47 @@ func TestPersonal_ListRemindersPages(t *testing.T) {
 	for _, q := range []string{"limit=101", "cursor=not-a-cursor"} {
 		if c := rg.rest(key, http.MethodGet, "/api/v1/reminders?"+q, nil, nil); c.status != http.StatusBadRequest || c.code() != "validation_error" {
 			t.Errorf("%s: %d %s, want 400 validation_error", q, c.status, c.body)
+		}
+	}
+}
+
+// TestPersonal_DeletesAnswerNoContent — the decision of the lead R8-06:
+// every DELETE of the public API answers 204 without a body, as
+// deleteProjectMember does. The DELETE routes of the table are each asked
+// with a request that succeeds. Red when one of them answers a body.
+func TestPersonal_DeletesAnswerNoContent(t *testing.T) {
+	rg, w := seedPersonalWorld(t)
+	key := w.key(w.owner, apikeys.LevelManage)
+	issue := w.issue("deletes")
+	other := w.issue("deletes to")
+	w.exec(`INSERT INTO dependencies (from_id, to_id, type, metadata, version, created_by, created_at)
+VALUES ($1, $2, 'related', '{}'::jsonb, 1, $3, now())`, issue, other, w.owner)
+	comment := w.comment(issue, w.owner, "to delete")
+	attachment := testsupport.SeedAttachment(t, w.pool, issue, w.owner, "ready")
+	filter := w.filter("to delete", notifications.CustomWatcherFilter{Projects: []string{w.project.String()}})
+	reminder := testsupport.SeedReminder(t, w.pool, issue, w.owner)
+	rg.tool(key, "skein_commits_attach", map[string]any{"issueId": issue, "commits": []map[string]any{{"hash": "abcdef78", "repoUrl": w.repoURL}}})
+	asked := map[string]bool{}
+	for _, c := range []struct{ id, path string }{
+		{publicapi.OperationDetachCommit, issuePath(issue, "/commits/abcdef78")},
+		{publicapi.OperationDeleteComment, commentPath(comment)},
+		{publicapi.OperationRemoveDependency, issuePath(issue, "/dependencies/"+other+"/related")},
+		{publicapi.OperationDeleteAttachment, "/api/v1/attachments/" + attachment.String()},
+		{publicapi.OperationUnwatchIssue, issuePath(issue, "/watch")},
+		{publicapi.OperationUnwatchProject, "/api/v1/projects/" + w.project.String() + "/watch"},
+		{publicapi.OperationDeleteWatchFilter, "/api/v1/me/watch-filters/" + filter},
+		{publicapi.OperationDismissReminder, "/api/v1/reminders/" + reminder.String()},
+	} {
+		asked[c.id] = true
+		if got := rg.rest(key, http.MethodDelete, c.path, nil, nil); got.status != http.StatusNoContent || len(got.body) != 0 {
+			t.Errorf("%s: %d %s, want 204 without a body", c.id, got.status, got.body)
+		}
+	}
+	// deleteProjectMember answers 204 in its own tests (projects_test.go).
+	asked[publicapi.OperationDeleteProjectMember] = true
+	for _, rt := range publicapi.ProductRoutes(publicapi.Deps{}) {
+		if rt.Method == http.MethodDelete && !asked[rt.OperationID] {
+			t.Errorf("DELETE %s is not asked here", rt.OperationID)
 		}
 	}
 }

@@ -1048,27 +1048,17 @@ func (a *issueWrites) attachCommits(w http.ResponseWriter, r *http.Request) {
 	a.withBody(w, r, &body, &body.Kind, issueops.AttachCommits, false, true)
 }
 
-// DetachedCommits is the answer of detachCommit.
-type DetachedCommits struct {
-	// Issue after the detach.
-	Issue *issues.IssueDetail `json:"issue"`
-	// Detached are the links removed.
-	Detached []issues.DetachedCommitRef `json:"detached"`
-	// NotFound are the hashes the issue had no link with.
-	NotFound []string `json:"notFound"`
-}
-
 // detachCommit removes the links of a commit from an issue.
 //
 // @Summary Detach a commit from an issue
-// @Description Removes every link of the issue of the path with the commit hash of the path, whatever its repo — the same operation as the MCP tool skein_commits_detach; a hash the issue has no link with is reported in notFound. The lock guards it: only the holder detaches from a claimed issue; force=true (the key needs manage, the owner force_unlock) bypasses another holder. Side effects: issue.commits_detached when something was removed.
+// @Description Removes every link of the issue of the path with the commit hash of the path, whatever its repo — the same operation as the MCP tool skein_commits_detach. A hash the issue has no link with is no error. Answers 204 without a body (every DELETE of the API does); ETag is the issue's version after the detach. The lock guards it: only the holder detaches from a claimed issue; force=true (the key needs manage, the owner force_unlock) bypasses another holder. Side effects: issue.commits_detached when something was removed.
 // @Tags Issues
 // @Produce json
 // @Security SkeinApiKey[write]
 // @Param issue path string true "The issue's hierarchical id"
 // @Param hash path string true "The commit hash, lowercase hex 7..64"
 // @Param force query bool false "The privileged mode: manage and force_unlock"
-// @Success 200 {object} DetachedCommits "What was detached"
+// @Success 204 "Detached"
 // @Failure 400 {object} ProblemDocument "Unknown parameter, force not true|false (code validation_error)"
 // @Failure 401 {object} ProblemDocument "No key, or the key is invalid, expired or revoked (code unauthenticated)"
 // @Failure 403 {object} ProblemDocument "The key lacks write, or manage for force (code insufficient_scope); the owner may not write (forbidden) or force (force_unlock_forbidden)"
@@ -1099,19 +1089,10 @@ func (a *issueWrites) detachCommit(w http.ResponseWriter, r *http.Request) {
 		writeFailure(w, f, id)
 		return
 	}
-	out := DetachedCommits{Issue: res.Issue, Detached: []issues.DetachedCommitRef{}, NotFound: []string{}}
-	if res.Detach != nil {
-		if res.Detach.Detached != nil {
-			out.Detached = res.Detach.Detached
-		}
-		if res.Detach.NotFound != nil {
-			out.NotFound = res.Detach.NotFound
-		}
+	if res.Issue != nil {
+		SetETag(w, res.Issue.Version)
 	}
-	if out.Issue != nil {
-		SetETag(w, out.Issue.Version)
-	}
-	WriteJSON(w, r, http.StatusOK, out)
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // issueOp is an operation of issueops on the issue of the path.

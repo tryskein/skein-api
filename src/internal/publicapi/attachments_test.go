@@ -114,7 +114,7 @@ func TestAttachments_ParityWithMCP(t *testing.T) {
 			rest, mcp := op.rest(r, ra), op.mcp(m, ma)
 			parity(t, op.name, rest, mcp, op.want)
 			if op.want == "" {
-				if rest.status != http.StatusOK && rest.status != http.StatusCreated {
+				if rest.status != http.StatusOK && rest.status != http.StatusCreated && rest.status != http.StatusNoContent {
 					t.Fatalf("REST answered %d %s", rest.status, rest.body)
 				}
 				if got, ref := w.issueEvents(r, since), w.issueEvents(m, since); len(got) != len(ref) || (len(got) > 0 && got[0] != ref[0]) {

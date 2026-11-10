@@ -34,16 +34,6 @@ type addDependencyBody struct {
 	Kind *string `json:"kind,omitempty"`
 }
 
-// DependencyRemoved is the answer of removeDependency.
-type DependencyRemoved struct {
-	// Removed is always true.
-	Removed bool `json:"removed"`
-	// FromID, ToID and Type name the edge that was removed.
-	FromID string `json:"fromId"`
-	ToID   string `json:"toId"`
-	Type   string `json:"type"`
-}
-
 // addDependency adds an edge from the issue of the path.
 //
 // @Summary Add a dependency
@@ -106,7 +96,7 @@ func (a *issueWrites) addDependency(w http.ResponseWriter, r *http.Request) {
 // @Param toIssue path string true "The TO issue's hierarchical id"
 // @Param type path string true "The edge type"
 // @Param body body kindBody false "Options"
-// @Success 200 {object} DependencyRemoved "The edge removed"
+// @Success 204 "The edge removed"
 // @Failure 400 {object} ProblemDocument "Malformed body, unknown field or parameter, a kind outside directed|autonomous (code validation_error)"
 // @Failure 401 {object} ProblemDocument "No key, or the key is invalid, expired or revoked (code unauthenticated)"
 // @Failure 403 {object} ProblemDocument "The key lacks write (code insufficient_scope); the owner may not write in the project (code forbidden)"
@@ -132,10 +122,9 @@ func (a *issueWrites) removeDependency(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	args := issueops.Args{"fromId": id, "toId": chi.URLParam(r, "toIssue"), "type": chi.URLParam(r, "type")}
-	res, f := issueops.DepRemove(r.Context(), a.ops, callerOf(r), args)
-	if f != nil {
+	if _, f := issueops.DepRemove(r.Context(), a.ops, callerOf(r), args); f != nil {
 		writeFailure(w, f, id)
 		return
 	}
-	WriteJSON(w, r, http.StatusOK, DependencyRemoved{Removed: true, FromID: res.FromID, ToID: res.ToID, Type: res.Type})
+	w.WriteHeader(http.StatusNoContent)
 }

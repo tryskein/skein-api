@@ -46,14 +46,6 @@ type attachmentUploadBody struct {
 	Kind *string `json:"kind,omitempty"`
 }
 
-// AttachmentDeleted is the answer of deleteAttachment.
-type AttachmentDeleted struct {
-	// ID of the attachment.
-	ID string `json:"id"`
-	// Deleted is always true.
-	Deleted bool `json:"deleted"`
-}
-
 // pathAttachment is the {attachment} of the path; a value that is not a
 // UUID names no attachment (404 attachment_not_found).
 func pathAttachment(w http.ResponseWriter, r *http.Request) (string, bool) {
@@ -282,7 +274,7 @@ func (a *issueWrites) getAttachmentDownloadURL(w http.ResponseWriter, r *http.Re
 // @Security SkeinApiKey[write]
 // @Param attachment path string true "The attachment's UUID"
 // @Param body body kindBody false "Options"
-// @Success 200 {object} AttachmentDeleted "The attachment deleted"
+// @Success 204 "The attachment deleted"
 // @Failure 400 {object} ProblemDocument "Malformed body, unknown field or parameter, a kind outside directed|autonomous (code validation_error)"
 // @Failure 401 {object} ProblemDocument "No key, or the key is invalid, expired or revoked (code unauthenticated)"
 // @Failure 403 {object} ProblemDocument "The key lacks write (code insufficient_scope); the owner may not write in the project (code forbidden)"
@@ -306,10 +298,9 @@ func (a *issueWrites) deleteAttachment(w http.ResponseWriter, r *http.Request) {
 	if _, ok := decodeArgs(w, r, &body); !ok || !kindOf(w, body.Kind) {
 		return
 	}
-	res, f := issueops.AttachmentDelete(r.Context(), a.attachments, callerOf(r), issueops.Args{"attachmentId": id})
-	if f != nil {
+	if _, f := issueops.AttachmentDelete(r.Context(), a.attachments, callerOf(r), issueops.Args{"attachmentId": id}); f != nil {
 		writeFailure(w, f, id)
 		return
 	}
-	WriteJSON(w, r, http.StatusOK, AttachmentDeleted{ID: res.String(), Deleted: true})
+	w.WriteHeader(http.StatusNoContent)
 }

@@ -106,7 +106,7 @@ VALUES ($1, $2, $3, '{}'::jsonb, 1, $4, now())`, from, to, typ, w.owner)
 			rest, mcp := op.rest(rf, rt), op.mcp(mf, mt)
 			parity(t, op.name, rest, mcp, op.want)
 			if op.want == "" {
-				if rest.status != http.StatusOK && rest.status != http.StatusCreated {
+				if rest.status != http.StatusOK && rest.status != http.StatusCreated && rest.status != http.StatusNoContent {
 					t.Fatalf("REST answered %d %s", rest.status, rest.body)
 				}
 				sameEvents(t, op.name, w.depEvents(rf, since), w.depEvents(mf, since))
@@ -123,7 +123,7 @@ VALUES ($1, $2, $3, '{}'::jsonb, 1, $4, now())`, from, to, typ, w.owner)
 		if got := edges(t, rg, ko, from); len(got) != 1 || got[0] != "outgoing/related/"+to {
 			t.Errorf("listed %v, want the one edge to %s", got, to)
 		}
-		wantOK(t, "removeDependency", rg.rest(ko, http.MethodDelete, issuePath(from, "/dependencies/"+to+"/related"), nil, nil), http.StatusOK)
+		wantOK(t, "removeDependency", rg.rest(ko, http.MethodDelete, issuePath(from, "/dependencies/"+to+"/related"), nil, nil), http.StatusNoContent)
 		if got := edges(t, rg, ko, from); len(got) != 0 {
 			t.Errorf("listed %v after the removal, want none", got)
 		}

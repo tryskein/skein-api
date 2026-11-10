@@ -45,16 +45,6 @@ type deleteCommentBody struct {
 	Kind *string `json:"kind,omitempty"`
 }
 
-// CommentDeleted is the answer of deleteComment.
-type CommentDeleted struct {
-	// ID of the comment.
-	ID string `json:"id"`
-	// IssueID is the issue the comment belongs to.
-	IssueID string `json:"issueId"`
-	// Deleted is always true: the comment is a tombstone now.
-	Deleted bool `json:"deleted"`
-}
-
 // pathComment is the {comment} of the path; a value that is not a UUID names
 // no comment (404 comment_not_found).
 func pathComment(w http.ResponseWriter, r *http.Request) (string, bool) {
@@ -264,7 +254,7 @@ func (a *issueWrites) updateComment(w http.ResponseWriter, r *http.Request) {
 // @Security SkeinApiKey[write]
 // @Param comment path string true "The comment's UUID"
 // @Param body body deleteCommentBody false "Options"
-// @Success 200 {object} CommentDeleted "The comment is a tombstone"
+// @Success 204 "The comment is a tombstone"
 // @Failure 400 {object} ProblemDocument "Malformed body, unknown field or parameter, a kind outside directed|autonomous (code validation_error)"
 // @Failure 401 {object} ProblemDocument "No key, or the key is invalid, expired or revoked (code unauthenticated)"
 // @Failure 403 {object} ProblemDocument "The key lacks write (code insufficient_scope); the owner is not the author and lacks delete_any_comment, or may not write in the project (code forbidden)"
@@ -292,12 +282,11 @@ func (a *issueWrites) deleteComment(w http.ResponseWriter, r *http.Request) {
 	}
 	delete(args, "kind")
 	args["commentId"] = id
-	res, f := issueops.DeleteComment(r.Context(), a.ops, callerOf(r), args)
-	if f != nil {
+	if _, f := issueops.DeleteComment(r.Context(), a.ops, callerOf(r), args); f != nil {
 		writeCommentRefusal(w, f, id)
 		return
 	}
-	WriteJSON(w, r, http.StatusOK, CommentDeleted{ID: res.ID.String(), IssueID: res.IssueID, Deleted: true})
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // commentVersion is the version of the comment of the path within the

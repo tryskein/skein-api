@@ -108,28 +108,12 @@ type WatchingLists struct {
 	Filters List[notifications.CustomWatcherDTO] `json:"filters"`
 }
 
-// WatchFilterDeleted is the answer of deleteWatchFilter.
-type WatchFilterDeleted struct {
-	// ID of the filter.
-	ID string `json:"id"`
-	// Deleted is always true.
-	Deleted bool `json:"deleted"`
-}
-
 // ReminderPage is the caller's reminders.
 type ReminderPage struct {
 	List[issueops.ReminderListItem]
 	// RingingTaskCount is the badge: issues with a ringing reminder across
 	// projects, of the key's scope (the project filter does not narrow it).
 	RingingTaskCount int `json:"ringingTaskCount"`
-}
-
-// ReminderDismissed is the answer of dismissReminder.
-type ReminderDismissed struct {
-	// ReminderID of the reminder.
-	ReminderID string `json:"reminderId"`
-	// Dismissed is always true.
-	Dismissed bool `json:"dismissed"`
 }
 
 // The bodies of the writes.
@@ -624,7 +608,7 @@ func (a *issueWrites) watchIssue(w http.ResponseWriter, r *http.Request) {
 // @Security SkeinApiKey[write]
 // @Param issue path string true "The issue's hierarchical id"
 // @Param body body kindBody false "Options"
-// @Success 200 {object} IssueWatch "Not watching"
+// @Success 204 "Not watching"
 // @Failure 400 {object} ProblemDocument "Malformed body, unknown field or parameter, a kind outside directed|autonomous (code validation_error)"
 // @Failure 401 {object} ProblemDocument "No key, or the key is invalid, expired or revoked (code unauthenticated)"
 // @Failure 403 {object} ProblemDocument "The key lacks write (code insufficient_scope)"
@@ -646,7 +630,7 @@ func (a *issueWrites) unwatchIssue(w http.ResponseWriter, r *http.Request) {
 		writeFailure(w, f, id)
 		return
 	}
-	WriteJSON(w, r, http.StatusOK, IssueWatch{IssueID: id, Watching: false})
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // projectWatch serves watchProject and unwatchProject.
@@ -677,6 +661,10 @@ func (a *issueWrites) projectWatch(w http.ResponseWriter, r *http.Request, unwat
 	res, f := issueops.WatchProject(r.Context(), a.ops, callerOf(r), args, unwatch)
 	if f != nil {
 		writeFailure(w, f, projectID.String())
+		return
+	}
+	if unwatch {
+		w.WriteHeader(http.StatusNoContent)
 		return
 	}
 	WriteJSON(w, r, http.StatusOK, ProjectWatch{ProjectID: res.ProjectID.String(), Watching: res.Watching, EventTypes: res.EventTypes})
@@ -717,7 +705,7 @@ func (a *issueWrites) watchProject(w http.ResponseWriter, r *http.Request) {
 // @Security SkeinApiKey[write]
 // @Param project path string true "The project's UUID, prefix or alias (URL-encoded)"
 // @Param body body kindBody false "Options"
-// @Success 200 {object} ProjectWatch "Not watching"
+// @Success 204 "Not watching"
 // @Failure 400 {object} ProblemDocument "Malformed body, unknown field or parameter, a kind outside directed|autonomous (code validation_error)"
 // @Failure 401 {object} ProblemDocument "No key, or the key is invalid, expired or revoked (code unauthenticated)"
 // @Failure 403 {object} ProblemDocument "The key lacks write (code insufficient_scope)"
@@ -810,7 +798,7 @@ func (a *issueWrites) createWatchFilter(w http.ResponseWriter, r *http.Request) 
 // @Security SkeinApiKey[write]
 // @Param filter path string true "The filter's UUID"
 // @Param body body kindBody false "Options"
-// @Success 200 {object} WatchFilterDeleted "Deleted"
+// @Success 204 "Deleted"
 // @Failure 400 {object} ProblemDocument "Malformed body, unknown field or parameter, a kind outside directed|autonomous (code validation_error)"
 // @Failure 401 {object} ProblemDocument "No key, or the key is invalid, expired or revoked (code unauthenticated)"
 // @Failure 403 {object} ProblemDocument "The key lacks write (code insufficient_scope)"
@@ -832,12 +820,11 @@ func (a *issueWrites) deleteWatchFilter(w http.ResponseWriter, r *http.Request) 
 	if !kindArgs(w, r) {
 		return
 	}
-	id, f := issueops.DeleteWatchFilter(r.Context(), a.ops, callerOf(r), issueops.Args{"filterId": raw})
-	if f != nil {
+	if _, f := issueops.DeleteWatchFilter(r.Context(), a.ops, callerOf(r), issueops.Args{"filterId": raw}); f != nil {
 		pathRefusal(w, f, issueops.MsgWatchFilterNotFound, errcode.WatchFilterNotFound, "filterId", raw)
 		return
 	}
-	WriteJSON(w, r, http.StatusOK, WatchFilterDeleted{ID: id.String(), Deleted: true})
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // listReminders lists the caller's reminders.
@@ -999,7 +986,7 @@ func (a *issueWrites) snoozeReminder(w http.ResponseWriter, r *http.Request) {
 // @Security SkeinApiKey[write]
 // @Param reminder path string true "The reminder's UUID"
 // @Param body body dismissBody false "Options"
-// @Success 200 {object} ReminderDismissed "Dismissed"
+// @Success 204 "Dismissed"
 // @Failure 400 {object} ProblemDocument "Malformed body, unknown field or parameter, a kind outside directed|autonomous (code validation_error)"
 // @Failure 401 {object} ProblemDocument "No key, or the key is invalid, expired or revoked (code unauthenticated)"
 // @Failure 403 {object} ProblemDocument "The key lacks write (code insufficient_scope)"
@@ -1022,10 +1009,9 @@ func (a *issueWrites) dismissReminder(w http.ResponseWriter, r *http.Request) {
 	delete(args, "kind")
 	id := strings.TrimSpace(chi.URLParam(r, "reminder"))
 	args["reminderId"] = id
-	res, f := issueops.RemindDismiss(r.Context(), a.ops, callerOf(r), args)
-	if f != nil {
+	if _, f := issueops.RemindDismiss(r.Context(), a.ops, callerOf(r), args); f != nil {
 		writeFailure(w, f, id)
 		return
 	}
-	WriteJSON(w, r, http.StatusOK, ReminderDismissed{ReminderID: res.String(), Dismissed: true})
+	w.WriteHeader(http.StatusNoContent)
 }
