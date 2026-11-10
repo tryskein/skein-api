@@ -114,9 +114,20 @@ END`
 // ProjectAccess returns the scope's level on project, or ErrNotVisible when
 // the project is missing or out of reach — the two are deliberately one
 // error (INV-3).
+//
+// A project outside the scope's key limit is out of reach as well: the
+// owner's level on it does not pass through the key (D-3, INV-2).
 func ProjectAccess(ctx context.Context, q Querier, s Scope, projectID uuid.UUID) (Level, error) {
+	sql, args := accessSQL, []any{s.unrestricted, s.callerID, projectID}
+	if !s.unrestricted && s.key.Limits() {
+		args = []any{s.callerID, projectID}
+		sql = `
+SELECT CASE WHEN ` + s.key.Expr("$2::uuid", Placeholders(&args)) + `
+            THEN skein_project_access($1::uuid, $2::uuid)
+            ELSE 'not_found' END`
+	}
 	var result string
-	if err := q.QueryRow(ctx, accessSQL, s.unrestricted, s.callerID, projectID).Scan(&result); err != nil {
+	if err := q.QueryRow(ctx, sql, args...).Scan(&result); err != nil {
 		return "", fmt.Errorf("resolving access to project %s: %w", projectID, err)
 	}
 	switch result {

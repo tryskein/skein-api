@@ -31,6 +31,9 @@ type StalledQuery struct {
 	Threshold time.Duration
 	// Limit caps the returned monitors.
 	Limit int
+	// Key is the scope of the caller's key (authz.Scope.KeyLimit): a monitor
+	// whose root lies outside it is not reported. Zero — nothing narrowed.
+	Key authzsql.KeyLimit
 }
 
 // StalledMonitor is one stalled monitor the caller may be told about.
@@ -49,7 +52,10 @@ type StalledResult struct {
 	Total    int
 }
 
-// stalledSQL selects the stalled monitors one call may be told about
+// stalledSQL is stalledSQLKeyed without a key scope condition.
+var stalledSQL = stalledSQLKeyed("true")
+
+// stalledSQLKeyed selects the stalled monitors one call may be told about
 // (sk-579 T014). One read, driven by monitor_credentials_stall_candidates_idx:
 // its condition (not revoked, not root_closed, issuing session known) is
 // repeated verbatim below. The rest is INV-5 (the monitor is stalled) and
@@ -65,7 +71,11 @@ type StalledResult struct {
 // the threshold» (INV-8) is therefore stamp < now() - (threshold + $7): a
 // session active a moment ago is never handed to another recipient early.
 // The age of the last successful poll (INV-5) is exact and is not widened.
-var stalledSQL = `
+//
+// keyScope is the condition of the caller's key scope on mc.project_id
+// (authz.KeyLimit.Expr).
+func stalledSQLKeyed(keyScope string) string {
+	return `
 SELECT mc.id, mc.scope_issue_id, mc.last_poll_succeeded_at,
        mc.issued_session_id, COALESCE(mc.token_file_path, ''),
        mc.issued_session_id = $3 AS mine,
@@ -89,6 +99,7 @@ SELECT mc.id, mc.scope_issue_id, mc.last_poll_succeeded_at,
    -- INV-5: the root is not closed and its project is visible to the owner
    AND root.status <> 'closed'
    AND ` + authzsql.RecipientVisibleExpr("mc.user_id", "mc.project_id") + `
+   AND ` + keyScope + `
    -- INV-5: no successful poll (or mint) for longer than the threshold
    AND COALESCE(mc.last_poll_succeeded_at, mc.created_at) < now() - $4::interval
    -- INV-8: the issuing session itself, or any session once it went quiet
@@ -109,14 +120,19 @@ SELECT mc.id, mc.scope_issue_id, mc.last_poll_succeeded_at,
             AND n.shown_at > now() - $6::interval)
  ORDER BY mine DESC, COALESCE(mc.last_poll_succeeded_at, mc.created_at), mc.id
  LIMIT $5`
+}
 
 // Stalled returns up to q.Limit stalled monitors the caller may be told
 // about — its own issuing session's first, then the longest-silent — and the
 // number that qualified (sk-579 US-5, INV-5, INV-8). One read; it writes
 // nothing (the show marks are ClaimStallNotices).
 func (s *Store) Stalled(ctx context.Context, q StalledQuery) (StalledResult, error) {
-	rows, err := s.pool.Query(ctx, stalledSQL,
-		q.APIKeyID, q.UserID, q.RecipientSession, q.Threshold, q.Limit, StallNoticeInterval, agents.LastSeenGranularity)
+	args := []any{q.APIKeyID, q.UserID, q.RecipientSession, q.Threshold, q.Limit, StallNoticeInterval, agents.LastSeenGranularity}
+	// The caller is told only of monitors inside his key's scope: a root of a
+	// project outside it is one he does not see (sk-878.3.1 D-3). Without a
+	// limit the condition is the literal true and the statement is stalledSQL.
+	keyed := q.Key.Expr("mc.project_id", authzsql.Placeholders(&args))
+	rows, err := s.pool.Query(ctx, stalledSQLKeyed(keyed), args...)
 	if err != nil {
 		return StalledResult{}, fmt.Errorf("selecting stalled monitors: %w", err)
 	}

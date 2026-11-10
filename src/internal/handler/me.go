@@ -333,6 +333,7 @@ func (h *MeHandler) computeCounts(ctx context.Context, userID uuid.UUID) (notifi
 	unreviewed := review.UnreviewedPredicate(bind, review.UnreviewedArgs{
 		Alias:    "i",
 		CallerID: userID,
+		Key:      authz.ScopeFor(ctx, userID).KeyLimit(),
 	})
 	// Each counter reads issues under its own alias (inb, onme, dlg, i) so
 	// that a plan names the subquery a read belongs to.

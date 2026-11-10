@@ -61,7 +61,7 @@ func EnsureProjectVisible(
 	projectID uuid.UUID,
 	callerID uuid.UUID,
 ) (AccessLevel, error) {
-	level, err := authz.ProjectAccess(ctx, db, authz.ForUser(callerID), projectID)
+	level, err := authz.ProjectAccess(ctx, db, authz.ScopeFor(ctx, callerID), projectID)
 	if errors.Is(err, authz.ErrNotVisible) {
 		return "", ErrProjectNotVisible
 	}
@@ -83,7 +83,7 @@ func EnsureProjectOwner(
 	projectID uuid.UUID,
 	callerID uuid.UUID,
 ) (AccessLevel, error) {
-	level, err := authz.Can(ctx, db, authz.ForUser(callerID), authz.ActionManageProject, projectID)
+	level, err := authz.Can(ctx, db, authz.ScopeFor(ctx, callerID), authz.ActionManageProject, projectID)
 	switch {
 	case errors.Is(err, authz.ErrNotVisible):
 		return "", ErrProjectNotVisible
@@ -110,7 +110,7 @@ func EnsureProjectAction(
 	callerID uuid.UUID,
 	actions ...authz.Action,
 ) (AccessLevel, error) {
-	level, err := authz.ProjectAccess(ctx, db, authz.ForUser(callerID), projectID)
+	level, err := authz.ProjectAccess(ctx, db, authz.ScopeFor(ctx, callerID), projectID)
 	switch {
 	case errors.Is(err, authz.ErrNotVisible):
 		return "", ErrProjectNotVisible

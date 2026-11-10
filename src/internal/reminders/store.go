@@ -351,14 +351,18 @@ func (s *Store) ListForUser(ctx context.Context, ownerID uuid.UUID, filter ListF
 
 	// sk-674.18 T029 (INV-11): only reminders on issues of a project the
 	// caller sees now; a reminder of a lost project stays stored, unshown.
+	// sk-878.3.1 D-3: and inside the key's scope (keyReach).
+	args := []any{ownerID, now.UTC()}
+	keyed := keyReach(ctx, ownerID, &args)
 	sql := `SELECT` + reminderColumns + `
   FROM reminders r
   JOIN issues i ON i.id = r.issue_id
  WHERE r.user_id = $1
    AND ` + authz.VisibleNowSetExpr("$1::uuid", "i.project_id") + where + `
+   AND ` + keyed + `
  ORDER BY (r.remind_at > $2) ASC, r.remind_at ASC, r.id ASC`
 
-	rows, err := s.pool.Query(ctx, sql, ownerID, now.UTC())
+	rows, err := s.pool.Query(ctx, sql, args...)
 	if err != nil {
 		return nil, fmt.Errorf("listing reminders: %w", err)
 	}
@@ -384,12 +388,15 @@ func (s *Store) ListForUser(ctx context.Context, ownerID uuid.UUID, filter ListF
 // issueId (not reminderId) and has exactly one reminder on that issue, the
 // tool targets it; >1 forces the caller to disambiguate with reminderId.
 func (s *Store) ListForUserIssue(ctx context.Context, ownerID uuid.UUID, issueID string, now time.Time) ([]Reminder, error) {
+	args := []any{ownerID, issueID}
+	keyed := keyReach(ctx, ownerID, &args)
 	rows, err := s.pool.Query(ctx, `SELECT`+reminderColumns+`
   FROM reminders r
   JOIN issues i ON i.id = r.issue_id
  WHERE r.user_id = $1 AND r.issue_id = $2
    AND `+authz.VisibleNowSetExpr("$1::uuid", "i.project_id")+`
- ORDER BY r.remind_at ASC, r.id ASC`, ownerID, issueID)
+   AND `+keyed+`
+ ORDER BY r.remind_at ASC, r.id ASC`, args...)
 	if err != nil {
 		return nil, fmt.Errorf("listing reminders for issue: %w", err)
 	}
@@ -415,12 +422,15 @@ func (s *Store) ListForUserIssue(ctx context.Context, ownerID uuid.UUID, issueID
 // reminders — two stacked reminders on one task is one ringing task.
 func (s *Store) CountRingingTasks(ctx context.Context, ownerID uuid.UUID, now time.Time) (int, error) {
 	var n int
+	args := []any{ownerID, now.UTC()}
+	keyed := keyReach(ctx, ownerID, &args)
 	err := s.pool.QueryRow(ctx, `
 SELECT COUNT(DISTINCT r.issue_id)
   FROM reminders r
   JOIN issues i ON i.id = r.issue_id
  WHERE r.user_id = $1 AND r.remind_at <= $2
-   AND `+authz.VisibleNowSetExpr("$1::uuid", "i.project_id"), ownerID, now.UTC()).Scan(&n)
+   AND `+authz.VisibleNowSetExpr("$1::uuid", "i.project_id")+`
+   AND `+keyed, args...).Scan(&n)
 	if err != nil {
 		return 0, fmt.Errorf("counting ringing tasks: %w", err)
 	}
@@ -442,4 +452,13 @@ func (s *Store) ListAndCount(ctx context.Context, ownerID uuid.UUID, filter List
 		return ListResponse{}, err
 	}
 	return ListResponse{Reminders: list, RingingTaskCount: count}, nil
+}
+
+// keyReach renders the condition of the caller's key scope on i.project_id,
+// binding its values after args (sk-878.3.1 D-3): a reminder on an issue
+// outside the scope is one of a project the caller does not see. The
+// literal true for a request without a key, or for another owner than the
+// request's caller.
+func keyReach(ctx context.Context, ownerID uuid.UUID, args *[]any) string {
+	return authz.ScopeFor(ctx, ownerID).KeyLimit().Expr("i.project_id", authz.Placeholders(args))
 }

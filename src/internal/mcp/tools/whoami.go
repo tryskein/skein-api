@@ -230,6 +230,10 @@ SELECT id::text, email, username, name, role, is_external
 // (no admin / member branch of its own).
 func loadProjects(ctx context.Context, pool *pgxpool.Pool, userID uuid.UUID) ([]whoamiProject, int, bool, error) {
 	s := authz.ScopeFor(ctx, userID)
+	// VisibleJoin reads the relation by the caller's id; the key's scope
+	// narrows it here, as Scope.Bind narrows the bound set (D-3).
+	args := []any{s.IsUnrestricted(), s.CallerID(), whoamiProjectsCap}
+	keyed := s.KeyLimit().Expr("p.project_id", authz.Placeholders(&args))
 	rows, err := pool.Query(ctx, `
 SELECT p.project_id::text, p.name, p.id_prefix,
        CASE va.access WHEN 'admin_member' THEN 'member' ELSE va.access END,
@@ -237,9 +241,10 @@ SELECT p.project_id::text, p.name, p.id_prefix,
        count(*) OVER ()
   FROM (SELECT id AS project_id, name, id_prefix, space_id FROM projects WHERE archived_at IS NULL) p
   `+authz.VisibleJoin("p", "$1", "$2", "va")+`
+ WHERE `+keyed+`
  ORDER BY lower(p.name), p.project_id
  LIMIT $3
-`, s.IsUnrestricted(), s.CallerID(), whoamiProjectsCap)
+`, args...)
 	if err != nil {
 		return nil, 0, false, err
 	}

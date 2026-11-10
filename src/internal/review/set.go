@@ -297,6 +297,11 @@ type UnreviewedArgs struct {
 	// as UnacceptedArgs.AddresseeExpr: the background worker walks every
 	// addressee in one query.
 	CallerExpr string
+	// Key — the scope of the API key the caller's request authenticated
+	// with (authz.Scope.KeyLimit): an issue outside it is an issue of a
+	// project the caller does not see (sk-878.3.1 D-3). The zero value — no
+	// key, the background worker — narrows nothing.
+	Key authz.KeyLimit
 }
 
 // caller returns the caller's identifier expression.
@@ -375,6 +380,7 @@ func UnreviewedPredicate(bind Binder, args UnreviewedArgs) string {
 			" WHERE pr.id = %s.project_id AND pr.archived_at IS NULL)", a) +
 		" AND " + mechanicEnabledFor(callerPh) +
 		" AND " + authz.RecipientVisibleExpr(callerPh+"::uuid", a+".project_id") +
+		" AND " + args.Key.Expr(a+".project_id", bind) +
 		")"
 }
 

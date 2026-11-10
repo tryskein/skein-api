@@ -355,6 +355,11 @@ func (s *Store) ListInbox(ctx context.Context, args ListInboxArgs) (*Notificatio
 	clauses = append(clauses, "n.feed_channel")
 	// sk-674.18 T029 (INV-11): only rows of a project the caller sees now.
 	clauses = append(clauses, authz.VisibleNowSetExpr("$1::uuid", "n.project_id"))
+	// sk-878.3.1 D-3: the key's scope narrows the same condition; a row of no
+	// project is not filtered by it, as by the relation.
+	if key := authz.ScopeFor(ctx, args.UserID).KeyLimit(); key.Limits() {
+		clauses = append(clauses, "(n.project_id IS NULL OR "+key.Expr("n.project_id", addParam)+")")
+	}
 
 	limitParam := addParam(args.Limit + 1)
 
@@ -1156,6 +1161,13 @@ func (s *Store) PollForMonitor(ctx context.Context, p PollParams) (PollResult, e
 // n.project_id = $2)` so a single statement covers both cases without
 // branching at the Go layer.
 func (s *Store) Counts(ctx context.Context, userID uuid.UUID, projectID *uuid.UUID) (CountsDTO, error) {
+	var pidParam any // nil → SQL NULL → predicate degenerates to TRUE
+	if projectID != nil {
+		pidParam = *projectID
+	}
+	args := []any{userID, pidParam}
+	// sk-878.3.1 D-3: the key's scope narrows the visibility condition.
+	keyed := authz.ScopeFor(ctx, userID).KeyLimit().Expr("n.project_id", authz.Placeholders(&args))
 	sql := `
 SELECT
     count(*) FILTER (WHERE n.read_at IS NULL AND n.archived_at IS NULL) AS unread,
@@ -1165,15 +1177,10 @@ SELECT
    AND n.feed_channel
    AND ($2::uuid IS NULL OR n.project_id = $2)
    AND ` + authz.VisibleNowSetExpr("$1::uuid", "n.project_id") + `
+   AND (n.project_id IS NULL OR ` + keyed + `)
 `
-	var (
-		c        CountsDTO
-		pidParam any // nil → SQL NULL → predicate degenerates to TRUE
-	)
-	if projectID != nil {
-		pidParam = *projectID
-	}
-	if err := s.pool.QueryRow(ctx, sql, userID, pidParam).Scan(&c.Unread, &c.Total); err != nil {
+	var c CountsDTO
+	if err := s.pool.QueryRow(ctx, sql, args...).Scan(&c.Unread, &c.Total); err != nil {
 		return CountsDTO{}, fmt.Errorf("counting notifications: %w", err)
 	}
 	return c, nil
@@ -1972,6 +1979,11 @@ func (s *Store) ListWatchingFeed(ctx context.Context, userID uuid.UUID, state Wa
 	if _, ok := ParseWatchingState(string(state)); !ok {
 		return WatchingFeedResult{}, fmt.Errorf("listing watching feed: unknown state %q", state)
 	}
+	args := []any{userID, WatchingFeedLimit, string(state), s.watchingWindow}
+	// The key's scope narrows the caller's cards as it narrows every other
+	// view of the relation (D-3): a card outside it is a card of a project
+	// he does not see. Without a key the condition is the literal true.
+	keyed := authz.ScopeFor(ctx, userID).KeyLimit().Expr("i.project_id", authz.Placeholders(&args))
 	sql := `
 WITH subs AS (
     SELECT iw.issue_id, iw.reasons, iw.since
@@ -2003,6 +2015,7 @@ cards AS (
      -- form per card; the window rows need no check of their own: they reach
      -- the totals only through a visible card.
      WHERE ` + authz.RecipientVisibleExpr("$1::uuid", "i.project_id") + `
+       AND ` + keyed + `
 ),
 totals AS (
     SELECT count(*) FILTER (WHERE subscribed)::int    AS subscriptions_total,
@@ -2026,7 +2039,7 @@ SELECT p.issue_id, p.subscribed, p.reasons, p.since, p.unread_count, p.last_at, 
   LEFT JOIN picked p ON true
  ORDER BY p.last_at DESC NULLS LAST, p.issue_id`
 
-	rows, err := s.pool.Query(ctx, sql, userID, WatchingFeedLimit, string(state), s.watchingWindow)
+	rows, err := s.pool.Query(ctx, sql, args...)
 	if err != nil {
 		return WatchingFeedResult{}, fmt.Errorf("listing watching feed: %w", err)
 	}

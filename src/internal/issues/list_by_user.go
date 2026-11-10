@@ -239,6 +239,7 @@ func (s *Store) ListByUser(ctx context.Context, args ListByUserArgs) (*ListResul
 		clauses = append(clauses, review.UnreviewedPredicate(addParam, review.UnreviewedArgs{
 			Alias:    "i",
 			CallerID: args.UserID,
+			Key:      authz.ScopeFor(ctx, args.UserID).KeyLimit(),
 		}))
 	}
 

@@ -2912,6 +2912,7 @@ func (s *Store) ListIssues(ctx context.Context, args ListIssuesArgs) (*ListResul
 		clauses = append(clauses, review.UnreviewedPredicate(addParam, review.UnreviewedArgs{
 			Alias:    "i",
 			CallerID: caller,
+			Key:      authz.ScopeFor(ctx, caller).KeyLimit(),
 		}))
 	}
 	if args.AcceptedAtNull != nil && *args.AcceptedAtNull {

@@ -52,7 +52,22 @@ func ReachFor(ctx context.Context, q RowsQuerier, s Scope, spaceShort string) (H
 	if s.callerID == uuid.Nil {
 		return out, nil
 	}
-	rows, err := q.Query(ctx, hotZoneReachSQL, s.callerID, spaceShort)
+	sql, args := hotZoneReachSQL, []any{s.callerID, spaceShort}
+	if s.key.Limits() {
+		// A project outside the key's scope is one the caller does not see:
+		// it stays in the reach only through his own non-personal spaces,
+		// anonymized, like any project hidden from him (D-3, INV-2).
+		keyed := s.key.Expr("p.id", Placeholders(&args))
+		sql = `
+SELECT p.id, (va.project_id IS NOT NULL AND ` + keyed + `) AS visible
+  FROM projects p
+  JOIN spaces sp ON sp.id = p.space_id
+  LEFT JOIN skein_project_access_set($1::uuid) va ON va.project_id = p.id
+ WHERE ((va.project_id IS NOT NULL AND ` + keyed + `)
+        OR p.space_id IN (SELECT cs.space_id FROM skein_contribution_spaces($1::uuid) cs))
+   AND ($2::text = '' OR sp.short_id = $2::text)`
+	}
+	rows, err := q.Query(ctx, sql, args...)
 	if err != nil {
 		return HotZoneReach{}, fmt.Errorf("loading the HOT ZONE reach: %w", err)
 	}
