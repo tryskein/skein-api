@@ -68,6 +68,8 @@ type execution struct {
 	lost bool
 	// target is the object the operation acts on, as NoteTarget named it.
 	target *publicapi.ObjectRef
+	// objects are the objects of the response, as NoteObjects named them.
+	objects []publicapi.ObjectRef
 }
 
 type executionKey struct{}
@@ -90,6 +92,9 @@ func RecordInTx(ctx context.Context, tx pgx.Tx, o Outcome) error {
 	}
 	if o.Refs.Target == nil {
 		o.Refs.Target = e.target
+	}
+	if len(o.Refs.Objects) == 0 {
+		o.Refs.Objects = e.objects
 	}
 	err := Record(ctx, tx, e.keyID, e.key, e.token, o)
 	if errors.Is(err, ErrMarkerLost) {
@@ -122,6 +127,18 @@ func IssueBeforeCommit(status int) func(ctx context.Context, tx pgx.Tx, st issue
 func NoteTarget(ctx context.Context, ref publicapi.ObjectRef) {
 	if e := executionFrom(ctx); e != nil {
 		e.target = &ref
+	}
+}
+
+// NoteObjects names objects of the response of an outcome produced without
+// a writing transaction — the candidates in the body of a 422
+// duplicate_suspected, the objects a 2xx without a write answers with. A
+// stored outcome keeps them, and a repeat re-checks the key's scope and the
+// owner's visibility on each before giving the answer out (US-7). It does
+// nothing for a request without Idempotency-Key.
+func NoteObjects(ctx context.Context, refs ...publicapi.ObjectRef) {
+	if e := executionFrom(ctx); e != nil {
+		e.objects = append(e.objects, refs...)
 	}
 }
 
@@ -259,7 +276,7 @@ func (m *Middleware) execute(w http.ResponseWriter, r *http.Request, next http.H
 	ctx, cancel := detached(r.Context())
 	defer cancel()
 	if err := e.store.Finish(ctx, e.keyID, e.key, e.token, resp, Storable(rec.status, resp.Body),
-		Refs{Target: e.target}); err != nil {
+		Refs{Target: e.target, Objects: e.objects}); err != nil {
 		slog.ErrorContext(r.Context(), "idempotency: ending the execution failed",
 			"operationId", operationID(r), "status", rec.status, "error", err.Error())
 	}

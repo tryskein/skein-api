@@ -20,6 +20,7 @@ import (
 	"skein-api/internal/apikeys"
 	"skein-api/internal/errcode"
 	"skein-api/internal/idempotency"
+	"skein-api/internal/publicapi"
 	"skein-api/internal/publicapi/apitest"
 	"skein-api/internal/testsupport"
 )
@@ -256,6 +257,34 @@ func TestIdempotency_RecheckBeforeTheStoredAnswer(t *testing.T) {
 				t.Errorf("the operation ran %d times, want 1", n)
 			}
 		})
+	}
+}
+
+// TestIdempotency_RecheckOfAnOutcomeWithoutAWrite — row 75 for an outcome
+// stored without a writing transaction (US-7, SC-027, review R6-02): a 422
+// whose body answers with an issue (as the candidates of
+// duplicate_suspected) names it as an object of the response; after the
+// key's scope is narrowed past that issue the repeat answers as for a
+// missing issue, the stored 422 is not given out and nothing executes.
+func TestIdempotency_RecheckOfAnOutcomeWithoutAWrite(t *testing.T) {
+	pool := testsupport.NewTestPool(t)
+	rg := newRig(t, pool)
+	w := seedWorld(t, pool, apikeys.LevelWrite)
+	raw, _ := json.Marshal(codeBody{Code: "dependency_cycle", Origin: "domain",
+		Objects: []publicapi.ObjectRef{{Kind: publicapi.ObjectIssue, ID: w.issueA}}})
+	c := call{path: "/api/v1/answers", key: w.key, idemKey: w.idemKeys, body: string(raw)}
+
+	wantProblem(t, rg.do(t, c), http.StatusUnprocessableEntity, "dependency_cycle")
+	wantProblem(t, rg.do(t, c), http.StatusUnprocessableEntity, "dependency_cycle")
+	if n := rg.calls.Load(); n != 1 {
+		t.Fatalf("the operation ran %d times before the scope changed, want 1 (the 422 is kept)", n)
+	}
+
+	exec(t, pool, "narrow the scope", `UPDATE api_keys SET scope_mode = 'projects' WHERE id = $1`, w.keyID)
+	exec(t, pool, "scope the other project", `INSERT INTO api_key_scope_projects (api_key_id, project_id) VALUES ($1, $2)`, w.keyID, w.other)
+	wantProblem(t, rg.do(t, c), http.StatusNotFound, "issue_not_found")
+	if n := rg.calls.Load(); n != 1 {
+		t.Errorf("the operation ran %d times, want 1", n)
 	}
 }
 

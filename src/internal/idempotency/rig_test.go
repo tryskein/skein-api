@@ -62,6 +62,8 @@ type codeBody struct {
 	Code   string `json:"code"`
 	Origin string `json:"origin"`
 	Status int    `json:"status"`
+	// Objects are named as objects of the response (NoteObjects).
+	Objects []publicapi.ObjectRef `json:"objects,omitempty"`
 }
 
 type rig struct {
@@ -196,6 +198,7 @@ func (rg *rig) answerCode(w http.ResponseWriter, r *http.Request) {
 	if !publicapi.DecodeBody(w, r, &body) {
 		return
 	}
+	idempotency.NoteObjects(r.Context(), body.Objects...)
 	if body.Code == "" {
 		publicapi.WriteJSON(w, r, body.Status, map[string]string{"id": "answer"})
 		return
