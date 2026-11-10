@@ -1068,10 +1068,11 @@ migration, before the HTTP listener opens:
   (`X-Forwarded-For`, `X-Real-IP`) name the client IP. From any other peer the
   headers are ignored and the client IP is the direct peer.
 - **Required:** no · **Default:** none · **Format:** comma-separated CIDR list
-  (`10.0.0.0/8,2001:db8::/32`); spaces around items are ignored. A single
-  address is written with its prefix length (`10.0.0.5/32`).
-- **If unset:** no proxy is trusted. An item that is not a CIDR aborts startup
-  while the public API is enabled.
+  (`10.0.0.0/8,2001:db8::/32`); spaces around items are ignored. Each item is
+  a network address with its prefix length: a single host is written as
+  `10.0.0.5/32`, and a prefix with host bits set (`10.0.0.5/8`) is refused.
+- **If unset:** no proxy is trusted. An item that is not such a CIDR aborts
+  startup while the public API is enabled.
 
 #### `SKEIN_PUBLIC_API_WRITE_TIMEOUT`
 

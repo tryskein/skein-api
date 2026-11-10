@@ -1178,9 +1178,9 @@ func validatePublicAPI(cfg *Config) error {
 }
 
 // parseTrustedProxies parses a comma-separated CIDR list. Items are trimmed and
-// empty ones dropped (a trailing comma, a space after a comma); a bare address
-// without a prefix length is refused, so a typo cannot silently trust a range
-// other than the one meant.
+// empty ones dropped (a trailing comma, a space after a comma). A bare address
+// without a prefix length and a prefix with host bits set (10.1.2.3/8) are
+// refused, so a typo cannot silently trust a range other than the one meant.
 func parseTrustedProxies(in []string) ([]netip.Prefix, error) {
 	var out []netip.Prefix
 	for _, item := range in {
@@ -1192,7 +1192,11 @@ func parseTrustedProxies(in []string) ([]netip.Prefix, error) {
 		if err != nil {
 			return nil, fmt.Errorf("%q is not a CIDR (want address/prefix-length, e.g. 10.0.0.0/8): %w", item, err)
 		}
-		out = append(out, prefix.Masked())
+		if prefix != prefix.Masked() {
+			return nil, fmt.Errorf("%q has host bits set: write the network address %s, or the address with /%d to trust one host",
+				item, prefix.Masked(), prefix.Addr().BitLen())
+		}
+		out = append(out, prefix)
 	}
 	return out, nil
 }

@@ -1297,6 +1297,8 @@ func TestLoad_PublicAPIRefusals(t *testing.T) {
 		{"default key TTL above the max", map[string]string{"SKEIN_API_KEY_DEFAULT_TTL": "2160h", "SKEIN_API_KEY_MAX_TTL": "720h"}, true},
 		{"CIDR with a bad prefix length", map[string]string{"SKEIN_PUBLIC_API_TRUSTED_PROXIES": "10.0.0.0/33"}, true},
 		{"CIDR without a prefix length", map[string]string{"SKEIN_PUBLIC_API_TRUSTED_PROXIES": "10.0.0.1"}, true},
+		{"CIDR with host bits set", map[string]string{"SKEIN_PUBLIC_API_TRUSTED_PROXIES": "10.1.2.3/8"}, true},
+		{"IPv6 CIDR with host bits set", map[string]string{"SKEIN_PUBLIC_API_TRUSTED_PROXIES": "2001:db8::1/32"}, true},
 		{"CIDR not an address", map[string]string{"SKEIN_PUBLIC_API_TRUSTED_PROXIES": "10.0.0.0/8,proxy"}, true},
 		{"rate limit zero", map[string]string{"SKEIN_PUBLIC_API_RATE_LIMIT_PER_MINUTE": "0"}, true},
 		{"rate limit negative", map[string]string{"SKEIN_PUBLIC_API_RATE_LIMIT_PER_MINUTE": "-1"}, true},
@@ -1326,14 +1328,14 @@ func TestLoad_PublicAPIRefusals(t *testing.T) {
 }
 
 // TestLoad_PublicAPITrustedProxiesParsed — the CIDR list reaches the config as
-// prefixes: items trimmed, empty ones dropped, host bits masked.
+// prefixes: items trimmed, empty ones dropped, a single host kept as /32.
 func TestLoad_PublicAPITrustedProxiesParsed(t *testing.T) {
-	withPublicAPIEnv(t, map[string]string{"SKEIN_PUBLIC_API_TRUSTED_PROXIES": " 10.1.2.3/8, ,2001:db8::/32,"})
+	withPublicAPIEnv(t, map[string]string{"SKEIN_PUBLIC_API_TRUSTED_PROXIES": " 10.0.0.0/8, ,10.1.2.3/32,2001:db8::/32,"})
 	cfg, err := Load()
 	if err != nil {
 		t.Fatalf("Load() = %v, want success", err)
 	}
-	want := []string{"10.0.0.0/8", "2001:db8::/32"}
+	want := []string{"10.0.0.0/8", "10.1.2.3/32", "2001:db8::/32"}
 	if len(cfg.PublicAPITrustedProxies) != len(want) {
 		t.Fatalf("PublicAPITrustedProxies = %v, want %v", cfg.PublicAPITrustedProxies, want)
 	}
