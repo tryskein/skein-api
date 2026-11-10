@@ -3237,3 +3237,118 @@ func (s *Store) UpdateReasonPrefs(ctx context.Context, userID uuid.UUID, input U
 func (s *Store) PendingInvitations(ctx context.Context, user uuid.UUID) ([]spaces.PendingInvitation, error) {
 	return spaces.PendingInvitationsTo(ctx, s.pool, user)
 }
+
+// WatchersCursor is the position of a page of one section of
+// ListWatchersPage: the last row's subscription time and id (the issue id,
+// the project UUID).
+type WatchersCursor struct {
+	Since time.Time
+	ID    string
+}
+
+// WatchersPageArgs are the arguments of ListWatchersPage. A nil cursor
+// starts its section from the newest subscription.
+type WatchersPageArgs struct {
+	UserID        uuid.UUID
+	Limit         int
+	IssuesAfter   *WatchersCursor
+	ProjectsAfter *WatchersCursor
+}
+
+// WatchersPage is one page of each section of the caller's subscriptions;
+// *More reports a further page of that section. Custom is every filter:
+// a user holds at most MaxCustomWatchersPerUser of them.
+type WatchersPage struct {
+	Issues       []IssueWatcherForUserDTO
+	IssuesMore   bool
+	Projects     []ProjectWatcherDTO
+	ProjectsMore bool
+	Custom       []CustomWatcherDTO
+}
+
+// ListWatchersPage is ListAllWatchers with keyset paging of each section
+// (sk-878.3.1 T027, listWatching): issues and projects newest subscription
+// first, ties by id; the filters whole. The rows are those of
+// ListAllWatchers: the key's scope narrows every section, the project
+// opt-outs are not listed.
+func (s *Store) ListWatchersPage(ctx context.Context, a WatchersPageArgs) (*WatchersPage, error) {
+	key := authz.ScopeFor(ctx, a.UserID).KeyLimit()
+	out := &WatchersPage{Issues: []IssueWatcherForUserDTO{}, Projects: []ProjectWatcherDTO{}}
+
+	issueArgs := []any{a.UserID, a.Limit + 1}
+	after := "true"
+	if a.IssuesAfter != nil {
+		issueArgs = append(issueArgs, a.IssuesAfter.Since, a.IssuesAfter.ID)
+		after = "(iw.since < $3::timestamptz OR (iw.since = $3::timestamptz AND iw.issue_id > $4::text))"
+	}
+	rows, err := s.pool.Query(ctx, `
+SELECT iw.issue_id, COALESCE(i.title, ''), i.project_id, COALESCE(p.id_prefix, ''), iw.reasons, iw.since
+  FROM issue_watchers iw
+  JOIN issues i   ON i.id = iw.issue_id
+  JOIN projects p ON p.id = i.project_id
+ WHERE iw.user_id = $1
+   AND `+after+`
+   AND `+key.Expr("i.project_id", authz.Placeholders(&issueArgs))+`
+ ORDER BY iw.since DESC, iw.issue_id ASC
+ LIMIT $2`, issueArgs...)
+	if err != nil {
+		return nil, fmt.Errorf("paging my issue watchers: %w", err)
+	}
+	for rows.Next() {
+		var w IssueWatcherForUserDTO
+		if err := rows.Scan(&w.IssueID, &w.IssueTitle, &w.ProjectID, &w.ProjectIDPrefix, &w.Reasons, &w.Since); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("scanning my issue watcher: %w", err)
+		}
+		out.Issues = append(out.Issues, w)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("paging my issue watchers: %w", err)
+	}
+	if len(out.Issues) > a.Limit {
+		out.Issues, out.IssuesMore = out.Issues[:a.Limit], true
+	}
+
+	projectArgs := []any{a.UserID, a.Limit + 1}
+	after = "true"
+	if a.ProjectsAfter != nil {
+		projectArgs = append(projectArgs, a.ProjectsAfter.Since, a.ProjectsAfter.ID)
+		after = "(pw.since < $3::timestamptz OR (pw.since = $3::timestamptz AND pw.project_id::text > $4::text))"
+	}
+	rows, err = s.pool.Query(ctx, `
+SELECT pw.project_id, COALESCE(p.name, ''), COALESCE(p.id_prefix, ''), pw.reasons, pw.since, pw.event_types
+  FROM project_watchers pw
+  JOIN projects p ON p.id = pw.project_id
+ WHERE pw.user_id = $1
+   AND NOT 'unwatched' = ANY(pw.reasons)
+   AND `+after+`
+   AND `+key.Expr("pw.project_id", authz.Placeholders(&projectArgs))+`
+ ORDER BY pw.since DESC, pw.project_id::text ASC
+ LIMIT $2`, projectArgs...)
+	if err != nil {
+		return nil, fmt.Errorf("paging my project watchers: %w", err)
+	}
+	for rows.Next() {
+		var w ProjectWatcherDTO
+		var types []string
+		if err := rows.Scan(&w.ProjectID, &w.ProjectName, &w.ProjectIDPrefix, &w.Reasons, &w.Since, &types); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("scanning my project watcher: %w", err)
+		}
+		w.EventTypes = types
+		out.Projects = append(out.Projects, w)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("paging my project watchers: %w", err)
+	}
+	if len(out.Projects) > a.Limit {
+		out.Projects, out.ProjectsMore = out.Projects[:a.Limit], true
+	}
+
+	if out.Custom, err = s.ListCustomWatchers(ctx, a.UserID); err != nil {
+		return nil, err
+	}
+	return out, nil
+}

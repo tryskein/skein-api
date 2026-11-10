@@ -398,3 +398,23 @@ func DecodeCustomWatcherFilter(raw any) (notifications.CustomWatcherFilter, erro
 	}
 	return out, nil
 }
+
+// WatchingPage is a page of each section of the caller's subscriptions —
+// issues and projects by their own cursor, the filters whole (listWatching;
+// MCP's list answers the first 50 of each instead). Only the subscriptions
+// inside the key's scope are listed.
+func WatchingPage(ctx context.Context, d Deps, userID uuid.UUID, args notifications.WatchersPageArgs) (*notifications.WatchersPage, *Failure) {
+	start := time.Now()
+	args.UserID = userID
+	page, err := d.Notifications.ListWatchersPage(ctx, args)
+	if err != nil {
+		slog.ErrorContext(ctx, logMessage(ctx, "error"),
+			"tool", watchersTool, "action", "list", "userId", userID.String(), "error", err.Error())
+		return nil, Fail(ErrCodeInternalError, "failed to list watchers", nil)
+	}
+	slog.InfoContext(ctx, logMessage(ctx, "ok"),
+		"tool", watchersTool, "action", "list", "userId", userID.String(),
+		"issues", len(page.Issues), "projects", len(page.Projects), "custom", len(page.Custom),
+		"latencyMs", time.Since(start).Milliseconds())
+	return page, nil
+}

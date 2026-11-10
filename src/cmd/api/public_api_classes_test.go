@@ -46,8 +46,10 @@ import (
 	"skein-api/internal/dependencies"
 	"skein-api/internal/issueops"
 	"skein-api/internal/issues"
+	"skein-api/internal/notifications"
 	"skein-api/internal/projects"
 	"skein-api/internal/publicapi"
+	"skein-api/internal/reminders"
 	"skein-api/internal/search"
 	"skein-api/internal/testsupport"
 	"skein-api/internal/users"
@@ -139,6 +141,27 @@ var publicOps = []publicOp{
 	{id: "getAttachment", method: http.MethodGet, path: "attachments/{attachment}", right: "read", read: true, field: "filename"},
 	{id: "getAttachmentDownloadUrl", method: http.MethodGet, path: "attachments/{attachment}/download-url", right: "read", read: true, field: "url"},
 	{id: "deleteAttachment", method: http.MethodDelete, path: "attachments/{attachment}", right: "write", body: true},
+
+	// T027 (row 127). The notification and subscription writes record no
+	// event; the reminder writes do.
+	{id: "listNotifications", method: http.MethodGet, path: "notifications", right: "read", read: true, field: "type"},
+	{id: "markNotificationRead", method: http.MethodPost, path: "notifications/{notification}/read", right: "write", body: true, noEvent: true},
+	{id: "markAllNotificationsRead", method: http.MethodPost, path: "notifications/read-all", right: "write", body: true, noEvent: true},
+	{id: "archiveNotification", method: http.MethodPost, path: "notifications/{notification}/archive", right: "write", body: true, noEvent: true},
+	{id: "markIssueNotificationsRead", method: http.MethodPost, path: "issues/{issue}/notifications/read", right: "write", body: true, noEvent: true},
+	{id: "markWatchingCardRead", method: http.MethodPost, path: "me/watching/issues/{issue}/read", right: "write", body: true, noEvent: true},
+	{id: "listWatching", method: http.MethodGet, path: "me/watching", right: "read", read: true, field: "issues"},
+	{id: "watchIssue", method: http.MethodPut, path: "issues/{issue}/watch", right: "write", body: true, noEvent: true},
+	{id: "unwatchIssue", method: http.MethodDelete, path: "issues/{issue}/watch", right: "write", body: true, noEvent: true},
+	{id: "watchProject", method: http.MethodPut, path: "projects/{project}/watch", right: "write", body: true, noEvent: true},
+	{id: "unwatchProject", method: http.MethodDelete, path: "projects/{project}/watch", right: "write", body: true, noEvent: true},
+	{id: "listWatchFilters", method: http.MethodGet, path: "me/watch-filters", right: "read", read: true, field: "name"},
+	{id: "createWatchFilter", method: http.MethodPost, path: "me/watch-filters", right: "write", body: true, noEvent: true},
+	{id: "deleteWatchFilter", method: http.MethodDelete, path: "me/watch-filters/{filter}", right: "write", body: true, noEvent: true},
+	{id: "listReminders", method: http.MethodGet, path: "reminders", right: "read", read: true, field: "issueId"},
+	{id: "createReminder", method: http.MethodPost, path: "issues/{issue}/reminders", right: "write", body: true},
+	{id: "snoozeReminder", method: http.MethodPost, path: "reminders/{reminder}/snooze", right: "write", body: true},
+	{id: "dismissReminder", method: http.MethodDelete, path: "reminders/{reminder}", right: "write", body: true},
 }
 
 // TestPublicAPIClasses_LiteralIsRoutesGo — rows 100 and 101, the literal
@@ -269,6 +292,10 @@ VALUES ($1, $2, 'owner', $3, 'human', 'human', 'a note', now(), now())`, uuid.Ne
 	w.exec(`INSERT INTO events (type, actor, actor_user_id, actor_type, entity_type, entity_id, project_id)
 VALUES ('issue.created', 'owner', $1, 'human', 'issue', $2, $3)`, w.owner, w.issue, w.p)
 	w.attachment = w.seedAttachment(w.issue, "ready")
+	// The lists of the owner's own state are not empty.
+	w.seedNotification(w.issue)
+	w.seedFilter()
+	testsupport.SeedReminder(t, pool, w.issue, w.owner)
 	t.Cleanup(func() {
 		ctx := context.Background()
 		_, _ = pool.Exec(ctx, `DELETE FROM comments WHERE issue_id = ANY($1)`, []string{w.issue, w.ready, w.qIssue})
@@ -291,11 +318,13 @@ func classDeps(pool *pgxpool.Pool) publicapi.Deps {
 		panic("search.NewService: " + err.Error())
 	}
 	return publicapi.Deps{
-		Projects:     projects.NewStore(pool),
-		Users:        users.NewStore(pool, auth.MinBcryptCost, apikeys.New(pool), "local", "", nil),
-		Issues:       issues.NewStore(pool),
-		Dependencies: dependencies.NewStore(pool),
-		Search:       searchSvc,
+		Projects:      projects.NewStore(pool),
+		Users:         users.NewStore(pool, auth.MinBcryptCost, apikeys.New(pool), "local", "", nil),
+		Issues:        issues.NewStore(pool),
+		Dependencies:  dependencies.NewStore(pool),
+		Search:        searchSvc,
+		Notifications: notifications.NewStore(pool),
+		Reminders:     reminders.NewStore(pool),
 		Attachments: issueops.AttachmentDeps{Store: attachments.NewStore(pool), S3: routingS3{}, Bucket: "classes",
 			MaxSize: 10 << 20, URLTTL: 10 * time.Minute},
 	}
@@ -308,6 +337,34 @@ func (w *classWorld) seedAttachment(issue, status string) string {
 	id := uuid.New()
 	w.exec(`INSERT INTO attachments (id, issue_id, filename, content_type, size_bytes, s3_bucket, s3_key, status, uploaded_by)
 VALUES ($1, $2, 'note.txt', 'text/plain', 12, 'classes', $3, $4, $5)`, id, issue, "classes/"+id.String(), status, w.owner)
+	return id.String()
+}
+
+// seedNotification inserts an unread notification of the owner about issue
+// and returns its id.
+func (w *classWorld) seedNotification(issue string) string {
+	w.t.Helper()
+	var event, id int64
+	if err := w.pool.QueryRow(context.Background(), `
+INSERT INTO events (occurred_at, type, entity_type, entity_id, project_id, actor, actor_user_id, actor_type, payload)
+VALUES (now(), 'issue.updated', 'issue', $1, $2, 'seed', $3, 'human', '{}'::jsonb) RETURNING id`, issue, w.p, w.owner).Scan(&event); err != nil {
+		w.t.Fatalf("seed event: %v", err)
+	}
+	if err := w.pool.QueryRow(context.Background(), `
+INSERT INTO notifications (user_id, event_id, type, project_id, created_at, feed_channel)
+VALUES ($1, $2, 'issue.updated', $3, now(), true) RETURNING id`, w.owner, event, w.p).Scan(&id); err != nil {
+		w.t.Fatalf("seed notification: %v", err)
+	}
+	return strconv.FormatInt(id, 10)
+}
+
+// seedFilter inserts a subscription filter of the owner over p and returns
+// its id.
+func (w *classWorld) seedFilter() string {
+	w.t.Helper()
+	id := uuid.New()
+	w.exec(`INSERT INTO custom_watchers (id, user_id, name, filter) VALUES ($1, $2, $3, jsonb_build_object('projects', jsonb_build_array($4::text)))`,
+		id, w.owner, w.fresh("filter"), w.p.String())
 	return id.String()
 }
 
@@ -455,6 +512,29 @@ func (w *classWorld) call(op publicOp, p uuid.UUID, key string) opCall {
 		return opCall{http.MethodGet, base + "issues/" + w.issue + "/move-plan?targetProject=" + w.qPrefix, nil, nil}
 	case "search":
 		return opCall{http.MethodGet, base + "search?kinds=issue&query=" + w.word, nil, nil}
+	case "listNotifications":
+		return opCall{http.MethodGet, base + "notifications", nil, nil}
+	case "markNotificationRead":
+		return opCall{http.MethodPost, base + "notifications/" + w.seedNotification(w.issue) + "/read", nil, nil}
+	case "markAllNotificationsRead":
+		return opCall{http.MethodPost, base + "notifications/read-all", nil, nil}
+	case "archiveNotification":
+		return opCall{http.MethodPost, base + "notifications/" + w.seedNotification(w.issue) + "/archive", nil, nil}
+	case "listWatching":
+		return opCall{http.MethodGet, base + "me/watching", nil, nil}
+	case "watchProject":
+		return opCall{http.MethodPut, proj + "/watch", nil, nil}
+	case "unwatchProject":
+		return opCall{http.MethodDelete, proj + "/watch", nil, nil}
+	case "listWatchFilters":
+		return opCall{http.MethodGet, base + "me/watch-filters", nil, nil}
+	case "createWatchFilter":
+		return opCall{http.MethodPost, base + "me/watch-filters", map[string]any{"name": w.fresh("filter"),
+			"filter": map[string]any{"projects": []string{p.String()}}}, nil}
+	case "deleteWatchFilter":
+		return opCall{http.MethodDelete, base + "me/watch-filters/" + w.seedFilter(), nil, nil}
+	case "listReminders":
+		return opCall{http.MethodGet, base + "reminders", nil, nil}
 	case "createIssue":
 		return opCall{http.MethodPost, proj + "/issues", map[string]any{"title": w.fresh("iss"), "type": "task", "force": true}, nil}
 	case "createEpic":
@@ -529,6 +609,21 @@ VALUES ($1, $2, 'related', '{}'::jsonb, 1, $3, now())`, id, to, w.owner)
 		return opCall{http.MethodGet, base + "attachments/" + w.attachment + "/download-url", nil, nil}
 	case "deleteAttachment":
 		return opCall{http.MethodDelete, base + "attachments/" + w.seedAttachment(id, "ready"), nil, nil}
+	case "markIssueNotificationsRead":
+		return opCall{http.MethodPost, issue + "/notifications/read", nil, nil}
+	case "markWatchingCardRead":
+		return opCall{http.MethodPost, base + "me/watching/issues/" + id + "/read", nil, nil}
+	case "watchIssue":
+		return opCall{http.MethodPut, issue + "/watch", nil, nil}
+	case "unwatchIssue":
+		return opCall{http.MethodDelete, issue + "/watch", nil, nil}
+	case "createReminder":
+		return opCall{http.MethodPost, issue + "/reminders", map[string]any{"remindAt": "2099-01-01T00:00:00Z"}, nil}
+	case "snoozeReminder":
+		return opCall{http.MethodPost, base + "reminders/" + testsupport.SeedReminder(w.t, w.pool, id, w.owner).String() + "/snooze",
+			map[string]any{"by": "1h"}, nil}
+	case "dismissReminder":
+		return opCall{http.MethodDelete, base + "reminders/" + testsupport.SeedReminder(w.t, w.pool, id, w.owner).String(), nil, nil}
 	case "detachCommit":
 		hash := w.freshHash()
 		w.do(key, opCall{http.MethodPost, issue + "/commits", map[string]any{"commits": []map[string]any{{"hash": hash, "repoUrl": w.repoURL}}}, nil}, "", nil)

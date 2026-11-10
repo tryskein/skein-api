@@ -32,8 +32,11 @@ import (
 	"skein-api/internal/issues"
 	mcppkg "skein-api/internal/mcp"
 	"skein-api/internal/mcp/tools"
+	"skein-api/internal/monitorcreds"
+	"skein-api/internal/notifications"
 	"skein-api/internal/projects"
 	"skein-api/internal/publicapi"
+	"skein-api/internal/reminders"
 	"skein-api/internal/search"
 	"skein-api/internal/spaces"
 	"skein-api/internal/testsupport"
@@ -62,6 +65,8 @@ func newResourceRig(t *testing.T, pool *pgxpool.Pool) *resourceRig {
 func newResourceRigWithStorage(t *testing.T, pool *pgxpool.Pool, s3 attachments.S3Access) *resourceRig {
 	t.Helper()
 	attStore := attachments.NewStore(pool)
+	notifStore := notifications.NewStore(pool)
+	remindersStore := reminders.NewStore(pool)
 	const attMax, attTTL = int64(10 << 20), 10 * time.Minute
 	projectsStore := projects.NewStore(pool)
 	usersStore := users.NewStore(pool, auth.MinBcryptCost, apikeys.New(pool), "local", "", nil)
@@ -91,8 +96,10 @@ func newResourceRigWithStorage(t *testing.T, pool *pgxpool.Pool, s3 attachments.
 			Issues:            issuesStore, Dependencies: depsStore, Search: searchSvc,
 			// As publicAPIServer wires it: without the hooks an outcome of
 			// an operation with a target is not kept.
-			Outcomes:    idempotency.Hooks{},
-			Attachments: issueops.AttachmentDeps{Store: attStore, S3: s3, Bucket: "rig", MaxSize: attMax, URLTTL: attTTL},
+			Outcomes:      idempotency.Hooks{},
+			Notifications: notifStore,
+			Reminders:     remindersStore,
+			Attachments:   issueops.AttachmentDeps{Store: attStore, S3: s3, Bucket: "rig", MaxSize: attMax, URLTTL: attTTL},
 		}))
 	mcpHandler, _ := mcppkg.Setup(pool, 0, func(s *server.MCPServer) {
 		tools.RegisterWhoami(s, pool)
@@ -129,6 +136,9 @@ func newResourceRigWithStorage(t *testing.T, pool *pgxpool.Pool, s3 attachments.
 		tools.RegisterDepAdd(s, pool, depsStore, issuesStore)
 		tools.RegisterDepRemove(s, pool, depsStore, issuesStore)
 		tools.RegisterAttachments(s, tools.AttachmentDepsFor(pool, attStore, s3, "rig", attMax, attTTL))
+		tools.RegisterNotifications(s, pool, notifStore)
+		tools.RegisterWatchers(s, pool, projectsStore, notifStore, monitorcreds.New(pool, 0))
+		tools.RegisterRemind(s, pool, remindersStore, issuesStore, projectsStore)
 	})
 	return &resourceRig{
 		t: t, pool: pool, restH: rest,

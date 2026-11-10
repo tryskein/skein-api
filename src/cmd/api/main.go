@@ -1085,6 +1085,8 @@ func main() {
 		Dependencies:     depsStore,
 		Search:           searchSvc,
 		IssuesEmbedder:   pubIssuesEmbedder,
+		Notifications:    notifStore,
+		Reminders:        remindersStore,
 		// The attachment store and storage of the MCP tool; S3 nil when
 		// S3_URL is unset — the operations then answer attachments_unavailable.
 		Attachments: issueops.AttachmentDeps{

@@ -19,7 +19,9 @@ import (
 	"skein-api/internal/dependencies"
 	"skein-api/internal/issueops"
 	"skein-api/internal/issues"
+	"skein-api/internal/notifications"
 	"skein-api/internal/projects"
+	"skein-api/internal/reminders"
 	"skein-api/internal/search"
 	"skein-api/internal/users"
 )
@@ -213,6 +215,9 @@ type Deps struct {
 	// Outcomes records the outcome of an operation that accepts
 	// Idempotency-Key (idempotency.Hooks).
 	Outcomes Outcomes
+	// Notifications and Reminders are the stores of the caller's own state.
+	Notifications *notifications.Store
+	Reminders     *reminders.Store
 	// Attachments are the attachment store and object storage, as the MCP
 	// tool skein_attachments gets them; S3 nil — storage not configured.
 	// Its Pool defaults to Pool.
@@ -236,8 +241,9 @@ func ProductRoutes(d Deps) []Route {
 		att.Pool = d.Pool
 	}
 	wa := &issueWrites{
-		issuesAPI:   ia,
-		ops:         issueops.Deps{Pool: d.Pool, Issues: d.Issues, Deps: d.Dependencies, Projects: d.Projects},
+		issuesAPI: ia,
+		ops: issueops.Deps{Pool: d.Pool, Issues: d.Issues, Deps: d.Dependencies, Projects: d.Projects,
+			Notifications: d.Notifications, Reminders: d.Reminders},
 		outcomes:    d.Outcomes,
 		attachments: att,
 	}
@@ -345,6 +351,38 @@ func ProductRoutes(d Deps) []Route {
 		key(OperationGetAttachmentDownloadURL, http.MethodGet, "attachments/{attachment}/download-url", read, ObjectNone, nil,
 			wa.getAttachmentDownloadURL),
 		writeRoute(OperationDeleteAttachment, http.MethodDelete, "attachments/{attachment}", ObjectNone, wa.deleteAttachment,
+			routeFlags{noActions: true}),
+
+		// The caller's own state (T027): the operation checks what it acts on,
+		// as in MCP; nothing here takes an action of a project.
+		key(OperationListNotifications, http.MethodGet, "notifications", read, ObjectNone, nil, wa.listNotifications),
+		writeRoute(OperationMarkNotificationRead, http.MethodPost, "notifications/{notification}/read", ObjectNone,
+			wa.markNotificationRead, routeFlags{noActions: true}),
+		writeRoute(OperationMarkAllNotificationsRead, http.MethodPost, "notifications/read-all", ObjectNone,
+			wa.markAllNotificationsRead, routeFlags{noActions: true}),
+		writeRoute(OperationArchiveNotification, http.MethodPost, "notifications/{notification}/archive", ObjectNone,
+			wa.archiveNotification, routeFlags{noActions: true}),
+		writeRoute(OperationMarkIssueNotificationsRead, http.MethodPost, "issues/{issue}/notifications/read", ObjectNone,
+			wa.markIssueNotificationsRead, routeFlags{noActions: true}),
+		writeRoute(OperationMarkWatchingCardRead, http.MethodPost, "me/watching/issues/{issue}/read", ObjectNone,
+			wa.markWatchingCardRead, routeFlags{noActions: true}),
+		key(OperationListWatching, http.MethodGet, "me/watching", read, ObjectNone, nil, wa.listWatching),
+		writeRoute(OperationWatchIssue, http.MethodPut, "issues/{issue}/watch", ObjectNone, wa.watchIssue, routeFlags{noActions: true}),
+		writeRoute(OperationUnwatchIssue, http.MethodDelete, "issues/{issue}/watch", ObjectNone, wa.unwatchIssue, routeFlags{noActions: true}),
+		writeRoute(OperationWatchProject, http.MethodPut, "projects/{project}/watch", ObjectNone, wa.watchProject, routeFlags{noActions: true}),
+		writeRoute(OperationUnwatchProject, http.MethodDelete, "projects/{project}/watch", ObjectNone, wa.unwatchProject,
+			routeFlags{noActions: true}),
+		key(OperationListWatchFilters, http.MethodGet, "me/watch-filters", read, ObjectNone, nil, wa.listWatchFilters),
+		writeRoute(OperationCreateWatchFilter, http.MethodPost, "me/watch-filters", ObjectNone, wa.createWatchFilter,
+			routeFlags{noActions: true}),
+		writeRoute(OperationDeleteWatchFilter, http.MethodDelete, "me/watch-filters/{filter}", ObjectNone, wa.deleteWatchFilter,
+			routeFlags{noActions: true}),
+		key(OperationListReminders, http.MethodGet, "reminders", read, ObjectNone, nil, wa.listReminders),
+		writeRoute(OperationCreateReminder, http.MethodPost, "issues/{issue}/reminders", ObjectNone, wa.createReminder,
+			routeFlags{noActions: true}),
+		writeRoute(OperationSnoozeReminder, http.MethodPost, "reminders/{reminder}/snooze", ObjectNone, wa.snoozeReminder,
+			routeFlags{noActions: true}),
+		writeRoute(OperationDismissReminder, http.MethodDelete, "reminders/{reminder}", ObjectNone, wa.dismissReminder,
 			routeFlags{noActions: true}),
 	}
 }

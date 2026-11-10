@@ -334,6 +334,42 @@
                 },
                 "type": "object"
             },
+            "issueops.ReminderListItem": {
+                "properties": {
+                    "issueId": {
+                        "description": "IssueID and IssueTitle name the issue it rings on.",
+                        "type": "string"
+                    },
+                    "issueTitle": {
+                        "type": "string"
+                    },
+                    "notifiedAt": {
+                        "description": "NotifiedAt is when it last rang, RFC 3339; omitted before it did.",
+                        "type": "string"
+                    },
+                    "projectId": {
+                        "description": "ProjectID is the issue's project.",
+                        "type": "string"
+                    },
+                    "remindAt": {
+                        "description": "RemindAt is when it rings, RFC 3339.",
+                        "type": "string"
+                    },
+                    "reminderId": {
+                        "description": "ReminderID is the reminder's UUID.",
+                        "type": "string"
+                    },
+                    "snoozeCount": {
+                        "description": "SnoozeCount is how often it was snoozed.",
+                        "type": "integer"
+                    },
+                    "state": {
+                        "description": "State: ringing (due) or armed (future).",
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
             "issues.BlockerRef": {
                 "properties": {
                     "id": {
@@ -916,6 +952,250 @@
                         "type": "string"
                     },
                     "username": {
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
+            "notifications.ActorDTO": {
+                "properties": {
+                    "deleted": {
+                        "description": "Deleted — the account was deleted (INV-18).",
+                        "type": "boolean"
+                    },
+                    "departed": {
+                        "description": "Departed — the person has left the space of this context (the\nissue's project); shown greyed. Never set together with Deleted.",
+                        "type": "boolean"
+                    },
+                    "pseudonym": {
+                        "description": "Pseudonym — the stable alias of a deleted account\n(users.pseudonym, `deleted-<8hex>`); absent otherwise.",
+                        "type": "string"
+                    },
+                    "type": {
+                        "description": "'human' | 'agent' | 'system'",
+                        "type": "string"
+                    },
+                    "userId": {
+                        "type": "string"
+                    },
+                    "username": {
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
+            "notifications.CustomWatcherDTO": {
+                "properties": {
+                    "createdAt": {
+                        "type": "string"
+                    },
+                    "filter": {
+                        "$ref": "#/components/schemas/notifications.CustomWatcherFilter"
+                    },
+                    "id": {
+                        "type": "string"
+                    },
+                    "name": {
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
+            "notifications.CustomWatcherFilter": {
+                "properties": {
+                    "components": {
+                        "items": {
+                            "type": "string"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
+                    },
+                    "event_types": {
+                        "items": {
+                            "type": "string"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
+                    },
+                    "labels": {
+                        "items": {
+                            "type": "string"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
+                    },
+                    "priority_max": {
+                        "type": "integer"
+                    },
+                    "projects": {
+                        "items": {
+                            "type": "string"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
+                    },
+                    "types": {
+                        "items": {
+                            "type": "string"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
+                    }
+                },
+                "type": "object"
+            },
+            "notifications.EntityDTO": {
+                "properties": {
+                    "id": {
+                        "type": "string"
+                    },
+                    "projectId": {
+                        "type": "string"
+                    },
+                    "projectIdPrefix": {
+                        "type": "string"
+                    },
+                    "title": {
+                        "type": "string"
+                    },
+                    "type": {
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
+            "notifications.IssueWatcherForUserDTO": {
+                "properties": {
+                    "issueId": {
+                        "type": "string"
+                    },
+                    "issueTitle": {
+                        "type": "string"
+                    },
+                    "projectId": {
+                        "type": "string"
+                    },
+                    "projectIdPrefix": {
+                        "type": "string"
+                    },
+                    "reasons": {
+                        "items": {
+                            "type": "string"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
+                    },
+                    "since": {
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
+            "notifications.MarkCardReadResult": {
+                "properties": {
+                    "marked": {
+                        "description": "Marked is how many notifications this call flipped from unread to\nread, counted in notification rows. Rows already read are not\ncounted, so a repeated call answers 0. It may exceed the drop of the\nWatching badge, which counts only unread rows inside the window.",
+                        "type": "integer"
+                    }
+                },
+                "type": "object"
+            },
+            "notifications.NotificationDTO": {
+                "properties": {
+                    "actor": {
+                        "$ref": "#/components/schemas/notifications.ActorDTO",
+                        "description": "Actor is who caused the event — resolved in the same query, so a\nclient never has to look a username up per row. A system-caused\nevent has no userId."
+                    },
+                    "actorSessionId": {
+                        "description": "ActorSessionID carries the originating event's actor_session_id and is\npopulated ONLY on the agent monitor-poll path (PollForMonitor). It lets\nthe monitor runner / agent skip its own echo — an event whose\nactorSessionId equals the agent's current MCP session (sk-164 US-2,\nINV-2, reader-side self-skip).\n\n`omitempty` is load-bearing: NotificationDTO is shared with the human\ninbox (ListInbox / me), where this field stays nil and\nmust NOT surface as `actorSessionId:null` — that inert null would change\nthe human inbox JSON and break \"human path unchanged\" (INV-5 / SC-004;\nspec Changelog 2026-07-20). Present only when the event carried a\nnon-empty actor_session_id; absent otherwise (nil → omitempty). The\nreader treats absent ≡ empty session ≡ \"not mine\".",
+                        "type": "string"
+                    },
+                    "archivedAt": {
+                        "description": "ArchivedAt is when the recipient archived the row; absent while it\nis not archived. An archived row is excluded from every scope but\n`archived`.",
+                        "type": "string"
+                    },
+                    "bodyPreview": {
+                        "type": "string"
+                    },
+                    "closeOutcome": {
+                        "description": "CloseOutcome — the outcome of closing the issue the row is about (sk-489, US-3,\nthe \"Notifications\" contract). Present on issue.status_changed rows\nthat report a transition to \"closed\", and only when the outcome is known.\n\nThis is a field of the short summary in the API response, not text: the UI prints\nthe outcome in the push title and in the feed row from Summary, and from here it is taken\nby whoever needs a machine-distinguishable value rather than a phrase.\n\nFor issue.outcome_changed the outcome change is carried by the regular Field / OldValue /\nNewValue (field = \"closeOutcome\"), and duplicating it here is pointless —\n\"was → became\" is a pair, not a single value.\n\nomitempty is mandatory: the field is empty on the vast majority of rows\n(comments, mentions, assignments), and an inert `closeOutcome:null`\nwould change the JSON of the inbox on every one of them.",
+                        "type": "string"
+                    },
+                    "commentId": {
+                        "description": "CommentID / BodyPreview / Truncated are monitor-only enrichment for\ncomment-entity events on the agent poll path (sk-242.1 US-1/2, FR-002,\nINV-5). Filled ONLY by PollForMonitor; human materialization paths\n(ListInbox / watching recent / MCP\nskein_notifications(action=\"inbox\")) leave\nthem nil so omitempty keeps the human JSON byte-stable.\n\nWire (comment.created monitor items):\n  - commentId: event entity UUID string when parseable; parallel to\n    Entity (which re-points comment→issue, INV-9).\n  - bodyPreview: live comments.body snapshot at first delivery, rune-\n    truncated to BodyPreviewMaxRunes (INV-2). *string so nil = absent\n    and non-nil \"\" = present empty string (string omitempty would drop \"\").\n  - truncated: non-nil true only when live body exceeded the rune cap;\n    absent (nil) when ≤ cap, soft-deleted, orphan, or non-comment.\nSoft-deleted / orphan / unparseable: commentId may still be present;\nbodyPreview and truncated stay nil (INV-4 — deleted text never on poll).",
+                        "type": "string"
+                    },
+                    "createdAt": {
+                        "description": "CreatedAt is when the row was minted for this recipient (UTC).",
+                        "type": "string"
+                    },
+                    "entity": {
+                        "$ref": "#/components/schemas/notifications.EntityDTO",
+                        "description": "Entity is what the row is about, already re-pointed to the thing a\nclient can open: for a comment event this is the ISSUE the comment\nis on, not the comment."
+                    },
+                    "field": {
+                        "description": "Field, OldValue and NewValue come straight off the events row — for\nstatus_changed a client renders \"open → in_progress\" without\nparsing the raw payload. Field names WHAT changed; the two values\nare its before and after, and either may be absent when the event\nhas no such side (a creation has no old value). Their JSON type\nfollows the field, so they are not always strings.",
+                        "type": "string"
+                    },
+                    "id": {
+                        "description": "ID is the row's identifier and the paging key: pages run in\nDESCENDING id, and the lowest id of a page is what comes back as\nnextCursor. On the agent monitor-poll path this is the EVENT id\ninstead (that path reads the audit log, not the inbox), so the two\nid namespaces are not interchangeable across the two endpoints.",
+                        "type": "integer"
+                    },
+                    "mentionContext": {
+                        "description": "MentionContext is a ~120-character snippet of the body where the\nmention happened (sk-38). Pre-trimmed around the first\n`@<caller-username>` occurrence so the UI can render a meaningful\npreview (\"...we should loop in @admin on this before the merge...\").\nOnly populated for mention-typed notifications (comment.mention /\nissue.mention). Wire-omitempty — non-mention rows lack the field.",
+                        "type": "string"
+                    },
+                    "newValue": {},
+                    "oldValue": {},
+                    "readAt": {
+                        "description": "ReadAt is when the recipient marked the row read; absent while it\nis unread. Absent and null are the same statement here: the field\nis omitted, never sent as null.",
+                        "type": "string"
+                    },
+                    "spaceId": {
+                        "description": "SpaceID is the short id of the space of the row's project (sk-674.18\nT029, spaces/contract.go: Inbox, Mentions, Watching rows). Absent on\nthe agent monitor-poll path and on a row without a project.",
+                        "type": "string"
+                    },
+                    "summary": {
+                        "description": "Summary is the ready-to-render one-line phrase for the row, built\nserver-side so every surface words the same event identically.",
+                        "type": "string"
+                    },
+                    "truncated": {
+                        "type": "boolean"
+                    },
+                    "type": {
+                        "description": "Type is the event type the row reports, e.g. issue.status_changed,\ncomment.created, comment.mention. The enumerated set is served by\nGET /api/v1/notification-event-types rather than being frozen here.",
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
+            "notifications.ProjectWatcherDTO": {
+                "properties": {
+                    "eventTypes": {
+                        "description": "EventTypes mirrors project_watchers.event_types. nil means \"all\nnotifiable types\"; an explicit list is a strict whitelist.",
+                        "items": {
+                            "type": "string"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
+                    },
+                    "projectId": {
+                        "type": "string"
+                    },
+                    "projectIdPrefix": {
+                        "type": "string"
+                    },
+                    "projectName": {
+                        "type": "string"
+                    },
+                    "reasons": {
+                        "items": {
+                            "type": "string"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
+                    },
+                    "since": {
                         "type": "string"
                     }
                 },
@@ -1637,6 +1917,19 @@
                 },
                 "type": "object"
             },
+            "publicapi.IssueWatch": {
+                "properties": {
+                    "issueId": {
+                        "description": "IssueID of the issue.",
+                        "type": "string"
+                    },
+                    "watching": {
+                        "description": "Watching: the caller watches the issue after the call.",
+                        "type": "boolean"
+                    }
+                },
+                "type": "object"
+            },
             "publicapi.List-attachments_Attachment": {
                 "properties": {
                     "hasMore": {
@@ -1717,6 +2010,60 @@
                     "items": {
                         "items": {
                             "$ref": "#/components/schemas/issues.IssueSummary"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
+                    },
+                    "nextCursor": {
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
+            "publicapi.List-notifications_CustomWatcherDTO": {
+                "properties": {
+                    "hasMore": {
+                        "type": "boolean"
+                    },
+                    "items": {
+                        "items": {
+                            "$ref": "#/components/schemas/notifications.CustomWatcherDTO"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
+                    },
+                    "nextCursor": {
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
+            "publicapi.List-notifications_IssueWatcherForUserDTO": {
+                "properties": {
+                    "hasMore": {
+                        "type": "boolean"
+                    },
+                    "items": {
+                        "items": {
+                            "$ref": "#/components/schemas/notifications.IssueWatcherForUserDTO"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
+                    },
+                    "nextCursor": {
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
+            "publicapi.List-notifications_ProjectWatcherDTO": {
+                "properties": {
+                    "hasMore": {
+                        "type": "boolean"
+                    },
+                    "items": {
+                        "items": {
+                            "$ref": "#/components/schemas/notifications.ProjectWatcherDTO"
                         },
                         "type": "array",
                         "uniqueItems": false
@@ -1883,6 +2230,54 @@
                 },
                 "type": "object"
             },
+            "publicapi.NotificationArchived": {
+                "properties": {
+                    "archived": {
+                        "description": "Archived is always true.",
+                        "type": "boolean"
+                    },
+                    "id": {
+                        "description": "ID of the notification.",
+                        "type": "integer"
+                    }
+                },
+                "type": "object"
+            },
+            "publicapi.NotificationPage": {
+                "properties": {
+                    "hasMore": {
+                        "type": "boolean"
+                    },
+                    "invitations": {
+                        "description": "Invitations are the pending invitations to the caller, on the first\npage of the live scopes; omitted otherwise.",
+                        "items": {
+                            "$ref": "#/components/schemas/spaces.PendingInvitation"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
+                    },
+                    "items": {
+                        "items": {
+                            "$ref": "#/components/schemas/notifications.NotificationDTO"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
+                    },
+                    "nextCursor": {
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
+            "publicapi.NotificationsMarked": {
+                "properties": {
+                    "updated": {
+                        "description": "Updated is how many notifications the call marked read; 0 is an\nanswer, not a refusal.",
+                        "type": "integer"
+                    }
+                },
+                "type": "object"
+            },
             "publicapi.ProblemDocument": {
                 "properties": {
                     "code": {
@@ -1908,6 +2303,62 @@
                     "type": {
                         "description": "Type is always \"about:blank\": the code says what happened.",
                         "type": "string"
+                    }
+                },
+                "type": "object"
+            },
+            "publicapi.ProjectWatch": {
+                "properties": {
+                    "eventTypes": {
+                        "description": "EventTypes the call narrowed the subscription to; omitted when it set\nnone.",
+                        "items": {
+                            "type": "string"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
+                    },
+                    "projectId": {
+                        "description": "ProjectID of the project.",
+                        "type": "string"
+                    },
+                    "watching": {
+                        "description": "Watching: the caller watches the project after the call.",
+                        "type": "boolean"
+                    }
+                },
+                "type": "object"
+            },
+            "publicapi.ReminderDismissed": {
+                "properties": {
+                    "dismissed": {
+                        "description": "Dismissed is always true.",
+                        "type": "boolean"
+                    },
+                    "reminderId": {
+                        "description": "ReminderID of the reminder.",
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
+            "publicapi.ReminderPage": {
+                "properties": {
+                    "hasMore": {
+                        "type": "boolean"
+                    },
+                    "items": {
+                        "items": {
+                            "$ref": "#/components/schemas/issueops.ReminderListItem"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
+                    },
+                    "nextCursor": {
+                        "type": "string"
+                    },
+                    "ringingTaskCount": {
+                        "description": "RingingTaskCount is the badge: issues with a ringing reminder across\nprojects, of the key's scope (the project filter does not narrow it).",
+                        "type": "integer"
                     }
                 },
                 "type": "object"
@@ -1975,6 +2426,36 @@
                     "nextCursor": {
                         "description": "NextCursor is the cursor of the next page, null on the last one.",
                         "type": "string"
+                    }
+                },
+                "type": "object"
+            },
+            "publicapi.WatchFilterDeleted": {
+                "properties": {
+                    "deleted": {
+                        "description": "Deleted is always true.",
+                        "type": "boolean"
+                    },
+                    "id": {
+                        "description": "ID of the filter.",
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
+            "publicapi.WatchingLists": {
+                "properties": {
+                    "filters": {
+                        "$ref": "#/components/schemas/publicapi.List-notifications_CustomWatcherDTO",
+                        "description": "Filters, all of them (at most 10 per user: one page)."
+                    },
+                    "issues": {
+                        "$ref": "#/components/schemas/publicapi.List-notifications_IssueWatcherForUserDTO",
+                        "description": "Issues, newest subscription first; issuesCursor continues them."
+                    },
+                    "projects": {
+                        "$ref": "#/components/schemas/publicapi.List-notifications_ProjectWatcherDTO",
+                        "description": "Projects, newest subscription first; projectsCursor continues them."
                     }
                 },
                 "type": "object"
@@ -2658,6 +3139,23 @@
                 },
                 "type": "object"
             },
+            "publicapi.createReminderBody": {
+                "properties": {
+                    "kind": {
+                        "description": "Kind of the write: directed or autonomous (checked).",
+                        "type": "string"
+                    },
+                    "note": {
+                        "description": "Note shown when it rings.",
+                        "type": "string"
+                    },
+                    "remindAt": {
+                        "description": "RemindAt, RFC 3339. Required.",
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
             "publicapi.deleteCommentBody": {
                 "properties": {
                     "kind": {
@@ -2683,6 +3181,19 @@
                     },
                     "type": {
                         "description": "Type is blocks, waits-for, related, discovered-from, supersedes,\nduplicates or parent-child.",
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
+            "publicapi.dismissBody": {
+                "properties": {
+                    "kind": {
+                        "description": "Kind of the write: directed or autonomous (checked).",
+                        "type": "string"
+                    },
+                    "note": {
+                        "description": "Note recorded on the event.",
                         "type": "string"
                     }
                 },
@@ -2714,6 +3225,19 @@
                 },
                 "type": "object"
             },
+            "publicapi.markAllBody": {
+                "properties": {
+                    "kind": {
+                        "description": "Kind of the write: directed or autonomous (checked).",
+                        "type": "string"
+                    },
+                    "projectId": {
+                        "description": "ProjectID narrows the sweep to one project (UUID).",
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
             "publicapi.putMemberBody": {
                 "properties": {
                     "kind": {
@@ -2735,6 +3259,27 @@
                     },
                     "newParentId": {
                         "description": "NewParentID is the new parent; \"\" detaches the issue. Required.",
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
+            "publicapi.snoozeBody": {
+                "properties": {
+                    "by": {
+                        "description": "By, a duration from now (1h, 30m, 2d).",
+                        "type": "string"
+                    },
+                    "kind": {
+                        "description": "Kind of the write: directed or autonomous (checked).",
+                        "type": "string"
+                    },
+                    "reason": {
+                        "description": "Reason recorded on the event.",
+                        "type": "string"
+                    },
+                    "until": {
+                        "description": "Until, RFC 3339.",
                         "type": "string"
                     }
                 },
@@ -2948,6 +3493,121 @@
                 },
                 "type": "object"
             },
+            "publicapi.watchFilterBody": {
+                "properties": {
+                    "filter": {
+                        "additionalProperties": {},
+                        "description": "Filter: projects (UUIDs), event_types, types, labels, components\n(UUIDs), priority_max. No projects — any project, which needs a key\nof scope all. Required.",
+                        "type": "object"
+                    },
+                    "kind": {
+                        "description": "Kind of the write: directed or autonomous (checked).",
+                        "type": "string"
+                    },
+                    "name": {
+                        "description": "Name, 1..100 characters, unique per user. Required.",
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
+            "publicapi.watchIssueBody": {
+                "properties": {
+                    "kind": {
+                        "description": "Kind of the write: directed or autonomous (checked).",
+                        "type": "string"
+                    },
+                    "subtree": {
+                        "description": "Subtree also watches the descendants' events on this card.",
+                        "type": "boolean"
+                    }
+                },
+                "type": "object"
+            },
+            "publicapi.watchProjectBody": {
+                "properties": {
+                    "eventTypes": {
+                        "description": "EventTypes narrows the subscription to these event types; [] clears\nthe narrowing; omitted keeps it.",
+                        "items": {
+                            "type": "string"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
+                    },
+                    "kind": {
+                        "description": "Kind of the write: directed or autonomous (checked).",
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
+            "reminders.Reminder": {
+                "properties": {
+                    "createdAt": {
+                        "type": "string"
+                    },
+                    "id": {
+                        "type": "string"
+                    },
+                    "issueId": {
+                        "type": "string"
+                    },
+                    "issuePriority": {
+                        "type": "integer"
+                    },
+                    "issueStatus": {
+                        "type": "string"
+                    },
+                    "issueTitle": {
+                        "description": "Issue summary — denormalised join fields. ProjectID lets the\nfrontend route to the issue without resolving the id prefix.",
+                        "type": "string"
+                    },
+                    "issueType": {
+                        "type": "string"
+                    },
+                    "lastReason": {
+                        "type": "string"
+                    },
+                    "notifiedAt": {
+                        "type": "string"
+                    },
+                    "projectId": {
+                        "type": "string"
+                    },
+                    "remindAt": {
+                        "type": "string"
+                    },
+                    "snoozeCount": {
+                        "type": "integer"
+                    },
+                    "spaceId": {
+                        "description": "SpaceID is the short id of the space of the issue's project\n(sk-674.18 T029, spaces/contract.go).",
+                        "type": "string"
+                    },
+                    "state": {
+                        "$ref": "#/components/schemas/reminders.State",
+                        "description": "State is the derived armed/ringing value, computed at read time."
+                    },
+                    "updatedAt": {
+                        "type": "string"
+                    },
+                    "userId": {
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
+            "reminders.State": {
+                "enum": [
+                    "armed",
+                    "ringing"
+                ],
+                "type": "string",
+                "x-enum-varnames": [
+                    "StateArmed",
+                    "StateRinging"
+                ]
+            },
             "search.Item": {
                 "properties": {
                     "archived": {
@@ -3049,6 +3709,31 @@
                     },
                     "role": {
                         "description": "Role is RoleOwner | RoleMember, or \"admin\" for a space the caller\nsees only as the instance admin.",
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
+            "spaces.PendingInvitation": {
+                "properties": {
+                    "expiresAt": {
+                        "description": "ExpiresAt is the expiry (RFC 3339, UTC).",
+                        "type": "string"
+                    },
+                    "id": {
+                        "description": "ID is the invitation id (UUID).",
+                        "type": "string"
+                    },
+                    "invitedBy": {
+                        "description": "InvitedBy is the sender's username.",
+                        "type": "string"
+                    },
+                    "spaceId": {
+                        "description": "SpaceID is the space short id.",
+                        "type": "string"
+                    },
+                    "spaceName": {
+                        "description": "SpaceName is the space name.",
                         "type": "string"
                     }
                 },
@@ -7630,6 +8315,128 @@
                 ]
             }
         },
+        "/api/v1/issues/{issue}/notifications/read": {
+            "post": {
+                "description": "Marks read every notification of the caller tied to the issue of the path, those of its comments included — the same operation as the MCP tool skein_notifications, action mark_read_issue. Answers how many were marked; 0 is an answer. Side effects: the notifications' read time; no event.",
+                "operationId": "markIssueNotificationsRead",
+                "parameters": [
+                    {
+                        "description": "The issue's hierarchical id",
+                        "in": "path",
+                        "name": "issue",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/publicapi.kindBody",
+                                "summary": "body",
+                                "description": "Options"
+                            }
+                        }
+                    },
+                    "description": "Options"
+                },
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.NotificationsMarked"
+                                }
+                            }
+                        },
+                        "description": "Marked read"
+                    },
+                    "400": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Malformed body, unknown field or parameter, a kind outside directed|autonomous (code validation_error)"
+                    },
+                    "401": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "No key, or the key is invalid, expired or revoked (code unauthenticated)"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The key lacks write (code insufficient_scope)"
+                    },
+                    "404": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The path names no issue (code issue_not_found)"
+                    },
+                    "429": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Rate limited (code rate_limited, Retry-After)"
+                    },
+                    "500": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Internal error (code internal_error)"
+                    },
+                    "503": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The database is unavailable (code database_unavailable)"
+                    }
+                },
+                "security": [
+                    {
+                        "SkeinApiKey": [
+                            "write"
+                        ]
+                    }
+                ],
+                "summary": "Mark the notifications of an issue read",
+                "tags": [
+                    "Me"
+                ]
+            }
+        },
         "/api/v1/issues/{issue}/release-lock": {
             "post": {
                 "description": "Releases the lock of the issue of the path without changing its status and without bypassing its version or its pin (the UI's «release the lock»): a lock the key's owner took — with any of his keys, executors or MCP sessions — is released without a role; another holder's needs the owner's force_unlock. The version grows, so a writer holding the old version gets 412. An issue nobody holds is answered as it is, its version unchanged. There is no MCP tool of its own (MCP releases another's lock with force on skein_unclaim). Side effects: issue.unclaimed; for another's lock also issue.lock_force_released.",
@@ -7767,6 +8574,139 @@
                 "summary": "Release the lock of an issue",
                 "tags": [
                     "Issues"
+                ]
+            }
+        },
+        "/api/v1/issues/{issue}/reminders": {
+            "post": {
+                "description": "Sets a reminder of the caller on the issue of the path — the same operation as the MCP tool skein_remind, action set: it rings at remindAt in the caller's inbox. Side effects: reminder.set.",
+                "operationId": "createReminder",
+                "parameters": [
+                    {
+                        "description": "The issue's hierarchical id",
+                        "in": "path",
+                        "name": "issue",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/publicapi.createReminderBody",
+                                "summary": "body",
+                                "description": "The reminder"
+                            }
+                        }
+                    },
+                    "description": "The reminder",
+                    "required": true
+                },
+                "responses": {
+                    "201": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/reminders.Reminder"
+                                }
+                            }
+                        },
+                        "description": "The reminder"
+                    },
+                    "400": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Malformed body, unknown field or parameter, a kind outside directed|autonomous (code validation_error)"
+                    },
+                    "401": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "No key, or the key is invalid, expired or revoked (code unauthenticated)"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The key lacks write (code insufficient_scope)"
+                    },
+                    "404": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "No such issue within reach (code issue_not_found)"
+                    },
+                    "422": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "remindAt is missing or not RFC 3339 (code validation_error)"
+                    },
+                    "429": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Rate limited (code rate_limited, Retry-After)"
+                    },
+                    "500": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Internal error (code internal_error)"
+                    },
+                    "503": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The database is unavailable (code database_unavailable)"
+                    }
+                },
+                "security": [
+                    {
+                        "SkeinApiKey": [
+                            "write"
+                        ]
+                    }
+                ],
+                "summary": "Set a reminder on an issue",
+                "tags": [
+                    "Me"
                 ]
             }
         },
@@ -8221,6 +9161,248 @@
                 ]
             }
         },
+        "/api/v1/issues/{issue}/watch": {
+            "delete": {
+                "description": "Unsubscribes the caller from the issue of the path — the same operation as the MCP tool skein_watchers, action unwatch; the explicit opt-out keeps the issue unwatched against the automatic subscriptions. Side effects: the opt-out; no event.",
+                "operationId": "unwatchIssue",
+                "parameters": [
+                    {
+                        "description": "The issue's hierarchical id",
+                        "in": "path",
+                        "name": "issue",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/publicapi.kindBody",
+                                "summary": "body",
+                                "description": "Options"
+                            }
+                        }
+                    },
+                    "description": "Options"
+                },
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.IssueWatch"
+                                }
+                            }
+                        },
+                        "description": "Not watching"
+                    },
+                    "400": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Malformed body, unknown field or parameter, a kind outside directed|autonomous (code validation_error)"
+                    },
+                    "401": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "No key, or the key is invalid, expired or revoked (code unauthenticated)"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The key lacks write (code insufficient_scope)"
+                    },
+                    "404": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "No such issue within reach (code issue_not_found)"
+                    },
+                    "429": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Rate limited (code rate_limited, Retry-After)"
+                    },
+                    "500": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Internal error (code internal_error)"
+                    },
+                    "503": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The database is unavailable (code database_unavailable)"
+                    }
+                },
+                "security": [
+                    {
+                        "SkeinApiKey": [
+                            "write"
+                        ]
+                    }
+                ],
+                "summary": "Stop watching an issue",
+                "tags": [
+                    "Me"
+                ]
+            },
+            "put": {
+                "description": "Subscribes the caller to the issue of the path — the same operation as the MCP tool skein_watchers, action watch; subtree also carries the descendants' events to its Watching card. Watching a watched issue only sets subtree. Side effects: the subscription; no event.",
+                "operationId": "watchIssue",
+                "parameters": [
+                    {
+                        "description": "The issue's hierarchical id",
+                        "in": "path",
+                        "name": "issue",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/publicapi.watchIssueBody",
+                                "summary": "body",
+                                "description": "Options"
+                            }
+                        }
+                    },
+                    "description": "Options"
+                },
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.IssueWatch"
+                                }
+                            }
+                        },
+                        "description": "Watching"
+                    },
+                    "400": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Malformed body, unknown field or parameter, a kind outside directed|autonomous (code validation_error)"
+                    },
+                    "401": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "No key, or the key is invalid, expired or revoked (code unauthenticated)"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The key lacks write (code insufficient_scope)"
+                    },
+                    "404": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "No such issue within reach (code issue_not_found)"
+                    },
+                    "429": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Rate limited (code rate_limited, Retry-After)"
+                    },
+                    "500": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Internal error (code internal_error)"
+                    },
+                    "503": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The database is unavailable (code database_unavailable)"
+                    }
+                },
+                "security": [
+                    {
+                        "SkeinApiKey": [
+                            "write"
+                        ]
+                    }
+                ],
+                "summary": "Watch an issue",
+                "tags": [
+                    "Me"
+                ]
+            }
+        },
         "/api/v1/me": {
             "get": {
                 "description": "Returns the identity the API key acts as: the user (id, email, username, name, role), the executor of this request (agent: sessionId is the lock holder api:<keyId>[:<workerId>] of X-Skein-Worker-Id, with when it was first and last seen), the projects the user sees within the key's scope (at most 100, by name, with the user's role and the space; projectsTotal counts all of them and projectsTruncated marks the cut), the spaces the user is in within the key's scope (canCreateProject only where the key may create a project: the right manage and a scope of spaces or all) and whether the user is an instance admin.\n\nThe same answer as the MCP tool skein_whoami. Any key may call it, whatever its rights. Read-only; the request still counts as activity of its executor.",
@@ -8293,6 +9475,1078 @@
                     }
                 ],
                 "summary": "Get the caller",
+                "tags": [
+                    "Me"
+                ]
+            }
+        },
+        "/api/v1/me/watch-filters": {
+            "get": {
+                "description": "Returns the caller's subscription filters — the same operation as the MCP tool skein_watchers, action filter_list. A filter over a project outside the key's scope, or over any project under a narrower scope, is not listed. At most 10 per user: one page. Read-only.",
+                "operationId": "listWatchFilters",
+                "parameters": [
+                    {
+                        "description": "Comma-separated fields of each item to return (plus id)",
+                        "in": "query",
+                        "name": "fields",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.List-notifications_CustomWatcherDTO"
+                                }
+                            }
+                        },
+                        "description": "The filters"
+                    },
+                    "400": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Unknown parameter or field (code validation_error)"
+                    },
+                    "401": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "No key, or the key is invalid, expired or revoked (code unauthenticated)"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The key lacks the read right (code insufficient_scope)"
+                    },
+                    "429": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Rate limited (code rate_limited, Retry-After)"
+                    },
+                    "500": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Internal error (code internal_error)"
+                    },
+                    "503": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The database is unavailable (code database_unavailable)"
+                    }
+                },
+                "security": [
+                    {
+                        "SkeinApiKey": [
+                            "read"
+                        ]
+                    }
+                ],
+                "summary": "List the caller's subscription filters",
+                "tags": [
+                    "Me"
+                ]
+            },
+            "post": {
+                "description": "Creates a subscription filter of the caller — the same operation as the MCP tool skein_watchers, action filter_create. A project of the filter outside the key's scope, or missing, is 422 project_not_found (a reference of the body); a filter over any project (no projects) needs a key of scope all, else 403 forbidden; at most 10 filters (422 validation_error, cap). Side effects: the filter; no event.",
+                "operationId": "createWatchFilter",
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/publicapi.watchFilterBody",
+                                "summary": "body",
+                                "description": "The filter"
+                            }
+                        }
+                    },
+                    "description": "The filter",
+                    "required": true
+                },
+                "responses": {
+                    "201": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/notifications.CustomWatcherDTO"
+                                }
+                            }
+                        },
+                        "description": "The filter created"
+                    },
+                    "400": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Malformed body, unknown field or parameter, a kind outside directed|autonomous (code validation_error)"
+                    },
+                    "401": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "No key, or the key is invalid, expired or revoked (code unauthenticated)"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The key lacks write (code insufficient_scope); a filter over any project under a narrower scope (code forbidden)"
+                    },
+                    "422": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "A project of the filter is missing or out of reach (code project_not_found); the name or the filter is invalid, or the cap is reached (code validation_error)"
+                    },
+                    "429": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Rate limited (code rate_limited, Retry-After)"
+                    },
+                    "500": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Internal error (code internal_error)"
+                    },
+                    "503": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The database is unavailable (code database_unavailable)"
+                    }
+                },
+                "security": [
+                    {
+                        "SkeinApiKey": [
+                            "write"
+                        ]
+                    }
+                ],
+                "summary": "Create a subscription filter",
+                "tags": [
+                    "Me"
+                ]
+            }
+        },
+        "/api/v1/me/watch-filters/{filter}": {
+            "delete": {
+                "description": "Deletes the subscription filter of the path — the same operation as the MCP tool skein_watchers, action filter_delete. A filter that is missing, another user's or outside the key's scope stays and is refused with the code MCP answers, 422 validation_error. Side effects: no event.",
+                "operationId": "deleteWatchFilter",
+                "parameters": [
+                    {
+                        "description": "The filter's UUID",
+                        "in": "path",
+                        "name": "filter",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/publicapi.kindBody",
+                                "summary": "body",
+                                "description": "Options"
+                            }
+                        }
+                    },
+                    "description": "Options"
+                },
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.WatchFilterDeleted"
+                                }
+                            }
+                        },
+                        "description": "Deleted"
+                    },
+                    "400": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Malformed body, unknown field or parameter, a kind outside directed|autonomous (code validation_error)"
+                    },
+                    "401": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "No key, or the key is invalid, expired or revoked (code unauthenticated)"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The key lacks write (code insufficient_scope)"
+                    },
+                    "422": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "No such filter of the caller within reach, or the id is not a UUID (code validation_error, as MCP)"
+                    },
+                    "429": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Rate limited (code rate_limited, Retry-After)"
+                    },
+                    "500": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Internal error (code internal_error)"
+                    },
+                    "503": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The database is unavailable (code database_unavailable)"
+                    }
+                },
+                "security": [
+                    {
+                        "SkeinApiKey": [
+                            "write"
+                        ]
+                    }
+                ],
+                "summary": "Delete a subscription filter",
+                "tags": [
+                    "Me"
+                ]
+            }
+        },
+        "/api/v1/me/watching": {
+            "get": {
+                "description": "Returns the caller's subscriptions — issues, projects and filters, each collection its own page with its own cursor (issuesCursor, projectsCursor; the filters are at most 10 and come whole). Issues and projects run newest subscription first. Only the subscriptions inside the key's scope are listed: a filter over a project outside it, or over any project under a narrower scope, is not. The MCP tool skein_watchers, action list, answers the first 50 of each instead. Read-only.",
+                "operationId": "listWatching",
+                "parameters": [
+                    {
+                        "description": "Page size of each collection, 1..100 (default 50)",
+                        "in": "query",
+                        "name": "limit",
+                        "schema": {
+                            "type": "integer"
+                        }
+                    },
+                    {
+                        "description": "The nextCursor of the previous page of issues",
+                        "in": "query",
+                        "name": "issuesCursor",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "The nextCursor of the previous page of projects",
+                        "in": "query",
+                        "name": "projectsCursor",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "Comma-separated members to return",
+                        "in": "query",
+                        "name": "fields",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.WatchingLists"
+                                }
+                            }
+                        },
+                        "description": "The subscriptions"
+                    },
+                    "400": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Unknown parameter or field, limit out of range, a foreign cursor (code validation_error)"
+                    },
+                    "401": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "No key, or the key is invalid, expired or revoked (code unauthenticated)"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The key lacks the read right (code insufficient_scope)"
+                    },
+                    "429": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Rate limited (code rate_limited, Retry-After)"
+                    },
+                    "500": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Internal error (code internal_error)"
+                    },
+                    "503": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The database is unavailable (code database_unavailable)"
+                    }
+                },
+                "security": [
+                    {
+                        "SkeinApiKey": [
+                            "read"
+                        ]
+                    }
+                ],
+                "summary": "List the caller's subscriptions",
+                "tags": [
+                    "Me"
+                ]
+            }
+        },
+        "/api/v1/me/watching/issues/{issue}/read": {
+            "post": {
+                "description": "Marks read every unread notification carded to the issue of the path in the caller's Watching — with a subtree subscription, the descendants' events included — the same operation as the MCP tool skein_notifications, action mark_read_card. A key of a narrower scope marks only the events of issues inside its scope. A card that is not the caller's, missing or with nothing unread answers marked 0. Side effects: the notifications' read time; no event.",
+                "operationId": "markWatchingCardRead",
+                "parameters": [
+                    {
+                        "description": "The card's issue, hierarchical id",
+                        "in": "path",
+                        "name": "issue",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/publicapi.kindBody",
+                                "summary": "body",
+                                "description": "Options"
+                            }
+                        }
+                    },
+                    "description": "Options"
+                },
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/notifications.MarkCardReadResult"
+                                }
+                            }
+                        },
+                        "description": "Marked read"
+                    },
+                    "400": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Malformed body, unknown field or parameter, a kind outside directed|autonomous (code validation_error)"
+                    },
+                    "401": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "No key, or the key is invalid, expired or revoked (code unauthenticated)"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The key lacks write (code insufficient_scope)"
+                    },
+                    "404": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The path names no issue (code issue_not_found)"
+                    },
+                    "429": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Rate limited (code rate_limited, Retry-After)"
+                    },
+                    "500": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Internal error (code internal_error)"
+                    },
+                    "503": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The database is unavailable (code database_unavailable)"
+                    }
+                },
+                "security": [
+                    {
+                        "SkeinApiKey": [
+                            "write"
+                        ]
+                    }
+                ],
+                "summary": "Read a Watching card",
+                "tags": [
+                    "Me"
+                ]
+            }
+        },
+        "/api/v1/notifications": {
+            "get": {
+                "description": "Returns a page of the caller's notifications, newest first — the same operation as the MCP tool skein_notifications, action inbox: scope unread (default), all or archived; projectId narrows to one project. Only the notifications of the key's scope are listed. Keyset paging: pass nextCursor back as cursor while hasMore is true. The first page of a live scope also carries the caller's pending invitations. Read-only.",
+                "operationId": "listNotifications",
+                "parameters": [
+                    {
+                        "description": "unread (default), all or archived",
+                        "in": "query",
+                        "name": "scope",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "A project UUID",
+                        "in": "query",
+                        "name": "projectId",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "Page size, 1..100 (default 25)",
+                        "in": "query",
+                        "name": "limit",
+                        "schema": {
+                            "type": "integer"
+                        }
+                    },
+                    {
+                        "description": "The nextCursor of the previous page",
+                        "in": "query",
+                        "name": "cursor",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "Comma-separated fields of each item to return (plus id)",
+                        "in": "query",
+                        "name": "fields",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.NotificationPage"
+                                }
+                            }
+                        },
+                        "description": "A page of notifications"
+                    },
+                    "400": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Unknown parameter or field, limit out of range, a foreign cursor (code validation_error)"
+                    },
+                    "401": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "No key, or the key is invalid, expired or revoked (code unauthenticated)"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The key lacks the read right (code insufficient_scope)"
+                    },
+                    "422": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "An unknown scope or a projectId that is not a UUID (code validation_error)"
+                    },
+                    "429": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Rate limited (code rate_limited, Retry-After)"
+                    },
+                    "500": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Internal error (code internal_error)"
+                    },
+                    "503": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The database is unavailable (code database_unavailable)"
+                    }
+                },
+                "security": [
+                    {
+                        "SkeinApiKey": [
+                            "read"
+                        ]
+                    }
+                ],
+                "summary": "List the caller's notifications",
+                "tags": [
+                    "Me"
+                ]
+            }
+        },
+        "/api/v1/notifications/read-all": {
+            "post": {
+                "description": "Marks every unread, unarchived notification of the caller read, optionally of one project — the same operation as the MCP tool skein_notifications, action mark_read_all. A key of a narrower scope marks only the notifications inside its scope: the others stay unread. Answers how many were marked. Side effects: the notifications' read time; no event.",
+                "operationId": "markAllNotificationsRead",
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/publicapi.markAllBody",
+                                "summary": "body",
+                                "description": "Options"
+                            }
+                        }
+                    },
+                    "description": "Options"
+                },
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.NotificationsMarked"
+                                }
+                            }
+                        },
+                        "description": "Marked read"
+                    },
+                    "400": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Malformed body, unknown field or parameter, a kind outside directed|autonomous (code validation_error)"
+                    },
+                    "401": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "No key, or the key is invalid, expired or revoked (code unauthenticated)"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The key lacks write (code insufficient_scope)"
+                    },
+                    "422": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "projectId is not a UUID (code validation_error)"
+                    },
+                    "429": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Rate limited (code rate_limited, Retry-After)"
+                    },
+                    "500": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Internal error (code internal_error)"
+                    },
+                    "503": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The database is unavailable (code database_unavailable)"
+                    }
+                },
+                "security": [
+                    {
+                        "SkeinApiKey": [
+                            "write"
+                        ]
+                    }
+                ],
+                "summary": "Mark all notifications read",
+                "tags": [
+                    "Me"
+                ]
+            }
+        },
+        "/api/v1/notifications/{notification}/archive": {
+            "post": {
+                "description": "Moves the notification of the path into the archive — the same operation as the MCP tool skein_notifications, action archive. A notification that is not the caller's, missing or outside the key's scope is refused with the code MCP answers, 422 validation_error. Side effects: the notification's archive time; no event.",
+                "operationId": "archiveNotification",
+                "parameters": [
+                    {
+                        "description": "The notification's id",
+                        "in": "path",
+                        "name": "notification",
+                        "required": true,
+                        "schema": {
+                            "type": "integer"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/publicapi.kindBody",
+                                "summary": "body",
+                                "description": "Options"
+                            }
+                        }
+                    },
+                    "description": "Options"
+                },
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.NotificationArchived"
+                                }
+                            }
+                        },
+                        "description": "Archived"
+                    },
+                    "400": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Malformed body, unknown field or parameter, a kind outside directed|autonomous (code validation_error)"
+                    },
+                    "401": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "No key, or the key is invalid, expired or revoked (code unauthenticated)"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The key lacks write (code insufficient_scope)"
+                    },
+                    "422": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "No such notification of the caller within reach, or the id is not a positive integer (code validation_error, as MCP)"
+                    },
+                    "429": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Rate limited (code rate_limited, Retry-After)"
+                    },
+                    "500": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Internal error (code internal_error)"
+                    },
+                    "503": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The database is unavailable (code database_unavailable)"
+                    }
+                },
+                "security": [
+                    {
+                        "SkeinApiKey": [
+                            "write"
+                        ]
+                    }
+                ],
+                "summary": "Archive a notification",
+                "tags": [
+                    "Me"
+                ]
+            }
+        },
+        "/api/v1/notifications/{notification}/read": {
+            "post": {
+                "description": "Marks the notification of the path read — the same operation as the MCP tool skein_notifications, action mark_read. A notification that is not the caller's, missing or outside the key's scope is refused with the code MCP answers, 422 validation_error. Side effects: the notification's read time; no event.",
+                "operationId": "markNotificationRead",
+                "parameters": [
+                    {
+                        "description": "The notification's id",
+                        "in": "path",
+                        "name": "notification",
+                        "required": true,
+                        "schema": {
+                            "type": "integer"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/publicapi.kindBody",
+                                "summary": "body",
+                                "description": "Options"
+                            }
+                        }
+                    },
+                    "description": "Options"
+                },
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.NotificationsMarked"
+                                }
+                            }
+                        },
+                        "description": "Marked read"
+                    },
+                    "400": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Malformed body, unknown field or parameter, a kind outside directed|autonomous (code validation_error)"
+                    },
+                    "401": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "No key, or the key is invalid, expired or revoked (code unauthenticated)"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The key lacks write (code insufficient_scope)"
+                    },
+                    "422": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "No such notification of the caller within reach, or the id is not a positive integer (code validation_error, as MCP)"
+                    },
+                    "429": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Rate limited (code rate_limited, Retry-After)"
+                    },
+                    "500": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Internal error (code internal_error)"
+                    },
+                    "503": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The database is unavailable (code database_unavailable)"
+                    }
+                },
+                "security": [
+                    {
+                        "SkeinApiKey": [
+                            "write"
+                        ]
+                    }
+                ],
+                "summary": "Mark a notification read",
                 "tags": [
                     "Me"
                 ]
@@ -10291,6 +12545,648 @@
                 "summary": "Add a project member or change the role",
                 "tags": [
                     "Projects"
+                ]
+            }
+        },
+        "/api/v1/projects/{project}/watch": {
+            "delete": {
+                "description": "Unsubscribes the caller from the project of the path — the same operation as the MCP tool skein_watchers, action project_unwatch: the subscription row goes, its narrowing included. Side effects: no event.",
+                "operationId": "unwatchProject",
+                "parameters": [
+                    {
+                        "description": "The project's UUID, prefix or alias (URL-encoded)",
+                        "in": "path",
+                        "name": "project",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/publicapi.kindBody",
+                                "summary": "body",
+                                "description": "Options"
+                            }
+                        }
+                    },
+                    "description": "Options"
+                },
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProjectWatch"
+                                }
+                            }
+                        },
+                        "description": "Not watching"
+                    },
+                    "400": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Malformed body, unknown field or parameter, a kind outside directed|autonomous (code validation_error)"
+                    },
+                    "401": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "No key, or the key is invalid, expired or revoked (code unauthenticated)"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The key lacks write (code insufficient_scope)"
+                    },
+                    "404": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "No such project within reach (code project_not_found)"
+                    },
+                    "429": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Rate limited (code rate_limited, Retry-After)"
+                    },
+                    "500": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Internal error (code internal_error)"
+                    },
+                    "503": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The database is unavailable (code database_unavailable)"
+                    }
+                },
+                "security": [
+                    {
+                        "SkeinApiKey": [
+                            "write"
+                        ]
+                    }
+                ],
+                "summary": "Stop watching a project",
+                "tags": [
+                    "Me"
+                ]
+            },
+            "put": {
+                "description": "Subscribes the caller to the project of the path — the same operation as the MCP tool skein_watchers, action project_watch; eventTypes narrows the subscription to those event types of the subscription catalogue, [] clears the narrowing. Side effects: the subscription; no event.",
+                "operationId": "watchProject",
+                "parameters": [
+                    {
+                        "description": "The project's UUID, prefix or alias (URL-encoded)",
+                        "in": "path",
+                        "name": "project",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/publicapi.watchProjectBody",
+                                "summary": "body",
+                                "description": "Options"
+                            }
+                        }
+                    },
+                    "description": "Options"
+                },
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProjectWatch"
+                                }
+                            }
+                        },
+                        "description": "Watching"
+                    },
+                    "400": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Malformed body, unknown field or parameter, a kind outside directed|autonomous (code validation_error)"
+                    },
+                    "401": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "No key, or the key is invalid, expired or revoked (code unauthenticated)"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The key lacks write (code insufficient_scope)"
+                    },
+                    "404": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "No such project within reach (code project_not_found)"
+                    },
+                    "422": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "An unknown or undeliverable event type (code validation_error)"
+                    },
+                    "429": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Rate limited (code rate_limited, Retry-After)"
+                    },
+                    "500": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Internal error (code internal_error)"
+                    },
+                    "503": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The database is unavailable (code database_unavailable)"
+                    }
+                },
+                "security": [
+                    {
+                        "SkeinApiKey": [
+                            "write"
+                        ]
+                    }
+                ],
+                "summary": "Watch a project",
+                "tags": [
+                    "Me"
+                ]
+            }
+        },
+        "/api/v1/reminders": {
+            "get": {
+                "description": "Returns the caller's reminders, ringing before armed — the same operation as the MCP tool skein_remind, action list: state ringing, armed or all (default); project, a handle, narrows the list. ringingTaskCount is the badge across projects. Reminders on issues outside the key's scope are neither listed nor counted. One page: hasMore is false. Read-only.",
+                "operationId": "listReminders",
+                "parameters": [
+                    {
+                        "description": "ringing, armed or all (default)",
+                        "in": "query",
+                        "name": "state",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "A project handle",
+                        "in": "query",
+                        "name": "project",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "Comma-separated fields of each item to return",
+                        "in": "query",
+                        "name": "fields",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ReminderPage"
+                                }
+                            }
+                        },
+                        "description": "The reminders"
+                    },
+                    "400": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Unknown parameter or field (code validation_error)"
+                    },
+                    "401": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "No key, or the key is invalid, expired or revoked (code unauthenticated)"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The key lacks the read right (code insufficient_scope)"
+                    },
+                    "422": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "An unknown state (code validation_error); the project is missing or out of reach (code project_not_found)"
+                    },
+                    "429": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Rate limited (code rate_limited, Retry-After)"
+                    },
+                    "500": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Internal error (code internal_error)"
+                    },
+                    "503": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The database is unavailable (code database_unavailable)"
+                    }
+                },
+                "security": [
+                    {
+                        "SkeinApiKey": [
+                            "read"
+                        ]
+                    }
+                ],
+                "summary": "List the caller's reminders",
+                "tags": [
+                    "Me"
+                ]
+            }
+        },
+        "/api/v1/reminders/{reminder}": {
+            "delete": {
+                "description": "Dismisses the reminder of the path — the same operation as the MCP tool skein_remind, action dismiss. A reminder that is not the caller's, missing or on an issue outside the key's scope is 404 reminder_not_found. Side effects: reminder.dismissed.",
+                "operationId": "dismissReminder",
+                "parameters": [
+                    {
+                        "description": "The reminder's UUID",
+                        "in": "path",
+                        "name": "reminder",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/publicapi.dismissBody",
+                                "summary": "body",
+                                "description": "Options"
+                            }
+                        }
+                    },
+                    "description": "Options"
+                },
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ReminderDismissed"
+                                }
+                            }
+                        },
+                        "description": "Dismissed"
+                    },
+                    "400": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Malformed body, unknown field or parameter, a kind outside directed|autonomous (code validation_error)"
+                    },
+                    "401": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "No key, or the key is invalid, expired or revoked (code unauthenticated)"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The key lacks write (code insufficient_scope)"
+                    },
+                    "404": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "No such reminder of the caller within reach (code reminder_not_found)"
+                    },
+                    "422": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The id is not a UUID (code validation_error)"
+                    },
+                    "429": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Rate limited (code rate_limited, Retry-After)"
+                    },
+                    "500": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Internal error (code internal_error)"
+                    },
+                    "503": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The database is unavailable (code database_unavailable)"
+                    }
+                },
+                "security": [
+                    {
+                        "SkeinApiKey": [
+                            "write"
+                        ]
+                    }
+                ],
+                "summary": "Dismiss a reminder",
+                "tags": [
+                    "Me"
+                ]
+            }
+        },
+        "/api/v1/reminders/{reminder}/snooze": {
+            "post": {
+                "description": "Moves the reminder of the path later — the same operation as the MCP tool skein_remind, action snooze: exactly one of by (a duration from now) and until (RFC 3339). A reminder that is not the caller's, missing or on an issue outside the key's scope is 404 reminder_not_found. Side effects: reminder.snoozed.",
+                "operationId": "snoozeReminder",
+                "parameters": [
+                    {
+                        "description": "The reminder's UUID",
+                        "in": "path",
+                        "name": "reminder",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/publicapi.snoozeBody",
+                                "summary": "body",
+                                "description": "When"
+                            }
+                        }
+                    },
+                    "description": "When",
+                    "required": true
+                },
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/reminders.Reminder"
+                                }
+                            }
+                        },
+                        "description": "The reminder"
+                    },
+                    "400": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Malformed body, unknown field or parameter, a kind outside directed|autonomous (code validation_error)"
+                    },
+                    "401": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "No key, or the key is invalid, expired or revoked (code unauthenticated)"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The key lacks write (code insufficient_scope)"
+                    },
+                    "404": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "No such reminder of the caller within reach (code reminder_not_found)"
+                    },
+                    "422": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Neither or both of by and until, or one is invalid; the id is not a UUID (code validation_error)"
+                    },
+                    "429": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Rate limited (code rate_limited, Retry-After)"
+                    },
+                    "500": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Internal error (code internal_error)"
+                    },
+                    "503": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The database is unavailable (code database_unavailable)"
+                    }
+                },
+                "security": [
+                    {
+                        "SkeinApiKey": [
+                            "write"
+                        ]
+                    }
+                ],
+                "summary": "Snooze a reminder",
+                "tags": [
+                    "Me"
                 ]
             }
         },
