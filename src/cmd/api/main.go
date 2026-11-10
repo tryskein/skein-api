@@ -481,7 +481,7 @@ func main() {
 	}
 
 	// R4.2 — S3 client (optional). When S3_URL is empty the
-	// attachments subsystem is disabled: every /api/v1/.../attachments/*
+	// attachments subsystem is disabled: every /ui/v1/.../attachments/*
 	// endpoint returns 503 and the cleanup goroutine is not started.
 	// This mirrors how NATS_URL gates the outbox dispatcher, so an
 	// offline dev environment can still bring up the rest of the API.
@@ -578,7 +578,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	// projectsHandler reuses the same embedder so GET /api/v1/projects?q=
+	// projectsHandler reuses the same embedder so GET /ui/v1/projects?q=
 	// can do FTS + semantic rerank when the FTS layer returns thin
 	// results. typed-nil dance: avoid passing a nil *search.Embedder
 	// boxed in an interface (the classic Go gotcha where iface != nil
@@ -632,7 +632,7 @@ func main() {
 	bulkHandler := handler.NewBulkHandler(pool, issuesStore)
 	// R3.3 — caller-scoped /me/assigned-by + /me/assigned-to wrappers.
 	issuesMeHandler := handler.NewIssuesMeHandler(pool, issuesStore)
-	// Sc3 — cross-project /api/v1/issues for the "All projects" Tasks
+	// Sc3 — cross-project /ui/v1/issues for the "All projects" Tasks
 	// column. Shares the same embedder as the projects FTS path so
 	// semantic rerank lights up when the FTS layer returns thin results.
 	// typed-nil dance — see the projectsEmbedder block above; we mirror
@@ -682,7 +682,7 @@ func main() {
 	}
 	usersStore := users.NewStore(pool, cfg.BcryptCost, apikeysStore, cfg.AuthMode, cfg.BreakGlassAdmin, pwnedChecker)
 	usersStore.SetSpaceMemberLimit(cfg.SpaceMemberLimit)
-	// projectsStore feeds GET /api/v1/me/memberships (R3.2c).
+	// projectsStore feeds GET /ui/v1/me/memberships (R3.2c).
 	usersHandler := handler.NewUsersHandler(pool, usersStore, projectsStore)
 
 	// R4.2 — attachments handler. s3Access is nil when S3_URL is
@@ -1407,9 +1407,9 @@ func buildRouter(
 	accountsH := handler.NewAccountsHandler(accountsSvc)
 
 	// R2.1 — MCP Streamable HTTP endpoint. Sits at the root, NOT under
-	// /api/v1/*: MCP clients are not browser-cookie-authenticated and
+	// the internal API prefix: MCP clients are not browser-cookie-authenticated and
 	// the BFF proxies the /mcp path on its own without going through
-	// the cookie-protected /api/v1/* path. Auth here is X-Skein-Api-Key
+	// the cookie-protected internal API. Auth here is X-Skein-Api-Key
 	// (resolves to a user) gated on top of the channel-secret check.
 	//
 	// R2.2a — read tools depend on the issues, dependencies, projects
@@ -1417,7 +1417,7 @@ func buildRouter(
 	// it in the registration closure so the existing Setup seam
 	// (callback that takes (server, pool)) doesn't need to change.
 	// projectsEmbedder is the same embedder instance used by the
-	// HTTP /api/v1/projects handler for FTS+semantic rerank. We pull
+	// HTTP /ui/v1/projects handler for FTS+semantic rerank. We pull
 	// it from searchSvc rather than parameterising buildRouter — the
 	// search service is already in scope here. typed-nil dance: when
 	// searchSvc.Embedder() returns nil we leave projectsEmbedder as
@@ -1487,8 +1487,9 @@ func buildRouter(
 		// challenge is attached here too — and the MCP authorization spec
 		// requires the header on a 401 from an MCP server unconditionally,
 		// not "on the interesting 401s". Two doors, one behaviour. The other
-		// three mounts of this middleware (/api/v1, /agent/v1 and the OIDC
-		// provision route) pass an empty challenge: their 401s are not
+		// mounts of this middleware (the internal API prefixes /ui/v1 and,
+		// for the transitional release, /api/v1, and /agent/v1) pass an
+		// empty challenge: their 401s are not
 		// protected-resource failures and must not advertise one.
 		r.Use(handler.RequireInternalSecret(cfg.InternalSecret, oauthChallenge))
 		// sk-304 — the api-key gate's 401 carries the RFC 9728 §5.1
@@ -1497,7 +1498,7 @@ func buildRouter(
 		// discovery route and the well-known probe only a fallback, so this
 		// removes the client's guess between the root and path-aware
 		// documents. The channel-secret gate above deliberately does NOT
-		// carry it: it is shared with /api/v1 and /agent/v1, whose 401s are
+		// carry it: it is shared with the internal API and /agent/v1, whose 401s are
 		// not OAuth-protected-resource failures, and only the BFF ever
 		// trips it.
 		r.Use(auth.RequireAPIKey(pool, cfg.BcryptCost, oauthChallenge))
@@ -1505,7 +1506,7 @@ func buildRouter(
 	})
 
 	// sk-142.4 — agent task-monitor data plane. SIBLING route group to /mcp,
-	// NOT under /api/v1: monitor-token runners are not browser-cookie
+	// NOT under the internal API prefix: monitor-token runners are not browser-cookie
 	// callers, and the BFF passes /agent/v1 through on its own door (T3).
 	// Two auth gates, composed like /mcp: the channel secret (only the BFF
 	// holds it) then RequireMonitorToken, which accepts ONLY skm_ tokens
@@ -1573,7 +1574,7 @@ func buildRouter(
 		r.With(handler.RequireUser).Post("/search/lookup-id-batch", searchH.LookupIDBatch)
 
 		// sk-17 — dashboard surface (scoring matrix + live feed). Two
-		// endpoints sit at the /api/v1 top-level (not under /me)
+		// endpoints sit at the top level of the internal API (not under /me)
 		// because the URL is consumed by a dedicated /activity SPA
 		// route and the convention across the codebase is that
 		// org-wide cross-project surfaces (/search, /issues, /search/
@@ -1699,7 +1700,7 @@ func buildRouter(
 
 			// R4.2 — attachment listing + upload-URL minting under the
 			// same issue-scoped path. Confirm / download / delete live
-			// under /api/v1/attachments/{id} below since they need
+			// under /ui/v1/attachments/{id} below since they need
 			// only the attachment uuid.
 			r.Get("/attachments", attachmentsH.List)
 			r.Post("/attachments/upload-url", attachmentsH.UploadURL)

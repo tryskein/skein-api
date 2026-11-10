@@ -139,8 +139,9 @@ starts either way and logs a warning naming the variable.
 #### `SKEIN_INTERNAL_SECRET`
 
 - **Purpose:** shared secret that authenticates skein-web (the BFF) to
-  skein-api. Sent as the `X-Skein-Internal-Secret` header on every
-  `/api/v1/*` request and checked by `RequireInternalSecret`.
+  skein-api. Sent as the `X-Skein-Internal-Secret` header on every request
+  to the internal API (`/ui/v1/*`, and `/api/v1/*` during the transitional
+  release that accepts both prefixes) and checked by `RequireInternalSecret`.
 - **Required:** **yes** · **Default:** none · **Format:** opaque string,
   **at least 16 characters**.
 - **If unset, or shorter than 16 characters:** startup aborts
@@ -478,7 +479,7 @@ rows present, `auth.Bootstrap` is a no-op regardless of what is set here.
 - **If unset:** 1m.
 - **Note:** none of the three `SKEIN_NUDGE_*` variables switch the mechanic on or
   off. Whether a person receives nudges is a per-user setting
-  (`PUT /api/v1/me/review-prefs`); these only set the pace of the sweep, so an
+  (`PUT /ui/v1/me/review-prefs`); these only set the pace of the sweep, so an
   empty environment leaves the worker running at factory values, not disabled.
 
 #### `SKEIN_NUDGE_BATCH_SIZE`
@@ -529,7 +530,8 @@ rows present, `auth.Bootstrap` is a no-op regardless of what is set here.
 
 #### `SKEIN_AUTH_MODE`
 
-- **Purpose:** which identity source authenticates `/api/v1/*`.
+- **Purpose:** which identity source authenticates the internal API
+  (`/ui/v1/*`).
   `local` — password login through `/auth/login`.
   `keycloak` — SSO only; `/auth/login` answers `410 Gone`.
   `hybrid` — OIDC for internal users *and* password login for accounts marked
@@ -586,7 +588,7 @@ rows present, `auth.Bootstrap` is a no-op regardless of what is set here.
 #### `SKEIN_VAPID_PUBLIC`
 
 - **Purpose:** public half of the P-256 VAPID keypair used to sign Web Push
-  requests; also handed to the browser (`GET /api/v1/push/config`) as the
+  requests; also handed to the browser (`GET /ui/v1/push/config`) as the
   `applicationServerKey`.
 - **Required:** no · **Default:** none (push disabled) · **Format:** base64url,
   as produced by `webpush.GenerateVAPIDKeys()`.
