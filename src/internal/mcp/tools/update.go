@@ -715,7 +715,7 @@ func mapUpdateError(ctx context.Context, err error, userID uuid.UUID, issueID, c
 	var verr *issues.ErrVersionConflict
 	if errors.Is(err, issues.ErrSerializationRetry) {
 		return skmcp.ToolError(ErrCodeSerializationRetry,
-			"the write transaction lost a serialization race; re-read the issue before retrying a multi-step update",
+			"the write transaction lost a serialization race; nothing was written — resend the call unchanged",
 			map[string]any{"id": issueID})
 	}
 	if errors.As(err, &verr) {

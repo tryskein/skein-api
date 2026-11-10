@@ -82,9 +82,9 @@ const cardUnavailableNote = " If the write applied but its card could not be rea
 // close refuses that replay. force=true requires a re-read first.
 //
 // Single-tool update also uses this classifier. Its cancellation message
-// requires a re-read because earlier sub-transactions may have committed;
-// resend only missing changes. Batch update uses updateRowContextStop for
-// its partial-step message.
+// requires a re-read because the change may have committed as a whole
+// before the stop was seen. Batch update uses updateRowContextStop for its
+// row message.
 func contextStop(parent, loop context.Context, err error) (code, message string, ok bool) {
 	if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
 		return "", "", false

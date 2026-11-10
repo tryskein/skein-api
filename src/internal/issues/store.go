@@ -166,8 +166,8 @@ var ErrAlreadyClaimed = errors.New("issue is already claimed by another session"
 // transaction exhausted its retries against a retryable abort (SQLSTATE
 // 40001 serialization_failure or 40P01 deadlock_detected — see
 // isRetryableTxError). The transaction rolled back, so the issue is
-// untouched by that transaction. A multi-step update may have committed earlier
-// transactions and must re-read before resending. Mirrors
+// untouched by that transaction; an update of an issue is one transaction
+// (UpdateIssue), so nothing of it was written. Mirrors
 // dependencies.ErrSerializationRetry; maps to the "serialization_retry"
 // tool code.
 //
@@ -3787,8 +3787,8 @@ func (s *Store) currentVersion(ctx context.Context, id string) (int, error) {
 //
 // The origin metric still classifies observed serialization aborts; its
 // serialization_derived bucket now corresponds to ErrSerializationRetry.
-// The failed transaction is rolled back. A higher-level multi-step update
-// may have committed earlier transactions and must re-read before replaying.
+// The failed transaction is rolled back; a change of an issue is one
+// transaction (UpdateIssue), so nothing of it was written.
 func (s *Store) degradeSerializationAbort(ctx context.Context, err error, op, id string, expectedVersion *int) error {
 	if expectedVersion != nil && isRetryableTxError(err) {
 		if ctx.Err() != nil {

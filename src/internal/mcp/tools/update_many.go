@@ -437,11 +437,11 @@ func updateRowContextStop(parent, loop context.Context, err error, issueID strin
 	if !ok {
 		return nil
 	}
-	message := "the request ended while this row was in progress; steps of its update may already " +
-		"be applied — re-read the issue before repeating it"
+	message := "the request ended while this row was in progress; the row may have committed as a " +
+		"whole — re-read the issue before resending it"
 	if code == ErrCodeBatchDeadlineExceeded {
-		message = "the batch reached its server-side deadline while this row was in progress; steps of " +
-			"its update may already be applied — re-read the issue, then resend what is still missing"
+		message = "the batch reached its server-side deadline while this row was in progress; the row " +
+			"may have committed as a whole — re-read the issue before resending it"
 	}
 	return &batchErrorDTO{
 		Code:    code,
@@ -490,7 +490,7 @@ func classifyUpdateError(ctx context.Context, err error, tool, userID, issueID s
 	if errors.Is(err, issues.ErrSerializationRetry) {
 		return &batchErrorDTO{
 			Code:    ErrCodeSerializationRetry,
-			Message: "the write transaction lost a serialization race; re-read the issue and retry only unapplied changes",
+			Message: "the write transaction lost a serialization race; nothing was written — resend the row unchanged",
 			Details: map[string]any{"id": issueID},
 		}
 	}
