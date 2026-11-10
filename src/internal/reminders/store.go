@@ -506,13 +506,17 @@ type ListPageArgs struct {
 // than an armed one), so a page boundary does not move as time passes.
 // more reports a further page.
 func (s *Store) ListPage(ctx context.Context, ownerID uuid.UUID, a ListPageArgs, now time.Time) (page []Reminder, more bool, err error) {
-	args := []any{ownerID, now.UTC(), a.Limit + 1}
+	args := []any{ownerID, a.Limit + 1}
 	where := ""
+	// now is bound only when the filter reads it: an unused parameter has
+	// no type the server can infer.
 	switch a.Filter {
 	case FilterRinging:
-		where += ` AND r.remind_at <= $2`
+		args = append(args, now.UTC())
+		where += fmt.Sprintf(` AND r.remind_at <= $%d`, len(args))
 	case FilterArmed:
-		where += ` AND r.remind_at > $2`
+		args = append(args, now.UTC())
+		where += fmt.Sprintf(` AND r.remind_at > $%d`, len(args))
 	}
 	if a.ProjectID != nil {
 		args = append(args, *a.ProjectID)
@@ -530,7 +534,7 @@ func (s *Store) ListPage(ctx context.Context, ownerID uuid.UUID, a ListPageArgs,
    AND `+authz.VisibleNowSetExpr("$1::uuid", "i.project_id")+where+`
    AND `+keyed+`
  ORDER BY r.remind_at ASC, r.id ASC
- LIMIT $3`, args...)
+ LIMIT $2`, args...)
 	if err != nil {
 		return nil, false, fmt.Errorf("paging reminders: %w", err)
 	}
