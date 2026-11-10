@@ -78,9 +78,11 @@ func RegisterUser(s *server.MCPServer, store *users.Store, pool *pgxpool.Pool, s
 	tool := mcpgo.NewTool(
 		"skein_user",
 		mcpgo.WithDescription(
-			"Instance-wide user accounts. ADMIN ONLY — every action returns "+
-				"`not_admin` to a non-admin caller, before any database "+
-				"access. action=\"update\" covers both the patch "+
+			"Instance-wide user accounts. ADMIN ONLY — every action needs "+
+				"an API key with the `admin` right, which only an instance "+
+				"admin's key carries; any other key gets `insufficient_scope` "+
+				"(`required: admin`) before any database access. "+
+				"action=\"update\" covers both the patch "+
 				"(name / role) and the deactivate / reactivate "+
 				"flip: deactivating cascades into API key revocation in the "+
 				"same transaction and is reversible with deactivated=false. "+
@@ -114,7 +116,7 @@ func RegisterUser(s *server.MCPServer, store *users.Store, pool *pgxpool.Pool, s
 			mcpgo.Description("Initial password, at least 8 characters. Required for create. Not accepted by update: an existing user's password is changed only in the web UI (`forbidden`). The user should rotate the initial password on first sign-in."),
 		),
 		mcpgo.WithString("role",
-			mcpgo.Description("Role of the account: `user`. Required for create; on update, omit to leave it unchanged. The instance admin role is never created, assigned or removed here — only in the web UI (`forbidden`); a concurrent change after three attempts returns `concurrent_change` (retry)."),
+			mcpgo.Description("Role of the account. Required for create; on update, omit to leave it unchanged. `admin` is accepted only as the unchanged role of an existing admin: the instance admin role is never created, assigned or removed here — only in the web UI (`forbidden`); a concurrent change after three attempts returns `concurrent_change` (retry)."),
 			mcpgo.Enum("admin", "user"),
 		),
 		mcpgo.WithBoolean("is_external",
