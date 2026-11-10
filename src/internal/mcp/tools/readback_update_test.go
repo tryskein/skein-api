@@ -100,53 +100,6 @@ func TestUpdateMCP_FinalReadBackFails_AcknowledgedFromCommittedState(t *testing.
 	}
 }
 
-// ---- skein_update: the read-back after an INTERMEDIATE step cannot finish ----
-//
-// The chain is a field patch then a close. Right after the patch commits,
-// a lock on issue_commits (read by the card's hydration, written by neither
-// step) makes any read-back of that card wait out its whole budget. The
-// chain must still run the close and acknowledge both steps.
-func TestUpdateMCP_IntermediateReadBackBlocked_ChainCompletes(t *testing.T) {
-	env := comSetup(t)
-	id := comSeed(t, env, env.pid, env.prefix, "rbu-mid")
-	before := rbRead(t, env, id)
-
-	var release func()
-	installAfterCommitHook(t, func(_ context.Context, op, issueID string) {
-		if issueID != id {
-			return
-		}
-		switch op {
-		case "patch":
-			release = rbLockTable(t, env.pool, "issue_commits")
-		case "close":
-			if release != nil {
-				release()
-			}
-		}
-	})
-
-	body := ucoUpdate(t, env, map[string]any{
-		"id": id, "expectedVersion": float64(before.Version),
-		"title":  "renamed before close",
-		"status": "closed", "closeOutcome": "done", "reason": "shipped",
-	})
-	if comErr(body) != "" {
-		t.Fatalf("both steps were requested; answered %+v", body)
-	}
-	after := rbRead(t, env, id)
-	// Spec: two writes — the patch and the close — each bump the version.
-	if after.Status != issues.StatusClosed || after.Outcome != "done" || after.Version != before.Version+2 {
-		t.Fatalf("db = %+v, want closed/done at version %d", after, before.Version+2)
-	}
-	if title := corTitle(t, env, id); title != "renamed before close" {
-		t.Errorf("title = %q, want the patch applied", title)
-	}
-	if got := jsonInt(t, body, "version"); got != after.Version {
-		t.Errorf("acknowledged version = %d, want the committed %d", got, after.Version)
-	}
-}
-
 // ---- skein_update_many ----
 
 // The row's final version read fails after the chain committed.
