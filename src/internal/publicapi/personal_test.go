@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"slices"
 	"strconv"
 	"testing"
 
@@ -446,5 +447,78 @@ func TestPersonal_ObjectsOfThePath(t *testing.T) {
 	}
 	if ref := rg.tool(kp, "skein_notifications", map[string]any{"action": "mark_read", "notificationId": 999999999}); ref.code != "validation_error" {
 		t.Errorf("MCP mark_read of a missing notification = %q, want validation_error (unchanged)", ref.code)
+	}
+}
+
+// TestPersonal_ListRemindersPages — R8-01 (spec «General rules»: lists are a
+// keyset cursor — items, nextCursor, hasMore; limit out of range — 400).
+// limit 1 over three reminders, two of them at the same time, gives each
+// reminder once, the soonest first, with a cursor while hasMore; the badge
+// counts every ringing reminder on every page; a project narrows the pages;
+// limit 101 and a foreign cursor are 400. Red when a page repeats or loses
+// a reminder, or the list is not paged.
+func TestPersonal_ListRemindersPages(t *testing.T) {
+	rg, w := seedPersonalWorld(t)
+	key := w.key(w.owner, apikeys.LevelRead)
+	first, second, third := testsupport.SeedReminder(t, w.pool, w.pIssue, w.owner),
+		testsupport.SeedReminder(t, w.pool, w.issue("tie"), w.owner),
+		testsupport.SeedReminder(t, w.pool, w.qIssue, w.owner)
+	w.exec(`UPDATE reminders SET remind_at = now() - interval '2 hours' WHERE id = $1`, first)
+	w.exec(`UPDATE reminders SET remind_at = now() + interval '1 day' WHERE id = ANY($1)`, []uuid.UUID{second, third})
+	want := map[string]bool{first.String(): true, second.String(): true, third.String(): true}
+
+	collect := func(query string) []string {
+		t.Helper()
+		out, cursor := []string{}, ""
+		for i := 0; i < 10; i++ {
+			q := "limit=1" + query
+			if cursor != "" {
+				q += "&cursor=" + cursor
+			}
+			c := rg.rest(key, http.MethodGet, "/api/v1/reminders?"+q, nil, nil)
+			wantOK(t, "listReminders "+q, c, http.StatusOK)
+			body := c.json(t)
+			if n, _ := body["ringingTaskCount"].(float64); n != 1 {
+				t.Errorf("ringingTaskCount on a page = %v, want 1", body["ringingTaskCount"])
+			}
+			items, _ := body["items"].([]any)
+			if len(items) > 1 {
+				t.Fatalf("a page of %d at limit 1", len(items))
+			}
+			for _, it := range items {
+				out = append(out, it.(map[string]any)["reminderId"].(string))
+			}
+			next, _ := body["nextCursor"].(string)
+			if more, _ := body["hasMore"].(bool); !more {
+				return out
+			}
+			if next == "" {
+				t.Fatalf("hasMore without a cursor")
+			}
+			cursor = next
+		}
+		t.Fatalf("no last page")
+		return nil
+	}
+	got := collect("")
+	seen := map[string]int{}
+	for _, id := range got {
+		seen[id]++
+	}
+	for id := range want {
+		if seen[id] != 1 {
+			t.Errorf("reminder %s listed %d times over %v, want once", id, seen[id], got)
+		}
+	}
+	if len(got) == 0 || got[0] != first.String() {
+		t.Errorf("the first page is %v, want the ringing reminder %s first", got, first)
+	}
+	if inP := collect("&project=" + w.project.String()); len(inP) != 2 || slices.Contains(inP, third.String()) {
+		t.Errorf("the pages of project P = %v, want the two reminders of P", inP)
+	}
+	for _, q := range []string{"limit=101", "cursor=not-a-cursor"} {
+		if c := rg.rest(key, http.MethodGet, "/api/v1/reminders?"+q, nil, nil); c.status != http.StatusBadRequest || c.code() != "validation_error" {
+			t.Errorf("%s: %d %s, want 400 validation_error", q, c.status, c.body)
+		}
 	}
 }

@@ -144,15 +144,7 @@ func RemindList(ctx context.Context, d Deps, userID uuid.UUID, a Args) (Reminder
 		if projectFilter != nil && r.ProjectID != *projectFilter {
 			continue
 		}
-		item := ReminderListItem{
-			ReminderID: r.ID.String(), IssueID: r.IssueID, IssueTitle: r.IssueTitle,
-			ProjectID: r.ProjectID.String(), RemindAt: r.RemindAt.Format(time.RFC3339),
-			State: string(r.State), SnoozeCount: r.SnoozeCount,
-		}
-		if r.NotifiedAt != nil {
-			item.NotifiedAt = r.NotifiedAt.Format(time.RFC3339)
-		}
-		items = append(items, item)
+		items = append(items, reminderItem(r))
 	}
 	slog.InfoContext(ctx, logMessage(ctx, "ok"), "tool", remindTool, "action", "list",
 		"userId", userID.String(), "count", len(items),
@@ -271,4 +263,73 @@ func RemindDismiss(ctx context.Context, d Deps, userID uuid.UUID, a Args) (uuid.
 	slog.InfoContext(ctx, logMessage(ctx, "ok"), "tool", remindTool, "action", "dismiss",
 		"userId", userID.String(), "reminderId", id.String(), "latencyMs", time.Since(start).Milliseconds())
 	return id, nil
+}
+
+// reminderItem is the list row of a reminder.
+func reminderItem(r reminders.Reminder) ReminderListItem {
+	item := ReminderListItem{
+		ReminderID: r.ID.String(), IssueID: r.IssueID, IssueTitle: r.IssueTitle,
+		ProjectID: r.ProjectID.String(), RemindAt: r.RemindAt.Format(time.RFC3339),
+		State: string(r.State), SnoozeCount: r.SnoozeCount,
+	}
+	if r.NotifiedAt != nil {
+		item.NotifiedAt = r.NotifiedAt.Format(time.RFC3339)
+	}
+	return item
+}
+
+// ReminderPage is a page of RemindPage.
+type ReminderPage struct {
+	Items []ReminderListItem
+	// Last is the position of the last row, for the next page; More reports
+	// one.
+	Last reminders.ListPosition
+	More bool
+	// RingingTaskCount is the badge over every reminder of the scope, not
+	// of the page.
+	RingingTaskCount int
+}
+
+// RemindPage is RemindList one keyset page at a time (listReminders; MCP's
+// list answers every reminder at once): state and project as RemindList,
+// the project narrowing in the query; after continues a page; limit rows.
+func RemindPage(ctx context.Context, d Deps, userID uuid.UUID, a Args, after *reminders.ListPosition, limit int) (ReminderPage, *Failure) {
+	start := time.Now()
+	filter, ok := reminders.ParseListFilter(strings.TrimSpace(a.GetString("state", "")))
+	if !ok {
+		return ReminderPage{}, Fail(ErrCodeValidationError, "state must be one of ringing | armed | all", nil)
+	}
+	args := reminders.ListPageArgs{Filter: filter, After: after, Limit: limit}
+	if raw := strings.TrimSpace(a.GetString("project", "")); raw != "" {
+		pid, err := ResolveProjectHandle(ctx, d.Pool, d.Projects, raw, userID)
+		if err != nil {
+			return ReminderPage{}, ProjectFailure(err)
+		}
+		args.ProjectID = &pid
+	}
+	now := time.Now().UTC()
+	fail := func(err error) (ReminderPage, *Failure) {
+		slog.ErrorContext(ctx, logMessage(ctx, "error"), "tool", remindTool, "action", "list",
+			"reason", "store list failed", "userId", userID.String(), "error", err.Error())
+		return ReminderPage{}, Fail(ErrCodeInternalError, "failed to list reminders", nil)
+	}
+	rows, more, err := d.Reminders.ListPage(ctx, userID, args, now)
+	if err != nil {
+		return fail(err)
+	}
+	count, err := d.Reminders.CountRingingTasks(ctx, userID, now)
+	if err != nil {
+		return fail(err)
+	}
+	out := ReminderPage{Items: make([]ReminderListItem, 0, len(rows)), More: more, RingingTaskCount: count}
+	for _, r := range rows {
+		out.Items = append(out.Items, reminderItem(r))
+	}
+	if n := len(rows); n > 0 {
+		out.Last = reminders.ListPosition{RemindAt: rows[n-1].RemindAt, ID: rows[n-1].ID}
+	}
+	slog.InfoContext(ctx, logMessage(ctx, "ok"), "tool", remindTool, "action", "list",
+		"userId", userID.String(), "count", len(out.Items),
+		"ringingTaskCount", count, "latencyMs", time.Since(start).Milliseconds())
+	return out, nil
 }

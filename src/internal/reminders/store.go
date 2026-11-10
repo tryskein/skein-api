@@ -482,3 +482,72 @@ func reminderInKeyScope(ctx context.Context, ownerID uuid.UUID, args *[]any) str
 	return "EXISTS (SELECT 1 FROM issues ki WHERE ki.id = reminders.issue_id AND " +
 		key.Expr("ki.project_id", authz.Placeholders(args)) + ")"
 }
+
+// ListPosition is the keyset position of a page of ListPage: the last
+// row's remind_at and id.
+type ListPosition struct {
+	RemindAt time.Time
+	ID       uuid.UUID
+}
+
+// ListPageArgs are the arguments of ListPage. ProjectID narrows to one
+// project; After continues after a position; Limit is the page size.
+type ListPageArgs struct {
+	Filter    ListFilter
+	ProjectID *uuid.UUID
+	After     *ListPosition
+	Limit     int
+}
+
+// ListPage is ListForUser one keyset page at a time (sk-878.3.1 T027,
+// listReminders): the same rows — the caller's reminders on issues he sees
+// now and inside the key's scope — in remind_at, id order, which is the
+// ringing-first order of ListForUser (a ringing reminder rings no later
+// than an armed one), so a page boundary does not move as time passes.
+// more reports a further page.
+func (s *Store) ListPage(ctx context.Context, ownerID uuid.UUID, a ListPageArgs, now time.Time) (page []Reminder, more bool, err error) {
+	args := []any{ownerID, now.UTC(), a.Limit + 1}
+	where := ""
+	switch a.Filter {
+	case FilterRinging:
+		where += ` AND r.remind_at <= $2`
+	case FilterArmed:
+		where += ` AND r.remind_at > $2`
+	}
+	if a.ProjectID != nil {
+		args = append(args, *a.ProjectID)
+		where += fmt.Sprintf(` AND i.project_id = $%d`, len(args))
+	}
+	if a.After != nil {
+		args = append(args, a.After.RemindAt, a.After.ID)
+		where += fmt.Sprintf(` AND (r.remind_at > $%d OR (r.remind_at = $%d AND r.id > $%d))`, len(args)-1, len(args)-1, len(args))
+	}
+	keyed := keyReach(ctx, ownerID, &args)
+	rows, err := s.pool.Query(ctx, `SELECT`+reminderColumns+`
+  FROM reminders r
+  JOIN issues i ON i.id = r.issue_id
+ WHERE r.user_id = $1
+   AND `+authz.VisibleNowSetExpr("$1::uuid", "i.project_id")+where+`
+   AND `+keyed+`
+ ORDER BY r.remind_at ASC, r.id ASC
+ LIMIT $3`, args...)
+	if err != nil {
+		return nil, false, fmt.Errorf("paging reminders: %w", err)
+	}
+	defer rows.Close()
+	page = make([]Reminder, 0, a.Limit+1)
+	for rows.Next() {
+		r, err := scanReminder(rows, now)
+		if err != nil {
+			return nil, false, fmt.Errorf("scanning reminder: %w", err)
+		}
+		page = append(page, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, false, fmt.Errorf("paging reminders: %w", err)
+	}
+	if len(page) > a.Limit {
+		return page[:a.Limit], true, nil
+	}
+	return page, false, nil
+}

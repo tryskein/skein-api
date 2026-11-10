@@ -22,6 +22,7 @@ import (
 	"skein-api/internal/errcode"
 	"skein-api/internal/issueops"
 	"skein-api/internal/notifications"
+	"skein-api/internal/reminders"
 	"skein-api/internal/spaces"
 )
 
@@ -50,6 +51,7 @@ const (
 // The page sizes of the lists of the caller's own state.
 var (
 	notificationsLimit = Limit{Min: 1, Max: 100, Default: 25}
+	remindersLimit     = Limit{Min: 1, Max: 100, Default: 50}
 	watchingLimit      = Limit{Min: 1, Max: 100, Default: 50}
 )
 
@@ -825,15 +827,17 @@ func (a *issueWrites) deleteWatchFilter(w http.ResponseWriter, r *http.Request) 
 // listReminders lists the caller's reminders.
 //
 // @Summary List the caller's reminders
-// @Description Returns the caller's reminders, ringing before armed — the same operation as the MCP tool skein_remind, action list: state ringing, armed or all (default); project, a handle, narrows the list. ringingTaskCount is the badge across projects. Reminders on issues outside the key's scope are neither listed nor counted. One page: hasMore is false. Read-only.
+// @Description Returns a page of the caller's reminders, the soonest first (a ringing one before an armed one) — the same rows as the MCP tool skein_remind, action list, which answers them all at once: state ringing, armed or all (default); project, a handle, narrows the list. ringingTaskCount is the badge across projects, of every reminder, not of the page. Reminders on issues outside the key's scope are neither listed nor counted. Keyset paging: pass nextCursor back as cursor while hasMore is true. Read-only.
 // @Tags Me
 // @Produce json
 // @Security SkeinApiKey[read]
 // @Param state query string false "ringing, armed or all (default)"
 // @Param project query string false "A project handle"
+// @Param limit query int false "Page size, 1..100 (default 50)"
+// @Param cursor query string false "The nextCursor of the previous page"
 // @Param fields query string false "Comma-separated fields of each item to return"
 // @Success 200 {object} ReminderPage "The reminders"
-// @Failure 400 {object} ProblemDocument "Unknown parameter or field (code validation_error)"
+// @Failure 400 {object} ProblemDocument "Unknown parameter or field, limit out of range, a foreign cursor (code validation_error)"
 // @Failure 401 {object} ProblemDocument "No key, or the key is invalid, expired or revoked (code unauthenticated)"
 // @Failure 403 {object} ProblemDocument "The key lacks the read right (code insufficient_scope)"
 // @Failure 422 {object} ProblemDocument "An unknown state (code validation_error); the project is missing or out of reach (code project_not_found)"
@@ -843,16 +847,45 @@ func (a *issueWrites) deleteWatchFilter(w http.ResponseWriter, r *http.Request) 
 // @Router /api/v1/reminders [get]
 // @ID listReminders
 func (a *issueWrites) listReminders(w http.ResponseWriter, r *http.Request) {
-	if !CheckQuery(w, r, "state", "project") {
+	if !CheckQuery(w, r, "state", "project", "limit", "cursor") {
+		return
+	}
+	limit, err := ParseLimit(r, remindersLimit)
+	if err != nil {
+		WriteParseError(w, err)
 		return
 	}
 	q := r.URL.Query()
-	res, f := issueops.RemindList(r.Context(), a.ops, callerOf(r), issueops.Args{"state": q.Get("state"), "project": q.Get("project")})
+	var after *reminders.ListPosition
+	if c := q.Get("cursor"); c != "" {
+		var cur reminderCursor
+		if err := DecodeCursor(c, &cur); err != nil {
+			WriteParseError(w, err)
+			return
+		}
+		after = &reminders.ListPosition{RemindAt: cur.RemindAt, ID: cur.ID}
+	}
+	res, f := issueops.RemindPage(r.Context(), a.ops, callerOf(r), issueops.Args{"state": q.Get("state"), "project": q.Get("project")}, after, limit)
 	if f != nil {
 		writeFailure(w, f)
 		return
 	}
-	WriteJSON(w, r, http.StatusOK, ReminderPage{List: List[issueops.ReminderListItem]{Items: res.Reminders}, RingingTaskCount: res.RingingTaskCount})
+	out := ReminderPage{List: List[issueops.ReminderListItem]{Items: res.Items, HasMore: res.More}, RingingTaskCount: res.RingingTaskCount}
+	if res.More {
+		c, err := EncodeCursor(reminderCursor{RemindAt: res.Last.RemindAt, ID: res.Last.ID})
+		if err != nil {
+			WriteInternalError(w, r, "encoding a cursor", err)
+			return
+		}
+		out.NextCursor = &c
+	}
+	WriteJSON(w, r, http.StatusOK, out)
+}
+
+// reminderCursor is the keyset position of a page of listReminders.
+type reminderCursor struct {
+	RemindAt time.Time `json:"t"`
+	ID       uuid.UUID `json:"i"`
 }
 
 // createReminder sets a reminder on an issue.

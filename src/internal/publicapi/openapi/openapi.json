@@ -12986,7 +12986,7 @@
         },
         "/api/v1/reminders": {
             "get": {
-                "description": "Returns the caller's reminders, ringing before armed — the same operation as the MCP tool skein_remind, action list: state ringing, armed or all (default); project, a handle, narrows the list. ringingTaskCount is the badge across projects. Reminders on issues outside the key's scope are neither listed nor counted. One page: hasMore is false. Read-only.",
+                "description": "Returns a page of the caller's reminders, the soonest first (a ringing one before an armed one) — the same rows as the MCP tool skein_remind, action list, which answers them all at once: state ringing, armed or all (default); project, a handle, narrows the list. ringingTaskCount is the badge across projects, of every reminder, not of the page. Reminders on issues outside the key's scope are neither listed nor counted. Keyset paging: pass nextCursor back as cursor while hasMore is true. Read-only.",
                 "operationId": "listReminders",
                 "parameters": [
                     {
@@ -13001,6 +13001,22 @@
                         "description": "A project handle",
                         "in": "query",
                         "name": "project",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "Page size, 1..100 (default 50)",
+                        "in": "query",
+                        "name": "limit",
+                        "schema": {
+                            "type": "integer"
+                        }
+                    },
+                    {
+                        "description": "The nextCursor of the previous page",
+                        "in": "query",
+                        "name": "cursor",
                         "schema": {
                             "type": "string"
                         }
@@ -13033,7 +13049,7 @@
                                 }
                             }
                         },
-                        "description": "Unknown parameter or field (code validation_error)"
+                        "description": "Unknown parameter or field, limit out of range, a foreign cursor (code validation_error)"
                     },
                     "401": {
                         "content": {
