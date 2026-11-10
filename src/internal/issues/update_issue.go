@@ -46,8 +46,8 @@ func (e *LabelNotPresentError) Error() string {
 // override the same fields inside Patch, Status and Close. The caller's
 // version is checked for every change (INV-7, US-6): by the first of
 // patch / status / close that is set, or — for a change made only of
-// components and labels — against the row read at the start of the
-// transaction, after the lock check. The steps after the check run on the
+// components and labels — by its first step, on the row that step reads,
+// after the lock check. The steps after the check run on the
 // version the transaction itself moved. Force skips the check, as on every
 // writer. The single-step component and label writers of /ui/v1
 // (ReplaceComponentsNoLoad, AddLabelNoLoad, RemoveLabelNoLoad) keep their
@@ -144,8 +144,8 @@ func (s *Store) runUpdateIssue(ctx context.Context, in UpdateIssueInput, op upda
 	if !versioned && !in.ReplaceComponents && len(in.LabelsAdd) == 0 && len(in.LabelsRemove) == 0 {
 		return UpdateIssueResult{}, fmt.Errorf("update issue %s: no step to apply", in.ID)
 	}
-	// A change of components and labels only: its version check is the
-	// transaction's first read (C5-01; INV-7, US-6).
+	// A change of components and labels only: its version check rides on
+	// the first step (C5-01; INV-7, US-6).
 	checkFirst := !versioned && !in.Force && in.ExpectedVersion >= 1
 
 	// Every check that needs no transaction runs before it opens, for every
@@ -190,19 +190,17 @@ func (s *Store) runUpdateIssue(ctx context.Context, in UpdateIssueInput, op upda
 		// A replayed attempt starts from scratch (sk-622.21, R17).
 		res = UpdateIssueResult{}
 		chained := false
+		// A change of components and labels only: its first step checks
+		// the caller's version on the row it reads anyway, after the lock
+		// check; the steps after it run on the version it saw.
+		pending := 0
 		if checkFirst {
-			old, err := s.fetchIssueInTx(ctx, tx, in.ID)
-			if err != nil {
-				return err
-			}
-			// Lock first, as every writer does: a locked issue answers
-			// locked_by_other, not a version mismatch.
-			if err := lockGuard(old, in.SessionID, in.Actor.UserID, in.Force); err != nil {
-				return err
-			}
-			if old.Version != in.ExpectedVersion {
-				return &ErrVersionConflict{CurrentVersion: old.Version}
-			}
+			pending = in.ExpectedVersion
+		}
+		expectOnce := func() int {
+			v := pending
+			pending = 0
+			return v
 		}
 		if in.Patch != nil {
 			var link CloseLinkState
@@ -226,17 +224,17 @@ func (s *Store) runUpdateIssue(ctx context.Context, in UpdateIssueInput, op upda
 			res.Link = link
 		}
 		if in.ReplaceComponents {
-			if err := s.replaceComponentsInTx(ctx, tx, in.ID, in.Components, in.Actor, lockOpts); err != nil {
+			if err := s.replaceComponentsInTx(ctx, tx, in.ID, in.Components, in.Actor, lockOpts, expectOnce()); err != nil {
 				return err
 			}
 		}
 		for _, label := range in.LabelsAdd {
-			if err := s.addLabelInTx(ctx, tx, in.ID, label, in.Actor, lockOpts); err != nil {
+			if err := s.addLabelInTx(ctx, tx, in.ID, label, in.Actor, lockOpts, expectOnce()); err != nil {
 				return err
 			}
 		}
 		for _, label := range in.LabelsRemove {
-			if err := s.removeLabelInTx(ctx, tx, in.ID, label, in.Actor, lockOpts); err != nil {
+			if err := s.removeLabelInTx(ctx, tx, in.ID, label, in.Actor, lockOpts, expectOnce()); err != nil {
 				if errors.Is(err, errLabelAbsent) {
 					return &LabelNotPresentError{Label: label}
 				}

@@ -4436,7 +4436,7 @@ func (s *Store) ReplaceComponentsNoLoad(
 	// after the commit.
 	var committed CommittedState
 	err := signals.BeginTxFunc(ctx, s.pool, pgx.TxOptions{IsoLevel: pgx.Serializable}, withCommittedState(ctx, id, &committed, func(tx pgx.Tx) error {
-		return s.replaceComponentsInTx(ctx, tx, id, componentIDs, actor, opts)
+		return s.replaceComponentsInTx(ctx, tx, id, componentIDs, actor, opts, 0)
 	}))
 	if err != nil {
 		return CommittedState{}, s.degradeSerializationAbort(ctx, err, "replaceComponents", id, nil)
@@ -4446,13 +4446,16 @@ func (s *Store) ReplaceComponentsNoLoad(
 
 // replaceComponentsInTx is the component replace inside the caller's
 // transaction (T015, US-14).
-func (s *Store) replaceComponentsInTx(ctx context.Context, tx pgx.Tx, id string, componentIDs []uuid.UUID, actor Actor, opts LockOpts) error {
+func (s *Store) replaceComponentsInTx(ctx context.Context, tx pgx.Tx, id string, componentIDs []uuid.UUID, actor Actor, opts LockOpts, expectedVersion int) error {
 	old, err := s.fetchIssueInTx(ctx, tx, id)
 	if err != nil {
 		return err
 	}
 	if err := lockGuard(old, opts.SessionID, actor.UserID, opts.Force); err != nil {
 		return err
+	}
+	if expectedVersion >= 1 && old.Version != expectedVersion {
+		return &ErrVersionConflict{CurrentVersion: old.Version}
 	}
 
 	if len(componentIDs) > 0 {
@@ -4555,7 +4558,7 @@ func (s *Store) AddLabelNoLoad(ctx context.Context, id, label string, actor Acto
 	// labels-only update still needs one to acknowledge.
 	var committed CommittedState
 	err := s.withSerializableRetry(ctx, "addLabel", addLabelMaxAttempts, withCommittedState(ctx, id, &committed, func(tx pgx.Tx) error {
-		return s.addLabelInTx(ctx, tx, id, label, actor, opts)
+		return s.addLabelInTx(ctx, tx, id, label, actor, opts, 0)
 	}))
 	if err != nil {
 		return CommittedState{}, s.degradeSerializationAbort(ctx, err, "addLabel", id, nil)
@@ -4565,13 +4568,16 @@ func (s *Store) AddLabelNoLoad(ctx context.Context, id, label string, actor Acto
 
 // addLabelInTx is the label add inside the caller's transaction (T015,
 // US-14).
-func (s *Store) addLabelInTx(ctx context.Context, tx pgx.Tx, id, label string, actor Actor, opts LockOpts) error {
+func (s *Store) addLabelInTx(ctx context.Context, tx pgx.Tx, id, label string, actor Actor, opts LockOpts, expectedVersion int) error {
 	old, err := s.fetchIssueInTx(ctx, tx, id)
 	if err != nil {
 		return err
 	}
 	if err := lockGuard(old, opts.SessionID, actor.UserID, opts.Force); err != nil {
 		return err
+	}
+	if expectedVersion >= 1 && old.Version != expectedVersion {
+		return &ErrVersionConflict{CurrentVersion: old.Version}
 	}
 	ct, err := tx.Exec(ctx, `
 INSERT INTO issue_labels (issue_id, label) VALUES ($1, $2)
@@ -4623,7 +4629,7 @@ func (s *Store) RemoveLabelNoLoad(ctx context.Context, id, label string, actor A
 	// labels-only update still needs one to acknowledge.
 	var committed CommittedState
 	err := s.withSerializableRetry(ctx, "removeLabel", removeLabelMaxAttempts, withCommittedState(ctx, id, &committed, func(tx pgx.Tx) error {
-		return s.removeLabelInTx(ctx, tx, id, label, actor, opts)
+		return s.removeLabelInTx(ctx, tx, id, label, actor, opts, 0)
 	}))
 	if err != nil {
 		return CommittedState{}, s.degradeSerializationAbort(ctx, err, "removeLabel", id, nil)
@@ -4634,13 +4640,16 @@ func (s *Store) RemoveLabelNoLoad(ctx context.Context, id, label string, actor A
 // removeLabelInTx is the label removal inside the caller's transaction
 // (T015, US-14). A label that is not on the issue answers errLabelAbsent,
 // which is ErrNotFound for every caller that does not ask further.
-func (s *Store) removeLabelInTx(ctx context.Context, tx pgx.Tx, id, label string, actor Actor, opts LockOpts) error {
+func (s *Store) removeLabelInTx(ctx context.Context, tx pgx.Tx, id, label string, actor Actor, opts LockOpts, expectedVersion int) error {
 	old, err := s.fetchIssueInTx(ctx, tx, id)
 	if err != nil {
 		return err
 	}
 	if err := lockGuard(old, opts.SessionID, actor.UserID, opts.Force); err != nil {
 		return err
+	}
+	if expectedVersion >= 1 && old.Version != expectedVersion {
+		return &ErrVersionConflict{CurrentVersion: old.Version}
 	}
 	ct, err := tx.Exec(ctx, `
 DELETE FROM issue_labels WHERE issue_id = $1 AND label = $2`, id, label)
