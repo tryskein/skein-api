@@ -18,7 +18,7 @@ type Agent struct {
 	SessionID   string             `json:"session_id"`
 	FirstSeenAt pgtype.Timestamptz `json:"first_seen_at"`
 	LastSeenAt  pgtype.Timestamptz `json:"last_seen_at"`
-	// API key of a REST executor row (session_id api:<keyId>[:<workerId>]); NULL on an MCP session row.
+	// API key the holder called with: a REST executor (session_id api:<keyId>[:<workerId>]) or an MCP session that used a key; NULL for a session without a key.
 	ApiKeyID pgtype.UUID `json:"api_key_id"`
 	// X-Skein-Worker-Id of a REST executor; NULL when the key itself is the executor.
 	WorkerID *string `json:"worker_id"`

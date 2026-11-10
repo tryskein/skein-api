@@ -471,7 +471,11 @@ func wrapAgentRegistry(pool *pgxpool.Pool, next http.Handler) http.Handler {
 		sessionID := auth.SessionIDFrom(ctx)
 
 		if hasUser && sessionID != "" {
-			if err := agents.Upsert(ctx, pool, userID, sessionID, agents.LastSeenGranularity); err != nil {
+			// D-6: the key the session called with rides on its row — the
+			// stale-lock reaper keeps the session's locks only while that
+			// key may write the issue.
+			keyID, _ := auth.APIKeyIDFrom(ctx)
+			if err := agents.UpsertWithKey(ctx, pool, userID, sessionID, keyID, agents.LastSeenGranularity); err != nil {
 				slog.WarnContext(ctx, "agents upsert failed",
 					"userId", userID.String(),
 					"sessionId", sessionID,

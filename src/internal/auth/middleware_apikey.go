@@ -9,6 +9,8 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"golang.org/x/crypto/bcrypt"
+
+	"skein-api/internal/agents"
 )
 
 // apiKeyAuthLogger captures structured audit fields without leaking the
@@ -175,8 +177,12 @@ func RequireAPIKey(pool *pgxpool.Pool, bcryptCost int, challenge string) func(ht
 			// first initialize call (the SDK generates it server-side and
 			// returns it in the response header). Empty is valid; the
 			// agents UPSERT skips when missing.
+			//
+			// D-6: an id inside the REST holder namespace (api:…) is moved
+			// out of it, so an MCP session never holds a lock as a REST
+			// executor of the same key.
 			if sid := strings.TrimSpace(r.Header.Get(HeaderMcpSessionID)); sid != "" {
-				ctx = WithSessionID(ctx, sid)
+				ctx = WithSessionID(ctx, agents.MCPSessionHolder(sid))
 			}
 
 			next.ServeHTTP(w, r.WithContext(ctx))

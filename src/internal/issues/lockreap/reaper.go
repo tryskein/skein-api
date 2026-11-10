@@ -290,6 +290,14 @@ type candidate struct {
 // neither can fan a candidate out into duplicates the way a plain join to
 // agents would.
 //
+// A REST executor of an API key (D-6) holds a lock as api:<keyId> or
+// api:<keyId>:<workerId>; it has its own agents row, so the rule above
+// already makes one executor's activity keep no other executor's locks.
+// Whatever the channel, a holder whose row carries the key it called with
+// counts as alive only while that key may write the issue
+// (keyKeepsLockExpr): a revoked or expired key, a key without write, or an
+// issue outside the key's scope keeps no lock however active the holder.
+//
 // A holder with NO agents row is released on age alone — the pre-sk-243
 // behaviour. That covers cookie-session claims, rows written before the
 // registry existed, and pruned agents: absence of evidence of life is not
@@ -375,7 +383,8 @@ SELECT i.id, i.project_id, i.locked_by, i.locked_at, i.version
            SELECT 1 FROM agents a
             WHERE a.user_id = i.locked_by_user_id
               AND a.session_id = i.locked_by
-              AND a.last_seen_at >= now() - $4::interval))
+              AND a.last_seen_at >= now() - $4::interval
+              AND `+keyKeepsLockExpr("a", "i")+`))
  ORDER BY i.locked_at
  LIMIT $2
    FOR UPDATE OF i SKIP LOCKED`,
@@ -438,13 +447,16 @@ func (r *Reaper) releaseCandidates(ctx context.Context, tx pgx.Tx, cands []candi
 	rows, err := tx.Query(ctx, `
 WITH judged AS (
     SELECT c.id, c.locked_by, c.locked_at, c.version,
-           (SELECT a.last_seen_at
-              FROM issues ih
-              JOIN agents a ON a.user_id = ih.locked_by_user_id
-                           AND a.session_id = c.locked_by
-             WHERE ih.id = c.id) AS holder_last_seen_at
+           h.last_seen_at AS holder_last_seen_at,
+           COALESCE(h.key_keeps_lock, true) AS holder_key_keeps_lock
       FROM unnest($1::text[], $2::text[], $3::timestamptz[], $4::int[])
              AS c(id, locked_by, locked_at, version)
+      LEFT JOIN LATERAL (
+           SELECT a.last_seen_at, `+keyKeepsLockExpr("a", "ih")+` AS key_keeps_lock
+             FROM issues ih
+             JOIN agents a ON a.user_id = ih.locked_by_user_id
+                          AND a.session_id = c.locked_by
+            WHERE ih.id = c.id) h ON true
 )
 UPDATE issues
    SET locked_by  = NULL,
@@ -459,7 +471,8 @@ UPDATE issues
    AND issues.version   = j.version
    AND ($5::boolean
         OR j.holder_last_seen_at IS NULL
-        OR j.holder_last_seen_at < now() - $6::interval)
+        OR j.holder_last_seen_at < now() - $6::interval
+        OR NOT j.holder_key_keeps_lock)
 RETURNING issues.id,
           issues.project_id,
           issues.version,
@@ -493,6 +506,34 @@ RETURNING issues.id,
 		return nil, fmt.Errorf("reapOnce iterate: %w", err)
 	}
 	return out, nil
+}
+
+// keyKeepsLockExpr is the key leg of liveness (D-6, US-5): a holder whose
+// agents row (alias a) carries the API key it called with is alive only
+// while that key is not revoked, has not expired, has the write right
+// (write or manage; the admin flag alone does not write issues) and its
+// scope covers the issue (alias i) — all projects, the issue's project, or
+// the issue's project's space. The activity of a key that lost write, or of
+// a key whose scope no longer covers the issue, keeps no lock: it goes at
+// its term like the lock of a silent holder. A row without a key (a session
+// that called without one) keeps the earlier rule. It applies to MCP
+// sessions and REST executors alike: the channel is not what the rule is
+// about. A deleted key has no row left (agents.api_key_id cascades).
+func keyKeepsLockExpr(a, i string) string {
+	return `(` + a + `.api_key_id IS NULL OR EXISTS (
+          SELECT 1 FROM api_keys k
+           WHERE k.id = ` + a + `.api_key_id
+             AND k.revoked_at IS NULL
+             AND (k.expires_at IS NULL OR k.expires_at > now())
+             AND k.level IN ('write', 'manage')
+             AND (k.scope_mode = 'all'
+                  OR (k.scope_mode = 'projects' AND EXISTS (
+                        SELECT 1 FROM api_key_scope_projects sp
+                         WHERE sp.api_key_id = k.id AND sp.project_id = ` + i + `.project_id))
+                  OR (k.scope_mode = 'spaces' AND EXISTS (
+                        SELECT 1 FROM api_key_scope_spaces ss
+                          JOIN projects p ON p.space_id = ss.space_id
+                         WHERE ss.api_key_id = k.id AND p.id = ` + i + `.project_id)))))`
 }
 
 // livenessArgs renders the two bind values the liveness leg takes. A zero

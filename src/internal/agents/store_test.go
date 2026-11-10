@@ -9,6 +9,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"skein-api/internal/apikeys"
 )
 
 // The stale-lock reaper judges an agent alive by agents.last_seen_at
@@ -120,5 +122,76 @@ func TestUpsert_EmptySessionIsNoOp(t *testing.T) {
 	}
 	if n != 0 {
 		t.Errorf("agents rows = %d, want 0", n)
+	}
+}
+
+// TestTouchRESTExecutor_RegistersAndThrottles — matrix row 42 (D-6).
+// Reference — the plan's decision D-6: a REST executor is registered in
+// agents with its key and worker id, and its activity is extended with
+// the same 60-second throttle as an MCP session: a touch inside the window
+// does not move last_seen_at, a touch after it does. "After the window" is
+// reached by moving the stamp back in the database, not by waiting.
+func TestTouchRESTExecutor_RegistersAndThrottles(t *testing.T) {
+	pool := newTestPool(t)
+	user := seedUser(t, pool)
+	ctx := context.Background()
+	k, err := apikeys.New(pool).Create(ctx, apikeys.NewKey{
+		UserID: user, Label: "rest executor",
+		Prefix: "ska_t016" + strings.ReplaceAll(uuid.NewString(), "-", "")[:8], Hash: "fake-bcrypt-hash-for-test",
+		Grant: apikeys.Grant{Level: apikeys.LevelWrite, Scope: apikeys.Scope{Mode: apikeys.ScopeAll}},
+	}, apikeys.TTLPolicy{Default: 24 * time.Hour, Max: 48 * time.Hour})
+	if err != nil {
+		t.Fatalf("create key: %v", err)
+	}
+	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM api_keys WHERE id = $1`, k.ID) })
+
+	for _, worker := range []string{"", "worker-1"} {
+		t.Run("worker="+worker, func(t *testing.T) {
+			holder, err := TouchRESTExecutor(ctx, pool, user, k.ID, worker, LastSeenGranularity)
+			if err != nil {
+				t.Fatalf("first touch: %v", err)
+			}
+			want := "api:" + k.ID.String()
+			if worker != "" {
+				want += ":" + worker
+			}
+			if holder != want {
+				t.Fatalf("holder = %q, want %q", holder, want)
+			}
+			var keyID *uuid.UUID
+			var workerID *string
+			if err := pool.QueryRow(ctx,
+				`SELECT api_key_id, worker_id FROM agents WHERE user_id = $1 AND session_id = $2`,
+				user, holder).Scan(&keyID, &workerID); err != nil {
+				t.Fatalf("read the executor row: %v", err)
+			}
+			if keyID == nil || *keyID != k.ID {
+				t.Errorf("api_key_id = %v, want %s", keyID, k.ID)
+			}
+			if (worker == "" && workerID != nil) || (worker != "" && (workerID == nil || *workerID != worker)) {
+				t.Errorf("worker_id = %v, want %q", workerID, worker)
+			}
+
+			first := lastSeen(t, pool, user, holder)
+			if _, err := TouchRESTExecutor(ctx, pool, user, k.ID, worker, LastSeenGranularity); err != nil {
+				t.Fatalf("touch inside the window: %v", err)
+			}
+			if got := lastSeen(t, pool, user, holder); !got.Equal(first) {
+				t.Errorf("last_seen_at moved inside the 60 s window: %v → %v", first, got)
+			}
+
+			if _, err := pool.Exec(ctx, `
+UPDATE agents SET last_seen_at = last_seen_at - interval '61 seconds'
+ WHERE user_id = $1 AND session_id = $2`, user, holder); err != nil {
+				t.Fatalf("move the stamp back: %v", err)
+			}
+			backdated := lastSeen(t, pool, user, holder)
+			if _, err := TouchRESTExecutor(ctx, pool, user, k.ID, worker, LastSeenGranularity); err != nil {
+				t.Fatalf("touch after the window: %v", err)
+			}
+			if got := lastSeen(t, pool, user, holder); !got.After(backdated) {
+				t.Errorf("last_seen_at not moved after the window: %v (was %v)", got, backdated)
+			}
+		})
 	}
 }

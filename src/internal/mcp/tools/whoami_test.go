@@ -8,12 +8,17 @@ package tools
 
 import (
 	"context"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 
+	"skein-api/internal/agents"
+	"skein-api/internal/apikeys"
+	"skein-api/internal/auth"
 	"skein-api/internal/testsupport"
 )
 
@@ -109,4 +114,63 @@ func TestWhoami_SpacesOfTheUser(t *testing.T) {
 			}
 		}
 	})
+}
+
+// TestWhoami_RESTExecutorRowIsTheOwnersSession — matrix row 47 (D-6, class
+// of agents readers). Reference — the plan's decision D-6: skein_whoami
+// treats the agents row of a REST executor as a session of its owner — the
+// row is read under the owner's id and its stamps are the owner's session
+// stamps; the same session string under another user is not that row.
+func TestWhoami_RESTExecutorRowIsTheOwnersSession(t *testing.T) {
+	pool := newTestPool(t)
+	ctx := context.Background()
+	owner, _ := seedUser(t, pool, "user")
+	stranger, _ := seedUser(t, pool, "user")
+	k, err := apikeys.New(pool).Create(ctx, apikeys.NewKey{
+		UserID: owner, Label: "rest executor",
+		Prefix: "ska_t016" + strings.ReplaceAll(uuid.NewString(), "-", "")[:8], Hash: "fake-bcrypt-hash-for-test",
+		Grant: apikeys.Grant{Level: apikeys.LevelWrite, Scope: apikeys.Scope{Mode: apikeys.ScopeAll}},
+	}, testsupport.KeyTTLPolicy)
+	if err != nil {
+		t.Fatalf("create key: %v", err)
+	}
+	holder := agents.RESTHolder(k.ID, "worker-1")
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM agents WHERE session_id = $1`, holder)
+		_, _ = pool.Exec(context.Background(), `DELETE FROM api_keys WHERE id = $1`, k.ID)
+	})
+	var lastSeen time.Time
+	if err := pool.QueryRow(ctx, `
+INSERT INTO agents (user_id, session_id, first_seen_at, last_seen_at, api_key_id, worker_id)
+VALUES ($1, $2, now() - interval '1 hour', now() - interval '5 minutes', $3, 'worker-1')
+RETURNING last_seen_at`, owner, holder, k.ID).Scan(&lastSeen); err != nil {
+		t.Fatalf("seed the REST executor row: %v", err)
+	}
+
+	agentOf := func(user uuid.UUID) map[string]any {
+		t.Helper()
+		res, err := handleWhoami(pool)(auth.WithSessionID(withCtx(t, user, "user"), holder), mcpgo.CallToolRequest{})
+		if err != nil {
+			t.Fatalf("whoami: %v", err)
+		}
+		body := extractToolJSON(t, res)
+		if res.IsError {
+			t.Fatalf("whoami refused: %v", body)
+		}
+		a, _ := body["agent"].(map[string]any)
+		return a
+	}
+
+	a := agentOf(owner)
+	if a["sessionId"] != holder {
+		t.Errorf("owner's agent.sessionId = %v, want %s", a["sessionId"], holder)
+	}
+	if got, _ := a["lastSeenAt"].(string); got == "" || !strings.HasPrefix(got, lastSeen.UTC().Format("2006-01-02T15:04:05")) {
+		t.Errorf("owner's agent.lastSeenAt = %v, want the row's %s", a["lastSeenAt"], lastSeen.UTC())
+	}
+
+	b := agentOf(stranger)
+	if got, _ := b["lastSeenAt"].(string); got != "" && strings.HasPrefix(got, lastSeen.UTC().Format("2006-01-02T15:04:05")) {
+		t.Errorf("another user sees the owner's executor stamps: %v", b)
+	}
 }
