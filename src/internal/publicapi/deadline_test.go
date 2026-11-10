@@ -57,7 +57,9 @@ func TestOperationDeadline_RollsBackTheTransaction(t *testing.T) {
 				return
 			}
 			defer func() {
-				if err := tx.Rollback(context.Background()); err != nil && !errors.Is(err, pgx.ErrTxClosed) {
+				// A deadline that cancels a query makes pgx close the
+				// connection: the transaction is gone with it.
+				if err := tx.Rollback(context.Background()); err != nil && !errors.Is(err, pgx.ErrTxClosed) && !tx.Conn().IsClosed() {
 					t.Errorf("rollback: %v", err)
 				}
 			}()
