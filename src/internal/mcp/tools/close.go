@@ -2,17 +2,13 @@ package tools
 
 import (
 	"context"
-	"errors"
-	"log/slog"
 	"strings"
-	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 
-	"skein-api/internal/auth"
-	"skein-api/internal/authz"
+	"skein-api/internal/issueops"
 	"skein-api/internal/issues"
 	skmcp "skein-api/internal/mcp"
 )
@@ -113,156 +109,28 @@ func RegisterClose(s *server.MCPServer, pool *pgxpool.Pool, issuesStore *issues.
 }
 
 func handleClose(pool *pgxpool.Pool, issuesStore *issues.Store) server.ToolHandlerFunc {
+	d := issueops.Deps{Pool: pool, Issues: issuesStore}
 	return func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-		start := time.Now()
 		userID, errResp := skmcp.RequireUser(ctx)
 		if errResp != nil {
 			return errResp, nil
 		}
-		role := callerRole(ctx)
-
-		rawID, err := req.RequireString("id")
-		if err != nil {
-			return skmcp.ToolError(ErrCodeValidationError, "id is required", nil), nil
+		res, f := issueops.Close(ctx, d, userID, issueops.Args(req.GetArguments()))
+		if f != nil {
+			return toolFailure(f), nil
 		}
-		id := strings.TrimSpace(rawID)
-		if !looksLikeHierarchicalID(id) {
-			return skmcp.ToolError(ErrCodeValidationError,
-				"id must be a full hierarchical id like \"demo-42\"",
-				map[string]any{"id": rawID}), nil
-		}
-
-		expectedVersion := req.GetInt("expectedVersion", 0)
-		if expectedVersion < 1 {
-			return skmcp.ToolError(ErrCodeValidationError,
-				"expectedVersion is required and must be >= 1", nil), nil
-		}
-
-		rawReason, err := req.RequireString("reason")
-		if err != nil {
-			return skmcp.ToolError(ErrCodeValidationError,
-				"reason is required", nil), nil
-		}
-		reason := strings.TrimSpace(rawReason)
-		if reason == "" {
-			return skmcp.ToolError(ErrCodeValidationError,
-				"reason must be non-empty after trim", nil), nil
-		}
-		if vErr := issues.ValidateProse("reason", reason); vErr != nil {
-			return validationToolError(vErr), nil
-		}
-
-		force := req.GetBool("force", false)
-		// sk-674.18 T034 (K-28): force is force_unlock of US-6, checked
-		// per issue on its project (forceUnlockGate), not by the role.
-
-		commits, parseErr := parseCommitInputs(req.GetArguments()["commits"], "commits")
-		if parseErr != nil {
-			return skmcp.ToolError(parseErr.Code, parseErr.Message, parseErr.Details), nil
-		}
-
-		// sk-489 (US-1, US-2). One of FOUR input builders: the package
-		// does not go in here, so the same helper sits in
-		// close_many.go#parseCloseManyItem — see close_outcome_arg.go.
-		outcome, outcomeErr := parseCloseOutcomeArgs(req.GetArguments(), id, "")
-		if outcomeErr != nil {
-			return skmcp.ToolError(outcomeErr.Code, outcomeErr.Message, outcomeErr.Details), nil
-		}
-
-		// Visibility.
-		issue, err := issuesStore.GetIssue(ctx, id)
-		if err != nil {
-			if errors.Is(err, issues.ErrNotFound) {
-				return skmcp.ToolError(ErrCodeIssueNotFound,
-					"issue does not exist or is not visible",
-					map[string]any{"id": id}), nil
-			}
-			slog.ErrorContext(ctx, "mcp tool error",
-				"tool", "skein_close",
-				"reason", "load issue failed",
-				"userId", userID.String(), "issueId", id, "error", err.Error())
-			return skmcp.ToolError(ErrCodeInternalError, "failed to load issue", nil), nil
-		}
-		if res := issueActionGate(ctx, pool, "skein_close", "id", id, issue.ProjectID, userID, authz.ActionWrite); res != nil {
-			return res, nil
-		}
-		if force {
-			if res := forceUnlockGate(ctx, pool, "skein_close", "id", id, issue.ProjectID, userID); res != nil {
-				return res, nil
-			}
-		}
-
-		sessionID := auth.SessionIDFrom(ctx)
-		actor := IssuesAgentActor(ctx, pool, userID)
-
-		// sk-32 slice 5: when the caller closes an epic that still has
-		// open children, surface them on the response as a non-blocking
-		// warning. The close itself proceeds regardless — the gate is
-		// agent-facing UX, not a hard enforcement (deferred to sk-24).
-		// We capture the snapshot BEFORE the close so the close
-		// transition (which clears nothing about children, but is the
-		// natural read-point) reflects what the agent saw at decision
-		// time.
-		var openChildren []issues.BlockerRef
-		if issue.Type == issues.TypeEpic {
-			oc, ocErr := issuesStore.EpicOpenChildrenFor(ctx, id)
-			if ocErr != nil {
-				slog.WarnContext(ctx, "mcp tool warning",
-					"tool", "skein_close",
-					"reason", "epic open-children snapshot failed; closing without warning",
-					"issueId", id, "error", ocErr.Error())
-			} else {
-				openChildren = oc
-			}
-		}
-
-		dto, link, err := issuesStore.CloseWithResult(ctx, issues.CloseInput{
-			ID:              id,
-			ExpectedVersion: expectedVersion,
-			Reason:          reason,
-			Force:           force,
-			SessionID:       sessionID,
-			Actor:           actor,
-			Commits:         commits,
-			CloseOutcome:    outcome.Outcome,
-			CloseTarget:     outcome.Target,
-			// sk-540.1: an explicit outcome is mandatory on a transition.
-			RequireOutcomeOnTransition: true,
-			// The system role, not Actor.Role: the target visibility key is the
-			// same as for a manual link (skein_dep_add), otherwise an admin and a
-			// non-admin would get the same answer for an invisible target.
-			DependenciesCaller: &issues.DependenciesCaller{UserID: userID, Role: role},
-		})
+		id, dto, link, openChildren := res.IssueID, res.Issue, res.Link, res.OpenChildren
 		verbose := req.GetBool("verbose", false)
 		cardUnavailable := false
-		if err != nil {
-			rb, committed := asReadBackFailed(err)
-			if !committed {
-				return mapCloseError(ctx, pool, issue.ProjectID, err, "skein_close",
-					userID.String(), id, outcome.Target), nil
-			}
-			// sk-607: the close committed, only reading the card back
-			// failed. The acknowledgement needs nothing the committing
-			// transaction did not already read; a verbose caller gets it
-			// too, marked cardUnavailable, never a hollow card.
+		if rb := res.ReadBack; rb != nil {
+			// sk-607: the close committed but the issue could not be read
+			// back — acknowledge it from the committed state.
 			logReadBackFallback(ctx, "skein_close", userID.String(), rb)
 			dto = ackSourceFromCommitted(rb.State)
 			cardUnavailable = verbose
 			verbose = false
 		}
 
-		slog.InfoContext(ctx, "mcp tool ok",
-			"tool", "skein_close",
-			"userId", userID.String(), "issueId", id,
-			"version", dto.Version,
-			"latencyMs", time.Since(start).Milliseconds())
-
-		// Compose the response: always the IssueDetail; surface a
-		// non-blocking warning when either close-time condition fires.
-		// The shape stays additive — old REST/MCP consumers can ignore
-		// the optional fields. Warnings accumulate: an epic closed with
-		// open children AND no assignee gets both reasons, joined, so
-		// neither nudge clobbers the other.
 		var warnings []string
 		if len(openChildren) > 0 {
 			warnings = append(warnings,
