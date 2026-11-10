@@ -408,8 +408,14 @@ func publicServer(cfg *config.Config, chain publicapi.RouteWrapper, deps publica
 		return nil, err
 	}
 	deps.Doc = doc
+	deps.Outcomes = idempotency.Hooks{}
 	router := publicapi.NewRouter(
-		publicapi.RouterOptions{OperationTimeout: cfg.PublicAPIWriteTimeout, Chain: chain},
+		publicapi.RouterOptions{
+			OperationTimeout: cfg.PublicAPIWriteTimeout,
+			Chain:            chain,
+			Versions:         publicapi.IssueVersions{Pool: deps.Pool, Issues: deps.Issues},
+			Idempotency:      idempotency.NewMiddleware(deps.Pool, cfg.PublicAPIWriteTimeout),
+		},
 		publicapi.ProductRoutes(deps),
 	)
 	return publicapi.NewServer(":"+cfg.PublicAPIPort, router, cfg.PublicAPIWriteTimeout), nil

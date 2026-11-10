@@ -29,6 +29,7 @@ import (
 	"net/url"
 	"os"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -66,6 +67,9 @@ type publicOp struct {
 	projectWrite bool
 	// field is the field a read keeps with fields= (row 101).
 	field string
+	// noEvent: a write that records no event (the delegation outbox is the
+	// owner's own view).
+	noEvent bool
 }
 
 // publicOps is the literal of the spec: the operations of T022, then the
@@ -94,6 +98,22 @@ var publicOps = []publicOp{
 	{id: "listComments", method: http.MethodGet, path: "issues/{issue}/comments", right: "read", read: true, field: "body"},
 	{id: "getIssueMovePlan", method: http.MethodGet, path: "issues/{issue}/move-plan", right: "read", read: true, field: "targetProject"},
 	{id: "search", method: http.MethodGet, path: "search", right: "read", read: true, field: "title"},
+
+	// T024 (row 124).
+	{id: "createIssue", method: http.MethodPost, path: "projects/{project}/issues", right: "write", prefer: true, idempotent: true, body: true},
+	{id: "createEpic", method: http.MethodPost, path: "projects/{project}/epics", right: "write", prefer: true, idempotent: true, body: true},
+	{id: "updateIssue", method: http.MethodPatch, path: "issues/{issue}", right: "write", prefer: true, ifMatch: "required", body: true},
+	{id: "claimIssue", method: http.MethodPost, path: "issues/{issue}/claim", right: "write", prefer: true, body: true},
+	{id: "claimIssues", method: http.MethodPost, path: "issues/claim", right: "write", body: true},
+	{id: "unclaimIssue", method: http.MethodPost, path: "issues/{issue}/unclaim", right: "write", prefer: true, body: true},
+	{id: "releaseIssueLock", method: http.MethodPost, path: "issues/{issue}/release-lock", right: "write", prefer: true, body: true},
+	{id: "closeIssue", method: http.MethodPost, path: "issues/{issue}/close", right: "write", prefer: true, ifMatch: "required", idempotent: true, body: true},
+	{id: "acceptIssue", method: http.MethodPost, path: "issues/{issue}/accept", right: "write", prefer: true, ifMatch: "optional", body: true},
+	{id: "reparentIssue", method: http.MethodPost, path: "issues/{issue}/reparent", right: "write", prefer: true, ifMatch: "required", body: true},
+	{id: "dropDelegated", method: http.MethodPost, path: "issues/{issue}/drop-delegated", right: "write", body: true, noEvent: true},
+	{id: "resumeDelegated", method: http.MethodPost, path: "issues/{issue}/resume-delegated", right: "write", body: true, noEvent: true},
+	{id: "attachCommits", method: http.MethodPost, path: "issues/{issue}/commits", right: "write", body: true},
+	{id: "detachCommit", method: http.MethodDelete, path: "issues/{issue}/commits/{hash}", right: "write", body: true},
 }
 
 // TestPublicAPIClasses_LiteralIsRoutesGo — rows 100 and 101, the literal
@@ -164,6 +184,8 @@ type classWorld struct {
 	// titles carry word.
 	issue, ready, qIssue string
 	word                 string
+	// repoURL is the repository of p, for the commit writes.
+	repoURL string
 }
 
 // newClassWorld seeds the world and builds the product public server from
@@ -203,6 +225,9 @@ func newClassWorld(t *testing.T) *classWorld {
 		w.component(p)
 	}
 	w.word = "clsw" + w.sfx
+	w.repoURL = "https://git.example.test/" + w.pPrefix + ".git"
+	w.exec(`UPDATE projects SET git_repos = jsonb_build_array(jsonb_build_object('id', $2::text, 'name', 'main', 'url', $3::text)) WHERE id = $1`,
+		w.p, uuid.NewString(), w.repoURL)
 	w.issue = testsupport.SeedIssue(t, pool, w.p, w.owner, w.pPrefix+"-1", "first "+w.word, "open", 1)
 	w.ready = testsupport.SeedIssue(t, pool, w.p, w.owner, w.pPrefix+"-2", "second "+w.word, "open", 2)
 	w.qIssue = testsupport.SeedIssue(t, pool, w.q, w.owner, w.qPrefix+"-1", "third "+w.word, "open", 2)
@@ -264,6 +289,32 @@ VALUES ($1, $2, $3, '', '[]'::jsonb, $4, now(), now())`, id, project, w.fresh("c
 	return id
 }
 
+// freshIssue seeds an open issue of project p with a fresh id.
+func (w *classWorld) freshIssue(p uuid.UUID) string {
+	w.t.Helper()
+	w.n++
+	prefix := w.pPrefix
+	if p == w.q {
+		prefix = w.qPrefix
+	}
+	return testsupport.SeedIssue(w.t, w.pool, p, w.owner, prefix+"-"+strconv.Itoa(100+w.n), "fresh "+w.word, "open", 2)
+}
+
+// issueVersion is the current version of issue id.
+func (w *classWorld) issueVersion(id string) int {
+	w.t.Helper()
+	var v int
+	if err := w.pool.QueryRow(context.Background(), `SELECT version FROM issues WHERE id = $1`, id).Scan(&v); err != nil {
+		w.t.Fatalf("read version: %v", err)
+	}
+	return v
+}
+
+// freshHash is a commit hash unique to the test.
+func (w *classWorld) freshHash() string {
+	return strings.ReplaceAll(uuid.NewString(), "-", "")[:12]
+}
+
 // key mints a key of user with grant.
 func (w *classWorld) key(user uuid.UUID, g apikeys.Grant) string {
 	w.t.Helper()
@@ -292,62 +343,105 @@ func levelKey(l apikeys.Level) apikeys.Grant {
 type opCall struct {
 	method, path string
 	body         map[string]any
+	// headers are sent with the request (If-Match).
+	headers map[string]string
 }
 
 // call is a request of op that succeeds for the owner of project p: the
 // state it needs (a member to remove, a component to change) is seeded
 // first.
-func (w *classWorld) call(op publicOp, p uuid.UUID) opCall {
+func (w *classWorld) call(op publicOp, p uuid.UUID, key string) opCall {
 	w.t.Helper()
 	base := "/api/v1/"
 	proj := base + "projects/" + p.String()
 	switch op.id {
 	case "getMe":
-		return opCall{http.MethodGet, base + "me", nil}
+		return opCall{http.MethodGet, base + "me", nil, nil}
 	case "listProjects":
-		return opCall{http.MethodGet, base + "projects", nil}
+		return opCall{http.MethodGet, base + "projects", nil, nil}
 	case "resolveProject":
-		return opCall{http.MethodGet, base + "projects/resolve?q=" + url.QueryEscape(w.pPrefix), nil}
+		return opCall{http.MethodGet, base + "projects/resolve?q=" + url.QueryEscape(w.pPrefix), nil, nil}
 	case "createProject":
-		return opCall{http.MethodPost, base + "projects", map[string]any{"name": w.fresh("proj"), "space": w.spaceShort}}
+		return opCall{http.MethodPost, base + "projects", map[string]any{"name": w.fresh("proj"), "space": w.spaceShort}, nil}
 	case "getProject":
-		return opCall{http.MethodGet, proj, nil}
+		return opCall{http.MethodGet, proj, nil, nil}
 	case "updateProject":
-		return opCall{http.MethodPatch, proj, map[string]any{"description": w.fresh("desc")}}
+		return opCall{http.MethodPatch, proj, map[string]any{"description": w.fresh("desc")}, nil}
 	case "listProjectMembers":
-		return opCall{http.MethodGet, proj + "/members", nil}
+		return opCall{http.MethodGet, proj + "/members", nil, nil}
 	case "putProjectMember":
 		u, _ := testsupport.SeedUser(w.t, w.pool, "")
-		return opCall{http.MethodPut, proj + "/members/" + u.String(), map[string]any{"role": "member"}}
+		return opCall{http.MethodPut, proj + "/members/" + u.String(), map[string]any{"role": "member"}, nil}
 	case "deleteProjectMember":
 		u, _ := testsupport.SeedUser(w.t, w.pool, "")
 		w.exec(`INSERT INTO project_members (project_id, user_id, role, added_at, added_by) VALUES ($1, $2, 'member', now(), $3)`,
 			p, u, w.owner)
-		return opCall{http.MethodDelete, proj + "/members/" + u.String(), nil}
+		return opCall{http.MethodDelete, proj + "/members/" + u.String(), nil, nil}
 	case "listComponents":
-		return opCall{http.MethodGet, proj + "/components", nil}
+		return opCall{http.MethodGet, proj + "/components", nil, nil}
 	case "createComponent":
-		return opCall{http.MethodPost, proj + "/components", map[string]any{"name": w.fresh("comp")}}
+		return opCall{http.MethodPost, proj + "/components", map[string]any{"name": w.fresh("comp")}, nil}
 	case "updateComponent":
-		return opCall{http.MethodPatch, proj + "/components/" + w.component(p).String(), map[string]any{"name": w.fresh("comp")}}
+		return opCall{http.MethodPatch, proj + "/components/" + w.component(p).String(), map[string]any{"name": w.fresh("comp")}, nil}
 	case "archiveComponent":
-		return opCall{http.MethodPost, proj + "/components/" + w.component(p).String() + "/archive", nil}
+		return opCall{http.MethodPost, proj + "/components/" + w.component(p).String() + "/archive", nil, nil}
 	case "listIssues":
-		return opCall{http.MethodGet, base + "issues?project=" + w.pPrefix, nil}
+		return opCall{http.MethodGet, base + "issues?project=" + w.pPrefix, nil, nil}
 	case "listReadyIssues":
-		return opCall{http.MethodGet, base + "issues/ready?project=" + w.pPrefix, nil}
+		return opCall{http.MethodGet, base + "issues/ready?project=" + w.pPrefix, nil, nil}
 	case "getIssue":
-		return opCall{http.MethodGet, base + "issues/" + w.issue, nil}
+		return opCall{http.MethodGet, base + "issues/" + w.issue, nil, nil}
 	case "listIssueEvents":
-		return opCall{http.MethodGet, base + "issues/" + w.issue + "/events", nil}
+		return opCall{http.MethodGet, base + "issues/" + w.issue + "/events", nil, nil}
 	case "listDependencies":
-		return opCall{http.MethodGet, base + "issues/" + w.issue + "/dependencies", nil}
+		return opCall{http.MethodGet, base + "issues/" + w.issue + "/dependencies", nil, nil}
 	case "listComments":
-		return opCall{http.MethodGet, base + "issues/" + w.issue + "/comments", nil}
+		return opCall{http.MethodGet, base + "issues/" + w.issue + "/comments", nil, nil}
 	case "getIssueMovePlan":
-		return opCall{http.MethodGet, base + "issues/" + w.issue + "/move-plan?targetProject=" + w.qPrefix, nil}
+		return opCall{http.MethodGet, base + "issues/" + w.issue + "/move-plan?targetProject=" + w.qPrefix, nil, nil}
 	case "search":
-		return opCall{http.MethodGet, base + "search?kinds=issue&query=" + w.word, nil}
+		return opCall{http.MethodGet, base + "search?kinds=issue&query=" + w.word, nil, nil}
+	case "createIssue":
+		return opCall{http.MethodPost, proj + "/issues", map[string]any{"title": w.fresh("iss"), "type": "task", "force": true}, nil}
+	case "createEpic":
+		return opCall{http.MethodPost, proj + "/epics", map[string]any{"title": w.fresh("epic"), "childTemplates": []map[string]any{{"title": "child"}}}, nil}
+	}
+	id := w.freshIssue(p)
+	issue := base + "issues/" + id
+	match := map[string]string{"If-Match": `"` + strconv.Itoa(w.issueVersion(id)) + `"`}
+	switch op.id {
+	case "updateIssue":
+		return opCall{http.MethodPatch, issue, map[string]any{"title": w.fresh("title")}, match}
+	case "claimIssue":
+		return opCall{http.MethodPost, issue + "/claim", nil, nil}
+	case "claimIssues":
+		return opCall{http.MethodPost, base + "issues/claim", map[string]any{"ids": []string{id}}, nil}
+	case "unclaimIssue":
+		w.do(key, opCall{http.MethodPost, issue + "/claim", nil, nil}, "", nil)
+		return opCall{http.MethodPost, issue + "/unclaim", map[string]any{"nextStatus": "open", "reason": "handover"}, nil}
+	case "releaseIssueLock":
+		w.do(key, opCall{http.MethodPost, issue + "/claim", nil, nil}, "", nil)
+		return opCall{http.MethodPost, issue + "/release-lock", nil, nil}
+	case "closeIssue":
+		return opCall{http.MethodPost, issue + "/close", map[string]any{"reason": "done", "closeOutcome": "done"}, match}
+	case "acceptIssue":
+		w.exec(`UPDATE issues SET assignee = (SELECT username FROM users WHERE id = $2) WHERE id = $1`, id, w.owner)
+		return opCall{http.MethodPost, issue + "/accept", nil, nil}
+	case "reparentIssue":
+		return opCall{http.MethodPost, issue + "/reparent", map[string]any{"newParentId": w.freshIssue(p)}, match}
+	case "dropDelegated", "resumeDelegated":
+		w.exec(`UPDATE issues SET assignee = (SELECT username FROM users WHERE id = $2) WHERE id = $1`, id, w.member)
+		action := "/drop-delegated"
+		if op.id == "resumeDelegated" {
+			action = "/resume-delegated"
+		}
+		return opCall{http.MethodPost, issue + action, nil, nil}
+	case "attachCommits":
+		return opCall{http.MethodPost, issue + "/commits", map[string]any{"commits": []map[string]any{{"hash": w.freshHash(), "repoUrl": w.repoURL}}}, nil}
+	case "detachCommit":
+		hash := w.freshHash()
+		w.do(key, opCall{http.MethodPost, issue + "/commits", map[string]any{"commits": []map[string]any{{"hash": hash, "repoUrl": w.repoURL}}}, nil}, "", nil)
+		return opCall{http.MethodDelete, issue + "/commits/" + hash, nil, nil}
 	}
 	w.t.Fatalf("no request for %s", op.id)
 	return opCall{}
@@ -401,6 +495,9 @@ func (w *classWorld) do(key string, c opCall, query string, headers map[string]s
 		req.Header.Set("Content-Type", "application/json")
 	}
 	req.Header.Set(auth.HeaderAPIKey, key)
+	for k, v := range c.headers {
+		req.Header.Set(k, v)
+	}
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
@@ -489,7 +586,7 @@ func TestPublicAPIClasses_KeyRight(t *testing.T) {
 		t.Run(op.id, func(t *testing.T) {
 			owner, g := w.below(op.right)
 			key := w.key(owner, g)
-			c := w.call(op, w.p)
+			c := w.call(op, w.p, key)
 			since := w.lastEvent()
 			a := w.do(key, c, "", nil)
 			if a.status != http.StatusForbidden || a.code() != "insufficient_scope" {
@@ -516,7 +613,7 @@ func TestPublicAPIClasses_FieldsAndPrefer(t *testing.T) {
 	for _, op := range publicOps {
 		t.Run(op.id, func(t *testing.T) {
 			if op.read {
-				c := w.call(op, w.p)
+				c := w.call(op, w.p, key)
 				full := w.do(key, c, "", nil).object(t)
 				a := w.do(key, c, "fields="+op.field, nil)
 				if a.status != http.StatusOK {
@@ -563,16 +660,25 @@ func TestPublicAPIClasses_FieldsAndPrefer(t *testing.T) {
 				}
 				return
 			}
-			c := w.call(op, w.p)
+			c := w.call(op, w.p, key)
 			since := w.lastEvent()
 			if a := w.do(key, c, "fields=id", nil); a.status != http.StatusBadRequest || a.code() != "validation_error" {
 				t.Errorf("fields= on a write: %d %s, want 400 validation_error", a.status, a.body)
 			}
 			w.wantNothingWritten(t, op.id+" with fields=", since)
-			if op.prefer {
-				t.Fatalf("%s: a write of T022 has no Prefer", op.id)
-			}
 			a := w.do(key, c, "", map[string]string{"Prefer": "return=minimal"})
+			if op.prefer {
+				if !success(a.status) {
+					t.Fatalf("with Prefer: %d %s", a.status, a.body)
+				}
+				if h := a.header.Get("Preference-Applied"); h != "return=minimal" {
+					t.Errorf("Preference-Applied %q, want return=minimal", h)
+				}
+				if got := keysOf(a.object(t)); !slices.Equal(got, []string{"id", "version"}) {
+					t.Errorf("Prefer: return=minimal answered %v, want id and version", got)
+				}
+				return
+			}
 			if !success(a.status) {
 				t.Fatalf("with Prefer: %d %s", a.status, a.body)
 			}
@@ -619,7 +725,7 @@ func TestPublicAPIClasses_OriginOfAWrite(t *testing.T) {
 		}
 		t.Run(op.id, func(t *testing.T) {
 			for _, kind := range []string{"", "directed", "autonomous"} {
-				c := w.call(op, w.p)
+				c := w.call(op, w.p, key)
 				if kind != "" {
 					c = withBody(c, map[string]any{"kind": kind})
 				}
@@ -629,8 +735,18 @@ func TestPublicAPIClasses_OriginOfAWrite(t *testing.T) {
 					t.Fatalf("kind %q: %d %s", kind, a.status, a.body)
 				}
 				actors := w.actorsSince(since)
-				if len(actors) == 0 {
+				if len(actors) == 0 && !op.noEvent {
 					t.Fatalf("kind %q: no event written", kind)
+				}
+				if op.id == "createIssue" || op.id == "createEpic" {
+					want := map[string]string{"": "api", "directed": "agent_directed", "autonomous": "agent_autonomous"}[kind]
+					var source string
+					if err := w.pool.QueryRow(context.Background(), `SELECT source FROM issues WHERE id = $1`, a.object(t)["id"]).Scan(&source); err != nil {
+						t.Fatalf("read source: %v", err)
+					}
+					if source != want {
+						t.Errorf("kind %q: source %q, want %s", kind, source, want)
+					}
 				}
 				for _, at := range actors {
 					if at != "agent" {
@@ -638,7 +754,7 @@ func TestPublicAPIClasses_OriginOfAWrite(t *testing.T) {
 					}
 				}
 			}
-			c := withBody(w.call(op, w.p), map[string]any{"kind": "human"})
+			c := withBody(w.call(op, w.p, key), map[string]any{"kind": "human"})
 			since := w.lastEvent()
 			if a := w.do(key, c, "", nil); a.status != http.StatusBadRequest || a.code() != "validation_error" {
 				t.Errorf("kind human: %d %s, want 400 validation_error", a.status, a.body)
@@ -648,11 +764,11 @@ func TestPublicAPIClasses_OriginOfAWrite(t *testing.T) {
 	}
 	t.Run("aliases added by key", func(t *testing.T) {
 		updated := w.fresh("al")
-		if a := w.do(key, opCall{http.MethodPatch, "/api/v1/projects/" + w.p.String(), map[string]any{"aliasesAdd": []string{updated}}}, "", nil); !success(a.status) {
+		if a := w.do(key, opCall{http.MethodPatch, "/api/v1/projects/" + w.p.String(), map[string]any{"aliasesAdd": []string{updated}}, nil}, "", nil); !success(a.status) {
 			t.Fatalf("updateProject: %d %s", a.status, a.body)
 		}
 		created := w.fresh("al")
-		if a := w.do(key, opCall{http.MethodPost, "/api/v1/projects", map[string]any{"name": w.fresh("proj"), "space": w.spaceShort, "aliases": []string{created}}}, "", nil); !success(a.status) {
+		if a := w.do(key, opCall{http.MethodPost, "/api/v1/projects", map[string]any{"name": w.fresh("proj"), "space": w.spaceShort, "aliases": []string{created}}, nil}, "", nil); !success(a.status) {
 			t.Fatalf("createProject: %d %s", a.status, a.body)
 		}
 		for _, alias := range []string{updated, created} {
@@ -677,7 +793,7 @@ func TestPublicAPIClasses_KeyScope(t *testing.T) {
 	scoped := w.key(w.owner, apikeys.Grant{Level: apikeys.LevelRead, Scope: apikeys.Scope{Mode: apikeys.ScopeProjects, Projects: []uuid.UUID{w.p}}})
 	all := w.key(w.owner, levelKey(apikeys.LevelRead))
 	q := w.q.String()
-	get := func(key, path string) answer { return w.do(key, opCall{http.MethodGet, path, nil}, "", nil) }
+	get := func(key, path string) answer { return w.do(key, opCall{http.MethodGet, path, nil, nil}, "", nil) }
 
 	for _, c := range []struct {
 		name, path string
@@ -739,7 +855,7 @@ func TestPublicAPIClasses_OwnerRole(t *testing.T) {
 			continue
 		}
 		t.Run(op.id, func(t *testing.T) {
-			c := w.call(op, w.p)
+			c := w.call(op, w.p, key)
 			since := w.lastEvent()
 			if a := w.do(key, c, "", nil); a.status != http.StatusForbidden || a.code() != "forbidden" {
 				t.Fatalf("a member: %d %s, want 403 forbidden", a.status, a.body)
@@ -747,7 +863,7 @@ func TestPublicAPIClasses_OwnerRole(t *testing.T) {
 			w.wantNothingWritten(t, op.id, since)
 			w.exec(`UPDATE project_members SET role = 'owner' WHERE project_id = $1 AND user_id = $2`, w.p, w.member)
 			defer w.exec(`UPDATE project_members SET role = 'member' WHERE project_id = $1 AND user_id = $2`, w.p, w.member)
-			if a := w.do(key, w.call(op, w.p), "", nil); !success(a.status) {
+			if a := w.do(key, w.call(op, w.p, key), "", nil); !success(a.status) {
 				t.Errorf("the owner: %d %s", a.status, a.body)
 			}
 		})
@@ -777,7 +893,7 @@ VALUES ($1, $2, $3, 'backfilled', 'manage', false, 'all', NULL) RETURNING id`, w
 	})
 	for _, op := range publicOps {
 		t.Run(op.id, func(t *testing.T) {
-			if a := w.do(plain, w.call(op, w.p), "", nil); !success(a.status) {
+			if a := w.do(plain, w.call(op, w.p, plain), "", nil); !success(a.status) {
 				t.Errorf("%d %s", a.status, a.body)
 			}
 		})
@@ -794,7 +910,7 @@ func TestPublicAPIClasses_StrictParsing(t *testing.T) {
 	key := w.key(w.owner, levelKey(apikeys.LevelManage))
 	for _, op := range publicOps {
 		t.Run(op.id, func(t *testing.T) {
-			c := w.call(op, w.p)
+			c := w.call(op, w.p, key)
 			since := w.lastEvent()
 			if a := w.do(key, c, "nosuchparam=1", nil); a.status != http.StatusBadRequest || a.code() != "validation_error" {
 				t.Errorf("an unknown parameter: %d %s, want 400 validation_error", a.status, a.body)

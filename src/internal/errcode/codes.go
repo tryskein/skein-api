@@ -76,6 +76,13 @@ var (
 	// closeIssue do; batches never).
 	IdempotencyNotSupported = define("idempotency_not_supported", ClassFormat, Permanent)
 
+	// DuplicateSuspected — createIssue found issues like the one asked for
+	// and created nothing: the client repeats with force=true or with
+	// duplicateOf (the duplicate gate; in MCP the same outcome is
+	// decisionRequired). Determined by the request body, so not transient
+	// and kept by Idempotency-Key (US-7).
+	DuplicateSuspected = define("duplicate_suspected", ClassBusiness, Permanent)
+
 	// Unavailable dependencies.
 	AttachmentsUnavailable = define("attachments_unavailable", ClassUnavailable, Transient)
 	PreviewUnavailable     = define("preview_unavailable", ClassUnavailable, Transient)

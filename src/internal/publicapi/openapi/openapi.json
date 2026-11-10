@@ -186,6 +186,17 @@
                 },
                 "type": "object"
             },
+            "issues.DetachedCommitRef": {
+                "properties": {
+                    "hash": {
+                        "type": "string"
+                    },
+                    "repoID": {
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
             "issues.EpicProgress": {
                 "properties": {
                     "closed": {
@@ -986,6 +997,19 @@
                 },
                 "type": "object"
             },
+            "publicapi.ClaimedIssues": {
+                "properties": {
+                    "items": {
+                        "description": "Items are the issues claimed.",
+                        "items": {
+                            "$ref": "#/components/schemas/issues.IssueDetail"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
+                    }
+                },
+                "type": "object"
+            },
             "publicapi.DependencyItem": {
                 "properties": {
                     "createdAt": {
@@ -1014,6 +1038,281 @@
                         "type": "string"
                     },
                     "type": {
+                        "type": "string"
+                    },
+                    "version": {
+                        "type": "integer"
+                    }
+                },
+                "type": "object"
+            },
+            "publicapi.DetachedCommits": {
+                "properties": {
+                    "detached": {
+                        "description": "Detached are the links removed.",
+                        "items": {
+                            "$ref": "#/components/schemas/issues.DetachedCommitRef"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
+                    },
+                    "issue": {
+                        "$ref": "#/components/schemas/issues.IssueDetail",
+                        "description": "Issue after the detach."
+                    },
+                    "notFound": {
+                        "description": "NotFound are the hashes the issue had no link with.",
+                        "items": {
+                            "type": "string"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
+                    }
+                },
+                "type": "object"
+            },
+            "publicapi.EpicCreated": {
+                "properties": {
+                    "acceptanceCriteria": {
+                        "type": "string"
+                    },
+                    "acceptedAt": {
+                        "description": "AcceptedAt records when the current assignee explicitly accepted\nthe task. nil = \"not yet accepted\" (Inbox surfaces it as \"needs\nacceptance\"). Reset to nil whenever the assignee changes; auto-\npopulated when the creator self-assigns. Phase 2 introduces\nskein_accept + issue.accepted event for the explicit positive\ntransition.",
+                        "type": "string"
+                    },
+                    "acceptedBy": {
+                        "description": "AcceptedBy is the user UUID that produced the latest acceptance\n(FK → users(id) ON DELETE SET NULL — the timestamp survives a\nhard-delete of the user record). nil iff AcceptedAt is nil.",
+                        "type": "string"
+                    },
+                    "acceptedByUsername": {
+                        "description": "AcceptedByUsername is the username for AcceptedBy, joined via\nLEFT JOIN users so a deleted accepter surfaces as nil. Optional\nin the wire shape.",
+                        "type": "string"
+                    },
+                    "assignee": {
+                        "type": "string"
+                    },
+                    "assigneeStatus": {
+                        "$ref": "#/components/schemas/person.Status",
+                        "description": "AssigneeStatus / CreatedByStatus — the person marks of the assignee\nand the author in the issue's space (sk-674.18 T027,\nspaces/contract.go): departed, or deleted with the pseudonym. Absent\nwhen there is nothing to mark, or when the assignee is free text."
+                    },
+                    "assigneeUserId": {
+                        "type": "string"
+                    },
+                    "blockers": {
+                        "description": "Blockers is the populated list backing IsBlocked: one entry per gating\nblocker (neither closed nor standing, on the TO-side of an outgoing\nblocks / waits-for edge) whose project is inside the reader's horizon,\nordered by id. Every entry is {id, title, status}. Always non-nil\n(empty array when not blocked) so JS clients don't have to\nspecial-case absence.\n\nsk-423: the redacted form {id, redacted:true} that sk-421.1 put here\nfor a blocker outside the reader's horizon is gone — its mere presence\nsaid that the hidden issue was not closed. Such edges are counted in\nUnavailableBlockingLinks.",
+                        "items": {
+                            "$ref": "#/components/schemas/issues.BlockerRef"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
+                    },
+                    "canForceUnlock": {
+                        "description": "CanForceUnlock — sk-674.18 T034 (US-16, K-28): the reader may release\nanother holder's claim on this issue (force_unlock: the project\nowner, the space owner, the instance admin). Set by the card read\n(GET …/issues/{id}) and the unlock action, which answer per reader;\nabsent on every other surface that returns a card.",
+                        "type": "boolean"
+                    },
+                    "children": {
+                        "description": "Children are the children created with the epic.",
+                        "items": {
+                            "$ref": "#/components/schemas/issues.IssueDetail"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
+                    },
+                    "closeOutcome": {
+                        "description": "CloseOutcome — the close outcome (sk-489, US-1): one of four values\nfrom close_outcome.go, answering \"how did it end\", unlike the free\ntext of ClosedReason. It sits next to ClosedAt / ClosedReason because\nit is a property of the same event — the close — while the wire name is taken from\nthe action (`closeOutcome`, like the \"close\" argument), not from the state.\n\nPresent if and only if the issue is closed (INV-1): an unclosed issue\nhas no key at all, a closed one always has it. Hence *string and\nomitempty: the invariant is held by storage (the CHECK and the trigger of migration\n000050), and the wire only repeats it — \"no key\" reads as \"not\nclosed\", and no value of the field can contradict that.\n\nA client that receives a value outside the four prints it as is and does not\ncount it as done or as dropped out (INV-2) — it takes the numbers from\nthe server and does not derive them from the row.",
+                        "type": "string"
+                    },
+                    "closedAt": {
+                        "type": "string"
+                    },
+                    "closedReason": {
+                        "type": "string"
+                    },
+                    "commentsCount": {
+                        "type": "integer"
+                    },
+                    "commitRefs": {
+                        "description": "populated from issue_commits (R3.4 commit-on-close).",
+                        "items": {
+                            "$ref": "#/components/schemas/issues.CommitRef"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
+                    },
+                    "componentIds": {
+                        "description": "Aggregates — joined / counted in GetIssue.",
+                        "items": {
+                            "type": "string"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
+                    },
+                    "createdAt": {
+                        "type": "string"
+                    },
+                    "createdBy": {
+                        "type": "string"
+                    },
+                    "createdByStatus": {
+                        "$ref": "#/components/schemas/person.Status"
+                    },
+                    "createdByUsername": {
+                        "type": "string"
+                    },
+                    "deferUntil": {
+                        "type": "string"
+                    },
+                    "description": {
+                        "type": "string"
+                    },
+                    "design": {
+                        "type": "string"
+                    },
+                    "dismissedBy": {
+                        "items": {
+                            "type": "string"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
+                    },
+                    "dismissedByUsernames": {
+                        "description": "DismissedByUsernames is the username projection of\nDismissedBy in matching order. Same missing-user semantics\nas PreviousAssigneeUsernames.",
+                        "items": {
+                            "type": "string"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
+                    },
+                    "dueAt": {
+                        "type": "string"
+                    },
+                    "epic": {
+                        "$ref": "#/components/schemas/issues.EpicRollup",
+                        "description": "sk-32: Epic rollup — populated only when issue.type == 'epic'.\nnil for every other type (and JSON-omitted via omitempty). The\nchild set is sourced from the dependencies graph (parent-child\nedges). sk-35 restored this as canonical.\n\nEligibleForClose is true when TotalChildren > 0 AND\nClosedChildren == TotalChildren. Empty epics never become\neligible — they would be a false signal (\"0 of 0 closed\" is not\na meaningful \"done\" state)."
+                    },
+                    "estimatedMinutes": {
+                        "type": "integer"
+                    },
+                    "externalRef": {
+                        "type": "string"
+                    },
+                    "id": {
+                        "type": "string"
+                    },
+                    "inheritedComponentIds": {
+                        "description": "InheritedComponentIDs is the transient \"echo what happened on\nthis call\" channel populated exclusively by CreateIssue when the\ncaller omitted componentIds AND a parent was supplied AND the\nparent (same project) had components attached. The store copies\nthe parent's set into ComponentIDs at INSERT time and mirrors\nthe inherited slice here so the caller can surface a warning\n(\"inherited foo, bar from parent — override via skein_update if\nwrong\"). GetIssue / Patch / List paths never populate this field;\nomitempty keeps it absent on every non-create read.",
+                        "items": {
+                            "type": "string"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
+                    },
+                    "isBlocked": {
+                        "description": "IsBlocked is the derived \"this issue is blocked\" flag (sk-31), FOR THE\nREADER (sk-423): true when at least one outgoing blocks / waits-for\nedge points at a target issue whose status is neither 'closed' nor\n'standing' AND whose project is inside the reader's horizon. A blocker\noutside the horizon never makes this true — it is reported as a link in\nUnavailableBlockingLinks instead. Agents never write it and the UI never\ncaches it across edge mutations.\n\nINV-11 (sk-421.1, restated by sk-423): on the detail it is DERIVED FROM\nBlockers of the same response — true if and only if Blockers is\nnon-empty — so the flag and the list always describe one state of the\ngraph.",
+                        "type": "boolean"
+                    },
+                    "labels": {
+                        "items": {
+                            "type": "string"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
+                    },
+                    "lockedAt": {
+                        "type": "string"
+                    },
+                    "lockedBy": {
+                        "type": "string"
+                    },
+                    "lockedByUsername": {
+                        "description": "LockedByUsername is the username of the user who PERFORMED the claim\nthat holds the lock now (sk-421.1, US-15) — derived on read from that\nclaim's issue.claimed event, never stored. Present only while the\nissue is locked AND that event is found; absent (not empty) otherwise,\nso it disappears with the lock on unclaim, close, auto-release or a\nforced release. For an admin who claimed on behalf of another user it\nis the admin, not the assignee. A request that does not change the\nlock cannot change it, whichever session it presents. LockedBy keeps\nthe MCP session id; this field never repeats it.",
+                        "type": "string"
+                    },
+                    "mentions": {
+                        "description": "R4.3 — resolved @username mentions across description / notes /\nacceptance_criteria / design. Frontend renderer substitutes the\n<UserMention> component for `@username` matches whose username is\nin this list; unresolved `@foo` stays plain text. Always non-nil\n(`[]` rather than `null`) so JS clients don't have to special-\ncase absence.",
+                        "items": {
+                            "$ref": "#/components/schemas/issues.MentionRef"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
+                    },
+                    "metadata": {
+                        "additionalProperties": {},
+                        "type": "object"
+                    },
+                    "notes": {
+                        "type": "string"
+                    },
+                    "parentIdCurrent": {
+                        "description": "ParentID is the current parent id derived from the dependencies\ngraph (parent-child edge, first by created_at). Wire field is\n`parentIdCurrent` since sk-35 — the `issues.parent_id` column is\nfrozen for backward-compat reads but no longer authoritative.\nAbsent when the parent's project is not visible to the reader\n(sk-674.18 T009).",
+                        "type": "string"
+                    },
+                    "pinned": {
+                        "type": "boolean"
+                    },
+                    "previousAssigneeUsernames": {
+                        "description": "PreviousAssigneeUsernames is the username projection of\nPreviousAssignees in matching order. Surfaced so the UI can\nrender a human-readable delegation chain without an extra\nper-uuid resolve. Missing users (deleted accounts) project\nas empty strings — the UI should treat empty slots as\n\"unknown\" and skip them when rendering.",
+                        "items": {
+                            "type": "string"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
+                    },
+                    "previousAssignees": {
+                        "description": "sk-34 — delegation chain. PreviousAssignees lists every user UUID\nthat was ever this issue's assignee (with no duplicates), append-\nordered by reassignment timestamp. PatchIssue's assignee-change\nbranch appends the old assignee on each reassign and prunes the\nnew assignee when they \"come back\" (the array tracks PAST\nassignees only — the current assignee is never present).\n\nDismissedBy lists users who explicitly opted out of this issue's\nDelegated lens via the \"Drop from Delegated\" affordance\n(skein_drop_delegated MCP tool / POST /issues/{id}/dismiss). Sticky\n— entries clear only when the user becomes the current assignee\nagain. The Delegated lens predicate is:\n\n  created_by = me\n  OR (me ∈ previous_assignees\n      AND me ∉ dismissed_by\n      AND assignee != me)\n\nBoth arrays are wire-omitempty — older clients that don't know the\nfields simply see nothing extra. JSON shape is always []uuid (empty\narrays normalise to absence via omitempty + nil slice).",
+                        "items": {
+                            "type": "string"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
+                    },
+                    "priority": {
+                        "type": "integer"
+                    },
+                    "projectId": {
+                        "type": "string"
+                    },
+                    "reviewRequired": {
+                        "description": "--- sk-303.14, contract C1 — the author's private\nbookkeeping (INV-2, SC-028). ---\n\nThree review-mechanic fields. They land on the card ONLY when the\ncaller is the issue author (issues.CreatedBy), and they are filled\nin EXACTLY one place — applyReviewVisibility (review_visibility.go).\nOther readers have no keys in the object at all: not `null`, not\n`false`, not zero — absence, because \"no field\" and \"no mark\" must\nbe indistinguishable to the assignee.\n\nHence pointers and `omitempty` on all three, including the flag: on\na flat bool `omitempty` strips `false` and keeps `true`, which would\ndisclose exactly half the state; a nil pointer removes the key at\nany value, and a non-nil pointer to false gives\n`\"reviewRequired\":false` to the author.\n\nThere is NO username projection of the mark author here on purpose:\ncontract C1 is three fields, and only the issue author may set the\nmark (INV-4), so reviewedBy is always equal to createdBy, whose\nname is already on the card as createdByUsername. A fourth key\nwould add no information and would widen the contract the frontend\nconsumes.",
+                        "type": "boolean"
+                    },
+                    "reviewedAt": {
+                        "type": "string"
+                    },
+                    "reviewedBy": {
+                        "type": "string"
+                    },
+                    "rowSeq": {
+                        "description": "RowSeq is the row freshness order of the issue (sk-622.21, US-15,\ndecision K16) — the same value and the same rule as\n[IssueSummary.RowSeq]: an open card takes a phase-2 event row\n([NeutralRow]) only if the row's RowSeq is greater than this one.\n\nRead in ONE statement with the issue's own columns AND the card's\nlabels and components (issueRowSelect, rowComponentsLabelsCols —\ndecision R26 item 2): the card is one snapshot, exactly the state its\nRowSeq names. A separate later read of the labels could show labels\nnewer than RowSeq, and an intermediate event row with a greater RowSeq\nwould then roll them back under the strict-greater rule. Zero (key absent) — the issue row has not been written\nsince the phase-2 rollout (migration 000064), order unknown; see\n[IssueSummary.RowSeq].",
+                        "type": "integer"
+                    },
+                    "source": {
+                        "type": "string"
+                    },
+                    "sourceContext": {
+                        "type": "string"
+                    },
+                    "spaceId": {
+                        "description": "SpaceID is the short id of the space of the issue's project\n(sk-674.18 T032), not of its id prefix.",
+                        "type": "string"
+                    },
+                    "startedAt": {
+                        "type": "string"
+                    },
+                    "status": {
+                        "type": "string"
+                    },
+                    "title": {
+                        "type": "string"
+                    },
+                    "type": {
+                        "type": "string"
+                    },
+                    "unavailableBlockingLinks": {
+                        "description": "UnavailableBlockingLinks is the number of outgoing blocks / waits-for\nedges of this issue whose target lives in a project outside the\nreader's horizon — counted WHATEVER the target's status, closed and\nstanding included (sk-423). It is the fact of the link, never a claim\nthat the link blocks: it does not depend on the hidden issue's status,\nso it cannot reveal it (the same rule as depsCounts' `unavailable`\nbucket and epic.unavailableChildren). Always present; 0 when there is\nnone, and always 0 for a reader who sees every project.\n\nReadiness (skein_ready) keeps counting every blocker, so an issue with\nisBlocked=false and UnavailableBlockingLinks > 0 may be absent from the\nready list: whether such a link still blocks is not knowable from here.",
+                        "type": "integer"
+                    },
+                    "updatedAt": {
                         "type": "string"
                     },
                     "version": {
@@ -1339,6 +1638,176 @@
                 },
                 "type": "object"
             },
+            "publicapi.attachBody": {
+                "properties": {
+                    "commits": {
+                        "description": "Commits to attach (1..10). Required.",
+                        "items": {
+                            "$ref": "#/components/schemas/publicapi.commitInput"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
+                    },
+                    "kind": {
+                        "description": "Kind of the write: directed or autonomous (checked).",
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
+            "publicapi.childTemplate": {
+                "properties": {
+                    "acceptanceCriteria": {
+                        "description": "AcceptanceCriteria, markdown.",
+                        "type": "string"
+                    },
+                    "assignee": {
+                        "description": "Assignee of the child.",
+                        "type": "string"
+                    },
+                    "componentIds": {
+                        "description": "ComponentIDs of the child; omitted — the epic's.",
+                        "items": {
+                            "type": "string"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
+                    },
+                    "description": {
+                        "description": "Description, markdown.",
+                        "type": "string"
+                    },
+                    "design": {
+                        "description": "Design, markdown.",
+                        "type": "string"
+                    },
+                    "labels": {
+                        "description": "Labels of the child.",
+                        "items": {
+                            "type": "string"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
+                    },
+                    "notes": {
+                        "description": "Notes, markdown.",
+                        "type": "string"
+                    },
+                    "priority": {
+                        "description": "Priority 0..4.",
+                        "type": "integer"
+                    },
+                    "title": {
+                        "description": "Title, required.",
+                        "type": "string"
+                    },
+                    "type": {
+                        "description": "Type of the child (default task).",
+                        "type": "string"
+                    },
+                    "unassigned": {
+                        "description": "Unassigned leaves the child without an assignee.",
+                        "type": "boolean"
+                    }
+                },
+                "type": "object"
+            },
+            "publicapi.claimBody": {
+                "properties": {
+                    "assignee": {
+                        "description": "Assignee claims on behalf of another user (the instance admin only).",
+                        "type": "string"
+                    },
+                    "kind": {
+                        "description": "Kind of the write: directed or autonomous (checked).",
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
+            "publicapi.claimIssuesBody": {
+                "properties": {
+                    "assignee": {
+                        "description": "Assignee claims on behalf of another user (the instance admin only).",
+                        "type": "string"
+                    },
+                    "ids": {
+                        "description": "IDs are 1..100 distinct hierarchical ids. Required.",
+                        "items": {
+                            "type": "string"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
+                    },
+                    "kind": {
+                        "description": "Kind of the write: directed or autonomous (checked).",
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
+            "publicapi.closeBody": {
+                "properties": {
+                    "closeOutcome": {
+                        "description": "CloseOutcome: done, duplicate, superseded or wont_do.",
+                        "type": "string"
+                    },
+                    "closeTarget": {
+                        "description": "CloseTarget, the issue a duplicate or superseded one points to; the\nedge is written in the same transaction.",
+                        "type": "string"
+                    },
+                    "commits": {
+                        "description": "Commits closing the issue (at most 10), attached in the same\ntransaction.",
+                        "items": {
+                            "$ref": "#/components/schemas/publicapi.commitInput"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
+                    },
+                    "kind": {
+                        "description": "Kind of the write: directed or autonomous (checked).",
+                        "type": "string"
+                    },
+                    "reason": {
+                        "description": "Reason of the close, non-empty. Required.",
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
+            "publicapi.commitInput": {
+                "properties": {
+                    "author": {
+                        "description": "Author of the commit.",
+                        "type": "string"
+                    },
+                    "committedAt": {
+                        "description": "CommittedAt, RFC 3339.",
+                        "type": "string"
+                    },
+                    "hash": {
+                        "description": "Hash, lowercase hex 7..64. Required.",
+                        "type": "string"
+                    },
+                    "message": {
+                        "description": "Message, the subject line.",
+                        "type": "string"
+                    },
+                    "repoId": {
+                        "description": "RepoID, the UUID of the project's repo; wins over repoUrl.",
+                        "type": "string"
+                    },
+                    "repoUrl": {
+                        "description": "RepoURL, exact match of the project's gitRepos[].url.",
+                        "type": "string"
+                    },
+                    "url": {
+                        "description": "URL of the commit.",
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
             "publicapi.componentBody": {
                 "properties": {
                     "description": {
@@ -1352,6 +1821,184 @@
                     "name": {
                         "description": "Name of the component, unique in the project. Required on create.",
                         "type": "string"
+                    }
+                },
+                "type": "object"
+            },
+            "publicapi.createEpicBody": {
+                "properties": {
+                    "acceptanceCriteria": {
+                        "description": "AcceptanceCriteria, markdown.",
+                        "type": "string"
+                    },
+                    "assignee": {
+                        "description": "Assignee: username, email or user UUID. Omitted: the owner's «assign\nissues my agent creates to me» setting decides.",
+                        "type": "string"
+                    },
+                    "childTemplates": {
+                        "description": "ChildTemplates are the children (at most 50).",
+                        "items": {
+                            "$ref": "#/components/schemas/publicapi.childTemplate"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
+                    },
+                    "componentIds": {
+                        "description": "ComponentIDs, UUIDs of components of the project; omitted — the\nparent's are inherited.",
+                        "items": {
+                            "type": "string"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
+                    },
+                    "description": {
+                        "description": "Description, markdown.",
+                        "type": "string"
+                    },
+                    "design": {
+                        "description": "Design notes, markdown.",
+                        "type": "string"
+                    },
+                    "kind": {
+                        "description": "Kind of the write: directed or autonomous; omitted — the origin is\napi.",
+                        "type": "string"
+                    },
+                    "labels": {
+                        "description": "Labels.",
+                        "items": {
+                            "type": "string"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
+                    },
+                    "notes": {
+                        "description": "Notes, markdown.",
+                        "type": "string"
+                    },
+                    "parentId": {
+                        "description": "ParentID, the hierarchical id of the parent.",
+                        "type": "string"
+                    },
+                    "priority": {
+                        "description": "Priority 0..4 (default 3).",
+                        "type": "integer"
+                    },
+                    "reviewRequired": {
+                        "description": "ReviewRequired asks the author's review once the issue is closed.",
+                        "type": "boolean"
+                    },
+                    "sourceContext": {
+                        "description": "SourceContext, free text on where the issue came from.",
+                        "type": "string"
+                    },
+                    "title": {
+                        "description": "Title, 1..500 characters. Required.",
+                        "type": "string"
+                    },
+                    "unassigned": {
+                        "description": "Unassigned leaves the issue without an assignee whatever the setting.",
+                        "type": "boolean"
+                    }
+                },
+                "type": "object"
+            },
+            "publicapi.createIssueBody": {
+                "properties": {
+                    "acceptanceCriteria": {
+                        "description": "AcceptanceCriteria, markdown.",
+                        "type": "string"
+                    },
+                    "assignee": {
+                        "description": "Assignee: username, email or user UUID. Omitted: the owner's «assign\nissues my agent creates to me» setting decides.",
+                        "type": "string"
+                    },
+                    "componentIds": {
+                        "description": "ComponentIDs, UUIDs of components of the project; omitted — the\nparent's are inherited.",
+                        "items": {
+                            "type": "string"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
+                    },
+                    "dependencies": {
+                        "description": "Dependencies are edges written with the issue, all or nothing (at\nmost 50).",
+                        "items": {
+                            "$ref": "#/components/schemas/publicapi.dependencyInput"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
+                    },
+                    "description": {
+                        "description": "Description, markdown.",
+                        "type": "string"
+                    },
+                    "design": {
+                        "description": "Design notes, markdown.",
+                        "type": "string"
+                    },
+                    "duplicateOf": {
+                        "description": "DuplicateOf names an existing issue this one duplicates: no gate, and\na duplicates edge to it in the same transaction.",
+                        "type": "string"
+                    },
+                    "force": {
+                        "description": "Force skips the duplicate gate (it is not a privilege: right write).",
+                        "type": "boolean"
+                    },
+                    "id": {
+                        "description": "ID is the id of a custom-mode issue.",
+                        "type": "string"
+                    },
+                    "idMode": {
+                        "description": "IDMode overrides the project's id mode: counter, hash or custom.",
+                        "type": "string"
+                    },
+                    "kind": {
+                        "description": "Kind of the write: directed or autonomous; omitted — the origin is\napi.",
+                        "type": "string"
+                    },
+                    "labels": {
+                        "description": "Labels.",
+                        "items": {
+                            "type": "string"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
+                    },
+                    "notes": {
+                        "description": "Notes, markdown.",
+                        "type": "string"
+                    },
+                    "parentId": {
+                        "description": "ParentID, the hierarchical id of the parent.",
+                        "type": "string"
+                    },
+                    "priority": {
+                        "description": "Priority 0..4 (default 3).",
+                        "type": "integer"
+                    },
+                    "reviewRequired": {
+                        "description": "ReviewRequired asks the author's review once the issue is closed.",
+                        "type": "boolean"
+                    },
+                    "sourceContext": {
+                        "description": "SourceContext, free text on where the issue came from.",
+                        "type": "string"
+                    },
+                    "standing": {
+                        "description": "Standing makes the issue a standing task.",
+                        "type": "boolean"
+                    },
+                    "title": {
+                        "description": "Title, 1..500 characters. Required.",
+                        "type": "string"
+                    },
+                    "type": {
+                        "description": "Type: bug, feature, task, epic, chore, decision, idea or note.\nRequired.",
+                        "type": "string"
+                    },
+                    "unassigned": {
+                        "description": "Unassigned leaves the issue without an assignee whatever the setting.",
+                        "type": "boolean"
                     }
                 },
                 "type": "object"
@@ -1405,6 +2052,23 @@
                 },
                 "type": "object"
             },
+            "publicapi.dependencyInput": {
+                "properties": {
+                    "gate": {
+                        "description": "Gate qualifies a waits-for edge.",
+                        "type": "string"
+                    },
+                    "toId": {
+                        "description": "ToID is the hierarchical id of the other end.",
+                        "type": "string"
+                    },
+                    "type": {
+                        "description": "Type is blocks, waits-for, related, discovered-from, supersedes,\nduplicates or parent-child.",
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
             "publicapi.gitRepoInput": {
                 "properties": {
                     "defaultBranch": {
@@ -1422,6 +2086,15 @@
                 },
                 "type": "object"
             },
+            "publicapi.kindBody": {
+                "properties": {
+                    "kind": {
+                        "description": "Kind of the write: directed or autonomous (checked).",
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
             "publicapi.putMemberBody": {
                 "properties": {
                     "kind": {
@@ -1430,6 +2103,36 @@
                     },
                     "role": {
                         "description": "Role of the member: owner or member. Required.",
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
+            "publicapi.reparentBody": {
+                "properties": {
+                    "kind": {
+                        "description": "Kind of the write: directed or autonomous (checked).",
+                        "type": "string"
+                    },
+                    "newParentId": {
+                        "description": "NewParentID is the new parent; \"\" detaches the issue. Required.",
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
+            "publicapi.unclaimBody": {
+                "properties": {
+                    "kind": {
+                        "description": "Kind of the write: directed or autonomous (checked).",
+                        "type": "string"
+                    },
+                    "nextStatus": {
+                        "description": "NextStatus: in_progress (hand over), open or deferred. Required.",
+                        "type": "string"
+                    },
+                    "reason": {
+                        "description": "Reason, non-empty. Required.",
                         "type": "string"
                     }
                 },
@@ -1451,6 +2154,111 @@
                     },
                     "name": {
                         "description": "Name replaces the name; unique in the project.",
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
+            "publicapi.updateIssueBody": {
+                "properties": {
+                    "acceptanceCriteria": {
+                        "description": "AcceptanceCriteria; null or \"\" clears it.",
+                        "type": "string"
+                    },
+                    "assignee": {
+                        "description": "Assignee; \"\" clears it.",
+                        "type": "string"
+                    },
+                    "closeOutcome": {
+                        "description": "CloseOutcome: done, duplicate, superseded, wont_do — with status\nclosed, or on an already closed issue.",
+                        "type": "string"
+                    },
+                    "closeTarget": {
+                        "description": "CloseTarget, the issue a duplicate or superseded one points to.",
+                        "type": "string"
+                    },
+                    "componentIds": {
+                        "description": "ComponentIDs replace the components.",
+                        "items": {
+                            "type": "string"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
+                    },
+                    "deferUntil": {
+                        "description": "DeferUntil, RFC 3339.",
+                        "type": "string"
+                    },
+                    "description": {
+                        "description": "Description; null or \"\" clears it.",
+                        "type": "string"
+                    },
+                    "design": {
+                        "description": "Design; null or \"\" clears it.",
+                        "type": "string"
+                    },
+                    "dueAt": {
+                        "description": "DueAt, RFC 3339.",
+                        "type": "string"
+                    },
+                    "estimatedMinutes": {
+                        "description": "EstimatedMinutes, >= 0.",
+                        "type": "integer"
+                    },
+                    "externalRef": {
+                        "description": "ExternalRef; null or \"\" clears it.",
+                        "type": "string"
+                    },
+                    "kind": {
+                        "description": "Kind of the write: directed or autonomous (checked; an issue keeps\nits origin).",
+                        "type": "string"
+                    },
+                    "labelsAdd": {
+                        "description": "LabelsAdd are labels to add.",
+                        "items": {
+                            "type": "string"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
+                    },
+                    "labelsRemove": {
+                        "description": "LabelsRemove are labels to remove (each must be set).",
+                        "items": {
+                            "type": "string"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
+                    },
+                    "notes": {
+                        "description": "Notes; null or \"\" clears it.",
+                        "type": "string"
+                    },
+                    "priority": {
+                        "description": "Priority 0..4.",
+                        "type": "integer"
+                    },
+                    "reason": {
+                        "description": "Reason of a status change (required to close).",
+                        "type": "string"
+                    },
+                    "reviewRequired": {
+                        "description": "ReviewRequired, sent alone, sets the author's review flag (it moves\nno version).",
+                        "type": "boolean"
+                    },
+                    "sourceContext": {
+                        "description": "SourceContext; null or \"\" clears it.",
+                        "type": "string"
+                    },
+                    "status": {
+                        "description": "Status: open, in_progress, deferred, closed or standing.",
+                        "type": "string"
+                    },
+                    "title": {
+                        "description": "Title, 1..500 characters.",
+                        "type": "string"
+                    },
+                    "type": {
+                        "description": "Type of the issue.",
                         "type": "string"
                     }
                 },
@@ -2023,6 +2831,128 @@
                 ]
             }
         },
+        "/api/v1/issues/claim": {
+            "post": {
+                "description": "Claims 1..100 issues in one transaction — the same operation as the MCP tool skein_claim with ids: every issue is claimed, or none (any refusal rolls every lock back, and names the issue that refused it). The answer keeps the order of the request. No version is needed: the lock is its own guard. Side effects: issue.claimed of each.",
+                "operationId": "claimIssues",
+                "parameters": [
+                    {
+                        "description": "The executor of the key that will hold the locks",
+                        "in": "header",
+                        "name": "X-Skein-Worker-Id",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/publicapi.claimIssuesBody",
+                                "summary": "body",
+                                "description": "The issues"
+                            }
+                        }
+                    },
+                    "description": "The issues",
+                    "required": true
+                },
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ClaimedIssues"
+                                }
+                            }
+                        },
+                        "description": "The issues, claimed, in the order of the request"
+                    },
+                    "400": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Malformed body, unknown field or parameter, 0 or more than 100 ids (code validation_error)"
+                    },
+                    "401": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "No key, or the key is invalid, expired or revoked (code unauthenticated)"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The key lacks write (code insufficient_scope); the owner may not be the assignee (code forbidden)"
+                    },
+                    "422": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "A repeated or malformed id (code validation_error); an issue out of reach (issue_not_found); claimed by another holder (already_claimed); closed (cannot_claim_closed); nothing was claimed"
+                    },
+                    "429": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Rate limited (code rate_limited, Retry-After)"
+                    },
+                    "500": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Internal error (code internal_error)"
+                    },
+                    "503": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The database is unavailable (code database_unavailable)"
+                    }
+                },
+                "security": [
+                    {
+                        "SkeinApiKey": [
+                            "write"
+                        ]
+                    }
+                ],
+                "summary": "Claim several issues",
+                "tags": [
+                    "Issues"
+                ]
+            }
+        },
         "/api/v1/issues/ready": {
             "get": {
                 "description": "Returns the open issues of a project that nothing blocks — no open blocks or waits-for edge, counting the blockers the caller cannot see (US-3) — by priority, then age: the same list as the MCP tool skein_ready. It is not paged: up to limit issues; hasMore is true when more ready issues exist (raise limit), nextCursor is always null. Read-only.",
@@ -2297,6 +3227,684 @@
                 "tags": [
                     "Issues"
                 ]
+            },
+            "patch": {
+                "description": "Changes the issue of the path in one command — the same operation as the MCP tool skein_update: fields, status (a close among them), components and labels land in one transaction, all or nothing (US-14). If-Match is required: the version of the issue (its ETag); a stale one answers 412 version_conflict with the current version, and nothing is written. reviewRequired travels alone and moves no version; labels alone move no version either.\n\nThe lock guards a change: only the holder changes a claimed issue. force=true (the key needs manage, the owner force_unlock) bypasses another holder's claim, the version and the pin in one call. Side effects: the issue.* events of what changed; notifications of the assignee and the watchers.",
+                "operationId": "updateIssue",
+                "parameters": [
+                    {
+                        "description": "The issue's hierarchical id",
+                        "in": "path",
+                        "name": "issue",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "The version of the issue, as its ETag gives it",
+                        "in": "header",
+                        "name": "If-Match",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "The privileged mode: manage and force_unlock",
+                        "in": "query",
+                        "name": "force",
+                        "schema": {
+                            "type": "boolean"
+                        }
+                    },
+                    {
+                        "description": "return=minimal answers only id and version",
+                        "in": "header",
+                        "name": "Prefer",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/publicapi.updateIssueBody",
+                                "summary": "body",
+                                "description": "The changes"
+                            }
+                        }
+                    },
+                    "description": "The changes",
+                    "required": true
+                },
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/issues.IssueDetail"
+                                }
+                            }
+                        },
+                        "description": "The issue after the change"
+                    },
+                    "400": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Malformed body, unknown field or parameter, force not true|false, If-Match not one version (code validation_error)"
+                    },
+                    "401": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "No key, or the key is invalid, expired or revoked (code unauthenticated)"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The key lacks write, or manage for force (code insufficient_scope); the owner may not write or assign (forbidden) or force (force_unlock_forbidden)"
+                    },
+                    "404": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "No such issue within reach (code issue_not_found)"
+                    },
+                    "412": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "If-Match is stale (code version_conflict, currentVersion)"
+                    },
+                    "422": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Locked by another holder (code locked_by_other, retryable); a value or transition is invalid (code validation_error, a standing transition code); a label not set (validation_error); pinned (pinned_no_force); the close target out of reach (issue_not_found); components of another project (components_wrong_project); a serialization race (serialization_retry)"
+                    },
+                    "428": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "If-Match is missing (code precondition_required)"
+                    },
+                    "429": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Rate limited (code rate_limited, Retry-After)"
+                    },
+                    "500": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Internal error (code internal_error)"
+                    },
+                    "503": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The database is unavailable (code database_unavailable)"
+                    }
+                },
+                "security": [
+                    {
+                        "SkeinApiKey": [
+                            "write"
+                        ]
+                    }
+                ],
+                "summary": "Update an issue",
+                "tags": [
+                    "Issues"
+                ]
+            }
+        },
+        "/api/v1/issues/{issue}/accept": {
+            "post": {
+                "description": "The assignee acknowledges the issue — the same operation as the MCP tool skein_accept: the acceptance stamp is set, nothing else changes; a repeat is a no-op. If-Match is optional: when sent, a stale version answers 412. The lock does not guard it. Side effects: issue.accepted; the creator's outbox is updated.",
+                "operationId": "acceptIssue",
+                "parameters": [
+                    {
+                        "description": "The issue's hierarchical id",
+                        "in": "path",
+                        "name": "issue",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "The version of the issue; checked when sent",
+                        "in": "header",
+                        "name": "If-Match",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "return=minimal answers only id and version",
+                        "in": "header",
+                        "name": "Prefer",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/publicapi.kindBody",
+                                "summary": "body",
+                                "description": "Options"
+                            }
+                        }
+                    },
+                    "description": "Options"
+                },
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/issues.IssueDetail"
+                                }
+                            }
+                        },
+                        "description": "The issue, accepted"
+                    },
+                    "400": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Malformed body, unknown field or parameter (code validation_error)"
+                    },
+                    "401": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "No key, or the key is invalid, expired or revoked (code unauthenticated)"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The key lacks write (code insufficient_scope); the owner is not the assignee (code forbidden)"
+                    },
+                    "404": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "No such issue within reach (code issue_not_found)"
+                    },
+                    "412": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "If-Match is stale (code version_conflict)"
+                    },
+                    "422": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Closed (code cannot_accept_closed); a serialization race (serialization_retry)"
+                    },
+                    "429": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Rate limited (code rate_limited, Retry-After)"
+                    },
+                    "500": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Internal error (code internal_error)"
+                    },
+                    "503": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The database is unavailable (code database_unavailable)"
+                    }
+                },
+                "security": [
+                    {
+                        "SkeinApiKey": [
+                            "write"
+                        ]
+                    }
+                ],
+                "summary": "Accept an issue",
+                "tags": [
+                    "Issues"
+                ]
+            }
+        },
+        "/api/v1/issues/{issue}/claim": {
+            "post": {
+                "description": "Takes the lock of the issue of the path and starts it — the same operation as the MCP tool skein_claim: status in_progress, the holder is the executor of this request (X-Skein-Worker-Id of the key, or the key itself), the owner becomes the assignee. The check of the lock is in the claiming transaction: of two concurrent claims exactly one succeeds, the other answers already_claimed. Another holder's lock is never taken over here. Side effects: issue.claimed (and the status change); notifications of the watchers.",
+                "operationId": "claimIssue",
+                "parameters": [
+                    {
+                        "description": "The issue's hierarchical id",
+                        "in": "path",
+                        "name": "issue",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "The executor of the key that will hold the lock (1..64 of A-Z a-z 0-9 . _ -)",
+                        "in": "header",
+                        "name": "X-Skein-Worker-Id",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "return=minimal answers only id and version",
+                        "in": "header",
+                        "name": "Prefer",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/publicapi.claimBody",
+                                "summary": "body",
+                                "description": "Options"
+                            }
+                        }
+                    },
+                    "description": "Options"
+                },
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/issues.IssueDetail"
+                                }
+                            }
+                        },
+                        "description": "The issue, claimed"
+                    },
+                    "400": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Malformed body, unknown field or parameter, a malformed X-Skein-Worker-Id (code validation_error)"
+                    },
+                    "401": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "No key, or the key is invalid, expired or revoked (code unauthenticated)"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The key lacks write (code insufficient_scope); the owner may not be the assignee, or claims for another user without being an admin (code forbidden)"
+                    },
+                    "404": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "No such issue within reach (code issue_not_found)"
+                    },
+                    "422": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Claimed by another holder (code already_claimed, retryable); closed (cannot_claim_closed); a standing task (cannot_claim_standing); a serialization race (serialization_retry)"
+                    },
+                    "429": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Rate limited (code rate_limited, Retry-After)"
+                    },
+                    "500": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Internal error (code internal_error)"
+                    },
+                    "503": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The database is unavailable (code database_unavailable)"
+                    }
+                },
+                "security": [
+                    {
+                        "SkeinApiKey": [
+                            "write"
+                        ]
+                    }
+                ],
+                "summary": "Claim an issue",
+                "tags": [
+                    "Issues"
+                ]
+            }
+        },
+        "/api/v1/issues/{issue}/close": {
+            "post": {
+                "description": "Closes the issue of the path — the same operation as the MCP tool skein_close: reason, outcome, the target edge of a duplicate or superseded close and the commits land in one transaction, all or nothing (US-14). If-Match is required (the issue's version). Only the holder closes a claimed issue; force=true (the key needs manage, the owner force_unlock) bypasses another holder's claim, the version and the pin. Closing a standing task with open children is refused.\n\nAccepts Idempotency-Key: a repeat within 24 h answers the first outcome without closing again. Side effects: issue.closed (and the lock release), the commit and edge events; notifications of the watchers.",
+                "operationId": "closeIssue",
+                "parameters": [
+                    {
+                        "description": "The issue's hierarchical id",
+                        "in": "path",
+                        "name": "issue",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "The version of the issue, as its ETag gives it",
+                        "in": "header",
+                        "name": "If-Match",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "The privileged mode: manage and force_unlock",
+                        "in": "query",
+                        "name": "force",
+                        "schema": {
+                            "type": "boolean"
+                        }
+                    },
+                    {
+                        "description": "A key that makes a repeat of this request answer its first outcome",
+                        "in": "header",
+                        "name": "Idempotency-Key",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "return=minimal answers only id and version",
+                        "in": "header",
+                        "name": "Prefer",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/publicapi.closeBody",
+                                "summary": "body",
+                                "description": "The close"
+                            }
+                        }
+                    },
+                    "description": "The close",
+                    "required": true
+                },
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/issues.IssueDetail"
+                                }
+                            }
+                        },
+                        "description": "The issue, closed"
+                    },
+                    "400": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Malformed body, unknown field or parameter, force not true|false (code validation_error)"
+                    },
+                    "401": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "No key, or the key is invalid, expired or revoked (code unauthenticated)"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The key lacks write, or manage for force (code insufficient_scope); the owner may not write (forbidden) or force (force_unlock_forbidden)"
+                    },
+                    "404": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "No such issue within reach (code issue_not_found)"
+                    },
+                    "409": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The first request with this Idempotency-Key is still running (code idempotency_in_progress)"
+                    },
+                    "412": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "If-Match is stale (code version_conflict, currentVersion)"
+                    },
+                    "422": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Locked by another holder (code locked_by_other); reason, outcome or a commit invalid (validation_error, close_outcome_link_required); the close target out of reach (issue_not_found); a repo unknown or ambiguous (repo_not_found, repo_ambiguous); pinned (pinned_no_force); a standing task with open children (standing_has_open_children); a serialization race (serialization_retry); the Idempotency-Key reused (idempotency_key_reused)"
+                    },
+                    "428": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "If-Match is missing (code precondition_required)"
+                    },
+                    "429": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Rate limited (code rate_limited, Retry-After)"
+                    },
+                    "500": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Internal error (code internal_error)"
+                    },
+                    "503": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The database is unavailable (code database_unavailable)"
+                    }
+                },
+                "security": [
+                    {
+                        "SkeinApiKey": [
+                            "write"
+                        ]
+                    }
+                ],
+                "summary": "Close an issue",
+                "tags": [
+                    "Issues"
+                ]
             }
         },
         "/api/v1/issues/{issue}/comments": {
@@ -2433,6 +4041,284 @@
                 ]
             }
         },
+        "/api/v1/issues/{issue}/commits": {
+            "post": {
+                "description": "Links commits to the issue of the path without touching its status or version — the same operation as the MCP tool skein_commits_attach; a repeat of a hash is a no-op. The lock guards it: only the holder attaches to a claimed issue; force=true (the key needs manage, the owner force_unlock) bypasses another holder. Side effects: issue.commits_attached.",
+                "operationId": "attachCommits",
+                "parameters": [
+                    {
+                        "description": "The issue's hierarchical id",
+                        "in": "path",
+                        "name": "issue",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "The privileged mode: manage and force_unlock",
+                        "in": "query",
+                        "name": "force",
+                        "schema": {
+                            "type": "boolean"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/publicapi.attachBody",
+                                "summary": "body",
+                                "description": "The commits"
+                            }
+                        }
+                    },
+                    "description": "The commits",
+                    "required": true
+                },
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/issues.IssueDetail"
+                                }
+                            }
+                        },
+                        "description": "The issue with its commits"
+                    },
+                    "400": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Malformed body, unknown field or parameter, force not true|false (code validation_error)"
+                    },
+                    "401": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "No key, or the key is invalid, expired or revoked (code unauthenticated)"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The key lacks write, or manage for force (code insufficient_scope); the owner may not write (forbidden) or force (force_unlock_forbidden)"
+                    },
+                    "404": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "No such issue within reach (code issue_not_found)"
+                    },
+                    "422": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Locked by another holder (code locked_by_other); a commit invalid (validation_error); a repo unknown or ambiguous (repo_not_found, repo_ambiguous)"
+                    },
+                    "429": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Rate limited (code rate_limited, Retry-After)"
+                    },
+                    "500": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Internal error (code internal_error)"
+                    },
+                    "503": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The database is unavailable (code database_unavailable)"
+                    }
+                },
+                "security": [
+                    {
+                        "SkeinApiKey": [
+                            "write"
+                        ]
+                    }
+                ],
+                "summary": "Attach commits to an issue",
+                "tags": [
+                    "Issues"
+                ]
+            }
+        },
+        "/api/v1/issues/{issue}/commits/{hash}": {
+            "delete": {
+                "description": "Removes every link of the issue of the path with the commit hash of the path, whatever its repo — the same operation as the MCP tool skein_commits_detach; a hash the issue has no link with is reported in notFound. The lock guards it: only the holder detaches from a claimed issue; force=true (the key needs manage, the owner force_unlock) bypasses another holder. Side effects: issue.commits_detached when something was removed.",
+                "operationId": "detachCommit",
+                "parameters": [
+                    {
+                        "description": "The issue's hierarchical id",
+                        "in": "path",
+                        "name": "issue",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "The commit hash, lowercase hex 7..64",
+                        "in": "path",
+                        "name": "hash",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "The privileged mode: manage and force_unlock",
+                        "in": "query",
+                        "name": "force",
+                        "schema": {
+                            "type": "boolean"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.DetachedCommits"
+                                }
+                            }
+                        },
+                        "description": "What was detached"
+                    },
+                    "400": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Unknown parameter, force not true|false (code validation_error)"
+                    },
+                    "401": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "No key, or the key is invalid, expired or revoked (code unauthenticated)"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The key lacks write, or manage for force (code insufficient_scope); the owner may not write (forbidden) or force (force_unlock_forbidden)"
+                    },
+                    "404": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "No such issue within reach (code issue_not_found)"
+                    },
+                    "422": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Locked by another holder (code locked_by_other); a malformed hash (validation_error)"
+                    },
+                    "429": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Rate limited (code rate_limited, Retry-After)"
+                    },
+                    "500": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Internal error (code internal_error)"
+                    },
+                    "503": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The database is unavailable (code database_unavailable)"
+                    }
+                },
+                "security": [
+                    {
+                        "SkeinApiKey": [
+                            "write"
+                        ]
+                    }
+                ],
+                "summary": "Detach a commit from an issue",
+                "tags": [
+                    "Issues"
+                ]
+            }
+        },
         "/api/v1/issues/{issue}/dependencies": {
             "get": {
                 "description": "Returns the edges of the issue named by the path — blocks, waits-for, related, discovered-from, supersedes, duplicates, parent-child — outgoing (the issue is the from-side) then incoming, each with the other end's summary. An edge whose other end the caller cannot see within the key's scope is returned redacted: no issue, a synthetic hidden-N id — as for a project the owner does not see (US-3). type and direction narrow the list. The same edges as the deps block of the MCP tool skein_show. Not paged: every edge, nextCursor is always null. Read-only.",
@@ -2562,6 +4448,138 @@
                     }
                 ],
                 "summary": "List the dependencies of an issue",
+                "tags": [
+                    "Issues"
+                ]
+            }
+        },
+        "/api/v1/issues/{issue}/drop-delegated": {
+            "post": {
+                "description": "Removes the issue of the path from the key owner's outbox of delegated issues — the same operation as the MCP tool skein_drop_delegated; only the owner's own view changes, the issue does not. Side effects: none on the issue.",
+                "operationId": "dropDelegated",
+                "parameters": [
+                    {
+                        "description": "The issue's hierarchical id",
+                        "in": "path",
+                        "name": "issue",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/publicapi.kindBody",
+                                "summary": "body",
+                                "description": "Options"
+                            }
+                        }
+                    },
+                    "description": "Options"
+                },
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/issues.IssueDetail"
+                                }
+                            }
+                        },
+                        "description": "The issue"
+                    },
+                    "400": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Malformed body, unknown field or parameter (code validation_error)"
+                    },
+                    "401": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "No key, or the key is invalid, expired or revoked (code unauthenticated)"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The key lacks write (code insufficient_scope)"
+                    },
+                    "404": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "No such issue within reach (code issue_not_found)"
+                    },
+                    "422": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The issue is not one the owner delegated (code validation_error)"
+                    },
+                    "429": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Rate limited (code rate_limited, Retry-After)"
+                    },
+                    "500": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Internal error (code internal_error)"
+                    },
+                    "503": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The database is unavailable (code database_unavailable)"
+                    }
+                },
+                "security": [
+                    {
+                        "SkeinApiKey": [
+                            "write"
+                        ]
+                    }
+                ],
+                "summary": "Drop a delegated issue",
                 "tags": [
                     "Issues"
                 ]
@@ -2833,6 +4851,597 @@
                     }
                 ],
                 "summary": "Plan moving an issue to another project",
+                "tags": [
+                    "Issues"
+                ]
+            }
+        },
+        "/api/v1/issues/{issue}/release-lock": {
+            "post": {
+                "description": "Releases the lock of the issue of the path without changing its status and without bypassing its version or its pin (the UI's «release the lock»): a lock the key's owner took — with any of his keys, executors or MCP sessions — is released without a role; another holder's needs the owner's force_unlock. The version grows, so a writer holding the old version gets 412. An issue nobody holds is answered as it is, its version unchanged. There is no MCP tool of its own (MCP releases another's lock with force on skein_unclaim). Side effects: issue.unclaimed; for another's lock also issue.lock_force_released.",
+                "operationId": "releaseIssueLock",
+                "parameters": [
+                    {
+                        "description": "The issue's hierarchical id",
+                        "in": "path",
+                        "name": "issue",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "return=minimal answers only id and version",
+                        "in": "header",
+                        "name": "Prefer",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/publicapi.kindBody",
+                                "summary": "body",
+                                "description": "Options"
+                            }
+                        }
+                    },
+                    "description": "Options"
+                },
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/issues.IssueDetail"
+                                }
+                            }
+                        },
+                        "description": "The issue, released"
+                    },
+                    "400": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Malformed body, unknown field or parameter (code validation_error)"
+                    },
+                    "401": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "No key, or the key is invalid, expired or revoked (code unauthenticated)"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The key lacks write (code insufficient_scope); the owner may not write (forbidden), or releases another holder's lock without force_unlock (force_unlock_forbidden)"
+                    },
+                    "404": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "No such issue within reach (code issue_not_found)"
+                    },
+                    "422": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The lock changed while it was being released (code not_lock_holder)"
+                    },
+                    "429": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Rate limited (code rate_limited, Retry-After)"
+                    },
+                    "500": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Internal error (code internal_error)"
+                    },
+                    "503": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The database is unavailable (code database_unavailable)"
+                    }
+                },
+                "security": [
+                    {
+                        "SkeinApiKey": [
+                            "write"
+                        ]
+                    }
+                ],
+                "summary": "Release the lock of an issue",
+                "tags": [
+                    "Issues"
+                ]
+            }
+        },
+        "/api/v1/issues/{issue}/reparent": {
+            "post": {
+                "description": "Replaces the parent of the issue of the path atomically — the same operation as the MCP tool skein_reparent; \"\" detaches it. If-Match is required. The new parent must be open, in the same project and not a descendant. Side effects: the parent-child edge events; the issue.reparented event.",
+                "operationId": "reparentIssue",
+                "parameters": [
+                    {
+                        "description": "The issue's hierarchical id",
+                        "in": "path",
+                        "name": "issue",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "The version of the issue, as its ETag gives it",
+                        "in": "header",
+                        "name": "If-Match",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "return=minimal answers only id and version",
+                        "in": "header",
+                        "name": "Prefer",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/publicapi.reparentBody",
+                                "summary": "body",
+                                "description": "The new parent"
+                            }
+                        }
+                    },
+                    "description": "The new parent",
+                    "required": true
+                },
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/issues.IssueDetail"
+                                }
+                            }
+                        },
+                        "description": "The issue under its new parent"
+                    },
+                    "400": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Malformed body, unknown field or parameter (code validation_error)"
+                    },
+                    "401": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "No key, or the key is invalid, expired or revoked (code unauthenticated)"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The key lacks write (code insufficient_scope); the owner may not write (code forbidden)"
+                    },
+                    "404": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "No such issue within reach (code issue_not_found)"
+                    },
+                    "412": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "If-Match is stale (code version_conflict)"
+                    },
+                    "422": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The new parent out of reach (code parent_not_found), closed (parent_closed), in another project (reparent_cross_project), the issue itself (reparent_self), a cycle (dependency_cycle); a serialization race (serialization_retry)"
+                    },
+                    "428": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "If-Match is missing (code precondition_required)"
+                    },
+                    "429": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Rate limited (code rate_limited, Retry-After)"
+                    },
+                    "500": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Internal error (code internal_error)"
+                    },
+                    "503": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The database is unavailable (code database_unavailable)"
+                    }
+                },
+                "security": [
+                    {
+                        "SkeinApiKey": [
+                            "write"
+                        ]
+                    }
+                ],
+                "summary": "Reparent an issue",
+                "tags": [
+                    "Issues"
+                ]
+            }
+        },
+        "/api/v1/issues/{issue}/resume-delegated": {
+            "post": {
+                "description": "Puts the issue of the path back into the key owner's outbox of delegated issues — the same operation as the MCP tool skein_resume_delegated; the issue itself does not change.",
+                "operationId": "resumeDelegated",
+                "parameters": [
+                    {
+                        "description": "The issue's hierarchical id",
+                        "in": "path",
+                        "name": "issue",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/publicapi.kindBody",
+                                "summary": "body",
+                                "description": "Options"
+                            }
+                        }
+                    },
+                    "description": "Options"
+                },
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/issues.IssueDetail"
+                                }
+                            }
+                        },
+                        "description": "The issue"
+                    },
+                    "400": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Malformed body, unknown field or parameter (code validation_error)"
+                    },
+                    "401": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "No key, or the key is invalid, expired or revoked (code unauthenticated)"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The key lacks write (code insufficient_scope)"
+                    },
+                    "404": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "No such issue within reach (code issue_not_found)"
+                    },
+                    "422": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The issue is not one the owner delegated (code validation_error)"
+                    },
+                    "429": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Rate limited (code rate_limited, Retry-After)"
+                    },
+                    "500": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Internal error (code internal_error)"
+                    },
+                    "503": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The database is unavailable (code database_unavailable)"
+                    }
+                },
+                "security": [
+                    {
+                        "SkeinApiKey": [
+                            "write"
+                        ]
+                    }
+                ],
+                "summary": "Resume a delegated issue",
+                "tags": [
+                    "Issues"
+                ]
+            }
+        },
+        "/api/v1/issues/{issue}/unclaim": {
+            "post": {
+                "description": "Releases the lock the executor of this request holds and sets the next status — the same operation as the MCP tool skein_unclaim. The version is not checked. Only the holder unclaims; force=true (the key needs manage, the owner force_unlock) releases another holder's. To release a lock without changing the status — your own, taken by any of your keys or sessions, or another's with force_unlock — use releaseIssueLock. Side effects: issue.unclaimed and the status change.",
+                "operationId": "unclaimIssue",
+                "parameters": [
+                    {
+                        "description": "The issue's hierarchical id",
+                        "in": "path",
+                        "name": "issue",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "The privileged mode: manage and force_unlock",
+                        "in": "query",
+                        "name": "force",
+                        "schema": {
+                            "type": "boolean"
+                        }
+                    },
+                    {
+                        "description": "return=minimal answers only id and version",
+                        "in": "header",
+                        "name": "Prefer",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/publicapi.unclaimBody",
+                                "summary": "body",
+                                "description": "Next status and reason"
+                            }
+                        }
+                    },
+                    "description": "Next status and reason",
+                    "required": true
+                },
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/issues.IssueDetail"
+                                }
+                            }
+                        },
+                        "description": "The issue, released"
+                    },
+                    "400": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Malformed body, unknown field or parameter, force not true|false (code validation_error)"
+                    },
+                    "401": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "No key, or the key is invalid, expired or revoked (code unauthenticated)"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The key lacks write, or manage for force (code insufficient_scope); the owner may not write (forbidden) or force (force_unlock_forbidden)"
+                    },
+                    "404": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "No such issue within reach (code issue_not_found)"
+                    },
+                    "422": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "nextStatus or reason invalid (code validation_error); the executor does not hold the lock (not_lock_holder)"
+                    },
+                    "429": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Rate limited (code rate_limited, Retry-After)"
+                    },
+                    "500": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Internal error (code internal_error)"
+                    },
+                    "503": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The database is unavailable (code database_unavailable)"
+                    }
+                },
+                "security": [
+                    {
+                        "SkeinApiKey": [
+                            "write"
+                        ]
+                    }
+                ],
+                "summary": "Unclaim an issue",
                 "tags": [
                     "Issues"
                 ]
@@ -4160,6 +6769,364 @@
                 "summary": "Archive a component",
                 "tags": [
                     "Projects"
+                ]
+            }
+        },
+        "/api/v1/projects/{project}/epics": {
+            "post": {
+                "description": "Creates an epic and its children in one transaction — the same operation as the MCP tool skein_epic_create: all of them, or none when any child is refused. The children are parent-child children of the epic, in the order given. There is no duplicate gate (no force, no duplicateOf).\n\nWithout kind the source is api; kind directed and autonomous give the agent's sources. Accepts Idempotency-Key. Side effects: issue.created of each issue and the parent-child edges; notifications of the assignees. The Location header names the epic, ETag is its version.",
+                "operationId": "createEpic",
+                "parameters": [
+                    {
+                        "description": "The project's UUID, prefix or alias (URL-encoded)",
+                        "in": "path",
+                        "name": "project",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "A key that makes a repeat of this request answer its first outcome",
+                        "in": "header",
+                        "name": "Idempotency-Key",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "return=minimal answers only the epic's id and version",
+                        "in": "header",
+                        "name": "Prefer",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/publicapi.createEpicBody",
+                                "summary": "body",
+                                "description": "The epic and its children"
+                            }
+                        }
+                    },
+                    "description": "The epic and its children",
+                    "required": true
+                },
+                "responses": {
+                    "201": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.EpicCreated"
+                                }
+                            }
+                        },
+                        "description": "The epic with its children"
+                    },
+                    "400": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Malformed body, unknown field or parameter, a kind outside directed|autonomous (code validation_error)"
+                    },
+                    "401": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "No key, or the key is invalid, expired or revoked (code unauthenticated)"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The key lacks write (code insufficient_scope); the owner may not write or assign in the project (code forbidden)"
+                    },
+                    "404": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "No such project within reach (code project_not_found)"
+                    },
+                    "409": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The first request with this Idempotency-Key is still running (code idempotency_in_progress)"
+                    },
+                    "413": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Body over 1 MiB (code payload_too_large)"
+                    },
+                    "415": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Body is not application/json (code unsupported_media_type)"
+                    },
+                    "422": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "A value of the epic or of a child is invalid (code validation_error); the parent is out of reach (code parent_not_found); components of another project (components_wrong_project); assignee may not work here (assignee_not_allowed); a serialization race (serialization_retry); the Idempotency-Key reused (idempotency_key_reused)"
+                    },
+                    "429": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Rate limited (code rate_limited, Retry-After)"
+                    },
+                    "500": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Internal error (code internal_error)"
+                    },
+                    "503": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The database is unavailable (code database_unavailable)"
+                    }
+                },
+                "security": [
+                    {
+                        "SkeinApiKey": [
+                            "write"
+                        ]
+                    }
+                ],
+                "summary": "Create an epic with its children",
+                "tags": [
+                    "Issues"
+                ]
+            }
+        },
+        "/api/v1/projects/{project}/issues": {
+            "post": {
+                "description": "Creates an issue in the project of the path — the same operation as the MCP tool skein_create:\n1. The fields are checked; the owner must be able to write in the project (and to assign, when assignee is given).\n2. Unless force or duplicateOf, the duplicate gate looks for similar issues of the project: found — nothing is created, the answer is 422 duplicate_suspected with the candidates (duplicates; degraded when only the lexical check ran). Repeat with force=true to create anyway, or with duplicateOf to create it as a duplicate.\n3. One transaction writes the issue, its components, labels, the inline dependencies (each refusal rolls everything back) and, with duplicateOf, the duplicates edge.\n\nWithout kind the issue's source is api; kind directed and autonomous give the agent's sources, with the same side effects as in MCP (the author's auto-watch, the notification rules, the default assignee). Accepts Idempotency-Key: a repeat within 24 h answers the first outcome without creating anything. Side effects: issue.created and the events of the edges; notifications of the assignee and the watchers. The Location header names the issue, ETag is its version.",
+                "operationId": "createIssue",
+                "parameters": [
+                    {
+                        "description": "The project's UUID, prefix or alias (URL-encoded)",
+                        "in": "path",
+                        "name": "project",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "A key that makes a repeat of this request answer its first outcome (1..255 visible ASCII)",
+                        "in": "header",
+                        "name": "Idempotency-Key",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "return=minimal answers only id and version",
+                        "in": "header",
+                        "name": "Prefer",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/publicapi.createIssueBody",
+                                "summary": "body",
+                                "description": "The issue"
+                            }
+                        }
+                    },
+                    "description": "The issue",
+                    "required": true
+                },
+                "responses": {
+                    "201": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/issues.IssueDetail"
+                                }
+                            }
+                        },
+                        "description": "The issue created"
+                    },
+                    "400": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Malformed body, unknown field or parameter, a kind outside directed|autonomous, a malformed Idempotency-Key (code validation_error)"
+                    },
+                    "401": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "No key, or the key is invalid, expired or revoked (code unauthenticated)"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The key lacks write (code insufficient_scope); the owner may not write or assign in the project (code forbidden)"
+                    },
+                    "404": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "No such project within reach (code project_not_found)"
+                    },
+                    "409": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The first request with this Idempotency-Key is still running (code idempotency_in_progress)"
+                    },
+                    "413": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Body over 1 MiB (code payload_too_large)"
+                    },
+                    "415": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Body is not application/json (code unsupported_media_type)"
+                    },
+                    "422": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Similar issues exist (code duplicate_suspected, with duplicates); a value is invalid (code validation_error); the parent, a dependency target or duplicateOf does not exist or is out of reach (code parent_not_found, issue_not_found, validation_error — as MCP); parent closed or in another project (parent_closed, parent_wrong_project); id taken (id_taken); components of another project (components_wrong_project); assignee may not work here (assignee_not_allowed); a cycle (dependency_cycle); a serialization race (serialization_retry, retryable); the Idempotency-Key reused with another request (idempotency_key_reused)"
+                    },
+                    "429": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Rate limited (code rate_limited, Retry-After)"
+                    },
+                    "500": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Internal error (code internal_error)"
+                    },
+                    "503": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The database is unavailable (code database_unavailable)"
+                    }
+                },
+                "security": [
+                    {
+                        "SkeinApiKey": [
+                            "write"
+                        ]
+                    }
+                ],
+                "summary": "Create an issue",
+                "tags": [
+                    "Issues"
                 ]
             }
         },

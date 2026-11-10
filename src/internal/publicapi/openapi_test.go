@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"skein-api/internal/idempotency"
 	"skein-api/internal/publicapi"
 )
 
@@ -18,7 +19,9 @@ func getDocument(t *testing.T, serverURL string) map[string]json.RawMessage {
 	if err != nil {
 		t.Fatal(err)
 	}
-	h := publicapi.NewRouter(publicapi.RouterOptions{OperationTimeout: 30 * time.Second}, publicapi.ProductRoutes(publicapi.Deps{Doc: doc}))
+	h := publicapi.NewRouter(publicapi.RouterOptions{OperationTimeout: 30 * time.Second,
+		Versions: publicapi.IssueVersions{}, Idempotency: idempotency.NewMiddleware(nil, 30*time.Second)},
+		publicapi.ProductRoutes(publicapi.Deps{Doc: doc}))
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/openapi.json", nil))
 	if rec.Code != http.StatusOK {

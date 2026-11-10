@@ -12,10 +12,12 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"skein-api/internal/authz"
 	"skein-api/internal/dependencies"
+	"skein-api/internal/issueops"
 	"skein-api/internal/issues"
 	"skein-api/internal/projects"
 	"skein-api/internal/search"
@@ -208,6 +210,9 @@ type Deps struct {
 	Search *search.Service
 	// IssuesEmbedder reranks listIssues by meaning; nil — full-text only.
 	IssuesEmbedder issues.QueryEmbedder
+	// Outcomes records the outcome of an operation that accepts
+	// Idempotency-Key (idempotency.Hooks).
+	Outcomes Outcomes
 }
 
 // ProductRoutes is the route table of the public API. Every operation of
@@ -221,6 +226,11 @@ func ProductRoutes(d Deps) []Route {
 	ia := &issuesAPI{
 		pool: d.Pool, issues: d.Issues, deps: d.Dependencies, projects: d.Projects,
 		search: d.Search, embedder: d.IssuesEmbedder,
+	}
+	wa := &issueWrites{
+		issuesAPI: ia,
+		ops:       issueops.Deps{Pool: d.Pool, Issues: d.Issues, Deps: d.Dependencies, Projects: d.Projects},
+		outcomes:  d.Outcomes,
 	}
 	read := authz.KeyRequirement{Right: authz.KeyRightRead}
 	manage := authz.KeyRequirement{Right: authz.KeyRightManage}
@@ -269,5 +279,74 @@ func ProductRoutes(d Deps) []Route {
 		key(OperationGetIssueMovePlan, http.MethodGet, "issues/{issue}/move-plan", read, ObjectPathIssueProject,
 			[]authz.Action{authz.ActionWrite}, ia.getIssueMovePlan),
 		key(OperationSearch, http.MethodGet, "search", read, ObjectNone, nil, ia.searchAll),
+
+		// Issue writes (T024).
+		writeRoute(OperationCreateIssue, http.MethodPost, "projects/{project}/issues", ObjectPathProject, wa.createIssue,
+			routeFlags{prefer: true, idempotent: true, hydrate: wa.hydrateIssue}),
+		writeRoute(OperationCreateEpic, http.MethodPost, "projects/{project}/epics", ObjectPathProject, wa.createEpic,
+			routeFlags{prefer: true, idempotent: true, hydrate: wa.hydrateEpic}),
+		writeRoute(OperationUpdateIssue, http.MethodPatch, "issues/{issue}", ObjectPathIssueProject, wa.updateIssue,
+			routeFlags{prefer: true, guarded: true, ifMatch: IfMatchRequired}),
+		writeRoute(OperationClaimIssue, http.MethodPost, "issues/{issue}/claim", ObjectPathIssueProject, wa.claimIssue,
+			routeFlags{prefer: true, actions: []authz.Action{authz.ActionAssign}}),
+		writeRoute(OperationClaimIssues, http.MethodPost, "issues/claim", ObjectNone, wa.claimIssues, routeFlags{noActions: true}),
+		writeRoute(OperationUnclaimIssue, http.MethodPost, "issues/{issue}/unclaim", ObjectPathIssueProject, wa.unclaimIssue,
+			routeFlags{prefer: true, guarded: true}),
+		writeRoute(OperationReleaseIssueLock, http.MethodPost, "issues/{issue}/release-lock", ObjectPathIssueProject, wa.releaseIssueLock,
+			routeFlags{prefer: true}),
+		writeRoute(OperationCloseIssue, http.MethodPost, "issues/{issue}/close", ObjectPathIssueProject, wa.closeIssue,
+			routeFlags{prefer: true, guarded: true, ifMatch: IfMatchRequired, idempotent: true, hydrate: wa.hydrateIssue}),
+		writeRoute(OperationAcceptIssue, http.MethodPost, "issues/{issue}/accept", ObjectPathIssueProject, wa.acceptIssue,
+			routeFlags{prefer: true, ifMatch: IfMatchOptional}),
+		writeRoute(OperationReparentIssue, http.MethodPost, "issues/{issue}/reparent", ObjectPathIssueProject, wa.reparentIssue,
+			routeFlags{prefer: true, ifMatch: IfMatchRequired}),
+		writeRoute(OperationDropDelegated, http.MethodPost, "issues/{issue}/drop-delegated", ObjectPathIssueProject, wa.dropDelegated, routeFlags{}),
+		writeRoute(OperationResumeDelegated, http.MethodPost, "issues/{issue}/resume-delegated", ObjectPathIssueProject, wa.resumeDelegated, routeFlags{}),
+		writeRoute(OperationAttachCommits, http.MethodPost, "issues/{issue}/commits", ObjectPathIssueProject, wa.attachCommits,
+			routeFlags{guarded: true}),
+		writeRoute(OperationDetachCommit, http.MethodDelete, "issues/{issue}/commits/{hash}", ObjectPathIssueProject, wa.detachCommit,
+			routeFlags{guarded: true}),
+	}
+}
+
+// Outcomes are the hooks an operation that accepts Idempotency-Key records
+// its outcome through (spec US-7, plan D-8): the idempotency package
+// implements them (idempotency.Hooks) and main wires it, so this package
+// does not import its own middleware. Each hook does nothing for a request
+// without Idempotency-Key.
+type Outcomes interface {
+	// IssueBeforeCommit is the before-commit hook of an issue write that
+	// answers status with the issue it wrote: it records the committed id
+	// and version in the write's own transaction (D-8 rule 2).
+	IssueBeforeCommit(status int) func(ctx context.Context, tx pgx.Tx, st issues.CommittedState) error
+	// NoteTarget names the object the operation acts on.
+	NoteTarget(ctx context.Context, ref ObjectRef)
+	// NoteObjects names the objects of a response produced without a
+	// writing transaction (the candidates of duplicate_suspected).
+	NoteObjects(ctx context.Context, refs ...ObjectRef)
+}
+
+// routeFlags are the request rules of a write route.
+type routeFlags struct {
+	prefer, guarded, idempotent bool
+	ifMatch                     IfMatch
+	hydrate                     Hydrator
+	// actions are the owner's actions on the object; nil — write.
+	actions []authz.Action
+	// noActions — the route checks no action on one object (a batch).
+	noActions bool
+}
+
+// writeRoute is a row of an operation that needs the key right write.
+func writeRoute(id, method, path string, obj ActionObject, h http.HandlerFunc, f routeFlags) Route {
+	actions := f.actions
+	if actions == nil && !f.noActions {
+		actions = []authz.Action{authz.ActionWrite}
+	}
+	return Route{
+		OperationID: id, Method: method, Path: PathPrefix + path, Auth: AuthKey,
+		Key: authz.KeyRequirement{Right: authz.KeyRightWrite}, Guarded: f.guarded,
+		Actions: actions, Object: obj, IfMatch: f.ifMatch, Idempotent: f.idempotent,
+		Hydrate: f.hydrate, Prefer: f.prefer, Handler: h,
 	}
 }

@@ -599,3 +599,57 @@ func DetachCommits(ctx context.Context, d Deps, userID uuid.UUID, a Args) (Issue
 
 	return IssueResult{IssueID: id, Issue: res.Issue, Detach: res}, nil
 }
+
+// ReleaseLock releases the claim on an issue without bypassing its version
+// or its pin (the public API's releaseIssueLock; the UI's «release the
+// lock»): the caller's own claim — taken by any of his keys, executors or
+// MCP sessions — without a role, another holder's with force_unlock. The
+// version grows; an issue nobody holds is answered as it is.
+func ReleaseLock(ctx context.Context, d Deps, userID uuid.UUID, a Args) (IssueResult, *Failure) {
+	rawID, err := a.RequireString("id")
+	if err != nil {
+		return IssueResult{}, Fail(ErrCodeValidationError, "id is required", nil)
+	}
+	id := strings.TrimSpace(rawID)
+	if !LooksLikeHierarchicalID(id) {
+		return IssueResult{}, Fail(ErrCodeValidationError,
+			"id must be a full hierarchical id like \"demo-42\"", map[string]any{"id": rawID})
+	}
+	issue, err := d.Issues.GetIssue(ctx, id)
+	if errors.Is(err, issues.ErrNotFound) {
+		return IssueResult{}, Fail(ErrCodeIssueNotFound, "issue does not exist or is not visible", map[string]any{"id": id})
+	}
+	if err != nil {
+		slog.ErrorContext(ctx, "issue operation error", "op", "release_lock", "reason", "load issue failed",
+			"userId", userID.String(), "issueId", id, "error", err.Error())
+		return IssueResult{}, Fail(ErrCodeInternalError, "failed to load issue", nil)
+	}
+	if f := IssueActionGate(ctx, d.Pool, "release_lock", "id", id, issue.ProjectID, userID, authz.ActionWrite); f != nil {
+		return IssueResult{}, f
+	}
+	_, ferr := projects.EnsureProjectAction(ctx, d.Pool, issue.ProjectID, userID, authz.ActionForceUnlock)
+	switch {
+	case ferr == nil, errors.Is(ferr, projects.ErrProjectActionForbidden):
+	default:
+		slog.ErrorContext(ctx, "issue operation error", "op", "release_lock", "reason", "force_unlock check failed",
+			"userId", userID.String(), "issueId", id, "error", ferr.Error())
+		return IssueResult{}, Fail(ErrCodeInternalError, "permission check failed", nil)
+	}
+	dto, err := d.Issues.ReleaseLock(ctx, issues.ReleaseLockInput{
+		ID: id, CanForceUnlock: ferr == nil, Actor: IssuesAgentActor(ctx, d.Pool, userID),
+	})
+	switch {
+	case err == nil:
+		return IssueResult{IssueID: id, Issue: dto}, nil
+	case errors.Is(err, issues.ErrForceUnlockForbidden):
+		return IssueResult{}, Fail(ErrCodeForceUnlockForbidden, MsgForceUnlockForbidden, map[string]any{"id": id})
+	case errors.Is(err, issues.ErrNotLockHolder):
+		return IssueResult{}, Fail(ErrCodeNotLockHolder,
+			"the claim changed while it was being released; read the issue again", map[string]any{"id": id})
+	case errors.Is(err, issues.ErrNotFound):
+		return IssueResult{}, Fail(ErrCodeIssueNotFound, "issue does not exist or is not visible", map[string]any{"id": id})
+	}
+	slog.ErrorContext(ctx, "issue operation error", "op", "release_lock", "reason", "store call failed",
+		"userId", userID.String(), "issueId", id, "error", err.Error())
+	return IssueResult{}, Fail(ErrCodeInternalError, "release failed", nil)
+}

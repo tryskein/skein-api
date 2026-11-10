@@ -26,6 +26,7 @@ import (
 	"skein-api/internal/apikeys"
 	"skein-api/internal/auth"
 	"skein-api/internal/dependencies"
+	"skein-api/internal/idempotency"
 	"skein-api/internal/issues"
 	mcppkg "skein-api/internal/mcp"
 	"skein-api/internal/mcp/tools"
@@ -70,7 +71,8 @@ func newResourceRig(t *testing.T, pool *pgxpool.Pool) *resourceRig {
 	if err != nil {
 		t.Fatalf("NewOpenAPIDocument: %v", err)
 	}
-	rest := publicapi.NewRouter(publicapi.RouterOptions{OperationTimeout: 30 * time.Second, Chain: chain},
+	rest := publicapi.NewRouter(publicapi.RouterOptions{OperationTimeout: 30 * time.Second, Chain: chain,
+		Versions: publicapi.IssueVersions{Pool: pool, Issues: issuesStore}, Idempotency: idempotency.NewMiddleware(pool, 30*time.Second)},
 		publicapi.ProductRoutes(publicapi.Deps{
 			Doc: doc, Pool: pool, Projects: projectsStore, Users: usersStore,
 			DefaultVisibility: spaces.VisibilityMembers,
@@ -89,6 +91,18 @@ func newResourceRig(t *testing.T, pool *pgxpool.Pool) *resourceRig {
 		tools.RegisterReady(s, pool, depsStore, projectsStore)
 		tools.RegisterSearch(s, pool, searchSvc, projectsStore)
 		tools.RegisterMove(s, pool, issuesStore, projectsStore)
+		tools.RegisterCreate(s, pool, issuesStore, depsStore, projectsStore)
+		tools.RegisterEpicCreate(s, pool, issuesStore, projectsStore)
+		tools.RegisterUpdate(s, pool, issuesStore)
+		tools.RegisterClaim(s, pool, issuesStore)
+		tools.RegisterUnclaim(s, pool, issuesStore)
+		tools.RegisterClose(s, pool, issuesStore)
+		tools.RegisterAccept(s, pool, issuesStore)
+		tools.RegisterReparent(s, pool, depsStore, issuesStore)
+		tools.RegisterDropDelegated(s, pool, issuesStore)
+		tools.RegisterResumeDelegated(s, pool, issuesStore)
+		tools.RegisterCommitsAttach(s, pool, issuesStore)
+		tools.RegisterCommitsDetach(s, pool, issuesStore)
 	})
 	return &resourceRig{
 		t: t, pool: pool, restH: rest,

@@ -550,3 +550,19 @@ func (rec *recorder) sendTo(w http.ResponseWriter) {
 		slog.Debug("idempotency: writing the response failed", "error", err.Error())
 	}
 }
+
+// Hooks implements publicapi.Outcomes with the functions of this package.
+type Hooks struct{}
+
+// IssueBeforeCommit implements publicapi.Outcomes.
+func (Hooks) IssueBeforeCommit(status int) func(ctx context.Context, tx pgx.Tx, st issues.CommittedState) error {
+	return IssueBeforeCommit(status)
+}
+
+// NoteTarget implements publicapi.Outcomes.
+func (Hooks) NoteTarget(ctx context.Context, ref publicapi.ObjectRef) { NoteTarget(ctx, ref) }
+
+// NoteObjects implements publicapi.Outcomes.
+func (Hooks) NoteObjects(ctx context.Context, refs ...publicapi.ObjectRef) { NoteObjects(ctx, refs...) }
+
+var _ publicapi.Outcomes = Hooks{}

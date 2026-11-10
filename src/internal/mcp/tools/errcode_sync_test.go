@@ -178,6 +178,8 @@ func TestErrCodes_ClassAndTransience(t *testing.T) {
 		"idempotency_in_progress":   {errcode.ClassConflict, true},
 		"idempotency_key_reused":    biz,
 		"idempotency_not_supported": {errcode.ClassFormat, false},
+		// The duplicate gate of createIssue in the public API (422).
+		"duplicate_suspected": biz,
 		// Unavailable dependency (503), transient.
 		"attachments_unavailable": {errcode.ClassUnavailable, true},
 		"preview_unavailable":     {errcode.ClassUnavailable, true},

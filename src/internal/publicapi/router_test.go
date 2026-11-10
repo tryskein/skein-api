@@ -10,6 +10,7 @@ import (
 
 	"skein-api/internal/authz"
 	"skein-api/internal/errcode"
+	"skein-api/internal/idempotency"
 	"skein-api/internal/publicapi"
 )
 
@@ -21,7 +22,9 @@ func productRouter(t *testing.T) http.Handler {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return publicapi.NewRouter(publicapi.RouterOptions{OperationTimeout: 30 * time.Second}, publicapi.ProductRoutes(publicapi.Deps{Doc: doc}))
+	return publicapi.NewRouter(publicapi.RouterOptions{OperationTimeout: 30 * time.Second,
+		Versions: publicapi.IssueVersions{}, Idempotency: idempotency.NewMiddleware(nil, 30*time.Second)},
+		publicapi.ProductRoutes(publicapi.Deps{Doc: doc}))
 }
 
 // testRoutes is a table of this test's own: a POST collection that reads

@@ -109,6 +109,9 @@ var Codes = map[string]Expect{
 	"idempotency_key_reused":    every(422, false),
 	"idempotency_not_supported": format(),
 
+	// The duplicate gate of createIssue: nothing created (422).
+	"duplicate_suspected": every(422, false),
+
 	// Transport of the public API.
 	"method_not_allowed":     every(405, false),
 	"payload_too_large":      every(413, false),
