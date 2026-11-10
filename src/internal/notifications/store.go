@@ -2131,6 +2131,11 @@ func (s *Store) ListWatchingFeed(ctx context.Context, userID uuid.UUID, state Wa
 	// view of the relation (D-3): a card outside it is a card of a project
 	// he does not see. Without a key the condition is the literal true.
 	keyed := authz.ScopeFor(ctx, userID).KeyLimit().Expr("i.project_id", authz.Placeholders(&args))
+	// The window too: a card with its subtree collects events of descendants
+	// in other projects; a key counts only those inside its scope, so the
+	// card's unread count, its last activity and UnreadTotal match the badge
+	// and what reading the card marks.
+	windowKeyed := keyScopeOn(ctx, userID, "n.project_id", &args)
 	sql := `
 WITH subs AS (
     SELECT iw.issue_id, iw.reasons, iw.since
@@ -2142,7 +2147,7 @@ win AS (
            count(*) FILTER (WHERE n.read_at IS NULL)::int AS unread_count,
            max(n.created_at)                              AS last_at
       FROM notifications n
-     WHERE ` + watchingInWindowPredicate("$1", "$4", "true") + `
+     WHERE ` + watchingInWindowPredicate("$1", "$4", windowKeyed) + `
      GROUP BY n.card_issue_id
 ),
 cards AS (

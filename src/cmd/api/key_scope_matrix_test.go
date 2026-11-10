@@ -414,6 +414,37 @@ ON CONFLICT DO NOTHING`, id, both.ID); err != nil {
 		if !slices.Contains(got, P.IssueID) || slices.Contains(got, Q.IssueID) {
 			t.Errorf("Watching cards with scope P = %v, want %s and not %s", got, P.IssueID, Q.IssueID)
 		}
+
+		// The card of P carries, through its subtree, one event of its own
+		// and one of a descendant in Q: by the key only the own one counts.
+		for _, n := range []struct {
+			project uuid.UUID
+			issue   string
+		}{{P.ID, P.IssueID}, {Q.ID, Q.IssueID}} {
+			id := seedKeyScopeNotification(t, s, both.ID, n.project, n.issue)
+			if _, err := s.pool.Exec(ctx, `UPDATE notifications SET card_issue_id = $2, card_resolved = true WHERE id = $1`, id, P.IssueID); err != nil {
+				t.Fatal(err)
+			}
+		}
+		unreadOfP := func(ctx context.Context) (card, total int) {
+			t.Helper()
+			feed, err := notifications.NewStore(s.pool).ListWatchingFeed(ctx, both.ID, notifications.WatchingStateAll)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, r := range feed.Rows {
+				if r.IssueID == P.IssueID {
+					card = r.UnreadEventsCount
+				}
+			}
+			return card, feed.UnreadTotal
+		}
+		if card, total := unreadOfP(ctx); card != 2 || total != 2 {
+			t.Fatalf("baseline without a key: card of P unread %d, total %d; want 2, 2", card, total)
+		}
+		if card, total := unreadOfP(k.ctx()); card != 1 || total != 1 {
+			t.Errorf("with scope P: card of P unread %d, total %d; want 1, 1 — the descendant's event in Q is counted", card, total)
+		}
 	})
 
 	t.Run("watcher list (issue and project subscriptions)", func(t *testing.T) {
