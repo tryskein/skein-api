@@ -97,10 +97,9 @@ type updateOneInput struct {
 
 // runUpdateForOne executes the full skein_update chain for a single
 // row: PatchIssue → UpdateStatus/Close → ReplaceComponents → AddLabel
-// (loop) → RemoveLabel (loop). Each store call is its own
-// SERIALIZABLE transaction (the underlying methods don't expose a
-// shared-tx surface). Mid-chain failure is documented in the tool
-// description: earlier sub-operations are NOT rolled back.
+// (loop) → RemoveLabel (loop), all in ONE serializable transaction
+// (issues.Store.UpdateIssue, T015, US-14): a failure at any step writes
+// nothing.
 //
 // Returns the post-state IssueDetail on success, or the typed error
 // from whichever sub-step failed first. Callers map that error to
@@ -124,9 +123,7 @@ type updateOneInput struct {
 //
 // The third line is not an omission. An outcome with a transition to a
 // non-closed status is refused by BOTH input builders before the chain
-// starts, because by the time UpdateStatus could refuse it the field
-// patch of step 1 would already have committed — and "nothing
-// changed" is what the refusal promises.
+// starts: it is a form refusal, answered before any transaction opens.
 //
 // The batch path wants the version and nothing else, so it calls
 // runUpdateChainVersion instead and skips the final hydration entirely.
@@ -139,7 +136,7 @@ func runUpdateForOne(
 	if err != nil {
 		return nil, "", err
 	}
-	// Final post-state load. sk-607: every requested step has committed by
+	// Final post-state load. sk-607: the change has committed by
 	// now, so the read runs detached from the caller's context, and if even
 	// that read fails the chain is acknowledged from the state its last
 	// transaction read (*ErrReadBackFailed) — never reported as a failed
@@ -199,33 +196,22 @@ var afterClosePrecheckHook func(ctx context.Context, issueID string)
 // runUpdateChain performs every mutation of the chain and loads nothing
 // back. Both entry points above add the read they actually need. The
 // first result is the close-target link state, as documented on
-// runUpdateForOne. The second is the post-state the LAST step's own
-// transaction read (sk-607) — zero when no step wrote — so a chain whose
-// every step committed can be acknowledged without any read after the
-// commit. A step that fails returns its error and nothing else: earlier
-// steps stay committed (the documented partial-chain semantics), and a
-// chain that did not finish is never passed off as one that did.
+// runUpdateForOne. The second is the post-state the change's transaction
+// read (sk-607), so the change can be acknowledged without any read after
+// the commit. A step that fails returns its error and nothing else: the
+// whole change rolled back (T015, US-14).
 func runUpdateChain(
 	ctx context.Context,
 	store *issues.Store,
 	in updateOneInput,
 ) (issues.CloseLinkState, issues.CommittedState, error) {
-	lockOpts := issues.LockOpts{Force: in.Force, SessionID: in.SessionID}
-	var link issues.CloseLinkState
-	var last issues.CommittedState
-
-	// currentVersion threads through the chain — PatchIssue bumps it,
-	// UpdateStatus consumes the bumped value as its expectedVersion.
-	currentVersion := in.ExpectedVersion
-
-	// sk-540.1 — pre-check BEFORE the first write. A transition into closed
-	// without closeOutcome is refused while nothing has been written: the
-	// field patch of step 1 commits in its own transaction, so a refusal
-	// raised only by the close step would leave the fields written. A
-	// re-close of an already closed issue passes and keeps its outcome.
-	// CloseCommitted repeats the check in its transaction, which is what
-	// catches an issue reopened in between under force=true (no version
-	// predicate stops that path).
+	// sk-540.1 — pre-check BEFORE the transaction. A transition into closed
+	// without closeOutcome is refused without opening it. A re-close of an
+	// already closed issue passes and keeps its outcome. The close step
+	// repeats the check in the transaction, which is what catches an issue
+	// reopened in between under force=true (no version predicate stops that
+	// path); the refusal there rolls back the whole change, field patch
+	// included (T015, US-14).
 	//
 	// sk-540.2 — the same pre-check refuses duplicate/superseded without
 	// closeTarget unless the issue is already closed and keeps its outcome
@@ -243,6 +229,16 @@ func runUpdateChain(
 	touchesOutcome := in.CloseOutcome != nil || strings.TrimSpace(in.CloseTarget) != ""
 	patchCarriesOutcome := touchesOutcome && in.StatusCanon == ""
 
+	change := issues.UpdateIssueInput{
+		ID:              in.ID,
+		ExpectedVersion: in.ExpectedVersion,
+		Force:           in.Force,
+		SessionID:       in.SessionID,
+		Actor:           in.Actor,
+		LabelsAdd:       in.LabelsAdd,
+		LabelsRemove:    in.LabelsRemove,
+	}
+
 	// 1) Field patch.
 	//
 	// patchCarriesOutcome widens the gate: editing ONLY the outcome of a
@@ -251,26 +247,12 @@ func runUpdateChain(
 	// written, with the call answering ok:true.
 	if in.HasFieldPatch || patchCarriesOutcome {
 		patch := in.PatchInput
-		patch.ExpectedVersion = currentVersion
-		patch.Force = in.Force
-		patch.SessionID = in.SessionID
 		if patchCarriesOutcome {
 			patch.CloseOutcome = in.CloseOutcome
 			patch.CloseTarget = in.CloseTarget
 			patch.DependenciesCaller = in.DependenciesCaller
 		}
-		// PatchIssueCommitted: the chain needs the version, which comes out
-		// of the patch's own transaction (sk-607) — no card read here that
-		// could fail after the patch committed and stop the chain.
-		state, l, err := store.PatchIssueCommitted(ctx, in.ID, patch, in.Actor)
-		if err != nil {
-			return "", issues.CommittedState{}, err
-		}
-		if patchCarriesOutcome {
-			link = l
-		}
-		last = state
-		currentVersion = state.Version
+		change.Patch = &patch
 	}
 
 	// 2) Status transition (closed routes to Close).
@@ -284,86 +266,52 @@ func runUpdateChain(
 			if reasonArg != nil {
 				reasonStr = *reasonArg
 			}
-			// CloseCommitted: the chain needs the version and the link,
-			// and both come out of the close's own transaction (sk-607).
-			// The card is loaded once, by the entry point, at the end.
-			state, l, err := store.CloseCommitted(ctx, issues.CloseInput{
-				ID:                 in.ID,
-				ExpectedVersion:    currentVersion,
+			change.Close = &issues.CloseInput{
 				Reason:             reasonStr,
-				Force:              in.Force,
-				SessionID:          in.SessionID,
-				Actor:              in.Actor,
 				CloseOutcome:       in.CloseOutcome,
 				CloseTarget:        in.CloseTarget,
 				DependenciesCaller: in.DependenciesCaller,
 				// sk-540.1: re-checked here against the live status — see
 				// the pre-check at the top of runUpdateChain.
 				RequireOutcomeOnTransition: true,
-			})
-			if err != nil {
-				return "", issues.CommittedState{}, err
 			}
-			link = l
-			last = state
-			currentVersion = state.Version
 		} else {
-			state, err := store.UpdateStatusCommitted(ctx, in.ID, issues.UpdateStatusInput{
-				ExpectedVersion: currentVersion,
-				Status:          in.StatusCanon,
-				Reason:          reasonArg,
-				Force:           in.Force,
-				SessionID:       in.SessionID,
-			}, in.Actor)
-			if err != nil {
-				return "", issues.CommittedState{}, err
+			change.Status = &issues.UpdateStatusInput{
+				Status: in.StatusCanon,
+				Reason: reasonArg,
 			}
-			last = state
-			currentVersion = state.Version
 		}
 	}
 
-	// 3) Component replace. NoLoad: no card is built — the post-state the
-	// transaction read is kept instead, because a component write moves the
-	// version the acknowledgement must carry.
+	// 3) Component replace.
 	if in.HasComponentIDs {
-		state, err := store.ReplaceComponentsNoLoad(ctx, in.ID, in.ComponentIDs, in.Actor, lockOpts)
-		if err != nil {
-			return "", issues.CommittedState{}, err
-		}
-		last = state
+		change.ReplaceComponents = true
+		change.Components = in.ComponentIDs
 	}
 
-	// 4) Labels add.
-	for _, label := range in.LabelsAdd {
-		state, err := store.AddLabelNoLoad(ctx, in.ID, label, in.Actor, lockOpts)
-		if err != nil {
-			return "", issues.CommittedState{}, err
-		}
-		last = state
-	}
+	// 4), 5) Labels added, then removed — carried in change above.
 
-	// 5) Labels remove. Maps "label not on issue" (ErrNotFound) to a
-	// validation error so the agent gets a discriminator distinct from
-	// "issue not found".
-	for _, label := range in.LabelsRemove {
-		state, err := store.RemoveLabelNoLoad(ctx, in.ID, label, in.Actor, lockOpts)
-		if err != nil {
-			if errors.Is(err, issues.ErrNotFound) {
-				// RemoveLabel returns ErrNotFound for both "issue gone"
-				// and "label not present". The chain only reaches here
-				// AFTER the field/status/components/labelsAdd steps
-				// succeeded, so the issue clearly exists — the cause
-				// must be the latter. Re-package as a typed error the
-				// caller maps to validation_error with {label: <name>}.
-				return "", issues.CommittedState{}, &errLabelNotPresent{Label: label}
-			}
-			return "", issues.CommittedState{}, err
-		}
-		last = state
+	// Nothing to change: no transaction, and the entry points read the
+	// live state themselves.
+	if change.Patch == nil && change.Status == nil && change.Close == nil &&
+		!change.ReplaceComponents && len(change.LabelsAdd) == 0 && len(change.LabelsRemove) == 0 {
+		return "", issues.CommittedState{}, nil
 	}
-
-	return link, last, nil
+	res, err := store.UpdateIssue(ctx, change)
+	if err != nil {
+		// A labelsRemove entry that is not on the issue: a validation
+		// error with {label: <name>}, distinct from "issue not found".
+		var absent *issues.LabelNotPresentError
+		if errors.As(err, &absent) {
+			return "", issues.CommittedState{}, &errLabelNotPresent{Label: absent.Label}
+		}
+		return "", issues.CommittedState{}, err
+	}
+	var link issues.CloseLinkState
+	if patchCarriesOutcome || change.Close != nil {
+		link = res.Link
+	}
+	return link, res.State, nil
 }
 
 // refuseOutcomeOnNonClosingStatus is the check BOTH input builders of this

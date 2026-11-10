@@ -20,13 +20,9 @@ import (
 
 // RegisterUpdate wires the skein_update tool. Patches issue fields with
 // optimistic concurrency, plus routes status / components / labels
-// through the dedicated store methods. The tool fans out to multiple
-// store calls in sequence; each store call is its own SERIALIZABLE
-// transaction (the underlying stores do not expose a multi-op tx
-// surface). On a mid-fan-out failure, earlier sub-operations are NOT
-// rolled back — the response carries the first error and the issue
-// reflects whatever sub-ops succeeded. The tool description warns the
-// agent about this so retries on partial failure are deliberate.
+// through the dedicated store methods. The whole change is ONE
+// SERIALIZABLE transaction (issues.Store.UpdateIssue, T015, US-14): a
+// refusal at any step writes nothing and leaves the version where it was.
 //
 // R2.3: this tool is lock-aware. The caller must hold the lock on the
 // issue (locked_by = caller's session) or pass force=true (force_unlock).
@@ -56,13 +52,11 @@ func RegisterUpdate(s *server.MCPServer, pool *pgxpool.Pool, issuesStore *issues
 				"`force=true` (force_unlock: project owner, space owner, instance admin). This tool does NOT touch the "+
 				"lock — to release the lock use `skein_unclaim(id, "+
 				"nextStatus, reason)` (atomic over lock+status) or "+
-				"`skein_close` (terminal close). Multi-op note: when the "+
-				"call sets a mix of "+
-				"fields, status, components, and labels, each sub-operation "+
-				"is committed independently — a failure mid-way leaves a "+
-				"partial state and you should re-fetch with skein_show "+
-				"before retrying.\n\n"+
-				"A transaction abort with an unchanged declared version returns serialization_retry. Earlier sub-operations may have committed: re-read and resend only unapplied changes.\n\n"+
+				"`skein_close` (terminal close). The change is atomic: "+
+				"fields, status, components and labels are written "+
+				"together or not at all — any error means nothing was "+
+				"written and the version did not move.\n\n"+
+				"A transaction abort with an unchanged declared version returns serialization_retry: nothing was written, resend the call unchanged.\n\n"+
 				"closeOutcome is required when transitioning to closed; repeating a close without it preserves the previous outcome.\n\n"+
 				patchTextContractNote+"\n\n"+
 				fieldBleedNote,

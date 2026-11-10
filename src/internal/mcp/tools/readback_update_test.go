@@ -205,32 +205,71 @@ func TestUpdateManyMCP_LoopDeadlineAfterCloseCommit_RowAcknowledged(t *testing.T
 	}
 }
 
-// A step that did NOT apply stays an error: the close commits, the deadline
-// then fires, and the label step after it never writes. Acknowledging that
-// row as ok would report a write that is not in the database.
-func TestUpdateManyMCP_StepAfterDeadlineNotApplied_RowIsNotOK(t *testing.T) {
-	env := comSetup(t)
-	id := comSeed(t, env, env.pid, env.prefix, "rbum-partial")
-	before := rbRead(t, env, id)
+// A row is one atomic change (US-14, SC-020), so the batch deadline either
+// cuts it before its commit — nothing written, the row is not ok — or finds
+// it committed — everything written, the row is ok. No third state exists:
+// a row whose close committed while its label did not.
+func TestUpdateManyMCP_DeadlineAndAtomicRow(t *testing.T) {
+	t.Run("deadline before the commit: nothing written, row not ok", func(t *testing.T) {
+		env := comSetup(t)
+		id := comSeed(t, env, env.pid, env.prefix, "rbum-before")
+		before := rbRead(t, env, id)
 
-	withShortBatchDeadline(t, 2*time.Second)
-	installAfterCommitHook(t, func(ctx context.Context, op, issueID string) {
-		if op == "close" && issueID == id {
-			<-ctx.Done()
+		withShortBatchDeadline(t, 2*time.Second)
+		// The label step waits on this lock inside the row's transaction
+		// until the deadline cancels it.
+		release := rbLockTable(t, env.pool, "issue_labels")
+
+		body := ucoUpdateMany(t, env, []any{
+			map[string]any{"id": id, "expectedVersion": float64(before.Version),
+				"status": "closed", "closeOutcome": "done", "reason": "batch",
+				"labelsAdd": []any{"before-deadline"}},
+		})
+		release()
+		if row := comRow(t, body, 0); row["ok"] == true {
+			t.Errorf("row reported ok although its transaction was cut before the commit: %+v", row)
+		}
+		after := rbRead(t, env, id)
+		if after.Status != before.Status || after.Version != before.Version {
+			t.Errorf("db = %+v, want unchanged %+v — the close must roll back with the label", after, before)
+		}
+		if n := rbLabelCount(t, env.pool, id, "before-deadline"); n != 0 {
+			t.Errorf("label written %d times; the row's transaction was cut", n)
 		}
 	})
 
-	body := ucoUpdateMany(t, env, []any{
-		map[string]any{"id": id, "expectedVersion": float64(before.Version),
-			"status": "closed", "closeOutcome": "done", "reason": "batch",
-			"labelsAdd": []any{"after-deadline"}},
+	t.Run("deadline after the commit: everything written, row ok", func(t *testing.T) {
+		env := comSetup(t)
+		id := comSeed(t, env, env.pid, env.prefix, "rbum-after")
+		before := rbRead(t, env, id)
+
+		withShortBatchDeadline(t, 2*time.Second)
+		installAfterCommitHook(t, func(ctx context.Context, _ string, issueID string) {
+			if issueID == id {
+				<-ctx.Done() // the row runs under the batch's loop context
+			}
+		})
+
+		body := ucoUpdateMany(t, env, []any{
+			map[string]any{"id": id, "expectedVersion": float64(before.Version),
+				"status": "closed", "closeOutcome": "done", "reason": "batch",
+				"labelsAdd": []any{"after-deadline"}},
+		})
+		row := comRow(t, body, 0)
+		if row["ok"] != true {
+			t.Errorf("row committed as a whole but answered %+v", row)
+		}
+		after := rbRead(t, env, id)
+		if after.Status != issues.StatusClosed {
+			t.Errorf("db = %+v, want closed", after)
+		}
+		if n := rbLabelCount(t, env.pool, id, "after-deadline"); n != 1 {
+			t.Errorf("label written %d times, want 1 — committed with the close", n)
+		}
+		if got := jsonInt(t, row, "version"); row["ok"] == true && got != after.Version {
+			t.Errorf("row version = %d, want the committed %d", got, after.Version)
+		}
 	})
-	if n := rbLabelCount(t, env.pool, id, "after-deadline"); n != 0 {
-		t.Fatalf("label written %d times; the step was meant to be cut by the deadline", n)
-	}
-	if row := comRow(t, body, 0); row["ok"] == true {
-		t.Errorf("row reported ok although its label step did not apply: %+v", row)
-	}
 }
 
 // ---- skein_create with duplicateOf ----

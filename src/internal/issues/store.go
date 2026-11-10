@@ -3204,258 +3204,280 @@ func (s *Store) PatchIssueCommitted(
 	input PatchIssueInput,
 	actor Actor,
 ) (CommittedState, CloseLinkState, error) {
-	linkState := CloseLinkNone
-	var committed CommittedState
+	res, err := s.runUpdateIssue(ctx, UpdateIssueInput{
+		ID:              id,
+		ExpectedVersion: input.ExpectedVersion,
+		Force:           input.Force,
+		SessionID:       input.SessionID,
+		Actor:           actor,
+		Patch:           &input,
+	}, updateIssueOp{name: "patchIssue", attempts: patchIssueMaxAttempts, commit: "patch"})
+	if err != nil {
+		return CommittedState{}, CloseLinkNone, err
+	}
+	return res.State, res.Link, nil
+}
+
+// validatePatchStep is the field patch's check before any transaction opens.
+func validatePatchStep(input PatchIssueInput) error {
 	if input.ExpectedVersion < 1 {
-		return CommittedState{}, linkState, &ValidationError{Code: "missing_version", Message: "expected version is required"}
+		return &ValidationError{Code: "missing_version", Message: "expected version is required"}
 	}
 	// sk-28 store-level backstop, same rationale as CreateIssue.
 	if err := validatePatchInputProse(input); err != nil {
-		return CommittedState{}, linkState, err
+		return err
 	}
 	if strings.TrimSpace(input.CloseTarget) != "" && input.DependenciesCaller == nil {
-		return CommittedState{}, linkState, fmt.Errorf("DependenciesCaller is required when CloseTarget is set")
+		return fmt.Errorf("DependenciesCaller is required when CloseTarget is set")
+	}
+	return nil
+}
+
+// patchIssueInTx is the field patch inside the caller's transaction (T015,
+// US-14). chained says an earlier step of the same transaction already
+// checked the caller's expectedVersion; link receives the close-target link
+// state of an outcome edit.
+func (s *Store) patchIssueInTx(ctx context.Context, tx pgx.Tx, id string, input PatchIssueInput, actor Actor, chained bool, link *CloseLinkState) error {
+	*link = CloseLinkNone
+	var projectID uuid.UUID
+	// K-7 (sk-674.18 T018): a change of assignee is made under the
+	// shared lock of the issue's space, taken before the issue row.
+	if input.Assignee != nil {
+		if err := spaces.ShareIssueSpace(ctx, tx, id); err != nil {
+			return err
+		}
+	}
+	// Read current row to compare versions and capture old snapshot
+	// for the event payload.
+	old, err := s.fetchIssueInTx(ctx, tx, id)
+	if err != nil {
+		return err
+	}
+	if chained {
+		// An earlier step of this transaction checked the caller's
+		// version and moved it; nothing else can have written since.
+		input.ExpectedVersion = old.Version
+	}
+	// sk-622.21 T015: "Assignee change" names the roles before the
+	// write too (the old assignee among them).
+	var rolesBefore signalRoles
+	if input.Assignee != nil {
+		if rolesBefore, err = readSignalRoles(ctx, tx, id); err != nil {
+			return err
+		}
+	}
+	// Lock predicate runs BEFORE the version check so a locked issue
+	// surfaces ErrLockedByOther rather than a confusing version
+	// mismatch when the holder bumped version mid-flight.
+	if err := lockGuard(old, input.SessionID, actor.UserID, input.Force); err != nil {
+		return err
+	}
+	if !input.Force && old.Version != input.ExpectedVersion {
+		return &ErrVersionConflict{CurrentVersion: old.Version}
+	}
+	projectID = old.ProjectID
+
+	// sk-489 (T004): an outcome edit of a closed issue. The same helper
+	// as in both close writers — all checks of the target and the value
+	// sound here verbatim the same as there.
+	touchesOutcome := input.CloseOutcome != nil || strings.TrimSpace(input.CloseTarget) != ""
+	var decision CloseOutcomeDecision
+	if touchesOutcome {
+		if old.Status != StatusClosed {
+			// An unclosed issue has no outcome (INV-1), so there is
+			// nothing to edit. The rejection comes before any write: the version does not grow.
+			//
+			// The request is correct by FORM here — it is forbidden by
+			// the issue's current state — so the code is a business one and the
+			// surface must return 422 (the list is in
+			// handler/issues.go#issueValidationIsBusinessError). The rejection
+			// of a transition "outcome with a status != closed" carries a DIFFERENT code
+			// (close_outcome_not_a_close) and a different class, 400: there
+			// the very combination of request fields is impossible.
+			return newValidationError("close_outcome_requires_closed",
+				"closeOutcome can only be edited on a closed issue")
+		}
+		previousOutcome := ""
+		if old.CloseOutcome != nil {
+			previousOutcome = *old.CloseOutcome
+		}
+		var derr error
+		decision, derr = DecideCloseOutcome(CloseOutcomeRequest{
+			IssueID:         id,
+			Requested:       input.CloseOutcome,
+			Target:          input.CloseTarget,
+			AlreadyClosed:   true,
+			PreviousOutcome: previousOutcome,
+		})
+		if derr != nil {
+			return derr
+		}
+		// sk-540.2 exception (a): before any write.
+		if err := ensureCloseLinkExists(ctx, tx, id, decision); err != nil {
+			return err
+		}
+	}
+	// Branch (2) of the review-mark reset predicate (SC-009) — shared with the close
+	// writers. Branch (1) is impossible here: an edit does not change the status.
+	resetReviewOnOutcome := touchesOutcome &&
+		OutcomeChangeResetsReview(decision.Previous, decision.Outcome,
+			actor.UserID, old.CreatedBy)
+	// The outcome is written only when it is edited; the COALESCE below leaves the
+	// column untouched on nil. The close date and reason are not
+	// mentioned in the UPDATE at all — INV-8 is held by the absence of a write,
+	// not by undoing one.
+	var outcomeArg any
+	if touchesOutcome {
+		outcomeArg = decision.Outcome
 	}
 
-	var projectID uuid.UUID
-
-	err := s.withSerializableRetry(ctx, "patchIssue", patchIssueMaxAttempts, withCommittedState(ctx, id, &committed, func(tx pgx.Tx) error {
-		// A replayed attempt starts from scratch (sk-622.21, R17): the link
-		// state of a rolled-back attempt must not leak into this one.
-		linkState = CloseLinkNone
-		// K-7 (sk-674.18 T018): a change of assignee is made under the
-		// shared lock of the issue's space, taken before the issue row.
-		if input.Assignee != nil {
-			if err := spaces.ShareIssueSpace(ctx, tx, id); err != nil {
+	// Phase 1 ui-redesign: detect assignee change so we can reset /
+	// re-seed acceptance state in the same UPDATE.
+	//
+	// "assigneeChanged" mirrors the IssuePatchFields diff semantics:
+	// the patch must explicitly set Assignee (non-nil pointer) AND
+	// the value must differ from the existing column. A PATCH that
+	// sets assignee to its current value writes nothing to
+	// acceptance state. We pre-compute resolved acceptance here
+	// rather than parsing the change-list post-UPDATE because the
+	// new accepted_at/by need to land in the same SQL statement.
+	assigneeChanged := false
+	var newAcceptedAtArg, newAcceptedByArg any
+	var patchAcceptedAt time.Time
+	var newAssigneeUserID uuid.UUID
+	// sk-34: captured pre-UPDATE so the post-UPDATE array mutation can
+	// append the OLD assignee to previous_assignees and prune the NEW
+	// assignee from both arrays when they come back. Scoped to the
+	// "if input.Assignee != nil" branch where it's resolved.
+	var oldAssigneeUserIDForChain uuid.UUID
+	// newAssigneeIdentityForChain — the person the new handle names,
+	// whatever his access (sk-674.18 T028): the chain prunes him from
+	// previous_assignees and dismissed_by by identity.
+	var newAssigneeIdentityForChain uuid.UUID
+	if input.Assignee != nil {
+		oldNil := old.Assignee == nil
+		oldVal := ""
+		if !oldNil {
+			oldVal = *old.Assignee
+		}
+		newVal := *input.Assignee
+		if newVal != "" {
+			if err := checkAssigneeChoice(ctx, tx, newVal, projectID); err != nil {
 				return err
 			}
 		}
-		// Read current row to compare versions and capture old snapshot
-		// for the event payload.
-		old, err := s.fetchIssueInTx(ctx, tx, id)
-		if err != nil {
-			return err
-		}
-		// sk-622.21 T015: "Assignee change" names the roles before the
-		// write too (the old assignee among them).
-		var rolesBefore signalRoles
-		if input.Assignee != nil {
-			if rolesBefore, err = readSignalRoles(ctx, tx, id); err != nil {
-				return err
-			}
-		}
-		// Lock predicate runs BEFORE the version check so a locked issue
-		// surfaces ErrLockedByOther rather than a confusing version
-		// mismatch when the holder bumped version mid-flight.
-		if err := lockGuard(old, input.SessionID, actor.UserID, input.Force); err != nil {
-			return err
-		}
-		if !input.Force && old.Version != input.ExpectedVersion {
-			return &ErrVersionConflict{CurrentVersion: old.Version}
-		}
-		projectID = old.ProjectID
 
-		// sk-489 (T004): an outcome edit of a closed issue. The same helper
-		// as in both close writers — all checks of the target and the value
-		// sound here verbatim the same as there.
-		touchesOutcome := input.CloseOutcome != nil || strings.TrimSpace(input.CloseTarget) != ""
-		var decision CloseOutcomeDecision
-		if touchesOutcome {
-			if old.Status != StatusClosed {
-				// An unclosed issue has no outcome (INV-1), so there is
-				// nothing to edit. The rejection comes before any write: the version does not grow.
-				//
-				// The request is correct by FORM here — it is forbidden by
-				// the issue's current state — so the code is a business one and the
-				// surface must return 422 (the list is in
-				// handler/issues.go#issueValidationIsBusinessError). The rejection
-				// of a transition "outcome with a status != closed" carries a DIFFERENT code
-				// (close_outcome_not_a_close) and a different class, 400: there
-				// the very combination of request fields is impossible.
-				return newValidationError("close_outcome_requires_closed",
-					"closeOutcome can only be edited on a closed issue")
+		// Resolve both sides to a users.id and gate "changed" on UUID
+		// inequality. ResolveAssigneeUserID is case-insensitive on
+		// users.username (LOWER=LOWER), so a case-only edit like
+		// "Admin" → "admin" lands the same UUID on both sides and
+		// surfaces here as unchanged — leaving accepted_at /
+		// accepted_by intact and emitting no audit row from the
+		// change-list. Raw string compare (the pre-fix behaviour)
+		// would have flipped assigneeChanged=true and spuriously
+		// reset acceptance.
+		//
+		// uuid.Nil on either side means the string didn't resolve to
+		// any user (free-form label like "the docs team", or empty
+		// for unassign). In that case we fall back to a
+		// case-insensitive string compare so two different
+		// unresolvable labels still register as a change while
+		// case-only edits of the same label do not.
+		var oldUserID uuid.UUID
+		if !oldNil && oldVal != "" {
+			rid, rerr := notifications.ResolveAssigneeIdentity(ctx, tx, oldVal)
+			if rerr != nil {
+				return rerr
 			}
-			previousOutcome := ""
-			if old.CloseOutcome != nil {
-				previousOutcome = *old.CloseOutcome
+			oldUserID = rid
+		}
+		// Who joins previous_assignees: the old
+		// assignee only if he could legitimately hold the issue — he may
+		// work in the project at this change — or already has a
+		// historical relation to it (authz.PersonLinkedToIssueExpr, the
+		// display ground of INV-30). Free text naming anybody else is
+		// text (E-33, E-37); appending its identity would turn it into
+		// a person on the card. A participant who loses his access is
+		// moved here by the revocation itself (INV-12, authz/revoke.go).
+		if oldUserID != uuid.Nil {
+			admitted, aerr := oldAssigneeAdmittedToChain(ctx, tx, id, oldVal, oldUserID, projectID)
+			if aerr != nil {
+				return aerr
 			}
-			var derr error
-			decision, derr = DecideCloseOutcome(CloseOutcomeRequest{
-				IssueID:         id,
-				Requested:       input.CloseOutcome,
-				Target:          input.CloseTarget,
-				AlreadyClosed:   true,
-				PreviousOutcome: previousOutcome,
-			})
+			if admitted {
+				oldAssigneeUserIDForChain = oldUserID
+			}
+		}
+		// Identity on both sides (sk-674.18 T028): whether the assignee
+		// changed and who joins previous_assignees are questions about
+		// the person, not about delivering to him.
+		var newIdentity uuid.UUID
+		if newVal != "" {
+			rid, rerr := notifications.ResolveAssigneeIdentity(ctx, tx, newVal)
+			if rerr != nil {
+				return rerr
+			}
+			newIdentity = rid
+			newAssigneeIdentityForChain = rid
+			// Delivery (watch, notification, acceptance) only to a person
+			// who may work in the project now (INV-30).
+			did, derr := notifications.ResolveAssigneeUserID(ctx, tx, newVal, projectID)
 			if derr != nil {
 				return derr
 			}
-			// sk-540.2 exception (a): before any write.
-			if err := ensureCloseLinkExists(ctx, tx, id, decision); err != nil {
-				return err
-			}
-		}
-		// Branch (2) of the review-mark reset predicate (SC-009) — shared with the close
-		// writers. Branch (1) is impossible here: an edit does not change the status.
-		resetReviewOnOutcome := touchesOutcome &&
-			OutcomeChangeResetsReview(decision.Previous, decision.Outcome,
-				actor.UserID, old.CreatedBy)
-		// The outcome is written only when it is edited; the COALESCE below leaves the
-		// column untouched on nil. The close date and reason are not
-		// mentioned in the UPDATE at all — INV-8 is held by the absence of a write,
-		// not by undoing one.
-		var outcomeArg any
-		if touchesOutcome {
-			outcomeArg = decision.Outcome
+			newAssigneeUserID = did
 		}
 
-		// Phase 1 ui-redesign: detect assignee change so we can reset /
-		// re-seed acceptance state in the same UPDATE.
-		//
-		// "assigneeChanged" mirrors the IssuePatchFields diff semantics:
-		// the patch must explicitly set Assignee (non-nil pointer) AND
-		// the value must differ from the existing column. A PATCH that
-		// sets assignee to its current value writes nothing to
-		// acceptance state. We pre-compute resolved acceptance here
-		// rather than parsing the change-list post-UPDATE because the
-		// new accepted_at/by need to land in the same SQL statement.
-		assigneeChanged := false
-		var newAcceptedAtArg, newAcceptedByArg any
-		var patchAcceptedAt time.Time
-		var newAssigneeUserID uuid.UUID
-		// sk-34: captured pre-UPDATE so the post-UPDATE array mutation can
-		// append the OLD assignee to previous_assignees and prune the NEW
-		// assignee from both arrays when they come back. Scoped to the
-		// "if input.Assignee != nil" branch where it's resolved.
-		var oldAssigneeUserIDForChain uuid.UUID
-		// newAssigneeIdentityForChain — the person the new handle names,
-		// whatever his access (sk-674.18 T028): the chain prunes him from
-		// previous_assignees and dismissed_by by identity.
-		var newAssigneeIdentityForChain uuid.UUID
-		if input.Assignee != nil {
-			oldNil := old.Assignee == nil
-			oldVal := ""
-			if !oldNil {
-				oldVal = *old.Assignee
-			}
-			newVal := *input.Assignee
-			if newVal != "" {
-				if err := checkAssigneeChoice(ctx, tx, newVal, projectID); err != nil {
-					return err
-				}
-			}
-
-			// Resolve both sides to a users.id and gate "changed" on UUID
-			// inequality. ResolveAssigneeUserID is case-insensitive on
-			// users.username (LOWER=LOWER), so a case-only edit like
-			// "Admin" → "admin" lands the same UUID on both sides and
-			// surfaces here as unchanged — leaving accepted_at /
-			// accepted_by intact and emitting no audit row from the
-			// change-list. Raw string compare (the pre-fix behaviour)
-			// would have flipped assigneeChanged=true and spuriously
-			// reset acceptance.
-			//
-			// uuid.Nil on either side means the string didn't resolve to
-			// any user (free-form label like "the docs team", or empty
-			// for unassign). In that case we fall back to a
-			// case-insensitive string compare so two different
-			// unresolvable labels still register as a change while
-			// case-only edits of the same label do not.
-			var oldUserID uuid.UUID
-			if !oldNil && oldVal != "" {
-				rid, rerr := notifications.ResolveAssigneeIdentity(ctx, tx, oldVal)
-				if rerr != nil {
-					return rerr
-				}
-				oldUserID = rid
-			}
-			// Who joins previous_assignees: the old
-			// assignee only if he could legitimately hold the issue — he may
-			// work in the project at this change — or already has a
-			// historical relation to it (authz.PersonLinkedToIssueExpr, the
-			// display ground of INV-30). Free text naming anybody else is
-			// text (E-33, E-37); appending its identity would turn it into
-			// a person on the card. A participant who loses his access is
-			// moved here by the revocation itself (INV-12, authz/revoke.go).
-			if oldUserID != uuid.Nil {
-				admitted, aerr := oldAssigneeAdmittedToChain(ctx, tx, id, oldVal, oldUserID, projectID)
-				if aerr != nil {
-					return aerr
-				}
-				if admitted {
-					oldAssigneeUserIDForChain = oldUserID
-				}
-			}
-			// Identity on both sides (sk-674.18 T028): whether the assignee
-			// changed and who joins previous_assignees are questions about
-			// the person, not about delivering to him.
-			var newIdentity uuid.UUID
-			if newVal != "" {
-				rid, rerr := notifications.ResolveAssigneeIdentity(ctx, tx, newVal)
-				if rerr != nil {
-					return rerr
-				}
-				newIdentity = rid
-				newAssigneeIdentityForChain = rid
-				// Delivery (watch, notification, acceptance) only to a person
-				// who may work in the project now (INV-30).
-				did, derr := notifications.ResolveAssigneeUserID(ctx, tx, newVal, projectID)
-				if derr != nil {
-					return derr
-				}
-				newAssigneeUserID = did
-			}
-
-			switch {
-			case newIdentity != uuid.Nil && oldUserID != uuid.Nil:
-				assigneeChanged = newIdentity != oldUserID
-			case newIdentity == uuid.Nil && oldUserID == uuid.Nil:
-				// Both sides are unresolvable (or both empty). Compare
-				// the raw strings case-insensitively so "" ≠ "the docs
-				// team" is a change, but "alice" ≡ "Alice" is not.
-				assigneeChanged = !strings.EqualFold(oldVal, newVal)
-			default:
-				// One resolves, the other does not (or transitions
-				// to/from empty) — always a change.
-				assigneeChanged = true
-			}
-
-			if assigneeChanged && newVal != "" {
-				if newAssigneeUserID == actor.UserID && newAssigneeUserID != uuid.Nil {
-					// Self-assign on patch → auto-accept (Q-4 = a,
-					// symmetric with create path).
-					patchAcceptedAt = time.Now().UTC()
-					newAcceptedAtArg = patchAcceptedAt
-					newAcceptedByArg = actor.UserID
-				}
-			}
-			// If assigneeChanged && newVal == "" — unassign (Q-3 = a):
-			// leave both args nil so the CASE expressions write NULL.
+		switch {
+		case newIdentity != uuid.Nil && oldUserID != uuid.Nil:
+			assigneeChanged = newIdentity != oldUserID
+		case newIdentity == uuid.Nil && oldUserID == uuid.Nil:
+			// Both sides are unresolvable (or both empty). Compare
+			// the raw strings case-insensitively so "" ≠ "the docs
+			// team" is a change, but "alice" ≡ "Alice" is not.
+			assigneeChanged = !strings.EqualFold(oldVal, newVal)
+		default:
+			// One resolves, the other does not (or transitions
+			// to/from empty) — always a change.
+			assigneeChanged = true
 		}
 
-		// SQL predicate parametrised: $force OR (locked_by IS NULL OR
-		// locked_by = $session) AND $force OR version = $expected. The Go-
-		// level lockGuard above has already validated, but we also encode
-		// the predicate in SQL so a concurrent UPDATE racing between the
-		// SELECT and our UPDATE cannot slip past unnoticed.
-		//
-		// sk-303.13 / T021: one decision for every path that touches the
-		// stamp. Note what it deliberately does NOT fire on. A patch that
-		// re-points the assignee at somebody else CLEARS the stamp — the
-		// reverse transition — and INV-5 is one-directional: the
-		// historical acceptance event stays, no new event is written
-		// (US-11). And a self-assign onto a row that was ALREADY accepted
-		// re-stamps it without an empty→filled transition, so it writes
-		// nothing either.
-		patchAcceptance := ClassifyAcceptance(old.AcceptedAt != nil,
-			assigneeChanged && newAcceptedAtArg != nil, false)
+		if assigneeChanged && newVal != "" {
+			if newAssigneeUserID == actor.UserID && newAssigneeUserID != uuid.Nil {
+				// Self-assign on patch → auto-accept (Q-4 = a,
+				// symmetric with create path).
+				patchAcceptedAt = time.Now().UTC()
+				newAcceptedAtArg = patchAcceptedAt
+				newAcceptedByArg = actor.UserID
+			}
+		}
+		// If assigneeChanged && newVal == "" — unassign (Q-3 = a):
+		// leave both args nil so the CASE expressions write NULL.
+	}
 
-		// accepted_at / accepted_by are CASE-gated on $assigneeChanged
-		// so rows whose assignee didn't change keep their prior
-		// acceptance state untouched (Q-6 = b — acceptance does NOT get
-		// its own audit row of the "issue.updated" kind; the acceptance
-		// event above is a different thing).
-		ct, err := tx.Exec(ctx, `
+	// SQL predicate parametrised: $force OR (locked_by IS NULL OR
+	// locked_by = $session) AND $force OR version = $expected. The Go-
+	// level lockGuard above has already validated, but we also encode
+	// the predicate in SQL so a concurrent UPDATE racing between the
+	// SELECT and our UPDATE cannot slip past unnoticed.
+	//
+	// sk-303.13 / T021: one decision for every path that touches the
+	// stamp. Note what it deliberately does NOT fire on. A patch that
+	// re-points the assignee at somebody else CLEARS the stamp — the
+	// reverse transition — and INV-5 is one-directional: the
+	// historical acceptance event stays, no new event is written
+	// (US-11). And a self-assign onto a row that was ALREADY accepted
+	// re-stamps it without an empty→filled transition, so it writes
+	// nothing either.
+	patchAcceptance := ClassifyAcceptance(old.AcceptedAt != nil,
+		assigneeChanged && newAcceptedAtArg != nil, false)
+
+	// accepted_at / accepted_by are CASE-gated on $assigneeChanged
+	// so rows whose assignee didn't change keep their prior
+	// acceptance state untouched (Q-6 = b — acceptance does NOT get
+	// its own audit row of the "issue.updated" kind; the acceptance
+	// event above is a different thing).
+	ct, err := tx.Exec(ctx, `
 UPDATE issues
    SET title               = COALESCE($2, title),
        description         = COALESCE($3, description),
@@ -3481,52 +3503,52 @@ UPDATE issues
    AND ($16::boolean OR version = $15)
    AND ($16::boolean OR locked_by IS NULL
         OR (locked_by = $17::text AND locked_by_user_id = $21::uuid))`,
-			id,
-			input.Title, input.Description, input.Type, input.Priority,
-			input.Assignee, input.Design, input.AcceptanceCriteria,
-			input.Notes, input.EstimatedMinutes, input.DueAt, input.DeferUntil,
-			input.ExternalRef, input.SourceContext,
-			input.ExpectedVersion,
-			input.Force, input.SessionID,
-			assigneeChanged, newAcceptedAtArg, newAcceptedByArg,
-			actor.UserID, outcomeArg, resetReviewOnOutcome,
-		)
-		if err != nil {
-			return fmt.Errorf("updating issue: %w", err)
-		}
-		if ct.RowsAffected() == 0 {
-			// fetchIssueInTx already verified version matched, so this
-			// branch is essentially defensive (multi-tenant trigger races).
-			return &ErrVersionConflict{CurrentVersion: old.Version}
-		}
+		id,
+		input.Title, input.Description, input.Type, input.Priority,
+		input.Assignee, input.Design, input.AcceptanceCriteria,
+		input.Notes, input.EstimatedMinutes, input.DueAt, input.DeferUntil,
+		input.ExternalRef, input.SourceContext,
+		input.ExpectedVersion,
+		input.Force, input.SessionID,
+		assigneeChanged, newAcceptedAtArg, newAcceptedByArg,
+		actor.UserID, outcomeArg, resetReviewOnOutcome,
+	)
+	if err != nil {
+		return fmt.Errorf("updating issue: %w", err)
+	}
+	if ct.RowsAffected() == 0 {
+		// fetchIssueInTx already verified version matched, so this
+		// branch is essentially defensive (multi-tenant trigger races).
+		return &ErrVersionConflict{CurrentVersion: old.Version}
+	}
 
-		// sk-34 — delegation-chain bookkeeping on assignee change.
-		//
-		// Three array mutations run in one statement so the tx stays
-		// atomic with the main UPDATE above:
-		//
-		//   1. Append the OLD assignee uuid to previous_assignees iff
-		//      it isn't already present (the array is set-semantic).
-		//      uuid.Nil is skipped — happens when the prior assignee
-		//      didn't resolve to a real user.
-		//
-		//   2. Remove the NEW assignee uuid from dismissed_by — if
-		//      they explicitly dropped earlier and the task came back
-		//      to them, the sticky dismissed_by entry is cleared so the
-		//      Delegated lens predicate doesn't continue hiding it
-		//      (the bell-silence side-effect — the deleted subscription
-		//      and its opt-out — stays decoupled: re-watching is a
-		//      separate user action via skein_watchers(action="watch")).
-		//
-		//   3. Remove the NEW assignee uuid from previous_assignees —
-		//      the array tracks PAST assignees only; the current
-		//      assignee is always implicit and must not double up.
-		//
-		// All three are conditional via WHERE NOT $X = ANY(...) so
-		// the statement is idempotent and won't redundantly bump the
-		// physical TOAST page when arrays don't actually change.
-		if assigneeChanged {
-			if _, err := tx.Exec(ctx, `
+	// sk-34 — delegation-chain bookkeeping on assignee change.
+	//
+	// Three array mutations run in one statement so the tx stays
+	// atomic with the main UPDATE above:
+	//
+	//   1. Append the OLD assignee uuid to previous_assignees iff
+	//      it isn't already present (the array is set-semantic).
+	//      uuid.Nil is skipped — happens when the prior assignee
+	//      didn't resolve to a real user.
+	//
+	//   2. Remove the NEW assignee uuid from dismissed_by — if
+	//      they explicitly dropped earlier and the task came back
+	//      to them, the sticky dismissed_by entry is cleared so the
+	//      Delegated lens predicate doesn't continue hiding it
+	//      (the bell-silence side-effect — the deleted subscription
+	//      and its opt-out — stays decoupled: re-watching is a
+	//      separate user action via skein_watchers(action="watch")).
+	//
+	//   3. Remove the NEW assignee uuid from previous_assignees —
+	//      the array tracks PAST assignees only; the current
+	//      assignee is always implicit and must not double up.
+	//
+	// All three are conditional via WHERE NOT $X = ANY(...) so
+	// the statement is idempotent and won't redundantly bump the
+	// physical TOAST page when arrays don't actually change.
+	if assigneeChanged {
+		if _, err := tx.Exec(ctx, `
 UPDATE issues
    SET previous_assignees = CASE
            WHEN $2::uuid <> '00000000-0000-0000-0000-000000000000'::uuid
@@ -3540,220 +3562,212 @@ UPDATE issues
            ELSE dismissed_by
        END
  WHERE id = $1`,
-				id,
-				oldAssigneeUserIDForChain,
-				newAssigneeIdentityForChain,
-			); err != nil {
-				return fmt.Errorf("updating delegation chain (append old): %w", err)
-			}
-			// Second statement: prune the NEW assignee from
-			// previous_assignees if present. Split out so the WHERE
-			// guard on each mutation stays readable (array_remove is
-			// always a no-op when the value isn't present, but the
-			// CASE-guard above is cleaner with one mutation per
-			// branch).
-			if newAssigneeIdentityForChain != uuid.Nil {
-				if _, err := tx.Exec(ctx, `
+			id,
+			oldAssigneeUserIDForChain,
+			newAssigneeIdentityForChain,
+		); err != nil {
+			return fmt.Errorf("updating delegation chain (append old): %w", err)
+		}
+		// Second statement: prune the NEW assignee from
+		// previous_assignees if present. Split out so the WHERE
+		// guard on each mutation stays readable (array_remove is
+		// always a no-op when the value isn't present, but the
+		// CASE-guard above is cleaner with one mutation per
+		// branch).
+		if newAssigneeIdentityForChain != uuid.Nil {
+			if _, err := tx.Exec(ctx, `
 UPDATE issues
    SET previous_assignees = array_remove(previous_assignees, $2::uuid)
  WHERE id = $1
    AND $2::uuid = ANY(previous_assignees)`,
-					id,
-					newAssigneeIdentityForChain,
-				); err != nil {
-					return fmt.Errorf("updating delegation chain (prune new): %w", err)
-				}
+				id,
+				newAssigneeIdentityForChain,
+			); err != nil {
+				return fmt.Errorf("updating delegation chain (prune new): %w", err)
 			}
 		}
+	}
 
-		// R3.2b hybrid event write: one issue.updated parent (full diff in
-		// payload.changes) plus N issue.field_changed children (one per
-		// changed field). The eventbus helper writes all rows on the same
-		// tx so the parent + children + the UPDATE land atomically.
-		// Force=true callers see reason="force-overridden" on every row so
-		// audit dashboards can flag admin overrides without inspecting
-		// old/new.
-		eventReason := ""
-		if input.Force {
-			eventReason = "force-overridden"
+	// R3.2b hybrid event write: one issue.updated parent (full diff in
+	// payload.changes) plus N issue.field_changed children (one per
+	// changed field). The eventbus helper writes all rows on the same
+	// tx so the parent + children + the UPDATE land atomically.
+	// Force=true callers see reason="force-overridden" on every row so
+	// audit dashboards can flag admin overrides without inspecting
+	// old/new.
+	eventReason := ""
+	if input.Force {
+		eventReason = "force-overridden"
+	}
+	changes := eventbus.DiffRegistry(IssuePatchFields, old, &input)
+
+	// Auto-watch on assignee change must run BEFORE FanOut so the new
+	// assignee appears in the recipient set of the parent event
+	// (typical UX: "you've been assigned demo-42"). Pre-R3.2b this
+	// lived inside the per-event branch; with the hybrid layout we
+	// pull it up to the change-list scan. We reuse the resolved
+	// newAssigneeUserID computed pre-UPDATE for the acceptance
+	// reset so the patch path resolves the assignee at most once.
+	assigneeAutoWatched := false
+	for _, fc := range changes {
+		if fc.Field != "assignee" {
+			continue
 		}
-		changes := eventbus.DiffRegistry(IssuePatchFields, old, &input)
-
-		// Auto-watch on assignee change must run BEFORE FanOut so the new
-		// assignee appears in the recipient set of the parent event
-		// (typical UX: "you've been assigned demo-42"). Pre-R3.2b this
-		// lived inside the per-event branch; with the hybrid layout we
-		// pull it up to the change-list scan. We reuse the resolved
-		// newAssigneeUserID computed pre-UPDATE for the acceptance
-		// reset so the patch path resolves the assignee at most once.
-		assigneeAutoWatched := false
-		for _, fc := range changes {
-			if fc.Field != "assignee" {
-				continue
-			}
-			newAssignee, _ := fc.NewValue.(string)
-			if newAssignee == "" {
-				break
-			}
-			if newAssigneeUserID != uuid.Nil {
-				if err := notifications.AddIssueWatcher(ctx, tx, id, newAssigneeUserID, notifications.ReasonAssignee); err != nil {
-					return err
-				}
-				assigneeAutoWatched = true
-			}
+		newAssignee, _ := fc.NewValue.(string)
+		if newAssignee == "" {
 			break
 		}
-
-		// sk-303.13 / T021: a self-assign patch that moved the acceptance
-		// stamp from empty to filled writes its own audit event, so no path
-		// stamps acceptance silently (INV-5). Journal-only: the same patch
-		// already notifies through issue.updated / "Assigned issue", and
-		// a second notification for one user action is what INV-6 forbids.
-		// Written BEFORE the update events so the journal reads in the order
-		// the writes happened.
-		if patchAcceptance.WriteEvent {
-			if _, err := WriteIssueEvent(ctx, tx, EventIssueAccepted, id, projectID,
-				actor, "accepted_at",
-				map[string]any{"acceptedBy": nil, "acceptedAt": nil},
-				map[string]any{"acceptedBy": actor.UserID, "acceptedAt": patchAcceptedAt},
-				acceptanceReasonAuto); err != nil {
+		if newAssigneeUserID != uuid.Nil {
+			if err := notifications.AddIssueWatcher(ctx, tx, id, newAssigneeUserID, notifications.ReasonAssignee); err != nil {
 				return err
 			}
+			assigneeAutoWatched = true
 		}
-
-		if len(changes) > 0 {
-			parentEventID, parentPayload, err := eventbus.WriteHybridUpdateEvents(
-				ctx, tx,
-				EventIssueUpdated, EventIssueFieldChanged,
-				"issue", id, &projectID,
-				eventbusActor(actor),
-				changes,
-				eventReason,
-			)
-			if err != nil {
-				return err
-			}
-			// FanOut consumes the parent's payload (changes[]) to decide
-			// whether issue.updated is notifiable. WriteHybridUpdateEvents
-			// returns the exact bytes that were written into events.payload,
-			// so subscribers and the gate see the same shape.
-			patchCreator, patchAssignee, err := roleContextOf(ctx, tx, old)
-			if err != nil {
-				return err
-			}
-			if newAssigneeUserID != uuid.Nil {
-				// The patch itself installed the assignee, so the post-state
-				// is what the audiences must read.
-				patchAssignee = newAssigneeUserID
-			}
-			if _, err := notifications.FanOut(ctx, tx, notifications.FanOutInput{
-				EventID:           parentEventID,
-				EventType:         EventIssueUpdated,
-				EntityType:        "issue",
-				IssueID:           id,
-				ProjectID:         projectID,
-				CreatorUserID:     patchCreator,
-				AssigneeUserID:    patchAssignee,
-				NewAssigneeUserID: newAssigneeUserID,
-				ActorUserID:       actor.UserID,
-				ActorType:         actor.Role,
-				Payload:           parentPayload,
-			}); err != nil {
-				return err
-			}
-
-		}
-
-		// sk-622.21, decisions R23 / R23′ (US-2 acceptance: on a closed issue
-		// no user with «unwatch on close» on keeps an automatic subscription
-		// reason). An assignment on an ALREADY closed issue goes the way of
-		// the close itself: the new assignee is subscribed above, the
-		// assignment is fanned out — so they get its feed row with the
-		// Watching card, the last notification the automatic subscription
-		// brings — and then, in this same transaction, the automatic reasons
-		// of everybody with the setting on are stripped
-		// (StripAutoWatchersOnClose: an automatic-only row is deleted, a manual
-		// one keeps only `manual`). At commit the invariant holds; with the
-		// setting off the subscription stays, as before. A later reopen
-		// subscribes the assignee again (reAddAutoWatchersOnReopen).
-		if assigneeAutoWatched && old.Status == StatusClosed {
-			if _, err := notifications.StripAutoWatchersOnClose(ctx, tx, id); err != nil {
-				return err
-			}
-		}
-
-		// sk-489 (US-3): an outcome change is its own event and its own fan-out, by the same
-		// helper as in the close writers. Passing the same
-		// outcome again (X = X) is NOT a change: no event, no notification —
-		// only the link, if a target is passed.
-		if decision.Changed {
-			if err := writeOutcomeChangedInTx(ctx, tx, id, old, actor, decision, eventReason); err != nil {
-				return err
-			}
-		}
-		if target := strings.TrimSpace(input.CloseTarget); target != "" {
-			state, lerr := linkCloseTargetInTx(ctx, tx, id, target,
-				decision.Outcome, *input.DependenciesCaller, actor)
-			if lerr != nil {
-				if errors.Is(lerr, errCloseLinkRaceLost) {
-					return ErrSerializationRetry
-				}
-				return lerr
-			}
-			linkState = state
-		}
-
-		// R4.3 — re-scan the four text fields and notify only on
-		// newly-introduced @username mentions. PatchIssue is the only
-		// path where text fields can grow new mentions; the diff against
-		// the old values (captured pre-UPDATE in `old`) ensures we
-		// don't re-fire on every PATCH that touches an unrelated field.
-		// Plan §F-9.
-		//
-		// The new text per field is "input.X if non-nil else old.X" —
-		// PatchIssueInput is partial, COALESCE in the UPDATE statement
-		// preserved unset fields. Resolve runs against the post-write
-		// state so the membership snapshot is consistent with the
-		// notifications we emit.
-		if patchTouchesMentionFields(input) {
-			oldTexts := IssueMentionTexts{
-				Description:        old.Description,
-				Notes:              old.Notes,
-				AcceptanceCriteria: old.AcceptanceCriteria,
-				Design:             old.Design,
-			}
-			newTexts := IssueMentionTexts{
-				Description:        coalesceString(input.Description, old.Description),
-				Notes:              coalesceString(input.Notes, old.Notes),
-				AcceptanceCriteria: coalesceString(input.AcceptanceCriteria, old.AcceptanceCriteria),
-				Design:             coalesceString(input.Design, old.Design),
-			}
-			if err := HandleIssueMentions(ctx, tx, id, projectID, actor, newTexts, &oldTexts); err != nil {
-				return err
-			}
-		}
-
-		// R1.5 search: any change to a text field that contributes to
-		// the embedding source invalidates the row's vector. Resetting
-		// embedding=NULL inside the same tx is the only way to keep the
-		// invariant "row.embedding ⇔ Build*EmbedText(row.cols)". The
-		// backfill worker picks the row up on its next tick (typically
-		// 5..10 seconds).
-		if embeddingDirtyFromPatch(old, input) {
-			if err := search.ResetEmbedding(ctx, tx, "issues", "id", id); err != nil {
-				return err
-			}
-		}
-		// sk-622.21 T015 (US-11): personal signal addressees of the patch.
-		return signalPatch(ctx, tx, id, changes, rolesBefore, decision.Changed)
-	}))
-	if err != nil {
-		// Compare the live version before reporting a mismatch; an unchanged
-		// declared version is a retryable transaction abort.
-		return CommittedState{}, CloseLinkNone, s.degradeSerializationAbort(ctx, err, "patchIssue", id, &input.ExpectedVersion)
+		break
 	}
-	afterCommit(ctx, "patch", id)
-	return committed, linkState, nil
+
+	// sk-303.13 / T021: a self-assign patch that moved the acceptance
+	// stamp from empty to filled writes its own audit event, so no path
+	// stamps acceptance silently (INV-5). Journal-only: the same patch
+	// already notifies through issue.updated / "Assigned issue", and
+	// a second notification for one user action is what INV-6 forbids.
+	// Written BEFORE the update events so the journal reads in the order
+	// the writes happened.
+	if patchAcceptance.WriteEvent {
+		if _, err := WriteIssueEvent(ctx, tx, EventIssueAccepted, id, projectID,
+			actor, "accepted_at",
+			map[string]any{"acceptedBy": nil, "acceptedAt": nil},
+			map[string]any{"acceptedBy": actor.UserID, "acceptedAt": patchAcceptedAt},
+			acceptanceReasonAuto); err != nil {
+			return err
+		}
+	}
+
+	if len(changes) > 0 {
+		parentEventID, parentPayload, err := eventbus.WriteHybridUpdateEvents(
+			ctx, tx,
+			EventIssueUpdated, EventIssueFieldChanged,
+			"issue", id, &projectID,
+			eventbusActor(actor),
+			changes,
+			eventReason,
+		)
+		if err != nil {
+			return err
+		}
+		// FanOut consumes the parent's payload (changes[]) to decide
+		// whether issue.updated is notifiable. WriteHybridUpdateEvents
+		// returns the exact bytes that were written into events.payload,
+		// so subscribers and the gate see the same shape.
+		patchCreator, patchAssignee, err := roleContextOf(ctx, tx, old)
+		if err != nil {
+			return err
+		}
+		if newAssigneeUserID != uuid.Nil {
+			// The patch itself installed the assignee, so the post-state
+			// is what the audiences must read.
+			patchAssignee = newAssigneeUserID
+		}
+		if _, err := notifications.FanOut(ctx, tx, notifications.FanOutInput{
+			EventID:           parentEventID,
+			EventType:         EventIssueUpdated,
+			EntityType:        "issue",
+			IssueID:           id,
+			ProjectID:         projectID,
+			CreatorUserID:     patchCreator,
+			AssigneeUserID:    patchAssignee,
+			NewAssigneeUserID: newAssigneeUserID,
+			ActorUserID:       actor.UserID,
+			ActorType:         actor.Role,
+			Payload:           parentPayload,
+		}); err != nil {
+			return err
+		}
+
+	}
+
+	// sk-622.21, decisions R23 / R23′ (US-2 acceptance: on a closed issue
+	// no user with «unwatch on close» on keeps an automatic subscription
+	// reason). An assignment on an ALREADY closed issue goes the way of
+	// the close itself: the new assignee is subscribed above, the
+	// assignment is fanned out — so they get its feed row with the
+	// Watching card, the last notification the automatic subscription
+	// brings — and then, in this same transaction, the automatic reasons
+	// of everybody with the setting on are stripped
+	// (StripAutoWatchersOnClose: an automatic-only row is deleted, a manual
+	// one keeps only `manual`). At commit the invariant holds; with the
+	// setting off the subscription stays, as before. A later reopen
+	// subscribes the assignee again (reAddAutoWatchersOnReopen).
+	if assigneeAutoWatched && old.Status == StatusClosed {
+		if _, err := notifications.StripAutoWatchersOnClose(ctx, tx, id); err != nil {
+			return err
+		}
+	}
+
+	// sk-489 (US-3): an outcome change is its own event and its own fan-out, by the same
+	// helper as in the close writers. Passing the same
+	// outcome again (X = X) is NOT a change: no event, no notification —
+	// only the link, if a target is passed.
+	if decision.Changed {
+		if err := writeOutcomeChangedInTx(ctx, tx, id, old, actor, decision, eventReason); err != nil {
+			return err
+		}
+	}
+	if target := strings.TrimSpace(input.CloseTarget); target != "" {
+		state, lerr := linkCloseTargetInTx(ctx, tx, id, target,
+			decision.Outcome, *input.DependenciesCaller, actor)
+		if lerr != nil {
+			if errors.Is(lerr, errCloseLinkRaceLost) {
+				return ErrSerializationRetry
+			}
+			return lerr
+		}
+		*link = state
+	}
+
+	// R4.3 — re-scan the four text fields and notify only on
+	// newly-introduced @username mentions. PatchIssue is the only
+	// path where text fields can grow new mentions; the diff against
+	// the old values (captured pre-UPDATE in `old`) ensures we
+	// don't re-fire on every PATCH that touches an unrelated field.
+	// Plan §F-9.
+	//
+	// The new text per field is "input.X if non-nil else old.X" —
+	// PatchIssueInput is partial, COALESCE in the UPDATE statement
+	// preserved unset fields. Resolve runs against the post-write
+	// state so the membership snapshot is consistent with the
+	// notifications we emit.
+	if patchTouchesMentionFields(input) {
+		oldTexts := IssueMentionTexts{
+			Description:        old.Description,
+			Notes:              old.Notes,
+			AcceptanceCriteria: old.AcceptanceCriteria,
+			Design:             old.Design,
+		}
+		newTexts := IssueMentionTexts{
+			Description:        coalesceString(input.Description, old.Description),
+			Notes:              coalesceString(input.Notes, old.Notes),
+			AcceptanceCriteria: coalesceString(input.AcceptanceCriteria, old.AcceptanceCriteria),
+			Design:             coalesceString(input.Design, old.Design),
+		}
+		if err := HandleIssueMentions(ctx, tx, id, projectID, actor, newTexts, &oldTexts); err != nil {
+			return err
+		}
+	}
+
+	// R1.5 search: any change to a text field that contributes to
+	// the embedding source invalidates the row's vector. Resetting
+	// embedding=NULL inside the same tx is the only way to keep the
+	// invariant "row.embedding ⇔ Build*EmbedText(row.cols)". The
+	// backfill worker picks the row up on its next tick (typically
+	// 5..10 seconds).
+	if embeddingDirtyFromPatch(old, input) {
+		if err := search.ResetEmbedding(ctx, tx, "issues", "id", id); err != nil {
+			return err
+		}
+	}
+	// sk-622.21 T015 (US-11): personal signal addressees of the patch.
+	return signalPatch(ctx, tx, id, changes, rolesBefore, decision.Changed)
 }
 
 // currentVersion best-effort reads the live version for a follow-up
@@ -3897,18 +3911,34 @@ func (s *Store) UpdateStatusCommitted(
 	input UpdateStatusInput,
 	actor Actor,
 ) (CommittedState, error) {
-	var committed CommittedState
+	res, err := s.runUpdateIssue(ctx, UpdateIssueInput{
+		ID:              id,
+		ExpectedVersion: input.ExpectedVersion,
+		Force:           input.Force,
+		SessionID:       input.SessionID,
+		Actor:           actor,
+		Status:          &input,
+	}, updateIssueOp{name: "updateStatus", attempts: updateStatusMaxAttempts, commit: "status"})
+	if err != nil {
+		return CommittedState{}, err
+	}
+	return res.State, nil
+}
+
+// validateStatusStep is the status transition's check before any
+// transaction opens; it answers the canonical new status.
+func validateStatusStep(input UpdateStatusInput) (string, error) {
 	if input.ExpectedVersion < 1 {
-		return CommittedState{}, &ValidationError{Code: "missing_version", Message: "expected version is required"}
+		return "", &ValidationError{Code: "missing_version", Message: "expected version is required"}
 	}
 	if input.Reason != nil {
 		if err := ValidateProse("reason", *input.Reason); err != nil {
-			return CommittedState{}, err
+			return "", err
 		}
 	}
 	newStatus, err := ValidateStatus(input.Status)
 	if err != nil {
-		return CommittedState{}, err
+		return "", err
 	}
 	// sk-489 (US-1): the outcome is a property of the CLOSE. Passed together with a
 	// status other than "closed", it is rejected by a check: it cannot be
@@ -3930,204 +3960,211 @@ func (s *Store) UpdateStatusCommitted(
 	// while close_outcome_requires_closed is.
 	if newStatus != StatusClosed &&
 		(input.CloseOutcome != nil || strings.TrimSpace(input.CloseTarget) != "") {
-		return CommittedState{}, newValidationError("close_outcome_not_a_close",
+		return "", newValidationError("close_outcome_not_a_close",
 			"closeOutcome and closeTarget are only accepted when the new status is "+StatusClosed)
 	}
 	if strings.TrimSpace(input.CloseTarget) != "" && input.DependenciesCaller == nil {
-		return CommittedState{}, fmt.Errorf("DependenciesCaller is required when CloseTarget is set")
+		return "", fmt.Errorf("DependenciesCaller is required when CloseTarget is set")
+	}
+	return newStatus, nil
+}
+
+// updateStatusInTx is the status transition inside the caller's transaction
+// (T015, US-14); chained as for patchIssueInTx.
+func (s *Store) updateStatusInTx(ctx context.Context, tx pgx.Tx, id, newStatus string, input UpdateStatusInput, actor Actor, chained bool) error {
+	old, err := s.fetchIssueInTx(ctx, tx, id)
+	if err != nil {
+		return err
+	}
+	if chained {
+		input.ExpectedVersion = old.Version
+	}
+	// Lock predicate first — same ordering as PatchIssue.
+	if err := lockGuard(old, input.SessionID, actor.UserID, input.Force); err != nil {
+		return err
+	}
+	if !input.Force && old.Version != input.ExpectedVersion {
+		return &ErrVersionConflict{CurrentVersion: old.Version}
 	}
 
-	err = s.withSerializableRetry(ctx, "updateStatus", updateStatusMaxAttempts, withCommittedState(ctx, id, &committed, func(tx pgx.Tx) error {
-		old, err := s.fetchIssueInTx(ctx, tx, id)
+	// Pinned protection on close.
+	if newStatus == StatusClosed && old.Pinned && !input.Force {
+		return ErrPinnedNoForce
+	}
+
+	// sk-118 (F2c): standing transition matrix. UpdateStatus is the
+	// sole promote/demote path for the `standing` status (Claim/Close
+	// have their own dedicated guards; create-as-standing goes through
+	// CreateIssue). The matrix enforced here:
+	//
+	//   TO standing (promote / reopen-as-standing):
+	//     open      → standing   ✓
+	//     deferred  → standing   ✓
+	//     closed    → standing   ✓  (reopen; fromClosed clears
+	//                                closed_at + closed_reason below)
+	//     in_progress → standing ✗  (a claimed issue is locked — the
+	//                                holder must unclaim first; even an
+	//                                unlocked in_progress is rejected so
+	//                                the directive is uniform)
+	//     standing  → standing   ✓  (idempotent self-promote; harmless)
+	//
+	//   FROM standing (demote — issue becomes claimable again):
+	//     standing → open        ✓  (the sole escape hatch / demote)
+	//     standing → in_progress ✗  (you don't WORK a standing task;
+	//                                spawn a child and work that)
+	//     standing → deferred    ✗  (a perpetual obligation can't be
+	//                                parked; demote to open first)
+	//     standing → closed      ✓  (retire-close — but routed through
+	//                                Close(), never here; UpdateStatus
+	//                                rejects nothing on this leg)
+	//
+	// Force does NOT bypass this matrix: the rejected legs are not
+	// permission checks, they are structural invariants (a locked issue
+	// genuinely still holds a lock; standing genuinely isn't worked
+	// directly). Admins who must override unclaim/close first.
+	if newStatus == StatusStanding && old.Status == StatusInProgress {
+		// Promote of an in_progress issue. Reject regardless of whether
+		// the lock is currently held — the directive is always "unclaim
+		// first". (A locked issue would also trip lockGuard above unless
+		// the caller holds the lock; this guard catches the held-lock
+		// and the lock-already-dropped-but-still-in_progress cases.)
+		return ErrCannotPromoteLockedToStanding
+	}
+	if old.Status == StatusStanding && newStatus == StatusInProgress {
+		// Demote-to-work is not a thing: standing tasks are acted on via
+		// spawned children, never claimed/worked in place.
+		return ErrCannotWorkStandingDirectly
+	}
+	if old.Status == StatusStanding && newStatus == StatusDeferred {
+		// A standing task is a perpetual obligation, not a parkable unit of
+		// work — deferring it is nonsensical (§11 / §6 invariant 9). The
+		// only demote is standing → open; defer from there if desired.
+		return ErrCannotDeferStanding
+	}
+
+	// R10 (CRITICAL): nested-standing guard on the PROMOTE path. On ANY
+	// transition INTO standing, reject if the issue already participates
+	// in a standing parent/child relationship — in EITHER representation
+	// (the frozen issues.parent_id column OR a parent-child dep edge).
+	// UpdateStatus is otherwise hierarchy-blind, so without this a
+	// skein_update(status=standing) could promote a child under a
+	// standing parent (or a parent that already has a standing child),
+	// reintroducing the §11.4 mutual-retire deadlock that the
+	// create/reparent/dep-add guards close on their own paths.
+	if newStatus == StatusStanding && old.Status != StatusStanding {
+		hasStandingRel, err := standingRelationExists(ctx, tx, id)
 		if err != nil {
 			return err
 		}
-		// Lock predicate first — same ordering as PatchIssue.
-		if err := lockGuard(old, input.SessionID, actor.UserID, input.Force); err != nil {
+		if hasStandingRel {
+			return ErrNestedStandingForbidden
+		}
+	}
+
+	// sk-118 (F2e): standing retire-block on the SHARED close path.
+	// UpdateStatus is the close path used by the REST/MCP bulk handler
+	// (BulkHandler.runOne routes action:"close"/"archive" through
+	// UpdateStatus(StatusClosed), NOT Store.Close), so the F2e retire
+	// guard must live here as well — otherwise bulk close/archive could
+	// retire a standing task while non-closed children remain, defeating
+	// the structural invariant. We run the SAME check Close() uses:
+	// standingOpenChildIDs covers BOTH hierarchy representations (the
+	// canonical parent-child dep edge AND the legacy issues.parent_id
+	// column) via status.ActiveWork. An empty standing (no children, or
+	// all children closed) retires fine. Like the nested-standing matrix
+	// above and Close()'s own guard, this is a structural invariant — NOT
+	// bypassed by force. Non-standing closes are untouched.
+	if old.Status == StatusStanding && newStatus == StatusClosed {
+		childIDs, cerr := standingOpenChildIDs(ctx, tx, id)
+		if cerr != nil {
+			return cerr
+		}
+		if len(childIDs) > 0 {
+			return newStandingHasOpenChildren(childIDs)
+		}
+	}
+
+	// Compute the auto-managed timestamp side-effects per the spec:
+	//
+	//  - started_at: set on first transition into in_progress; we don't
+	//    overwrite if it's already present (a re-open → in_progress
+	//    keeps the original start time, which matches "started" intent).
+	//  - closed_at: required when status='closed' (CHECK constraint),
+	//    cleared on any other status.
+	//  - closed_reason: stored when caller provided one on a close
+	//    transition; cleared when leaving closed.
+	startedNow := old.StartedAt == nil && newStatus == StatusInProgress
+	toClosed := newStatus == StatusClosed
+	fromClosed := old.Status == StatusClosed && newStatus != StatusClosed
+
+	// sk-303.14 / T009: resetting the review mark is a property of
+	// the TRANSITION into closed, not of the status value.
+	// `toClosed` will not do: it is also true on closing an already-
+	// closed issue, where the spec requires the opposite (SC-023,
+	// edge-case table). The second closing path — Store.Close —
+	// computes the same predicate by the same rule; both must match,
+	// otherwise "every close path yields one semantics" stops being
+	// true.
+	//
+	// The reverse transition (`fromClosed`, a reopen) does NOT
+	// touch the mark on purpose: on a reopened and not-yet-closed
+	// issue the previous mark is kept until the next close. Such an
+	// issue is not in the unreviewed set — the set counts only
+	// closed results — and T028 hides it from the card.
+	resetReview := toClosed && old.Status != StatusClosed
+
+	// sk-489 (T003): the same outcome helper as in the second close
+	// writer — Store.Close. The one input present here and not there is
+	// Archive (sk-540.4): archiving goes through this writer
+	// (handler/bulk.go#runOne). Deciding it HERE, on the row read inside
+	// the transaction, is what refuses a row reopened after the batch
+	// preflight instead of archiving it without an outcome.
+	decision := CloseOutcomeDecision{}
+	if toClosed {
+		previousOutcome := ""
+		if old.CloseOutcome != nil {
+			previousOutcome = *old.CloseOutcome
+		}
+		var derr error
+		decision, derr = DecideCloseOutcome(CloseOutcomeRequest{
+			IssueID:         id,
+			Requested:       input.CloseOutcome,
+			Target:          input.CloseTarget,
+			AlreadyClosed:   old.Status == StatusClosed,
+			PreviousOutcome: previousOutcome,
+			Archive:         input.Archive,
+			Standing:        old.Status == StatusStanding,
+		})
+		if derr != nil {
+			return derr
+		}
+		// sk-540.2 exception (a): before any write.
+		if err := ensureCloseLinkExists(ctx, tx, id, decision); err != nil {
 			return err
 		}
-		if !input.Force && old.Version != input.ExpectedVersion {
-			return &ErrVersionConflict{CurrentVersion: old.Version}
-		}
+		// Branch (2) of the review-mark reset predicate — see Store.Close.
+		resetReview = resetReview ||
+			OutcomeChangeResetsReview(decision.Previous, decision.Outcome,
+				actor.UserID, old.CreatedBy)
+	}
+	// Leaving "closed" erases the outcome with an explicit NULL (US-4). Trigger
+	// 000050 would do it by itself, but the writer must assert
+	// the invariant, not rely on the schema's safety net.
+	var outcomeArg any
+	if toClosed {
+		outcomeArg = decision.Outcome
+	}
 
-		// Pinned protection on close.
-		if newStatus == StatusClosed && old.Pinned && !input.Force {
-			return ErrPinnedNoForce
-		}
+	var reasonArg any
+	if toClosed && input.Reason != nil {
+		reasonArg = *input.Reason
+	}
 
-		// sk-118 (F2c): standing transition matrix. UpdateStatus is the
-		// sole promote/demote path for the `standing` status (Claim/Close
-		// have their own dedicated guards; create-as-standing goes through
-		// CreateIssue). The matrix enforced here:
-		//
-		//   TO standing (promote / reopen-as-standing):
-		//     open      → standing   ✓
-		//     deferred  → standing   ✓
-		//     closed    → standing   ✓  (reopen; fromClosed clears
-		//                                closed_at + closed_reason below)
-		//     in_progress → standing ✗  (a claimed issue is locked — the
-		//                                holder must unclaim first; even an
-		//                                unlocked in_progress is rejected so
-		//                                the directive is uniform)
-		//     standing  → standing   ✓  (idempotent self-promote; harmless)
-		//
-		//   FROM standing (demote — issue becomes claimable again):
-		//     standing → open        ✓  (the sole escape hatch / demote)
-		//     standing → in_progress ✗  (you don't WORK a standing task;
-		//                                spawn a child and work that)
-		//     standing → deferred    ✗  (a perpetual obligation can't be
-		//                                parked; demote to open first)
-		//     standing → closed      ✓  (retire-close — but routed through
-		//                                Close(), never here; UpdateStatus
-		//                                rejects nothing on this leg)
-		//
-		// Force does NOT bypass this matrix: the rejected legs are not
-		// permission checks, they are structural invariants (a locked issue
-		// genuinely still holds a lock; standing genuinely isn't worked
-		// directly). Admins who must override unclaim/close first.
-		if newStatus == StatusStanding && old.Status == StatusInProgress {
-			// Promote of an in_progress issue. Reject regardless of whether
-			// the lock is currently held — the directive is always "unclaim
-			// first". (A locked issue would also trip lockGuard above unless
-			// the caller holds the lock; this guard catches the held-lock
-			// and the lock-already-dropped-but-still-in_progress cases.)
-			return ErrCannotPromoteLockedToStanding
-		}
-		if old.Status == StatusStanding && newStatus == StatusInProgress {
-			// Demote-to-work is not a thing: standing tasks are acted on via
-			// spawned children, never claimed/worked in place.
-			return ErrCannotWorkStandingDirectly
-		}
-		if old.Status == StatusStanding && newStatus == StatusDeferred {
-			// A standing task is a perpetual obligation, not a parkable unit of
-			// work — deferring it is nonsensical (§11 / §6 invariant 9). The
-			// only demote is standing → open; defer from there if desired.
-			return ErrCannotDeferStanding
-		}
-
-		// R10 (CRITICAL): nested-standing guard on the PROMOTE path. On ANY
-		// transition INTO standing, reject if the issue already participates
-		// in a standing parent/child relationship — in EITHER representation
-		// (the frozen issues.parent_id column OR a parent-child dep edge).
-		// UpdateStatus is otherwise hierarchy-blind, so without this a
-		// skein_update(status=standing) could promote a child under a
-		// standing parent (or a parent that already has a standing child),
-		// reintroducing the §11.4 mutual-retire deadlock that the
-		// create/reparent/dep-add guards close on their own paths.
-		if newStatus == StatusStanding && old.Status != StatusStanding {
-			hasStandingRel, err := standingRelationExists(ctx, tx, id)
-			if err != nil {
-				return err
-			}
-			if hasStandingRel {
-				return ErrNestedStandingForbidden
-			}
-		}
-
-		// sk-118 (F2e): standing retire-block on the SHARED close path.
-		// UpdateStatus is the close path used by the REST/MCP bulk handler
-		// (BulkHandler.runOne routes action:"close"/"archive" through
-		// UpdateStatus(StatusClosed), NOT Store.Close), so the F2e retire
-		// guard must live here as well — otherwise bulk close/archive could
-		// retire a standing task while non-closed children remain, defeating
-		// the structural invariant. We run the SAME check Close() uses:
-		// standingOpenChildIDs covers BOTH hierarchy representations (the
-		// canonical parent-child dep edge AND the legacy issues.parent_id
-		// column) via status.ActiveWork. An empty standing (no children, or
-		// all children closed) retires fine. Like the nested-standing matrix
-		// above and Close()'s own guard, this is a structural invariant — NOT
-		// bypassed by force. Non-standing closes are untouched.
-		if old.Status == StatusStanding && newStatus == StatusClosed {
-			childIDs, cerr := standingOpenChildIDs(ctx, tx, id)
-			if cerr != nil {
-				return cerr
-			}
-			if len(childIDs) > 0 {
-				return newStandingHasOpenChildren(childIDs)
-			}
-		}
-
-		// Compute the auto-managed timestamp side-effects per the spec:
-		//
-		//  - started_at: set on first transition into in_progress; we don't
-		//    overwrite if it's already present (a re-open → in_progress
-		//    keeps the original start time, which matches "started" intent).
-		//  - closed_at: required when status='closed' (CHECK constraint),
-		//    cleared on any other status.
-		//  - closed_reason: stored when caller provided one on a close
-		//    transition; cleared when leaving closed.
-		startedNow := old.StartedAt == nil && newStatus == StatusInProgress
-		toClosed := newStatus == StatusClosed
-		fromClosed := old.Status == StatusClosed && newStatus != StatusClosed
-
-		// sk-303.14 / T009: resetting the review mark is a property of
-		// the TRANSITION into closed, not of the status value.
-		// `toClosed` will not do: it is also true on closing an already-
-		// closed issue, where the spec requires the opposite (SC-023,
-		// edge-case table). The second closing path — Store.Close —
-		// computes the same predicate by the same rule; both must match,
-		// otherwise "every close path yields one semantics" stops being
-		// true.
-		//
-		// The reverse transition (`fromClosed`, a reopen) does NOT
-		// touch the mark on purpose: on a reopened and not-yet-closed
-		// issue the previous mark is kept until the next close. Such an
-		// issue is not in the unreviewed set — the set counts only
-		// closed results — and T028 hides it from the card.
-		resetReview := toClosed && old.Status != StatusClosed
-
-		// sk-489 (T003): the same outcome helper as in the second close
-		// writer — Store.Close. The one input present here and not there is
-		// Archive (sk-540.4): archiving goes through this writer
-		// (handler/bulk.go#runOne). Deciding it HERE, on the row read inside
-		// the transaction, is what refuses a row reopened after the batch
-		// preflight instead of archiving it without an outcome.
-		decision := CloseOutcomeDecision{}
-		if toClosed {
-			previousOutcome := ""
-			if old.CloseOutcome != nil {
-				previousOutcome = *old.CloseOutcome
-			}
-			var derr error
-			decision, derr = DecideCloseOutcome(CloseOutcomeRequest{
-				IssueID:         id,
-				Requested:       input.CloseOutcome,
-				Target:          input.CloseTarget,
-				AlreadyClosed:   old.Status == StatusClosed,
-				PreviousOutcome: previousOutcome,
-				Archive:         input.Archive,
-				Standing:        old.Status == StatusStanding,
-			})
-			if derr != nil {
-				return derr
-			}
-			// sk-540.2 exception (a): before any write.
-			if err := ensureCloseLinkExists(ctx, tx, id, decision); err != nil {
-				return err
-			}
-			// Branch (2) of the review-mark reset predicate — see Store.Close.
-			resetReview = resetReview ||
-				OutcomeChangeResetsReview(decision.Previous, decision.Outcome,
-					actor.UserID, old.CreatedBy)
-		}
-		// Leaving "closed" erases the outcome with an explicit NULL (US-4). Trigger
-		// 000050 would do it by itself, but the writer must assert
-		// the invariant, not rely on the schema's safety net.
-		var outcomeArg any
-		if toClosed {
-			outcomeArg = decision.Outcome
-		}
-
-		var reasonArg any
-		if toClosed && input.Reason != nil {
-			reasonArg = *input.Reason
-		}
-
-		// On close transition we auto-clear locked_by/locked_at so the
-		// issue is not "stuck" locked after the holder finishes work.
-		// Other transitions keep the lock — agents must explicitly drop
-		// it via Unclaim.
-		ct, err := tx.Exec(ctx, `
+	// On close transition we auto-clear locked_by/locked_at so the
+	// issue is not "stuck" locked after the holder finishes work.
+	// Other transitions keep the lock — agents must explicitly drop
+	// it via Unclaim.
+	ct, err := tx.Exec(ctx, `
 UPDATE issues
    SET status        = $2,
        started_at    = CASE WHEN $3::boolean THEN now() ELSE started_at END,
@@ -4151,153 +4188,147 @@ UPDATE issues
    AND ($8::boolean OR version = $7)
    AND ($8::boolean OR locked_by IS NULL
         OR (locked_by = $9::text AND locked_by_user_id = $11::uuid))`,
-			id, newStatus,
-			startedNow, toClosed, fromClosed, reasonArg, input.ExpectedVersion,
-			input.Force, input.SessionID, resetReview,
-			actor.UserID, outcomeArg,
-		)
-		if err != nil {
-			return fmt.Errorf("updating status: %w", err)
-		}
-		if ct.RowsAffected() == 0 {
-			return &ErrVersionConflict{CurrentVersion: old.Version}
-		}
-
-		reasonStr := ""
-		if input.Reason != nil {
-			reasonStr = *input.Reason
-		}
-		// Force=true callers see reason="force-overridden" appended to the
-		// status_changed reason so the audit row records the override even
-		// when the caller passed an explicit reason.
-		statusEventReason := buildForceReason(reasonStr, input.Force)
-		// sk-489: on a closing transition both close events carry the outcome
-		// in the payload; on all other transitions the payload is empty, as it was.
-		var statusPayload map[string]any
-		var statusPayloadJSON []byte
-		if toClosed {
-			statusPayload = closeOutcomePayload(decision)
-			statusPayloadJSON, err = json.Marshal(statusPayload)
-			if err != nil {
-				return fmt.Errorf("marshalling close payload for %s: %w", id, err)
-			}
-		}
-		eventID, err := WriteIssueEventWithPayload(ctx, tx, EventIssueStatusChanged, id, old.ProjectID,
-			actor, "status", old.Status, newStatus, statusEventReason, statusPayload)
-		if err != nil {
-			return err
-		}
-		// sk-622.21 (US-2, US-6 "reopened"): a reopen gives the
-		// automatic subscriptions back BEFORE the fan-out below, so the
-		// people who come back receive the reopen notification as
-		// subscribers, with its Watching card. The opt-out check rides on
-		// the subscription primitive (AddIssueWatcherScoped): a person who
-		// explicitly unwatched this issue is not re-subscribed.
-		if fromClosed {
-			if err := reAddAutoWatchersOnReopen(ctx, tx, old); err != nil {
-				return err
-			}
-		}
-		statusCreator, statusAssignee, err := roleContextOf(ctx, tx, old)
-		if err != nil {
-			return err
-		}
-		if _, err := notifications.FanOut(ctx, tx, notifications.FanOutInput{
-			EventID:    eventID,
-			EventType:  EventIssueStatusChanged,
-			EntityType: "issue",
-			IssueID:    id,
-			ProjectID:  old.ProjectID,
-			Payload:    statusPayloadJSON,
-			// "Status of a delegated issue": the feed reaches every
-			// subscriber, the push reaches the creator and only when the task
-			// is genuinely delegated — hence both ids.
-			CreatorUserID:  statusCreator,
-			AssigneeUserID: statusAssignee,
-			ActorUserID:    actor.UserID,
-			ActorType:      actor.Role,
-		}); err != nil {
-			return err
-		}
-
-		// R2.3: closing an issue auto-clears its lock. Emit issue.closed
-		// (so subscribers can filter the close-event channel without
-		// pattern-matching status_changed) AND issue.unclaimed (when the
-		// issue was previously locked) for symmetry with skein_unclaim.
-		// sk-551.10, item 5 / sk-622.21 US-2 — the personal «unwatch on
-		// close» setting (on by default): closing strips the automatic
-		// subscriptions of the people who have it on, AFTER the fan-out
-		// above, so they still learn of the close and its notification
-		// keeps its Watching card (the card becomes historical). No
-		// opt-out is written and no card is cleared. Reopening gives the
-		// subscriptions back — before the fan-out, see above.
-		if toClosed {
-			if _, err := notifications.StripAutoWatchersOnClose(ctx, tx, id); err != nil {
-				return err
-			}
-		}
-
-		if toClosed {
-			closedReason := buildForceReason(reasonStr, input.Force)
-			if _, err := WriteIssueEventWithPayload(ctx, tx, EventIssueClosed, id, old.ProjectID,
-				actor, "status", old.Status, newStatus, closedReason, statusPayload); err != nil {
-				return err
-			}
-			// A repeated close that changed the outcome (US-3) — the same event
-			// and fan-out helper as in Store.Close.
-			if decision.Changed {
-				if err := writeOutcomeChangedInTx(ctx, tx, id, old, actor, decision, closedReason); err != nil {
-					return err
-				}
-			}
-			if old.LockedBy != nil && *old.LockedBy != "" {
-				unclaimReason := "auto-unclaimed-on-close"
-				if input.Force {
-					unclaimReason = "force-overridden"
-				}
-				if _, err := WriteIssueEvent(ctx, tx, EventIssueUnclaimed, id, old.ProjectID,
-					actor, "lockedBy",
-					map[string]any{"lockedBy": *old.LockedBy, "lockedAt": old.LockedAt},
-					map[string]any{"lockedBy": nil, "lockedAt": nil},
-					unclaimReason); err != nil {
-					return err
-				}
-				// sk-674.18 T034: a forced close releases another holder's claim.
-				if forceReleasesAnother(old, actor, input.Force) {
-					if err := writeForceReleased(ctx, tx, id, old, actor, unclaimReason); err != nil {
-						return err
-					}
-				}
-			}
-
-			// The link by target — in the same transaction (R-5), by the same helper
-			// as in Store.Close. This writer does not hand the link flag outward:
-			// confirmations with it (US-2) are built by MCP, and MCP
-			// closes through Store.CloseWithResult — the REST transition response
-			// is the issue card anyway.
-			//
-			// sk-540.4: an archive of an already closed or standing row does
-			// not take the batch's target (decision.TargetDropped).
-			if target := strings.TrimSpace(input.CloseTarget); target != "" && !decision.TargetDropped {
-				if _, lerr := linkCloseTargetInTx(ctx, tx, id, target,
-					decision.Outcome, *input.DependenciesCaller, actor); lerr != nil {
-					if errors.Is(lerr, errCloseLinkRaceLost) {
-						return ErrSerializationRetry
-					}
-					return lerr
-				}
-			}
-		}
-		// sk-622.21 T015 (US-11): "Status change / close / reopen /
-		// outcome". A status transition never changes the roles, so the
-		// post-write read is both "before" and "after".
-		return signalStatusChanged(ctx, tx, id, signalRoles{})
-	}))
+		id, newStatus,
+		startedNow, toClosed, fromClosed, reasonArg, input.ExpectedVersion,
+		input.Force, input.SessionID, resetReview,
+		actor.UserID, outcomeArg,
+	)
 	if err != nil {
-		return CommittedState{}, s.degradeSerializationAbort(ctx, err, "updateStatus", id, &input.ExpectedVersion)
+		return fmt.Errorf("updating status: %w", err)
 	}
-	afterCommit(ctx, "status", id)
-	return committed, nil
+	if ct.RowsAffected() == 0 {
+		return &ErrVersionConflict{CurrentVersion: old.Version}
+	}
+
+	reasonStr := ""
+	if input.Reason != nil {
+		reasonStr = *input.Reason
+	}
+	// Force=true callers see reason="force-overridden" appended to the
+	// status_changed reason so the audit row records the override even
+	// when the caller passed an explicit reason.
+	statusEventReason := buildForceReason(reasonStr, input.Force)
+	// sk-489: on a closing transition both close events carry the outcome
+	// in the payload; on all other transitions the payload is empty, as it was.
+	var statusPayload map[string]any
+	var statusPayloadJSON []byte
+	if toClosed {
+		statusPayload = closeOutcomePayload(decision)
+		statusPayloadJSON, err = json.Marshal(statusPayload)
+		if err != nil {
+			return fmt.Errorf("marshalling close payload for %s: %w", id, err)
+		}
+	}
+	eventID, err := WriteIssueEventWithPayload(ctx, tx, EventIssueStatusChanged, id, old.ProjectID,
+		actor, "status", old.Status, newStatus, statusEventReason, statusPayload)
+	if err != nil {
+		return err
+	}
+	// sk-622.21 (US-2, US-6 "reopened"): a reopen gives the
+	// automatic subscriptions back BEFORE the fan-out below, so the
+	// people who come back receive the reopen notification as
+	// subscribers, with its Watching card. The opt-out check rides on
+	// the subscription primitive (AddIssueWatcherScoped): a person who
+	// explicitly unwatched this issue is not re-subscribed.
+	if fromClosed {
+		if err := reAddAutoWatchersOnReopen(ctx, tx, old); err != nil {
+			return err
+		}
+	}
+	statusCreator, statusAssignee, err := roleContextOf(ctx, tx, old)
+	if err != nil {
+		return err
+	}
+	if _, err := notifications.FanOut(ctx, tx, notifications.FanOutInput{
+		EventID:    eventID,
+		EventType:  EventIssueStatusChanged,
+		EntityType: "issue",
+		IssueID:    id,
+		ProjectID:  old.ProjectID,
+		Payload:    statusPayloadJSON,
+		// "Status of a delegated issue": the feed reaches every
+		// subscriber, the push reaches the creator and only when the task
+		// is genuinely delegated — hence both ids.
+		CreatorUserID:  statusCreator,
+		AssigneeUserID: statusAssignee,
+		ActorUserID:    actor.UserID,
+		ActorType:      actor.Role,
+	}); err != nil {
+		return err
+	}
+
+	// R2.3: closing an issue auto-clears its lock. Emit issue.closed
+	// (so subscribers can filter the close-event channel without
+	// pattern-matching status_changed) AND issue.unclaimed (when the
+	// issue was previously locked) for symmetry with skein_unclaim.
+	// sk-551.10, item 5 / sk-622.21 US-2 — the personal «unwatch on
+	// close» setting (on by default): closing strips the automatic
+	// subscriptions of the people who have it on, AFTER the fan-out
+	// above, so they still learn of the close and its notification
+	// keeps its Watching card (the card becomes historical). No
+	// opt-out is written and no card is cleared. Reopening gives the
+	// subscriptions back — before the fan-out, see above.
+	if toClosed {
+		if _, err := notifications.StripAutoWatchersOnClose(ctx, tx, id); err != nil {
+			return err
+		}
+	}
+
+	if toClosed {
+		closedReason := buildForceReason(reasonStr, input.Force)
+		if _, err := WriteIssueEventWithPayload(ctx, tx, EventIssueClosed, id, old.ProjectID,
+			actor, "status", old.Status, newStatus, closedReason, statusPayload); err != nil {
+			return err
+		}
+		// A repeated close that changed the outcome (US-3) — the same event
+		// and fan-out helper as in Store.Close.
+		if decision.Changed {
+			if err := writeOutcomeChangedInTx(ctx, tx, id, old, actor, decision, closedReason); err != nil {
+				return err
+			}
+		}
+		if old.LockedBy != nil && *old.LockedBy != "" {
+			unclaimReason := "auto-unclaimed-on-close"
+			if input.Force {
+				unclaimReason = "force-overridden"
+			}
+			if _, err := WriteIssueEvent(ctx, tx, EventIssueUnclaimed, id, old.ProjectID,
+				actor, "lockedBy",
+				map[string]any{"lockedBy": *old.LockedBy, "lockedAt": old.LockedAt},
+				map[string]any{"lockedBy": nil, "lockedAt": nil},
+				unclaimReason); err != nil {
+				return err
+			}
+			// sk-674.18 T034: a forced close releases another holder's claim.
+			if forceReleasesAnother(old, actor, input.Force) {
+				if err := writeForceReleased(ctx, tx, id, old, actor, unclaimReason); err != nil {
+					return err
+				}
+			}
+		}
+
+		// The link by target — in the same transaction (R-5), by the same helper
+		// as in Store.Close. This writer does not hand the link flag outward:
+		// confirmations with it (US-2) are built by MCP, and MCP
+		// closes through Store.CloseWithResult — the REST transition response
+		// is the issue card anyway.
+		//
+		// sk-540.4: an archive of an already closed or standing row does
+		// not take the batch's target (decision.TargetDropped).
+		if target := strings.TrimSpace(input.CloseTarget); target != "" && !decision.TargetDropped {
+			if _, lerr := linkCloseTargetInTx(ctx, tx, id, target,
+				decision.Outcome, *input.DependenciesCaller, actor); lerr != nil {
+				if errors.Is(lerr, errCloseLinkRaceLost) {
+					return ErrSerializationRetry
+				}
+				return lerr
+			}
+		}
+	}
+	// sk-622.21 T015 (US-11): "Status change / close / reopen /
+	// outcome". A status transition never changes the roles, so the
+	// post-write read is both "before" and "after".
+	return signalStatusChanged(ctx, tx, id, signalRoles{})
 }
 
 // PinIssue sets pinned=true. Optimistic concurrency on version. Idempotent
@@ -4405,80 +4436,86 @@ func (s *Store) ReplaceComponentsNoLoad(
 	// after the commit.
 	var committed CommittedState
 	err := signals.BeginTxFunc(ctx, s.pool, pgx.TxOptions{IsoLevel: pgx.Serializable}, withCommittedState(ctx, id, &committed, func(tx pgx.Tx) error {
-		old, err := s.fetchIssueInTx(ctx, tx, id)
-		if err != nil {
-			return err
-		}
-		if err := lockGuard(old, opts.SessionID, actor.UserID, opts.Force); err != nil {
-			return err
-		}
-
-		if len(componentIDs) > 0 {
-			if err := assertComponentsInProject(ctx, tx, old.ProjectID, componentIDs); err != nil {
-				return err
-			}
-		}
-
-		// Read existing for the event payload.
-		oldRows, err := tx.Query(ctx, `SELECT component_id FROM issue_components WHERE issue_id = $1`, id)
-		if err != nil {
-			return fmt.Errorf("loading existing components: %w", err)
-		}
-		oldComps := []uuid.UUID{}
-		for oldRows.Next() {
-			var c uuid.UUID
-			if err := oldRows.Scan(&c); err != nil {
-				oldRows.Close()
-				return err
-			}
-			oldComps = append(oldComps, c)
-		}
-		oldRows.Close()
-		if err := oldRows.Err(); err != nil {
-			return err
-		}
-
-		// Delete-all + insert-new. The junction has no event row tying it to
-		// version on issues, so we must bump issues.version too — otherwise
-		// listing endpoints don't see the change in updated_at order.
-		if _, err := tx.Exec(ctx, `DELETE FROM issue_components WHERE issue_id = $1`, id); err != nil {
-			return fmt.Errorf("clearing components: %w", err)
-		}
-		for _, cid := range componentIDs {
-			if _, err := tx.Exec(ctx, `
-INSERT INTO issue_components (issue_id, component_id) VALUES ($1, $2)
-ON CONFLICT DO NOTHING`, id, cid); err != nil {
-				return fmt.Errorf("inserting component %s: %w", cid, err)
-			}
-		}
-
-		// SQL-level lock-aware predicate as belt-and-suspenders against a
-		// concurrent claim landing between the SELECT and our UPDATE.
-		if _, err := tx.Exec(ctx, `
-UPDATE issues SET version = version + 1, updated_at = now()
- WHERE id = $1
-   AND ($2::boolean OR locked_by IS NULL
-        OR (locked_by = $3::text AND locked_by_user_id = $4::uuid))`,
-			id, opts.Force, opts.SessionID, actor.UserID); err != nil {
-			return fmt.Errorf("bumping issue version: %w", err)
-		}
-
-		eventReason := ""
-		if opts.Force {
-			eventReason = "force-overridden"
-		}
-		_, err = WriteIssueEvent(ctx, tx, EventComponentsChanged, id, old.ProjectID, actor,
-			"componentIds", oldComps, componentIDs, eventReason)
-		if err != nil {
-			return err
-		}
-		// sk-622.21 T015 (US-11): "Row field change".
-		return signalRowFields(ctx, tx, id)
+		return s.replaceComponentsInTx(ctx, tx, id, componentIDs, actor, opts)
 	}))
 	if err != nil {
 		return CommittedState{}, s.degradeSerializationAbort(ctx, err, "replaceComponents", id, nil)
 	}
 	return committed, nil
+}
+
+// replaceComponentsInTx is the component replace inside the caller's
+// transaction (T015, US-14).
+func (s *Store) replaceComponentsInTx(ctx context.Context, tx pgx.Tx, id string, componentIDs []uuid.UUID, actor Actor, opts LockOpts) error {
+	old, err := s.fetchIssueInTx(ctx, tx, id)
+	if err != nil {
+		return err
+	}
+	if err := lockGuard(old, opts.SessionID, actor.UserID, opts.Force); err != nil {
+		return err
+	}
+
+	if len(componentIDs) > 0 {
+		if err := assertComponentsInProject(ctx, tx, old.ProjectID, componentIDs); err != nil {
+			return err
+		}
+	}
+
+	// Read existing for the event payload.
+	oldRows, err := tx.Query(ctx, `SELECT component_id FROM issue_components WHERE issue_id = $1`, id)
+	if err != nil {
+		return fmt.Errorf("loading existing components: %w", err)
+	}
+	oldComps := []uuid.UUID{}
+	for oldRows.Next() {
+		var c uuid.UUID
+		if err := oldRows.Scan(&c); err != nil {
+			oldRows.Close()
+			return err
+		}
+		oldComps = append(oldComps, c)
+	}
+	oldRows.Close()
+	if err := oldRows.Err(); err != nil {
+		return err
+	}
+
+	// Delete-all + insert-new. The junction has no event row tying it to
+	// version on issues, so we must bump issues.version too — otherwise
+	// listing endpoints don't see the change in updated_at order.
+	if _, err := tx.Exec(ctx, `DELETE FROM issue_components WHERE issue_id = $1`, id); err != nil {
+		return fmt.Errorf("clearing components: %w", err)
+	}
+	for _, cid := range componentIDs {
+		if _, err := tx.Exec(ctx, `
+INSERT INTO issue_components (issue_id, component_id) VALUES ($1, $2)
+ON CONFLICT DO NOTHING`, id, cid); err != nil {
+			return fmt.Errorf("inserting component %s: %w", cid, err)
+		}
+	}
+
+	// SQL-level lock-aware predicate as belt-and-suspenders against a
+	// concurrent claim landing between the SELECT and our UPDATE.
+	if _, err := tx.Exec(ctx, `
+UPDATE issues SET version = version + 1, updated_at = now()
+ WHERE id = $1
+   AND ($2::boolean OR locked_by IS NULL
+        OR (locked_by = $3::text AND locked_by_user_id = $4::uuid))`,
+		id, opts.Force, opts.SessionID, actor.UserID); err != nil {
+		return fmt.Errorf("bumping issue version: %w", err)
+	}
+
+	eventReason := ""
+	if opts.Force {
+		eventReason = "force-overridden"
+	}
+	_, err = WriteIssueEvent(ctx, tx, EventComponentsChanged, id, old.ProjectID, actor,
+		"componentIds", oldComps, componentIDs, eventReason)
+	if err != nil {
+		return err
+	}
+	// sk-622.21 T015 (US-11): "Row field change".
+	return signalRowFields(ctx, tx, id)
 }
 
 // ReplaceComponents applies the change and returns the post-state
@@ -4518,42 +4555,48 @@ func (s *Store) AddLabelNoLoad(ctx context.Context, id, label string, actor Acto
 	// labels-only update still needs one to acknowledge.
 	var committed CommittedState
 	err := s.withSerializableRetry(ctx, "addLabel", addLabelMaxAttempts, withCommittedState(ctx, id, &committed, func(tx pgx.Tx) error {
-		old, err := s.fetchIssueInTx(ctx, tx, id)
-		if err != nil {
-			return err
-		}
-		if err := lockGuard(old, opts.SessionID, actor.UserID, opts.Force); err != nil {
-			return err
-		}
-		ct, err := tx.Exec(ctx, `
-INSERT INTO issue_labels (issue_id, label) VALUES ($1, $2)
-ON CONFLICT DO NOTHING`, id, label)
-		if err != nil {
-			return fmt.Errorf("inserting label: %w", err)
-		}
-		if ct.RowsAffected() == 0 {
-			return nil // already present — no event, no version bump
-		}
-		if _, err := tx.Exec(ctx, `
-UPDATE issues SET updated_at = now() WHERE id = $1`, id); err != nil {
-			return err
-		}
-		eventReason := ""
-		if opts.Force {
-			eventReason = "force-overridden"
-		}
-		_, err = WriteIssueEvent(ctx, tx, EventLabelAdded, id, old.ProjectID, actor,
-			"label", nil, label, eventReason)
-		if err != nil {
-			return err
-		}
-		// sk-622.21 T015 (US-11): "Row field change".
-		return signalRowFields(ctx, tx, id)
+		return s.addLabelInTx(ctx, tx, id, label, actor, opts)
 	}))
 	if err != nil {
 		return CommittedState{}, s.degradeSerializationAbort(ctx, err, "addLabel", id, nil)
 	}
 	return committed, nil
+}
+
+// addLabelInTx is the label add inside the caller's transaction (T015,
+// US-14).
+func (s *Store) addLabelInTx(ctx context.Context, tx pgx.Tx, id, label string, actor Actor, opts LockOpts) error {
+	old, err := s.fetchIssueInTx(ctx, tx, id)
+	if err != nil {
+		return err
+	}
+	if err := lockGuard(old, opts.SessionID, actor.UserID, opts.Force); err != nil {
+		return err
+	}
+	ct, err := tx.Exec(ctx, `
+INSERT INTO issue_labels (issue_id, label) VALUES ($1, $2)
+ON CONFLICT DO NOTHING`, id, label)
+	if err != nil {
+		return fmt.Errorf("inserting label: %w", err)
+	}
+	if ct.RowsAffected() == 0 {
+		return nil // already present — no event, no version bump
+	}
+	if _, err := tx.Exec(ctx, `
+UPDATE issues SET updated_at = now() WHERE id = $1`, id); err != nil {
+		return err
+	}
+	eventReason := ""
+	if opts.Force {
+		eventReason = "force-overridden"
+	}
+	_, err = WriteIssueEvent(ctx, tx, EventLabelAdded, id, old.ProjectID, actor,
+		"label", nil, label, eventReason)
+	if err != nil {
+		return err
+	}
+	// sk-622.21 T015 (US-11): "Row field change".
+	return signalRowFields(ctx, tx, id)
 }
 
 // AddLabel applies the change and returns the post-state IssueDetail. See
@@ -4580,41 +4623,48 @@ func (s *Store) RemoveLabelNoLoad(ctx context.Context, id, label string, actor A
 	// labels-only update still needs one to acknowledge.
 	var committed CommittedState
 	err := s.withSerializableRetry(ctx, "removeLabel", removeLabelMaxAttempts, withCommittedState(ctx, id, &committed, func(tx pgx.Tx) error {
-		old, err := s.fetchIssueInTx(ctx, tx, id)
-		if err != nil {
-			return err
-		}
-		if err := lockGuard(old, opts.SessionID, actor.UserID, opts.Force); err != nil {
-			return err
-		}
-		ct, err := tx.Exec(ctx, `
-DELETE FROM issue_labels WHERE issue_id = $1 AND label = $2`, id, label)
-		if err != nil {
-			return fmt.Errorf("removing label: %w", err)
-		}
-		if ct.RowsAffected() == 0 {
-			return ErrNotFound
-		}
-		if _, err := tx.Exec(ctx, `
-UPDATE issues SET updated_at = now() WHERE id = $1`, id); err != nil {
-			return err
-		}
-		eventReason := ""
-		if opts.Force {
-			eventReason = "force-overridden"
-		}
-		_, err = WriteIssueEvent(ctx, tx, EventLabelRemoved, id, old.ProjectID, actor,
-			"label", label, nil, eventReason)
-		if err != nil {
-			return err
-		}
-		// sk-622.21 T015 (US-11): "Row field change".
-		return signalRowFields(ctx, tx, id)
+		return s.removeLabelInTx(ctx, tx, id, label, actor, opts)
 	}))
 	if err != nil {
 		return CommittedState{}, s.degradeSerializationAbort(ctx, err, "removeLabel", id, nil)
 	}
 	return committed, nil
+}
+
+// removeLabelInTx is the label removal inside the caller's transaction
+// (T015, US-14). A label that is not on the issue answers errLabelAbsent,
+// which is ErrNotFound for every caller that does not ask further.
+func (s *Store) removeLabelInTx(ctx context.Context, tx pgx.Tx, id, label string, actor Actor, opts LockOpts) error {
+	old, err := s.fetchIssueInTx(ctx, tx, id)
+	if err != nil {
+		return err
+	}
+	if err := lockGuard(old, opts.SessionID, actor.UserID, opts.Force); err != nil {
+		return err
+	}
+	ct, err := tx.Exec(ctx, `
+DELETE FROM issue_labels WHERE issue_id = $1 AND label = $2`, id, label)
+	if err != nil {
+		return fmt.Errorf("removing label: %w", err)
+	}
+	if ct.RowsAffected() == 0 {
+		return errLabelAbsent
+	}
+	if _, err := tx.Exec(ctx, `
+UPDATE issues SET updated_at = now() WHERE id = $1`, id); err != nil {
+		return err
+	}
+	eventReason := ""
+	if opts.Force {
+		eventReason = "force-overridden"
+	}
+	_, err = WriteIssueEvent(ctx, tx, EventLabelRemoved, id, old.ProjectID, actor,
+		"label", label, nil, eventReason)
+	if err != nil {
+		return err
+	}
+	// sk-622.21 T015 (US-11): "Row field change".
+	return signalRowFields(ctx, tx, id)
 }
 
 // RemoveLabel applies the change and returns the post-state IssueDetail.
@@ -6462,137 +6512,157 @@ func (s *Store) CloseWithResult(ctx context.Context, input CloseInput) (*IssueDe
 // card per row only to drop it cost a hydration per row and was the read
 // production lost to the batch's own deadline.
 func (s *Store) CloseCommitted(ctx context.Context, input CloseInput) (CommittedState, CloseLinkState, error) {
-	linkState := CloseLinkNone
-	var committed CommittedState
+	res, err := s.runUpdateIssue(ctx, UpdateIssueInput{
+		ID:              input.ID,
+		ExpectedVersion: input.ExpectedVersion,
+		Force:           input.Force,
+		SessionID:       input.SessionID,
+		Actor:           input.Actor,
+		Close:           &input,
+	}, updateIssueOp{name: "close", attempts: closeMaxAttempts, commit: "close"})
+	if err != nil {
+		return CommittedState{}, CloseLinkNone, err
+	}
+	return res.State, res.Link, nil
+}
+
+// validateCloseStep is the close's check before any transaction opens.
+func validateCloseStep(input CloseInput) error {
 	// expectedVersion is required even with force=true: a SRE running a
 	// force-override should still have observed current state. There's no
 	// scenario where "I want to force-close but I haven't bothered to look
 	// at the issue".
 	if input.ExpectedVersion < 1 {
-		return CommittedState{}, linkState, &ValidationError{Code: "missing_version", Message: "expected version is required"}
+		return &ValidationError{Code: "missing_version", Message: "expected version is required"}
 	}
 	if err := ValidateProse("reason", input.Reason); err != nil {
-		return CommittedState{}, linkState, err
+		return err
 	}
 
 	// Validate commit refs up front — bad hash format short-circuits
 	// before we open a SERIALIZABLE tx (cheaper) and gives the caller a
 	// stable validation_error rather than a deeper-layer surprise.
 	if len(input.Commits) > MaxCommitsPerClose {
-		return CommittedState{}, linkState, &ValidationError{
+		return &ValidationError{
 			Code:    "too_many_commits",
 			Message: fmt.Sprintf("at most %d commits per close call (got %d)", MaxCommitsPerClose, len(input.Commits)),
 		}
 	}
 	for i, c := range input.Commits {
 		if !commitHashRegex.MatchString(c.Hash) {
-			return CommittedState{}, linkState, &ValidationError{
+			return &ValidationError{
 				Code:    "invalid_commit_hash",
 				Message: fmt.Sprintf("commits[%d].hash must be lowercase hex of length 7..64 (got %q)", i, c.Hash),
 			}
 		}
 	}
 	if strings.TrimSpace(input.CloseTarget) != "" && input.DependenciesCaller == nil {
-		return CommittedState{}, linkState, fmt.Errorf("DependenciesCaller is required when CloseTarget is set")
+		return fmt.Errorf("DependenciesCaller is required when CloseTarget is set")
+	}
+	return nil
+}
+
+// closeInTx is the close inside the caller's transaction (T015, US-14),
+// commit refs included; chained and link as for patchIssueInTx.
+func (s *Store) closeInTx(ctx context.Context, tx pgx.Tx, input CloseInput, chained bool, link *CloseLinkState) error {
+	*link = CloseLinkNone
+	old, err := s.fetchIssueInTx(ctx, tx, input.ID)
+	if err != nil {
+		return err
+	}
+	if chained {
+		input.ExpectedVersion = old.Version
 	}
 
-	err := s.withSerializableRetry(ctx, "close", closeMaxAttempts, func(tx pgx.Tx) error {
-		// A replayed attempt starts from scratch (sk-622.21, R17).
-		linkState = CloseLinkNone
-		old, err := s.fetchIssueInTx(ctx, tx, input.ID)
-		if err != nil {
-			return err
+	// sk-118 (F2e): retire-block. Closing a `standing` issue is a RETIRE,
+	// and a standing task's children ARE its reason to exist — retiring
+	// with an in-flight child would silently strand real work. Reject the
+	// retire while ANY non-closed child remains, in EITHER hierarchy
+	// representation (the canonical `parent-child` dep edge OR the legacy
+	// issues.parent_id column). "Non-closed" = status <> 'closed', so
+	// open / in_progress / deferred children ALL block (a deferred child is
+	// real, unresolved work — §11.4). This guard fires ONLY for standing
+	// issues: a normal epic with open children stays closeable (§11.9, the
+	// open-children list there is a tool-layer affordance, not a store
+	// contract). It is NOT bypassed by force — the block is a structural
+	// invariant (mirrors the F2c nested-standing matrix stance), so it runs
+	// before the pinned / lock / version predicates.
+	if old.Status == StatusStanding {
+		childIDs, cerr := standingOpenChildIDs(ctx, tx, input.ID)
+		if cerr != nil {
+			return cerr
 		}
+		if len(childIDs) > 0 {
+			return newStandingHasOpenChildren(childIDs)
+		}
+	}
 
-		// sk-118 (F2e): retire-block. Closing a `standing` issue is a RETIRE,
-		// and a standing task's children ARE its reason to exist — retiring
-		// with an in-flight child would silently strand real work. Reject the
-		// retire while ANY non-closed child remains, in EITHER hierarchy
-		// representation (the canonical `parent-child` dep edge OR the legacy
-		// issues.parent_id column). "Non-closed" = status <> 'closed', so
-		// open / in_progress / deferred children ALL block (a deferred child is
-		// real, unresolved work — §11.4). This guard fires ONLY for standing
-		// issues: a normal epic with open children stays closeable (§11.9, the
-		// open-children list there is a tool-layer affordance, not a store
-		// contract). It is NOT bypassed by force — the block is a structural
-		// invariant (mirrors the F2c nested-standing matrix stance), so it runs
-		// before the pinned / lock / version predicates.
-		if old.Status == StatusStanding {
-			childIDs, cerr := standingOpenChildIDs(ctx, tx, input.ID)
-			if cerr != nil {
-				return cerr
-			}
-			if len(childIDs) > 0 {
-				return newStandingHasOpenChildren(childIDs)
-			}
-		}
+	// Pinned check first — same ordering as REST: pinned → lock → version.
+	if old.Pinned && !input.Force {
+		return ErrPinnedNoForce
+	}
+	// Lock predicate.
+	if err := lockGuard(old, input.SessionID, input.Actor.UserID, input.Force); err != nil {
+		return err
+	}
+	// Version predicate.
+	if !input.Force && old.Version != input.ExpectedVersion {
+		return &ErrVersionConflict{CurrentVersion: old.Version}
+	}
 
-		// Pinned check first — same ordering as REST: pinned → lock → version.
-		if old.Pinned && !input.Force {
-			return ErrPinnedNoForce
-		}
-		// Lock predicate.
-		if err := lockGuard(old, input.SessionID, input.Actor.UserID, input.Force); err != nil {
-			return err
-		}
-		// Version predicate.
-		if !input.Force && old.Version != input.ExpectedVersion {
-			return &ErrVersionConflict{CurrentVersion: old.Version}
-		}
+	var reasonArg any
+	if input.Reason != "" {
+		reasonArg = input.Reason
+	}
 
-		var reasonArg any
-		if input.Reason != "" {
-			reasonArg = input.Reason
-		}
+	// sk-303.14 / T009: the review mark is reset on the TRANSITION
+	// into closed, not on every closing call. The predicate is the
+	// old status, and it is what splits the two cases the spec
+	// requires distinguishing: an issue explicitly reopened and
+	// closed again returns to the unreviewed set (SC-023), while a
+	// technical re-close of an ALREADY closed issue (rewriting the
+	// reason, appending commits) does not touch the mark — otherwise
+	// an author who marked the result would see it as unreviewed
+	// again because of someone else's close-reason edit.
+	resetReview := old.Status != StatusClosed
 
-		// sk-303.14 / T009: the review mark is reset on the TRANSITION
-		// into closed, not on every closing call. The predicate is the
-		// old status, and it is what splits the two cases the spec
-		// requires distinguishing: an issue explicitly reopened and
-		// closed again returns to the unreviewed set (SC-023), while a
-		// technical re-close of an ALREADY closed issue (rewriting the
-		// reason, appending commits) does not touch the mark — otherwise
-		// an author who marked the result would see it as unreviewed
-		// again because of someone else's close-reason edit.
-		resetReview := old.Status != StatusClosed
+	// sk-489 (T003): the outcome is decided by ONE helper for both close
+	// writers — DecideCloseOutcome. All target checks are caught here too:
+	// a value outside the four, a target without an explicit outcome, a target with
+	// "done" / "won't do", a target that is the issue itself. The decision
+	// is taken AFTER the lock and version predicates: a close that lost
+	// the version race must answer with a version conflict, not with a parse
+	// of its own input.
+	previousOutcome := ""
+	if old.CloseOutcome != nil {
+		previousOutcome = *old.CloseOutcome
+	}
+	decision, derr := DecideCloseOutcome(CloseOutcomeRequest{
+		IssueID:         input.ID,
+		Requested:       input.CloseOutcome,
+		Target:          input.CloseTarget,
+		AlreadyClosed:   old.Status == StatusClosed,
+		PreviousOutcome: previousOutcome,
+		// Archive is not set here and CloseInput has no such
+		// field: archiving goes through UpdateStatus (US-11).
+		Standing:            old.Status == StatusStanding,
+		RequireOnTransition: input.RequireOutcomeOnTransition,
+	})
+	if derr != nil {
+		return derr
+	}
+	// sk-540.2 exception (a): before any write.
+	if err := ensureCloseLinkExists(ctx, tx, input.ID, decision); err != nil {
+		return err
+	}
+	// Branch (2) of the review-mark reset predicate (US-3): an outcome change on an already
+	// closed issue. Branch (1) — the resetReview line above — does not
+	// change.
+	resetReview = resetReview ||
+		OutcomeChangeResetsReview(decision.Previous, decision.Outcome,
+			input.Actor.UserID, old.CreatedBy)
 
-		// sk-489 (T003): the outcome is decided by ONE helper for both close
-		// writers — DecideCloseOutcome. All target checks are caught here too:
-		// a value outside the four, a target without an explicit outcome, a target with
-		// "done" / "won't do", a target that is the issue itself. The decision
-		// is taken AFTER the lock and version predicates: a close that lost
-		// the version race must answer with a version conflict, not with a parse
-		// of its own input.
-		previousOutcome := ""
-		if old.CloseOutcome != nil {
-			previousOutcome = *old.CloseOutcome
-		}
-		decision, derr := DecideCloseOutcome(CloseOutcomeRequest{
-			IssueID:         input.ID,
-			Requested:       input.CloseOutcome,
-			Target:          input.CloseTarget,
-			AlreadyClosed:   old.Status == StatusClosed,
-			PreviousOutcome: previousOutcome,
-			// Archive is not set here and CloseInput has no such
-			// field: archiving goes through UpdateStatus (US-11).
-			Standing:            old.Status == StatusStanding,
-			RequireOnTransition: input.RequireOutcomeOnTransition,
-		})
-		if derr != nil {
-			return derr
-		}
-		// sk-540.2 exception (a): before any write.
-		if err := ensureCloseLinkExists(ctx, tx, input.ID, decision); err != nil {
-			return err
-		}
-		// Branch (2) of the review-mark reset predicate (US-3): an outcome change on an already
-		// closed issue. Branch (1) — the resetReview line above — does not
-		// change.
-		resetReview = resetReview ||
-			OutcomeChangeResetsReview(decision.Previous, decision.Outcome,
-				input.Actor.UserID, old.CreatedBy)
-
-		ct, err := tx.Exec(ctx, `
+	ct, err := tx.Exec(ctx, `
 UPDATE issues
    SET status        = 'closed',
        closed_at     = now(),
@@ -6610,139 +6680,124 @@ UPDATE issues
    AND ($4::boolean OR locked_by IS NULL
         OR (locked_by = $5::text AND locked_by_user_id = $7::uuid))
    AND ($4::boolean OR pinned = false)`,
-			input.ID, reasonArg, input.ExpectedVersion, input.Force, input.SessionID,
-			resetReview, input.Actor.UserID, decision.Outcome)
-		if err != nil {
-			return fmt.Errorf("closing issue: %w", err)
-		}
-		if ct.RowsAffected() == 0 {
-			// Fallthrough returns version_conflict; the rare race could be pinned or lock change but this is dominated by SERIALIZABLE 40001 mapping.
-			return &ErrVersionConflict{CurrentVersion: old.Version}
-		}
-
-		eventReason := buildForceReason(input.Reason, input.Force)
-		// sk-489: both close events carry the outcome in the payload. new_data of
-		// status_changed stays a JSON status string — it is read by
-		// outbox/push.go#delegatedStatusHead, including on an old pod in
-		// the rollout window.
-		closePayload := closeOutcomePayload(decision)
-		closePayloadJSON, err := json.Marshal(closePayload)
-		if err != nil {
-			return fmt.Errorf("marshalling close payload for %s: %w", input.ID, err)
-		}
-		// status_changed for back-compat with subscribers that filter the
-		// generic event-type. Notification fan-out goes through
-		// status_changed (issue.closed isn't in the notifiable set).
-		eventID, err := WriteIssueEventWithPayload(ctx, tx, EventIssueStatusChanged, input.ID, old.ProjectID,
-			input.Actor, "status", old.Status, StatusClosed, eventReason, closePayload)
-		if err != nil {
-			return err
-		}
-		statusCreator, statusAssignee, err := roleContextOf(ctx, tx, old)
-		if err != nil {
-			return err
-		}
-		if _, err := notifications.FanOut(ctx, tx, notifications.FanOutInput{
-			EventID:        eventID,
-			EventType:      EventIssueStatusChanged,
-			EntityType:     "issue",
-			IssueID:        input.ID,
-			ProjectID:      old.ProjectID,
-			CreatorUserID:  statusCreator,
-			AssigneeUserID: statusAssignee,
-			ActorUserID:    input.Actor.UserID,
-			ActorType:      input.Actor.Role,
-			Payload:        closePayloadJSON,
-		}); err != nil {
-			return err
-		}
-
-		// sk-551.10, item 5 — strip the automatic subscriptions of people
-		// with «unwatch on close» on; after the fan-out, so they still get
-		// the closing notification.
-		if _, err := notifications.StripAutoWatchersOnClose(ctx, tx, input.ID); err != nil {
-			return err
-		}
-
-		// Dedicated issue.closed event.
-		if _, err := WriteIssueEventWithPayload(ctx, tx, EventIssueClosed, input.ID, old.ProjectID,
-			input.Actor, "status", old.Status, StatusClosed, eventReason, closePayload); err != nil {
-			return err
-		}
-
-		// A repeated close that changed the outcome is also an outcome change
-		// (US-3): its own event and its own fan-out, shared with the other writer and
-		// with the edit.
-		if decision.Changed {
-			if err := writeOutcomeChangedInTx(ctx, tx, input.ID, old, input.Actor, decision, eventReason); err != nil {
-				return err
-			}
-		}
-
-		// issue.unclaimed when the issue was previously locked.
-		if old.LockedBy != nil && *old.LockedBy != "" {
-			unclaimReason := "auto-unclaimed-on-close"
-			if input.Force {
-				unclaimReason = "force-overridden"
-			}
-			if _, err := WriteIssueEvent(ctx, tx, EventIssueUnclaimed, input.ID, old.ProjectID,
-				input.Actor, "lockedBy",
-				map[string]any{"lockedBy": *old.LockedBy, "lockedAt": old.LockedAt},
-				map[string]any{"lockedBy": nil, "lockedAt": nil},
-				unclaimReason); err != nil {
-				return err
-			}
-			// sk-674.18 T034: a forced close releases another holder's claim.
-			if forceReleasesAnother(old, input.Actor, input.Force) {
-				if err := writeForceReleased(ctx, tx, input.ID, old, input.Actor, unclaimReason); err != nil {
-					return err
-				}
-			}
-		}
-
-		// Commit-on-close: resolve each {repoUrl?, repoId?} into a
-		// uuid against the project's git_repos[], then INSERT into
-		// issue_commits inside the same tx. Re-close with the same
-		// (issue_id, repo_id, hash) is idempotent (ON CONFLICT DO
-		// NOTHING) — the agent can re-run skein_close after a
-		// transient failure without duplicating rows.
-		if len(input.Commits) > 0 {
-			if err := linkCommitsInTx(ctx, tx, input.ID, old.ProjectID, input.Actor, input.Commits); err != nil {
-				return err
-			}
-		}
-
-		// The link by target — in the same transaction (R-5). It goes last:
-		// dependencies.CreateInTx reads both sides of the edge, and by that
-		// moment the issue being closed is already in its final state.
-		if target := strings.TrimSpace(input.CloseTarget); target != "" {
-			state, lerr := linkCloseTargetInTx(ctx, tx, input.ID, target,
-				decision.Outcome, *input.DependenciesCaller, input.Actor)
-			if lerr != nil {
-				if errors.Is(lerr, errCloseLinkRaceLost) {
-					return ErrSerializationRetry
-				}
-				return lerr
-			}
-			linkState = state
-		}
-		// sk-607: the post-state, read last so it reflects every write of
-		// this transaction whatever is added above it later.
-		st, serr := committedStatesInTx(ctx, tx, input.ID)
-		if serr != nil {
-			return serr
-		}
-		committed = st[0]
-		// sk-622.21 T015 (US-11): personal signal "close".
-		return signalStatusChanged(ctx, tx, input.ID, signalRoles{})
-	})
+		input.ID, reasonArg, input.ExpectedVersion, input.Force, input.SessionID,
+		resetReview, input.Actor.UserID, decision.Outcome)
 	if err != nil {
-		// A race for the edge rolls back the whole transaction, so linkState
-		// set inside a failed attempt must not go outward.
-		return CommittedState{}, CloseLinkNone, s.degradeSerializationAbort(ctx, err, "close", input.ID, &input.ExpectedVersion)
+		return fmt.Errorf("closing issue: %w", err)
 	}
-	afterCommit(ctx, "close", input.ID)
-	return committed, linkState, nil
+	if ct.RowsAffected() == 0 {
+		// Fallthrough returns version_conflict; the rare race could be pinned or lock change but this is dominated by SERIALIZABLE 40001 mapping.
+		return &ErrVersionConflict{CurrentVersion: old.Version}
+	}
+
+	eventReason := buildForceReason(input.Reason, input.Force)
+	// sk-489: both close events carry the outcome in the payload. new_data of
+	// status_changed stays a JSON status string — it is read by
+	// outbox/push.go#delegatedStatusHead, including on an old pod in
+	// the rollout window.
+	closePayload := closeOutcomePayload(decision)
+	closePayloadJSON, err := json.Marshal(closePayload)
+	if err != nil {
+		return fmt.Errorf("marshalling close payload for %s: %w", input.ID, err)
+	}
+	// status_changed for back-compat with subscribers that filter the
+	// generic event-type. Notification fan-out goes through
+	// status_changed (issue.closed isn't in the notifiable set).
+	eventID, err := WriteIssueEventWithPayload(ctx, tx, EventIssueStatusChanged, input.ID, old.ProjectID,
+		input.Actor, "status", old.Status, StatusClosed, eventReason, closePayload)
+	if err != nil {
+		return err
+	}
+	statusCreator, statusAssignee, err := roleContextOf(ctx, tx, old)
+	if err != nil {
+		return err
+	}
+	if _, err := notifications.FanOut(ctx, tx, notifications.FanOutInput{
+		EventID:        eventID,
+		EventType:      EventIssueStatusChanged,
+		EntityType:     "issue",
+		IssueID:        input.ID,
+		ProjectID:      old.ProjectID,
+		CreatorUserID:  statusCreator,
+		AssigneeUserID: statusAssignee,
+		ActorUserID:    input.Actor.UserID,
+		ActorType:      input.Actor.Role,
+		Payload:        closePayloadJSON,
+	}); err != nil {
+		return err
+	}
+
+	// sk-551.10, item 5 — strip the automatic subscriptions of people
+	// with «unwatch on close» on; after the fan-out, so they still get
+	// the closing notification.
+	if _, err := notifications.StripAutoWatchersOnClose(ctx, tx, input.ID); err != nil {
+		return err
+	}
+
+	// Dedicated issue.closed event.
+	if _, err := WriteIssueEventWithPayload(ctx, tx, EventIssueClosed, input.ID, old.ProjectID,
+		input.Actor, "status", old.Status, StatusClosed, eventReason, closePayload); err != nil {
+		return err
+	}
+
+	// A repeated close that changed the outcome is also an outcome change
+	// (US-3): its own event and its own fan-out, shared with the other writer and
+	// with the edit.
+	if decision.Changed {
+		if err := writeOutcomeChangedInTx(ctx, tx, input.ID, old, input.Actor, decision, eventReason); err != nil {
+			return err
+		}
+	}
+
+	// issue.unclaimed when the issue was previously locked.
+	if old.LockedBy != nil && *old.LockedBy != "" {
+		unclaimReason := "auto-unclaimed-on-close"
+		if input.Force {
+			unclaimReason = "force-overridden"
+		}
+		if _, err := WriteIssueEvent(ctx, tx, EventIssueUnclaimed, input.ID, old.ProjectID,
+			input.Actor, "lockedBy",
+			map[string]any{"lockedBy": *old.LockedBy, "lockedAt": old.LockedAt},
+			map[string]any{"lockedBy": nil, "lockedAt": nil},
+			unclaimReason); err != nil {
+			return err
+		}
+		// sk-674.18 T034: a forced close releases another holder's claim.
+		if forceReleasesAnother(old, input.Actor, input.Force) {
+			if err := writeForceReleased(ctx, tx, input.ID, old, input.Actor, unclaimReason); err != nil {
+				return err
+			}
+		}
+	}
+
+	// Commit-on-close: resolve each {repoUrl?, repoId?} into a
+	// uuid against the project's git_repos[], then INSERT into
+	// issue_commits inside the same tx. Re-close with the same
+	// (issue_id, repo_id, hash) is idempotent (ON CONFLICT DO
+	// NOTHING) — the agent can re-run skein_close after a
+	// transient failure without duplicating rows.
+	if len(input.Commits) > 0 {
+		if err := linkCommitsInTx(ctx, tx, input.ID, old.ProjectID, input.Actor, input.Commits); err != nil {
+			return err
+		}
+	}
+
+	// The link by target — in the same transaction (R-5). It goes last:
+	// dependencies.CreateInTx reads both sides of the edge, and by that
+	// moment the issue being closed is already in its final state.
+	if target := strings.TrimSpace(input.CloseTarget); target != "" {
+		state, lerr := linkCloseTargetInTx(ctx, tx, input.ID, target,
+			decision.Outcome, *input.DependenciesCaller, input.Actor)
+		if lerr != nil {
+			if errors.Is(lerr, errCloseLinkRaceLost) {
+				return ErrSerializationRetry
+			}
+			return lerr
+		}
+		*link = state
+	}
+	// sk-622.21 T015 (US-11): personal signal "close".
+	return signalStatusChanged(ctx, tx, input.ID, signalRoles{})
 }
 
 // AttachCommits links one or more commit refs to an existing issue

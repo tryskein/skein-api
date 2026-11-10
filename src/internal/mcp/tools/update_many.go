@@ -26,11 +26,9 @@ import (
 // "same patch applied to N issues" — agents constructing a mass-edit
 // build the same value into each item.
 //
-// Per-row behaviour mirrors skein_update exactly: the multi-step chain
-// (PatchIssue → UpdateStatus/Close → ReplaceComponents → AddLabel /
-// RemoveLabel) runs sub-tx by sub-tx; mid-chain failure leaves
-// THAT row in partial state but the rest of the batch keeps running.
-// See plan §C-2 / risks §H.
+// Per-row behaviour mirrors skein_update exactly: each row is one
+// atomic change (issues.Store.UpdateIssue, T015, US-14) — a failed row
+// writes nothing, and the rest of the batch keeps running.
 //
 // `force=true` needs the key right manage and force_unlock on each row's
 // project, and applies uniformly across the batch.
@@ -48,17 +46,13 @@ func RegisterUpdateMany(s *server.MCPServer, pool *pgxpool.Pool, issuesStore *is
 				"independent — passing the same value in every "+
 				"item gives mass-edit semantics. "+
 				patchTextContractNote+" Refusal applies only to the offending row. "+
-				"Each row runs the full skein_update chain in its own "+
-				"SERIALIZABLE sub-transactions per step; mid-chain "+
-				"failure on one row leaves THAT row in partial state "+
-				"(earlier sub-ops are NOT rolled back — this matches "+
-				"single-tool behaviour) but does not affect the rest of "+
-				"the batch. Inspect results[i].ok / results[i].error.code "+
+				"Each row is one atomic change, as in skein_update: a "+
+				"failed row writes nothing and does not affect the rest "+
+				"of the batch. Inspect results[i].ok / results[i].error.code "+
 				"per row. A row stopped by batch_deadline_exceeded / "+
-				"request_cancelled while in progress may have committed "+
-				"earlier steps: re-read it and resend only what is missing, "+
-				"with the live version. "+
-				"A row may return serialization_retry after a sub-operation rolls back; earlier changes in that row may have committed. Re-read and resend only missing changes.\n\n"+
+				"request_cancelled while in progress may still have "+
+				"committed as a whole: re-read it before resending. "+
+				"A row answering serialization_retry wrote nothing; resend it unchanged.\n\n"+
 				"closeOutcome is required when transitioning to closed; repeating a close without it preserves the previous outcome. "+
 				"No per-row `closeTarget`: close an OPEN issue as duplicate / "+
 				"superseded with skein_close / skein_update. "+
