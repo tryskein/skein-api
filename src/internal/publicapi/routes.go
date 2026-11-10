@@ -15,7 +15,10 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"skein-api/internal/authz"
+	"skein-api/internal/dependencies"
+	"skein-api/internal/issues"
 	"skein-api/internal/projects"
+	"skein-api/internal/search"
 	"skein-api/internal/users"
 )
 
@@ -197,6 +200,14 @@ type Deps struct {
 	ProjectsEmbedder projects.QueryEmbedder
 	// DefaultVisibility is SKEIN_PROJECT_DEFAULT_VISIBILITY.
 	DefaultVisibility string
+	// Issues is the issues store.
+	Issues *issues.Store
+	// Dependencies is the dependencies store.
+	Dependencies *dependencies.Store
+	// Search is the search service.
+	Search *search.Service
+	// IssuesEmbedder reranks listIssues by meaning; nil — full-text only.
+	IssuesEmbedder issues.QueryEmbedder
 }
 
 // ProductRoutes is the route table of the public API. Every operation of
@@ -206,6 +217,10 @@ func ProductRoutes(d Deps) []Route {
 	pa := &projectsAPI{
 		pool: d.Pool, projects: d.Projects, users: d.Users,
 		embedder: d.ProjectsEmbedder, defaultVisibility: d.DefaultVisibility,
+	}
+	ia := &issuesAPI{
+		pool: d.Pool, issues: d.Issues, deps: d.Dependencies, projects: d.Projects,
+		search: d.Search, embedder: d.IssuesEmbedder,
 	}
 	read := authz.KeyRequirement{Right: authz.KeyRightRead}
 	manage := authz.KeyRequirement{Right: authz.KeyRightManage}
@@ -243,5 +258,16 @@ func ProductRoutes(d Deps) []Route {
 		key(OperationCreateComponent, http.MethodPost, "projects/{project}/components", manage, ObjectPathProject, manageProject, pa.createComponent),
 		key(OperationUpdateComponent, http.MethodPatch, "projects/{project}/components/{component}", manage, ObjectPathProject, manageProject, pa.updateComponent),
 		key(OperationArchiveComponent, http.MethodPost, "projects/{project}/components/{component}/archive", manage, ObjectPathProject, manageProject, pa.archiveComponent),
+
+		// Issue reads (T023).
+		key(OperationListIssues, http.MethodGet, "issues", read, ObjectNone, nil, ia.listIssues),
+		key(OperationListReadyIssues, http.MethodGet, "issues/ready", read, ObjectNone, nil, ia.listReadyIssues),
+		key(OperationGetIssue, http.MethodGet, "issues/{issue}", read, ObjectPathIssueProject, view, ia.getIssue),
+		key(OperationListIssueEvents, http.MethodGet, "issues/{issue}/events", read, ObjectPathIssueProject, view, ia.listIssueEvents),
+		key(OperationListDependencies, http.MethodGet, "issues/{issue}/dependencies", read, ObjectPathIssueProject, view, ia.listDependencies),
+		key(OperationListComments, http.MethodGet, "issues/{issue}/comments", read, ObjectPathIssueProject, view, ia.listComments),
+		key(OperationGetIssueMovePlan, http.MethodGet, "issues/{issue}/move-plan", read, ObjectPathIssueProject,
+			[]authz.Action{authz.ActionWrite}, ia.getIssueMovePlan),
+		key(OperationSearch, http.MethodGet, "search", read, ObjectNone, nil, ia.searchAll),
 	}
 }

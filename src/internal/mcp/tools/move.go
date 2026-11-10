@@ -112,13 +112,13 @@ type moveTargetProject struct {
 	IDPrefix string `json:"idPrefix"`
 }
 
-// moveComponent is one row of `targetComponents` — the full picker the
+// MoveComponent is one row of `targetComponents` — the full picker the
 // agent chooses from. MatchHint is a one-line human-readable nudge when
 // the component name appears verbatim in the source title or description
 // (case-insensitive substring); nil otherwise. Intentionally cheap — no
 // fuzzy / embedding match — because the agent always has full freedom to
 // override and a wrong-but-plausible hint would be worse than no hint.
-type moveComponent struct {
+type MoveComponent struct {
 	ID          string  `json:"id"`
 	Name        string  `json:"name"`
 	Description string  `json:"description"`
@@ -153,7 +153,7 @@ type moveResponse struct {
 	// is computed, not declared — see moveCreateArgs.
 	Source           map[string]any    `json:"source"`
 	TargetProject    moveTargetProject `json:"targetProject"`
-	TargetComponents []moveComponent   `json:"targetComponents"`
+	TargetComponents []MoveComponent   `json:"targetComponents"`
 	NextSteps        []moveNextStep    `json:"nextSteps"`
 }
 
@@ -229,6 +229,104 @@ func (b *moveCreateArgs) sourceCard(d *issues.IssueDetail) (map[string]any, erro
 		delete(m, key)
 	}
 	return m, nil
+}
+
+// MoveKit is the copy-to-target kit of moving an issue to another project
+// (skein_move; the public API's getIssueMovePlan): the fields of the copy,
+// the source card without them, and the components of the target to pick
+// from.
+type MoveKit struct {
+	// CreateArgs are the fields of the copy, named as skein_create (and the
+	// public API's createIssue) takes them.
+	CreateArgs map[string]any
+	// Source is the source's card minus every field CreateArgs carries.
+	Source map[string]any
+	// Components are the target's active components, with a match hint
+	// when a name appears in the source's title or description.
+	Components []MoveComponent
+}
+
+// BuildMoveKit builds the kit of moving source into target, whose active
+// components are components. It decides nothing about rights: the caller
+// has checked them.
+func BuildMoveKit(source *issues.IssueDetail, target *projects.ProjectDTO, components []projects.ComponentDTO) (MoveKit, error) {
+	moveComps := make([]MoveComponent, 0, len(components))
+	titleLower := strings.ToLower(source.Title)
+	descLower := strings.ToLower(source.Description)
+	for _, c := range components {
+		nameLower := strings.ToLower(c.Name)
+		var hint *string
+		switch {
+		case nameLower != "" && strings.Contains(titleLower, nameLower):
+			h := fmt.Sprintf("name %q appears in source title", c.Name)
+			hint = &h
+		case nameLower != "" && strings.Contains(descLower, nameLower):
+			h := fmt.Sprintf("name %q appears in source description", c.Name)
+			hint = &h
+		}
+		moveComps = append(moveComps, MoveComponent{
+			ID:          c.ID.String(),
+			Name:        c.Name,
+			Description: c.Description,
+			MatchHint:   hint,
+		})
+	}
+
+	// Pre-filled skein_create args. We append a footer to the
+	// description that documents the provenance — the supersedes
+	// edge is machine-readable, the footer is human-readable for
+	// people opening the new issue cold.
+	movedFooter := fmt.Sprintf(
+		"\n\n---\n\n_Moved from `%s` (via `skein_move` signpost): see the `supersedes` edge on the source issue._",
+		source.ID,
+	)
+	builder := newMoveCreateArgs()
+	builder.carry("title", source.Title)
+	builder.carry("description", source.Description+movedFooter)
+	builder.carry("type", source.Type)
+	builder.carry("priority", source.Priority)
+	builder.setDerived("project", target.IDPrefix)
+	builder.setDerived("kind", "directed")
+	builder.setDerived("sourceContext", fmt.Sprintf(
+		"manual move from %s → %s (via skein_move signpost)",
+		source.ID, target.IDPrefix,
+	))
+	builder.setDerived("dependencies", []map[string]any{
+		{"toId": source.ID, "type": "supersedes"},
+	})
+	builder.setDerived("componentIds", []string{})
+
+	// The optional fields are carried ONLY when the source has them,
+	// and the card gives up exactly what was carried — so an issue
+	// with no notes keeps its empty `notes` key on the card, and one
+	// with notes has them in the prepared call instead. Either way,
+	// once.
+	if source.Assignee != nil && *source.Assignee != "" {
+		builder.carry("assignee", *source.Assignee)
+	} else {
+		// sk-565 (US-7, P10): an unassigned source stays unassigned on
+		// the copy whatever the caller's «assign to me» setting says.
+		// Derived, not carried: the card has no such field to give up.
+		builder.setDerived("unassigned", true)
+	}
+	if source.AcceptanceCriteria != "" {
+		builder.carry("acceptanceCriteria", source.AcceptanceCriteria)
+	}
+	if source.Design != "" {
+		builder.carry("design", source.Design)
+	}
+	if source.Notes != "" {
+		builder.carry("notes", source.Notes)
+	}
+	if len(source.Labels) > 0 {
+		builder.carry("labels", source.Labels)
+	}
+
+	card, err := builder.sourceCard(source)
+	if err != nil {
+		return MoveKit{}, err
+	}
+	return MoveKit{CreateArgs: builder.args, Source: card, Components: moveComps}, nil
 }
 
 func handleMove(pool *pgxpool.Pool, issuesStore *issues.Store, projectsStore *projects.Store) server.ToolHandlerFunc {
@@ -347,80 +445,7 @@ func handleMove(pool *pgxpool.Pool, issuesStore *issues.Store, projectsStore *pr
 		// match takes precedence over description match. Empty hints
 		// stay nil (omitempty would hide the field entirely; nil keeps
 		// the JSON shape stable so the agent can branch on null vs string).
-		moveComps := make([]moveComponent, 0, len(components))
-		titleLower := strings.ToLower(source.Title)
-		descLower := strings.ToLower(source.Description)
-		for _, c := range components {
-			nameLower := strings.ToLower(c.Name)
-			var hint *string
-			switch {
-			case nameLower != "" && strings.Contains(titleLower, nameLower):
-				h := fmt.Sprintf("name %q appears in source title", c.Name)
-				hint = &h
-			case nameLower != "" && strings.Contains(descLower, nameLower):
-				h := fmt.Sprintf("name %q appears in source description", c.Name)
-				hint = &h
-			}
-			moveComps = append(moveComps, moveComponent{
-				ID:          c.ID.String(),
-				Name:        c.Name,
-				Description: c.Description,
-				MatchHint:   hint,
-			})
-		}
-
-		// Pre-filled skein_create args. We append a footer to the
-		// description that documents the provenance — the supersedes
-		// edge is machine-readable, the footer is human-readable for
-		// people opening the new issue cold.
-		movedFooter := fmt.Sprintf(
-			"\n\n---\n\n_Moved from `%s` (via `skein_move` signpost): see the `supersedes` edge on the source issue._",
-			source.ID,
-		)
-		builder := newMoveCreateArgs()
-		builder.carry("title", source.Title)
-		builder.carry("description", source.Description+movedFooter)
-		builder.carry("type", source.Type)
-		builder.carry("priority", source.Priority)
-		builder.setDerived("project", targetProj.IDPrefix)
-		builder.setDerived("kind", "directed")
-		builder.setDerived("sourceContext", fmt.Sprintf(
-			"manual move from %s → %s (via skein_move signpost)",
-			source.ID, targetProj.IDPrefix,
-		))
-		builder.setDerived("dependencies", []map[string]any{
-			{"toId": source.ID, "type": "supersedes"},
-		})
-		builder.setDerived("componentIds", []string{})
-
-		// The optional fields are carried ONLY when the source has them,
-		// and the card gives up exactly what was carried — so an issue
-		// with no notes keeps its empty `notes` key on the card, and one
-		// with notes has them in the prepared call instead. Either way,
-		// once.
-		if source.Assignee != nil && *source.Assignee != "" {
-			builder.carry("assignee", *source.Assignee)
-		} else {
-			// sk-565 (US-7, P10): an unassigned source stays unassigned on
-			// the copy whatever the caller's «assign to me» setting says.
-			// Derived, not carried: the card has no such field to give up.
-			builder.setDerived("unassigned", true)
-		}
-		if source.AcceptanceCriteria != "" {
-			builder.carry("acceptanceCriteria", source.AcceptanceCriteria)
-		}
-		if source.Design != "" {
-			builder.carry("design", source.Design)
-		}
-		if source.Notes != "" {
-			builder.carry("notes", source.Notes)
-		}
-		if len(source.Labels) > 0 {
-			builder.carry("labels", source.Labels)
-		}
-		createArgs := builder.args
-
-		sourceCard, cerr := builder.sourceCard(source)
+		kit, cerr := BuildMoveKit(source, targetProj, components)
 		if cerr != nil {
 			slog.ErrorContext(ctx, "mcp tool error",
 				"tool", "skein_move",
@@ -428,11 +453,8 @@ func handleMove(pool *pgxpool.Pool, issuesStore *issues.Store, projectsStore *pr
 				"userId", userID.String(), "issueId", issueID, "error", cerr.Error())
 			return skmcp.ToolError(ErrCodeInternalError, "failed to encode result", nil), nil
 		}
+		moveComps, createArgs, sourceCard := kit.Components, kit.CreateArgs, kit.Source
 
-		// Pre-filled skein_close args. expectedVersion is taken at
-		// signpost time — if someone bumps it before the agent
-		// closes, the close errors with version_conflict and the
-		// agent re-fetches.
 		closeArgs := map[string]any{
 			"id":              source.ID,
 			"expectedVersion": source.Version,

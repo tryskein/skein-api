@@ -1066,10 +1066,18 @@ func main() {
 
 	// The public API, its own server on its own port (nil when
 	// SKEIN_PUBLIC_API_ENABLED=false).
+	var pubIssuesEmbedder issues.QueryEmbedder
+	if e := searchSvc.Embedder(); e != nil {
+		pubIssuesEmbedder = e
+	}
 	pubSrv, err := publicAPIServer(cfg, pool, publicapi.Deps{
 		Projects:         projectsStore,
 		Users:            usersStore,
 		ProjectsEmbedder: projectsEmbedder,
+		Issues:           issuesStore,
+		Dependencies:     depsStore,
+		Search:           searchSvc,
+		IssuesEmbedder:   pubIssuesEmbedder,
 	}, slog.Default())
 	if err != nil {
 		slog.Error("public API setup failed", "error", err.Error())

@@ -38,8 +38,11 @@ import (
 	"skein-api/internal/apikeys"
 	"skein-api/internal/auth"
 	"skein-api/internal/config"
+	"skein-api/internal/dependencies"
+	"skein-api/internal/issues"
 	"skein-api/internal/projects"
 	"skein-api/internal/publicapi"
+	"skein-api/internal/search"
 	"skein-api/internal/testsupport"
 	"skein-api/internal/users"
 )
@@ -65,7 +68,8 @@ type publicOp struct {
 	field string
 }
 
-// publicOps is the literal of the spec, the operations of T022.
+// publicOps is the literal of the spec: the operations of T022, then the
+// slices the later tasks add.
 var publicOps = []publicOp{
 	{id: "getMe", method: http.MethodGet, path: "me", right: "none", read: true, field: "isAdmin"},
 	{id: "listProjects", method: http.MethodGet, path: "projects", right: "read", read: true, field: "name"},
@@ -80,6 +84,16 @@ var publicOps = []publicOp{
 	{id: "createComponent", method: http.MethodPost, path: "projects/{project}/components", right: "manage", body: true, projectWrite: true},
 	{id: "updateComponent", method: http.MethodPatch, path: "projects/{project}/components/{component}", right: "manage", body: true, projectWrite: true},
 	{id: "archiveComponent", method: http.MethodPost, path: "projects/{project}/components/{component}/archive", right: "manage", body: true, projectWrite: true},
+
+	// T023 (row 123).
+	{id: "listIssues", method: http.MethodGet, path: "issues", right: "read", read: true, field: "title"},
+	{id: "listReadyIssues", method: http.MethodGet, path: "issues/ready", right: "read", read: true, field: "title"},
+	{id: "getIssue", method: http.MethodGet, path: "issues/{issue}", right: "read", read: true, field: "title"},
+	{id: "listIssueEvents", method: http.MethodGet, path: "issues/{issue}/events", right: "read", read: true, field: "type"},
+	{id: "listDependencies", method: http.MethodGet, path: "issues/{issue}/dependencies", right: "read", read: true, field: "type"},
+	{id: "listComments", method: http.MethodGet, path: "issues/{issue}/comments", right: "read", read: true, field: "body"},
+	{id: "getIssueMovePlan", method: http.MethodGet, path: "issues/{issue}/move-plan", right: "read", read: true, field: "targetProject"},
+	{id: "search", method: http.MethodGet, path: "search", right: "read", read: true, field: "title"},
 }
 
 // TestPublicAPIClasses_LiteralIsRoutesGo — rows 100 and 101, the literal
@@ -145,6 +159,11 @@ type classWorld struct {
 	qName      string
 	sfx        string
 	n          int
+	// issue and ready are issues of p: issue waits on ready and has an
+	// event, a comment and the edge; qIssue is an issue of q. All three
+	// titles carry word.
+	issue, ready, qIssue string
+	word                 string
 }
 
 // newClassWorld seeds the world and builds the product public server from
@@ -183,6 +202,22 @@ func newClassWorld(t *testing.T) *classWorld {
 	for _, p := range []uuid.UUID{w.p, w.q} {
 		w.component(p)
 	}
+	w.word = "clsw" + w.sfx
+	w.issue = testsupport.SeedIssue(t, pool, w.p, w.owner, w.pPrefix+"-1", "first "+w.word, "open", 1)
+	w.ready = testsupport.SeedIssue(t, pool, w.p, w.owner, w.pPrefix+"-2", "second "+w.word, "open", 2)
+	w.qIssue = testsupport.SeedIssue(t, pool, w.q, w.owner, w.qPrefix+"-1", "third "+w.word, "open", 2)
+	w.exec(`INSERT INTO dependencies (from_id, to_id, type, metadata, version, created_by, created_at)
+VALUES ($1, $2, 'blocks', '{}'::jsonb, 1, $3, now())`, w.issue, w.ready, w.owner)
+	w.exec(`INSERT INTO comments (id, issue_id, author, author_user_id, author_type, author_kind, body, created_at, updated_at)
+VALUES ($1, $2, 'owner', $3, 'human', 'human', 'a note', now(), now())`, uuid.New(), w.issue, w.owner)
+	w.exec(`INSERT INTO events (type, actor, actor_user_id, actor_type, entity_type, entity_id, project_id)
+VALUES ('issue.created', 'owner', $1, 'human', 'issue', $2, $3)`, w.owner, w.issue, w.p)
+	t.Cleanup(func() {
+		ctx := context.Background()
+		_, _ = pool.Exec(ctx, `DELETE FROM comments WHERE issue_id = ANY($1)`, []string{w.issue, w.ready, w.qIssue})
+		_, _ = pool.Exec(ctx, `DELETE FROM dependencies WHERE from_id = ANY($1) OR to_id = ANY($1)`, []string{w.issue, w.ready, w.qIssue})
+		_, _ = pool.Exec(ctx, `DELETE FROM events WHERE entity_id = ANY($1)`, []string{w.issue, w.ready, w.qIssue})
+	})
 	t.Cleanup(func() {
 		ctx := context.Background()
 		like := "%" + w.sfx + "%"
@@ -194,9 +229,16 @@ func newClassWorld(t *testing.T) *classWorld {
 
 // classDeps are the stores of the product, as main builds them.
 func classDeps(pool *pgxpool.Pool) publicapi.Deps {
+	searchSvc, err := search.NewService(search.NewStore(pool), nil, 0)
+	if err != nil {
+		panic("search.NewService: " + err.Error())
+	}
 	return publicapi.Deps{
-		Projects: projects.NewStore(pool),
-		Users:    users.NewStore(pool, auth.MinBcryptCost, apikeys.New(pool), "local", "", nil),
+		Projects:     projects.NewStore(pool),
+		Users:        users.NewStore(pool, auth.MinBcryptCost, apikeys.New(pool), "local", "", nil),
+		Issues:       issues.NewStore(pool),
+		Dependencies: dependencies.NewStore(pool),
+		Search:       searchSvc,
 	}
 }
 
@@ -290,6 +332,22 @@ func (w *classWorld) call(op publicOp, p uuid.UUID) opCall {
 		return opCall{http.MethodPatch, proj + "/components/" + w.component(p).String(), map[string]any{"name": w.fresh("comp")}}
 	case "archiveComponent":
 		return opCall{http.MethodPost, proj + "/components/" + w.component(p).String() + "/archive", nil}
+	case "listIssues":
+		return opCall{http.MethodGet, base + "issues?project=" + w.pPrefix, nil}
+	case "listReadyIssues":
+		return opCall{http.MethodGet, base + "issues/ready?project=" + w.pPrefix, nil}
+	case "getIssue":
+		return opCall{http.MethodGet, base + "issues/" + w.issue, nil}
+	case "listIssueEvents":
+		return opCall{http.MethodGet, base + "issues/" + w.issue + "/events", nil}
+	case "listDependencies":
+		return opCall{http.MethodGet, base + "issues/" + w.issue + "/dependencies", nil}
+	case "listComments":
+		return opCall{http.MethodGet, base + "issues/" + w.issue + "/comments", nil}
+	case "getIssueMovePlan":
+		return opCall{http.MethodGet, base + "issues/" + w.issue + "/move-plan?targetProject=" + w.qPrefix, nil}
+	case "search":
+		return opCall{http.MethodGet, base + "search?kinds=issue&query=" + w.word, nil}
 	}
 	w.t.Fatalf("no request for %s", op.id)
 	return opCall{}
@@ -628,25 +686,38 @@ func TestPublicAPIClasses_KeyScope(t *testing.T) {
 		{"listProjects", "/api/v1/projects?limit=100"},
 		{"listProjects by search", "/api/v1/projects?q=" + url.QueryEscape(w.qName)},
 		{"resolveProject", "/api/v1/projects/resolve?q=" + url.QueryEscape(w.qPrefix)},
+		{"listIssues across projects", "/api/v1/issues?limit=100&q=" + w.word},
+		{"search", "/api/v1/search?kinds=issue&limit=50&query=" + w.word},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			s, a := get(scoped, c.path), get(all, c.path)
 			if s.status != http.StatusOK || a.status != http.StatusOK {
 				t.Fatalf("answers %d %s / %d %s", s.status, s.body, a.status, a.body)
 			}
-			if strings.Contains(string(s.body), q) {
-				t.Errorf("the P key's answer carries Q: %s", s.body)
+			for _, of := range []string{q, w.qIssue} {
+				if strings.Contains(string(s.body), `"`+of+`"`) {
+					t.Errorf("the P key's answer carries %s of Q: %s", of, s.body)
+				}
 			}
-			if !strings.Contains(string(a.body), q) {
+			if !strings.Contains(string(a.body), `"`+q+`"`) && !strings.Contains(string(a.body), `"`+w.qIssue+`"`) {
 				t.Errorf("the base line does not show Q: %s", a.body)
 			}
 		})
 	}
-	for _, path := range []string{"/api/v1/projects/" + q, "/api/v1/projects/" + q + "/members",
-		"/api/v1/projects/" + q + "/components", "/api/v1/projects/" + w.qPrefix} {
+	for _, c := range []struct{ path, code string }{
+		{"/api/v1/projects/" + q, "project_not_found"},
+		{"/api/v1/projects/" + q + "/members", "project_not_found"},
+		{"/api/v1/projects/" + q + "/components", "project_not_found"},
+		{"/api/v1/projects/" + w.qPrefix, "project_not_found"},
+		{"/api/v1/issues/" + w.qIssue, "issue_not_found"},
+		{"/api/v1/issues/" + w.qIssue + "/comments", "issue_not_found"},
+		{"/api/v1/issues/" + w.qIssue + "/events", "issue_not_found"},
+		{"/api/v1/issues/" + w.qIssue + "/dependencies", "issue_not_found"},
+	} {
+		path := c.path
 		t.Run(path, func(t *testing.T) {
-			if s := get(scoped, path); s.status != http.StatusNotFound || s.code() != "project_not_found" {
-				t.Errorf("the P key: %d %s, want 404 project_not_found", s.status, s.body)
+			if s := get(scoped, path); s.status != http.StatusNotFound || s.code() != c.code {
+				t.Errorf("the P key: %d %s, want 404 %s", s.status, s.body, c.code)
 			}
 			if a := get(all, path); a.status != http.StatusOK {
 				t.Errorf("the base line: %d %s", a.status, a.body)

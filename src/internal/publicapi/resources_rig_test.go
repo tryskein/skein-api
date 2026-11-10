@@ -25,10 +25,13 @@ import (
 
 	"skein-api/internal/apikeys"
 	"skein-api/internal/auth"
+	"skein-api/internal/dependencies"
+	"skein-api/internal/issues"
 	mcppkg "skein-api/internal/mcp"
 	"skein-api/internal/mcp/tools"
 	"skein-api/internal/projects"
 	"skein-api/internal/publicapi"
+	"skein-api/internal/search"
 	"skein-api/internal/spaces"
 	"skein-api/internal/testsupport"
 	"skein-api/internal/users"
@@ -49,6 +52,12 @@ func newResourceRig(t *testing.T, pool *pgxpool.Pool) *resourceRig {
 	t.Helper()
 	projectsStore := projects.NewStore(pool)
 	usersStore := users.NewStore(pool, auth.MinBcryptCost, apikeys.New(pool), "local", "", nil)
+	issuesStore := issues.NewStore(pool)
+	depsStore := dependencies.NewStore(pool)
+	searchSvc, err := search.NewService(search.NewStore(pool), nil, 0)
+	if err != nil {
+		t.Fatalf("search.NewService: %v", err)
+	}
 	chain := publicapi.NewChain(publicapi.ChainOptions{
 		Authenticator: auth.NewAPIKeyAuthenticator(pool, auth.MinBcryptCost),
 		Executors:     publicapi.PoolExecutors{Pool: pool},
@@ -65,6 +74,7 @@ func newResourceRig(t *testing.T, pool *pgxpool.Pool) *resourceRig {
 		publicapi.ProductRoutes(publicapi.Deps{
 			Doc: doc, Pool: pool, Projects: projectsStore, Users: usersStore,
 			DefaultVisibility: spaces.VisibilityMembers,
+			Issues: issuesStore, Dependencies: depsStore, Search: searchSvc,
 		}))
 	mcpHandler, _ := mcppkg.Setup(pool, 0, func(s *server.MCPServer) {
 		tools.RegisterWhoami(s, pool)
@@ -74,6 +84,11 @@ func newResourceRig(t *testing.T, pool *pgxpool.Pool) *resourceRig {
 		tools.RegisterProjectUpdate(s, pool, projectsStore)
 		tools.RegisterProjectMembers(s, pool, projectsStore, usersStore)
 		tools.RegisterComponent(s, pool, projectsStore)
+		tools.RegisterShow(s, pool, issuesStore, depsStore)
+		tools.RegisterList(s, pool, issuesStore, projectsStore, nil)
+		tools.RegisterReady(s, pool, depsStore, projectsStore)
+		tools.RegisterSearch(s, pool, searchSvc, projectsStore)
+		tools.RegisterMove(s, pool, issuesStore, projectsStore)
 	})
 	return &resourceRig{
 		t: t, pool: pool, restH: rest,

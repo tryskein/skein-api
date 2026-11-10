@@ -67,9 +67,23 @@ type CommentDTO struct {
 //
 // Since: when non-nil, population is rows with created_at strictly greater
 // than Since (exclusive). Total is counted AFTER this filter and BEFORE Limit.
+//
+// First: when > 0, a keyset page instead of the last N — the first First
+// rows of the filtered set after After (exclusive, by (created_at, id); nil
+// = from the start), ordered ASC. Limit is then ignored. The page of the
+// public API's comment list (sk-878.3.1 T023).
 type ListCommentsOpts struct {
 	Limit int
 	Since *time.Time
+	First int
+	After *CommentKey
+}
+
+// CommentKey is the keyset position of a comment in a thread: its
+// creation time and, to break a tie, its id.
+type CommentKey struct {
+	CreatedAt time.Time
+	ID        uuid.UUID
 }
 
 // LabelStat is the wire shape for the per-project labels summary

@@ -1,6 +1,665 @@
 {
     "components": {
         "schemas": {
+            "dependencies.IssueRef": {
+                "properties": {
+                    "id": {
+                        "type": "string"
+                    },
+                    "priority": {
+                        "type": "integer"
+                    },
+                    "projectId": {
+                        "type": "string"
+                    },
+                    "status": {
+                        "type": "string"
+                    },
+                    "title": {
+                        "type": "string"
+                    },
+                    "type": {
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
+            "dependencies.IssueSummary": {
+                "properties": {
+                    "assignee": {
+                        "type": "string"
+                    },
+                    "componentIds": {
+                        "items": {
+                            "type": "string"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
+                    },
+                    "createdAt": {
+                        "type": "string"
+                    },
+                    "id": {
+                        "type": "string"
+                    },
+                    "labels": {
+                        "items": {
+                            "type": "string"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
+                    },
+                    "parentIdCurrent": {
+                        "description": "sk-35: derived from the parent-child dep graph (first edge by\ncreated_at); wire field renamed to parentIdCurrent so clients\ndon't assume it's a stored column.",
+                        "type": "string"
+                    },
+                    "pinned": {
+                        "type": "boolean"
+                    },
+                    "priority": {
+                        "type": "integer"
+                    },
+                    "projectId": {
+                        "type": "string"
+                    },
+                    "status": {
+                        "type": "string"
+                    },
+                    "title": {
+                        "type": "string"
+                    },
+                    "type": {
+                        "type": "string"
+                    },
+                    "updatedAt": {
+                        "type": "string"
+                    },
+                    "version": {
+                        "type": "integer"
+                    }
+                },
+                "type": "object"
+            },
+            "issues.BlockerRef": {
+                "properties": {
+                    "id": {
+                        "description": "ID is the blocker's hierarchical id.",
+                        "type": "string"
+                    },
+                    "status": {
+                        "description": "Status is the blocker's status: open, in_progress or deferred\n(closed and standing targets never block).",
+                        "type": "string"
+                    },
+                    "title": {
+                        "description": "Title is the blocker's title.",
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
+            "issues.CommentDTO": {
+                "properties": {
+                    "author": {
+                        "type": "string"
+                    },
+                    "authorKind": {
+                        "type": "string"
+                    },
+                    "authorStatus": {
+                        "$ref": "#/components/schemas/person.Status",
+                        "description": "AuthorStatus — the author's person marks in the issue's space\n(sk-674.18 T027): departed, or deleted with the pseudonym; absent\nwhen nothing to mark or the author is not a user (an agent label)."
+                    },
+                    "authorType": {
+                        "type": "string"
+                    },
+                    "authorUserId": {
+                        "type": "string"
+                    },
+                    "body": {
+                        "type": "string"
+                    },
+                    "createdAt": {
+                        "type": "string"
+                    },
+                    "deletedAt": {
+                        "type": "string"
+                    },
+                    "editedAt": {
+                        "type": "string"
+                    },
+                    "id": {
+                        "type": "string"
+                    },
+                    "issueId": {
+                        "type": "string"
+                    },
+                    "mentions": {
+                        "description": "R4.3 — resolved @username mentions in `body`. See\nIssueDetail.Mentions for the contract — same shape, scope here\nis just the comment body. Always non-nil.",
+                        "items": {
+                            "$ref": "#/components/schemas/issues.MentionRef"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
+                    },
+                    "updatedAt": {
+                        "type": "string"
+                    },
+                    "version": {
+                        "description": "sk-57 — edit/delete metadata.\n\nVersion is the optimistic-concurrency counter (starts at 1, bumped\non every edit). Edits pass expectedVersion; a mismatch surfaces as\nErrVersionConflict carrying the live value.\n\nEditedAt is nil until the first edit; non-nil ⇒ the UI renders an\n\"edited\" badge (tooltip = the edit timestamp). CreatedAt is never\nrewritten.\n\nDeletedAt is nil for live comments. When non-nil the row is a\ntombstone: ListComments blanks Body and Mentions on read so deleted\ntext never reaches clients, but the slot remains in the thread.",
+                        "type": "integer"
+                    }
+                },
+                "type": "object"
+            },
+            "issues.CommitRef": {
+                "properties": {
+                    "author": {
+                        "type": "string"
+                    },
+                    "committedAt": {
+                        "type": "string"
+                    },
+                    "hash": {
+                        "type": "string"
+                    },
+                    "linkedAt": {
+                        "type": "string"
+                    },
+                    "linkedBy": {
+                        "type": "string"
+                    },
+                    "linkedByKind": {
+                        "type": "string"
+                    },
+                    "message": {
+                        "type": "string"
+                    },
+                    "repoId": {
+                        "type": "string"
+                    },
+                    "repoUrl": {
+                        "type": "string"
+                    },
+                    "url": {
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
+            "issues.EpicProgress": {
+                "properties": {
+                    "closed": {
+                        "type": "integer"
+                    },
+                    "counted": {
+                        "description": "Counted — the progress denominator: Total minus the visible dropped-out ones.\nUnavailable ones stay in it, as today (INV-4).",
+                        "type": "integer"
+                    },
+                    "done": {
+                        "description": "Done — how many visible children are closed with the outcome \"done\". The numerator.",
+                        "type": "integer"
+                    },
+                    "noWork": {
+                        "description": "NoWork — how many visible children are closed without work. They are not part of\nthe denominator; the chip prints them as a separate tail.",
+                        "type": "integer"
+                    },
+                    "total": {
+                        "type": "integer"
+                    },
+                    "unavailable": {
+                        "description": "Unavailable counts children in projects the caller cannot see\n(sk-291). They stay in Total and are absent from Closed, so a chip\nwith a non-zero Unavailable can never read as complete — which is\nthe honest answer, since whether those children are done is not\nknowable from here. Not omitempty: a zero has to read as \"counted,\nand there are none\" rather than as \"not counted\".",
+                        "type": "integer"
+                    }
+                },
+                "type": "object"
+            },
+            "issues.EpicRollup": {
+                "properties": {
+                    "blockedChildren": {
+                        "type": "integer"
+                    },
+                    "closedChildren": {
+                        "type": "integer"
+                    },
+                    "countedChildren": {
+                        "description": "CountedChildren — the progress denominator: TotalChildren minus the visible\ndropped-out ones. Unavailable ones stay in the denominator, as today (INV-4):\nit is not known whether they are done, and throwing them out would mean\nasserting that they dropped out.\n\nIts own name, not \"total for progress\", because TotalChildren next to it\nkeeps its previous meaning, and two different numbers must be named\ndifferently.",
+                        "type": "integer"
+                    },
+                    "deferredChildren": {
+                        "type": "integer"
+                    },
+                    "doneChildren": {
+                        "description": "DoneChildren — how many children VISIBLE to the reader are closed with the outcome\n\"done\". The numerator of progress. Unavailable children are not included\nunder any of their outcomes (INV-4).",
+                        "type": "integer"
+                    },
+                    "eligibleForClose": {
+                        "type": "boolean"
+                    },
+                    "inProgressChildren": {
+                        "type": "integer"
+                    },
+                    "noWorkChildren": {
+                        "description": "NoWorkChildren — how many VISIBLE children are closed without work (the outcome\ndiffers from \"done\"). The number is counted by the SQL leg\n`store.go#epicRollupFor` — the same as in the rows\n(`store.go#epicSummaryNoWorkExpr`); the Go predicate\n`close_outcome.go#IsNoWorkOutcome` writes the same rule as a whitelist,\nbut does not take part in the count. This is the \"no work\" tail next to\nthe ring; they are not part of the denominator.",
+                        "type": "integer"
+                    },
+                    "openChildren": {
+                        "type": "integer"
+                    },
+                    "standingChildren": {
+                        "type": "integer"
+                    },
+                    "totalChildren": {
+                        "type": "integer"
+                    },
+                    "unavailableChildren": {
+                        "type": "integer"
+                    }
+                },
+                "type": "object"
+            },
+            "issues.EventDTO": {
+                "properties": {
+                    "actor": {
+                        "type": "string"
+                    },
+                    "actorSessionId": {
+                        "type": "string"
+                    },
+                    "actorType": {
+                        "type": "string"
+                    },
+                    "field": {
+                        "type": "string"
+                    },
+                    "id": {
+                        "type": "integer"
+                    },
+                    "occurredAt": {
+                        "type": "string"
+                    },
+                    "reason": {
+                        "type": "string"
+                    },
+                    "type": {
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
+            "issues.IssueDetail": {
+                "properties": {
+                    "acceptanceCriteria": {
+                        "type": "string"
+                    },
+                    "acceptedAt": {
+                        "description": "AcceptedAt records when the current assignee explicitly accepted\nthe task. nil = \"not yet accepted\" (Inbox surfaces it as \"needs\nacceptance\"). Reset to nil whenever the assignee changes; auto-\npopulated when the creator self-assigns. Phase 2 introduces\nskein_accept + issue.accepted event for the explicit positive\ntransition.",
+                        "type": "string"
+                    },
+                    "acceptedBy": {
+                        "description": "AcceptedBy is the user UUID that produced the latest acceptance\n(FK → users(id) ON DELETE SET NULL — the timestamp survives a\nhard-delete of the user record). nil iff AcceptedAt is nil.",
+                        "type": "string"
+                    },
+                    "acceptedByUsername": {
+                        "description": "AcceptedByUsername is the username for AcceptedBy, joined via\nLEFT JOIN users so a deleted accepter surfaces as nil. Optional\nin the wire shape.",
+                        "type": "string"
+                    },
+                    "assignee": {
+                        "type": "string"
+                    },
+                    "assigneeStatus": {
+                        "$ref": "#/components/schemas/person.Status",
+                        "description": "AssigneeStatus / CreatedByStatus — the person marks of the assignee\nand the author in the issue's space (sk-674.18 T027,\nspaces/contract.go): departed, or deleted with the pseudonym. Absent\nwhen there is nothing to mark, or when the assignee is free text."
+                    },
+                    "assigneeUserId": {
+                        "type": "string"
+                    },
+                    "blockers": {
+                        "description": "Blockers is the populated list backing IsBlocked: one entry per gating\nblocker (neither closed nor standing, on the TO-side of an outgoing\nblocks / waits-for edge) whose project is inside the reader's horizon,\nordered by id. Every entry is {id, title, status}. Always non-nil\n(empty array when not blocked) so JS clients don't have to\nspecial-case absence.\n\nsk-423: the redacted form {id, redacted:true} that sk-421.1 put here\nfor a blocker outside the reader's horizon is gone — its mere presence\nsaid that the hidden issue was not closed. Such edges are counted in\nUnavailableBlockingLinks.",
+                        "items": {
+                            "$ref": "#/components/schemas/issues.BlockerRef"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
+                    },
+                    "canForceUnlock": {
+                        "description": "CanForceUnlock — sk-674.18 T034 (US-16, K-28): the reader may release\nanother holder's claim on this issue (force_unlock: the project\nowner, the space owner, the instance admin). Set by the card read\n(GET …/issues/{id}) and the unlock action, which answer per reader;\nabsent on every other surface that returns a card.",
+                        "type": "boolean"
+                    },
+                    "closeOutcome": {
+                        "description": "CloseOutcome — the close outcome (sk-489, US-1): one of four values\nfrom close_outcome.go, answering \"how did it end\", unlike the free\ntext of ClosedReason. It sits next to ClosedAt / ClosedReason because\nit is a property of the same event — the close — while the wire name is taken from\nthe action (`closeOutcome`, like the \"close\" argument), not from the state.\n\nPresent if and only if the issue is closed (INV-1): an unclosed issue\nhas no key at all, a closed one always has it. Hence *string and\nomitempty: the invariant is held by storage (the CHECK and the trigger of migration\n000050), and the wire only repeats it — \"no key\" reads as \"not\nclosed\", and no value of the field can contradict that.\n\nA client that receives a value outside the four prints it as is and does not\ncount it as done or as dropped out (INV-2) — it takes the numbers from\nthe server and does not derive them from the row.",
+                        "type": "string"
+                    },
+                    "closedAt": {
+                        "type": "string"
+                    },
+                    "closedReason": {
+                        "type": "string"
+                    },
+                    "commentsCount": {
+                        "type": "integer"
+                    },
+                    "commitRefs": {
+                        "description": "populated from issue_commits (R3.4 commit-on-close).",
+                        "items": {
+                            "$ref": "#/components/schemas/issues.CommitRef"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
+                    },
+                    "componentIds": {
+                        "description": "Aggregates — joined / counted in GetIssue.",
+                        "items": {
+                            "type": "string"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
+                    },
+                    "createdAt": {
+                        "type": "string"
+                    },
+                    "createdBy": {
+                        "type": "string"
+                    },
+                    "createdByStatus": {
+                        "$ref": "#/components/schemas/person.Status"
+                    },
+                    "createdByUsername": {
+                        "type": "string"
+                    },
+                    "deferUntil": {
+                        "type": "string"
+                    },
+                    "description": {
+                        "type": "string"
+                    },
+                    "design": {
+                        "type": "string"
+                    },
+                    "dismissedBy": {
+                        "items": {
+                            "type": "string"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
+                    },
+                    "dismissedByUsernames": {
+                        "description": "DismissedByUsernames is the username projection of\nDismissedBy in matching order. Same missing-user semantics\nas PreviousAssigneeUsernames.",
+                        "items": {
+                            "type": "string"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
+                    },
+                    "dueAt": {
+                        "type": "string"
+                    },
+                    "epic": {
+                        "$ref": "#/components/schemas/issues.EpicRollup",
+                        "description": "sk-32: Epic rollup — populated only when issue.type == 'epic'.\nnil for every other type (and JSON-omitted via omitempty). The\nchild set is sourced from the dependencies graph (parent-child\nedges). sk-35 restored this as canonical.\n\nEligibleForClose is true when TotalChildren > 0 AND\nClosedChildren == TotalChildren. Empty epics never become\neligible — they would be a false signal (\"0 of 0 closed\" is not\na meaningful \"done\" state)."
+                    },
+                    "estimatedMinutes": {
+                        "type": "integer"
+                    },
+                    "externalRef": {
+                        "type": "string"
+                    },
+                    "id": {
+                        "type": "string"
+                    },
+                    "inheritedComponentIds": {
+                        "description": "InheritedComponentIDs is the transient \"echo what happened on\nthis call\" channel populated exclusively by CreateIssue when the\ncaller omitted componentIds AND a parent was supplied AND the\nparent (same project) had components attached. The store copies\nthe parent's set into ComponentIDs at INSERT time and mirrors\nthe inherited slice here so the caller can surface a warning\n(\"inherited foo, bar from parent — override via skein_update if\nwrong\"). GetIssue / Patch / List paths never populate this field;\nomitempty keeps it absent on every non-create read.",
+                        "items": {
+                            "type": "string"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
+                    },
+                    "isBlocked": {
+                        "description": "IsBlocked is the derived \"this issue is blocked\" flag (sk-31), FOR THE\nREADER (sk-423): true when at least one outgoing blocks / waits-for\nedge points at a target issue whose status is neither 'closed' nor\n'standing' AND whose project is inside the reader's horizon. A blocker\noutside the horizon never makes this true — it is reported as a link in\nUnavailableBlockingLinks instead. Agents never write it and the UI never\ncaches it across edge mutations.\n\nINV-11 (sk-421.1, restated by sk-423): on the detail it is DERIVED FROM\nBlockers of the same response — true if and only if Blockers is\nnon-empty — so the flag and the list always describe one state of the\ngraph.",
+                        "type": "boolean"
+                    },
+                    "labels": {
+                        "items": {
+                            "type": "string"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
+                    },
+                    "lockedAt": {
+                        "type": "string"
+                    },
+                    "lockedBy": {
+                        "type": "string"
+                    },
+                    "lockedByUsername": {
+                        "description": "LockedByUsername is the username of the user who PERFORMED the claim\nthat holds the lock now (sk-421.1, US-15) — derived on read from that\nclaim's issue.claimed event, never stored. Present only while the\nissue is locked AND that event is found; absent (not empty) otherwise,\nso it disappears with the lock on unclaim, close, auto-release or a\nforced release. For an admin who claimed on behalf of another user it\nis the admin, not the assignee. A request that does not change the\nlock cannot change it, whichever session it presents. LockedBy keeps\nthe MCP session id; this field never repeats it.",
+                        "type": "string"
+                    },
+                    "mentions": {
+                        "description": "R4.3 — resolved @username mentions across description / notes /\nacceptance_criteria / design. Frontend renderer substitutes the\n<UserMention> component for `@username` matches whose username is\nin this list; unresolved `@foo` stays plain text. Always non-nil\n(`[]` rather than `null`) so JS clients don't have to special-\ncase absence.",
+                        "items": {
+                            "$ref": "#/components/schemas/issues.MentionRef"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
+                    },
+                    "metadata": {
+                        "additionalProperties": {},
+                        "type": "object"
+                    },
+                    "notes": {
+                        "type": "string"
+                    },
+                    "parentIdCurrent": {
+                        "description": "ParentID is the current parent id derived from the dependencies\ngraph (parent-child edge, first by created_at). Wire field is\n`parentIdCurrent` since sk-35 — the `issues.parent_id` column is\nfrozen for backward-compat reads but no longer authoritative.\nAbsent when the parent's project is not visible to the reader\n(sk-674.18 T009).",
+                        "type": "string"
+                    },
+                    "pinned": {
+                        "type": "boolean"
+                    },
+                    "previousAssigneeUsernames": {
+                        "description": "PreviousAssigneeUsernames is the username projection of\nPreviousAssignees in matching order. Surfaced so the UI can\nrender a human-readable delegation chain without an extra\nper-uuid resolve. Missing users (deleted accounts) project\nas empty strings — the UI should treat empty slots as\n\"unknown\" and skip them when rendering.",
+                        "items": {
+                            "type": "string"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
+                    },
+                    "previousAssignees": {
+                        "description": "sk-34 — delegation chain. PreviousAssignees lists every user UUID\nthat was ever this issue's assignee (with no duplicates), append-\nordered by reassignment timestamp. PatchIssue's assignee-change\nbranch appends the old assignee on each reassign and prunes the\nnew assignee when they \"come back\" (the array tracks PAST\nassignees only — the current assignee is never present).\n\nDismissedBy lists users who explicitly opted out of this issue's\nDelegated lens via the \"Drop from Delegated\" affordance\n(skein_drop_delegated MCP tool / POST /issues/{id}/dismiss). Sticky\n— entries clear only when the user becomes the current assignee\nagain. The Delegated lens predicate is:\n\n  created_by = me\n  OR (me ∈ previous_assignees\n      AND me ∉ dismissed_by\n      AND assignee != me)\n\nBoth arrays are wire-omitempty — older clients that don't know the\nfields simply see nothing extra. JSON shape is always []uuid (empty\narrays normalise to absence via omitempty + nil slice).",
+                        "items": {
+                            "type": "string"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
+                    },
+                    "priority": {
+                        "type": "integer"
+                    },
+                    "projectId": {
+                        "type": "string"
+                    },
+                    "reviewRequired": {
+                        "description": "--- sk-303.14, contract C1 — the author's private\nbookkeeping (INV-2, SC-028). ---\n\nThree review-mechanic fields. They land on the card ONLY when the\ncaller is the issue author (issues.CreatedBy), and they are filled\nin EXACTLY one place — applyReviewVisibility (review_visibility.go).\nOther readers have no keys in the object at all: not `null`, not\n`false`, not zero — absence, because \"no field\" and \"no mark\" must\nbe indistinguishable to the assignee.\n\nHence pointers and `omitempty` on all three, including the flag: on\na flat bool `omitempty` strips `false` and keeps `true`, which would\ndisclose exactly half the state; a nil pointer removes the key at\nany value, and a non-nil pointer to false gives\n`\"reviewRequired\":false` to the author.\n\nThere is NO username projection of the mark author here on purpose:\ncontract C1 is three fields, and only the issue author may set the\nmark (INV-4), so reviewedBy is always equal to createdBy, whose\nname is already on the card as createdByUsername. A fourth key\nwould add no information and would widen the contract the frontend\nconsumes.",
+                        "type": "boolean"
+                    },
+                    "reviewedAt": {
+                        "type": "string"
+                    },
+                    "reviewedBy": {
+                        "type": "string"
+                    },
+                    "rowSeq": {
+                        "description": "RowSeq is the row freshness order of the issue (sk-622.21, US-15,\ndecision K16) — the same value and the same rule as\n[IssueSummary.RowSeq]: an open card takes a phase-2 event row\n([NeutralRow]) only if the row's RowSeq is greater than this one.\n\nRead in ONE statement with the issue's own columns AND the card's\nlabels and components (issueRowSelect, rowComponentsLabelsCols —\ndecision R26 item 2): the card is one snapshot, exactly the state its\nRowSeq names. A separate later read of the labels could show labels\nnewer than RowSeq, and an intermediate event row with a greater RowSeq\nwould then roll them back under the strict-greater rule. Zero (key absent) — the issue row has not been written\nsince the phase-2 rollout (migration 000064), order unknown; see\n[IssueSummary.RowSeq].",
+                        "type": "integer"
+                    },
+                    "source": {
+                        "type": "string"
+                    },
+                    "sourceContext": {
+                        "type": "string"
+                    },
+                    "spaceId": {
+                        "description": "SpaceID is the short id of the space of the issue's project\n(sk-674.18 T032), not of its id prefix.",
+                        "type": "string"
+                    },
+                    "startedAt": {
+                        "type": "string"
+                    },
+                    "status": {
+                        "type": "string"
+                    },
+                    "title": {
+                        "type": "string"
+                    },
+                    "type": {
+                        "type": "string"
+                    },
+                    "unavailableBlockingLinks": {
+                        "description": "UnavailableBlockingLinks is the number of outgoing blocks / waits-for\nedges of this issue whose target lives in a project outside the\nreader's horizon — counted WHATEVER the target's status, closed and\nstanding included (sk-423). It is the fact of the link, never a claim\nthat the link blocks: it does not depend on the hidden issue's status,\nso it cannot reveal it (the same rule as depsCounts' `unavailable`\nbucket and epic.unavailableChildren). Always present; 0 when there is\nnone, and always 0 for a reader who sees every project.\n\nReadiness (skein_ready) keeps counting every blocker, so an issue with\nisBlocked=false and UnavailableBlockingLinks > 0 may be absent from the\nready list: whether such a link still blocks is not knowable from here.",
+                        "type": "integer"
+                    },
+                    "updatedAt": {
+                        "type": "string"
+                    },
+                    "version": {
+                        "type": "integer"
+                    }
+                },
+                "type": "object"
+            },
+            "issues.IssueSummary": {
+                "properties": {
+                    "acceptedAt": {
+                        "description": "AcceptedAt mirrors IssueDetail.AcceptedAt but at the summary\nlevel so the Inbox / list views can render the \"needs acceptance\"\nchip without round-tripping for the full detail. AcceptedBy /\nAcceptedByUsername are NOT carried on the summary — only needed\nwhen the user opens the issue.",
+                        "type": "string"
+                    },
+                    "assignee": {
+                        "type": "string"
+                    },
+                    "assigneeStatus": {
+                        "$ref": "#/components/schemas/person.Status",
+                        "description": "AssigneeStatus / CreatedByStatus — the person marks of the assignee\nand the author in the issue's space (sk-674.18 T027,\nspaces/contract.go): departed, or deleted with the pseudonym. Absent\nwhen there is nothing to mark, or when the assignee is free text."
+                    },
+                    "assigneeUserId": {
+                        "type": "string"
+                    },
+                    "closeOutcome": {
+                        "description": "CloseOutcome mirrors IssueDetail.CloseOutcome on the row (sk-489,\nUS-1): the same key, the same Go type, the same rule \"present exactly for\na closed one\" (INV-1). One type on the card and on the row — so that\nthe consumer does not have to know which surface answered.\n\nIn MCP rows the field is \"selectable, not default\": the default set\ndoes not contain it, and it arrives only on an explicit `fields`\n(`mcp/tools/issuerow.go`, the classification is in its guard test).\nThe task column and the board do not show the field — it is on the wire, and\nit has two surfaces: the card and the rows of the epic section.",
+                        "type": "string"
+                    },
+                    "componentIds": {
+                        "items": {
+                            "type": "string"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
+                    },
+                    "createdAt": {
+                        "type": "string"
+                    },
+                    "createdBy": {
+                        "type": "string"
+                    },
+                    "createdByStatus": {
+                        "$ref": "#/components/schemas/person.Status"
+                    },
+                    "createdByUsername": {
+                        "type": "string"
+                    },
+                    "epicProgress": {
+                        "$ref": "#/components/schemas/issues.EpicProgress",
+                        "description": "EpicProgress carries the cheap (closed,total) child-count pair on\nepic rows so the task list can render inline progress without a\nper-row IssueDetail fetch. nil/omitted on every non-epic row.\nSlice 2 of sk-32 — children sourced from the dependencies graph\n(parent-child edges). sk-35 restored this as canonical."
+                    },
+                    "iAssigned": {
+                        "description": "IAssigned is true when the caller created the issue and assigned it\nto someone else. Used by the UI to highlight \"tasks I delegated\" in\ndefault mode. Computed in ListIssues based on the caller's user id\n(passed via ListIssuesArgs.Caller); absent (false) for unauthenticated\ncallers and for issues the caller is also the assignee of (no point\nhighlighting your own work). Phase 2 ui-redesign — B5.",
+                        "type": "boolean"
+                    },
+                    "id": {
+                        "type": "string"
+                    },
+                    "isBlocked": {
+                        "description": "IsBlocked is the derived \"this issue is blocked\" flag (sk-31), for\nthe reader (sk-423: only blockers inside the reader's horizon count) —\nEXISTS over the dep graph at SELECT time (isBlockedExprFor). List\nendpoints surface it on every row so cards can render the [blocked]\nchip without a per-row Get round-trip. The detail's\nIssueDetail.IsBlocked is no longer this expression: since sk-421.1 it\nis derived from the detail's own blockers list (non-empty ⇔ blocked),\nover the same set of blocking statuses.",
+                        "type": "boolean"
+                    },
+                    "labels": {
+                        "items": {
+                            "type": "string"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
+                    },
+                    "parentIdCurrent": {
+                        "description": "sk-35: derived from the parent-child dep graph (first edge by\ncreated_at). Wire field is `parentIdCurrent` — see IssueDetail\nfor the full rationale; absent when the reader cannot see the\nparent (sk-674.18 T009).",
+                        "type": "string"
+                    },
+                    "pinned": {
+                        "type": "boolean"
+                    },
+                    "priority": {
+                        "type": "integer"
+                    },
+                    "projectId": {
+                        "type": "string"
+                    },
+                    "rowSeq": {
+                        "description": "RowSeq is the row freshness order (sk-622.21, US-15, decision K16):\nthe value of the issues row's freshness sequence after the last\ncommitted change of ANY of its columns — including writes that do not\nbump Version (label add/remove, component replace). For one issue a\ngreater RowSeq is always a later committed state; values of different\nissues are not comparable in any useful way. It is the same order the\nphase-2 event row ([NeutralRow.RowSeq]) carries, so a client compares\nthe two directly — see [NeutralRow] for the substitution rule.\n\nPopulated on every REST list, tree and card read since migration\n000064 (T026): the column `issues.row_seq` is NOT NULL and a trigger\nassigns the next value of the global sequence on every INSERT and\nUPDATE of the issue row, after the row lock is taken — so the order of\nRowSeq for one issue is the order of its commits. Writes that touch\nonly side tables (labels, components, the child's parent-child edge —\ndependencies/store.go#touchChildRow) also UPDATE the issue row and\ntherefore move it. Every REST read takes a row's labels and component\nids in the SAME statement as its RowSeq (store.go#rowComponentsLabelsCols,\ndecision R26 item 2), so a row is one snapshot: its fields are exactly\nthe state its RowSeq names, never newer or older.\n\nZero means \"order unknown\", and on the wire it is the ABSENT key\n(`omitempty`, deliberately: absent ≡ 0, a client reads a missing\n`rowSeq` as 0). Two sources of zero:\n  - the issue row has not been written since the phase-2 rollout:\n    migration 000064 adds the column without a backfill (decision R26,\n    no table rewrite), so untouched rows read 0 until their next write;\n  - a carrier that does not read the column (a redacted `<hidden>`\n    tree stub, the Ready surface).\nAny write after the rollout gives the row a positive value, and an\nevent row is read from the issue's current state, so an event row\nwith a positive RowSeq is always fresher than a shown zero; an event\nolder than a REST row showing zero cannot exist. An event row with\nzero carries the same state as a shown zero row. The value fits a\nJSON number exactly (a global sequence stays far below 2^53).",
+                        "type": "integer"
+                    },
+                    "spaceId": {
+                        "description": "SpaceID is the short id of the space of the issue's project\n(sk-674.18 T032), not of its id prefix.",
+                        "type": "string"
+                    },
+                    "status": {
+                        "type": "string"
+                    },
+                    "title": {
+                        "type": "string"
+                    },
+                    "type": {
+                        "type": "string"
+                    },
+                    "updatedAt": {
+                        "type": "string"
+                    },
+                    "version": {
+                        "type": "integer"
+                    }
+                },
+                "type": "object"
+            },
+            "issues.MentionRef": {
+                "properties": {
+                    "status": {
+                        "$ref": "#/components/schemas/person.Status",
+                        "description": "Status — the mentioned person's marks in the issue's space\n(sk-674.18 T027): deleted with the pseudonym; absent when nothing\nto mark. A person outside the space does not resolve at all (INV-9)."
+                    },
+                    "userId": {
+                        "type": "string"
+                    },
+                    "username": {
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
+            "person.Status": {
+                "properties": {
+                    "deleted": {
+                        "description": "Deleted — the account was deleted (INV-18).",
+                        "type": "boolean"
+                    },
+                    "departed": {
+                        "description": "Departed — the person has left the space of this context (the\nissue's project); shown greyed. Never set together with Deleted.",
+                        "type": "boolean"
+                    },
+                    "pseudonym": {
+                        "description": "Pseudonym — the stable alias of a deleted account\n(users.pseudonym, `deleted-<8hex>`); absent otherwise.",
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
             "projects.ComponentDTO": {
                 "properties": {
                     "archivedAt": {
@@ -327,6 +986,114 @@
                 },
                 "type": "object"
             },
+            "publicapi.DependencyItem": {
+                "properties": {
+                    "createdAt": {
+                        "type": "string"
+                    },
+                    "direction": {
+                        "description": "Direction is outgoing or incoming.",
+                        "type": "string"
+                    },
+                    "fromId": {
+                        "type": "string"
+                    },
+                    "issue": {
+                        "$ref": "#/components/schemas/dependencies.IssueRef",
+                        "description": "Issue is the OTHER end of the edge from the request perspective —\nfor outgoing lists Issue == to-side; for incoming, Issue == from-side.\nAlways non-nil unless Redacted is true."
+                    },
+                    "metadata": {
+                        "additionalProperties": {},
+                        "type": "object"
+                    },
+                    "redacted": {
+                        "description": "Redacted marks an edge whose other end the caller cannot see: no\nIssue, and that end's id (ToID outgoing, FromID incoming) is a\nsynthetic \"hidden-N\" token, never the real id (sk-674.18 T009).",
+                        "type": "boolean"
+                    },
+                    "toId": {
+                        "type": "string"
+                    },
+                    "type": {
+                        "type": "string"
+                    },
+                    "version": {
+                        "type": "integer"
+                    }
+                },
+                "type": "object"
+            },
+            "publicapi.List-dependencies_IssueSummary": {
+                "properties": {
+                    "hasMore": {
+                        "type": "boolean"
+                    },
+                    "items": {
+                        "items": {
+                            "$ref": "#/components/schemas/dependencies.IssueSummary"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
+                    },
+                    "nextCursor": {
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
+            "publicapi.List-issues_CommentDTO": {
+                "properties": {
+                    "hasMore": {
+                        "type": "boolean"
+                    },
+                    "items": {
+                        "items": {
+                            "$ref": "#/components/schemas/issues.CommentDTO"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
+                    },
+                    "nextCursor": {
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
+            "publicapi.List-issues_EventDTO": {
+                "properties": {
+                    "hasMore": {
+                        "type": "boolean"
+                    },
+                    "items": {
+                        "items": {
+                            "$ref": "#/components/schemas/issues.EventDTO"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
+                    },
+                    "nextCursor": {
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
+            "publicapi.List-issues_IssueSummary": {
+                "properties": {
+                    "hasMore": {
+                        "type": "boolean"
+                    },
+                    "items": {
+                        "items": {
+                            "$ref": "#/components/schemas/issues.IssueSummary"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
+                    },
+                    "nextCursor": {
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
             "publicapi.List-projects_ComponentDTO": {
                 "properties": {
                     "hasMore": {
@@ -376,6 +1143,126 @@
                         "uniqueItems": false
                     },
                     "nextCursor": {
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
+            "publicapi.List-publicapi_DependencyItem": {
+                "properties": {
+                    "hasMore": {
+                        "type": "boolean"
+                    },
+                    "items": {
+                        "items": {
+                            "$ref": "#/components/schemas/publicapi.DependencyItem"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
+                    },
+                    "nextCursor": {
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
+            "publicapi.List-search_Item": {
+                "properties": {
+                    "hasMore": {
+                        "type": "boolean"
+                    },
+                    "items": {
+                        "items": {
+                            "$ref": "#/components/schemas/search.Item"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
+                    },
+                    "nextCursor": {
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
+            "publicapi.MovePlan": {
+                "properties": {
+                    "nextSteps": {
+                        "description": "NextSteps are the two requests that make the move.",
+                        "items": {
+                            "$ref": "#/components/schemas/publicapi.MoveStep"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
+                    },
+                    "reason": {
+                        "description": "Reason explains the copy-and-close workflow.",
+                        "type": "string"
+                    },
+                    "source": {
+                        "additionalProperties": {},
+                        "description": "Source is the source issue's card minus the fields the copy carries.",
+                        "type": "object"
+                    },
+                    "supported": {
+                        "description": "Supported is false: an issue never changes its project in place.",
+                        "type": "boolean"
+                    },
+                    "targetComponents": {
+                        "description": "TargetComponents are the target's components to pick from.",
+                        "items": {
+                            "$ref": "#/components/schemas/tools.MoveComponent"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
+                    },
+                    "targetProject": {
+                        "$ref": "#/components/schemas/publicapi.MoveTarget",
+                        "description": "TargetProject is the project the copy goes to."
+                    }
+                },
+                "type": "object"
+            },
+            "publicapi.MoveStep": {
+                "properties": {
+                    "body": {
+                        "additionalProperties": {},
+                        "description": "Body of the request; placeholders in angle brackets are filled in by\nthe client.",
+                        "type": "object"
+                    },
+                    "comment": {
+                        "description": "Comment says what the client decides before sending.",
+                        "type": "string"
+                    },
+                    "headers": {
+                        "additionalProperties": {
+                            "type": "string"
+                        },
+                        "description": "Headers to send (If-Match of the close).",
+                        "type": "object"
+                    },
+                    "method": {
+                        "description": "Method and Path of the request.",
+                        "type": "string"
+                    },
+                    "operationId": {
+                        "description": "OperationID names the operation: createIssue, then closeIssue.",
+                        "type": "string"
+                    },
+                    "path": {
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
+            "publicapi.MoveTarget": {
+                "properties": {
+                    "id": {
+                        "type": "string"
+                    },
+                    "idPrefix": {
+                        "type": "string"
+                    },
+                    "name": {
                         "type": "string"
                     }
                 },
@@ -634,6 +1521,88 @@
                 },
                 "type": "object"
             },
+            "search.Item": {
+                "properties": {
+                    "archived": {
+                        "description": "Project-specific. True when the project's archived_at is non-NULL.",
+                        "type": "boolean"
+                    },
+                    "assignee": {
+                        "type": "string"
+                    },
+                    "authorUsername": {
+                        "type": "string"
+                    },
+                    "componentArchived": {
+                        "description": "Component-specific. True when the component's archived_at is non-NULL.\nNamed to disambiguate from the project-level `archived` in mixed\nresult lists on the client.",
+                        "type": "boolean"
+                    },
+                    "exactMatch": {
+                        "type": "boolean"
+                    },
+                    "id": {
+                        "type": "string"
+                    },
+                    "kind": {
+                        "$ref": "#/components/schemas/search.Kind"
+                    },
+                    "parentIssueId": {
+                        "description": "Comment-specific. ParentIssueID links the comment back to its issue\n(replaces the legacy `issueId` field — frontend SearchItem.parentIssueId\nis the contract).  AuthorUsername is the comment author's username,\nresolved via JOIN users on comments.author_user_id; nullable because\nsystem/agent comments may not have a user row.",
+                        "type": "string"
+                    },
+                    "pinned": {
+                        "type": "boolean"
+                    },
+                    "priority": {
+                        "type": "integer"
+                    },
+                    "projectId": {
+                        "type": "string"
+                    },
+                    "projectName": {
+                        "type": "string"
+                    },
+                    "score": {
+                        "type": "number"
+                    },
+                    "snippet": {
+                        "type": "string"
+                    },
+                    "spaceId": {
+                        "description": "SpaceID is the short id of the space of the hit's project (sk-674.18\nT031) — with ProjectName the client renders «Space · Project».",
+                        "type": "string"
+                    },
+                    "status": {
+                        "description": "Issue-specific. Status, Priority, Type are always set on issue rows;\nPinned defaults to false in the column; Assignee is nullable so it\nstays *string and is omitted when the issue has no assignee.",
+                        "type": "string"
+                    },
+                    "title": {
+                        "type": "string"
+                    },
+                    "type": {
+                        "type": "string"
+                    },
+                    "updatedAt": {
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
+            "search.Kind": {
+                "enum": [
+                    "issue",
+                    "comment",
+                    "project",
+                    "component"
+                ],
+                "type": "string",
+                "x-enum-varnames": [
+                    "KindIssue",
+                    "KindComment",
+                    "KindProject",
+                    "KindComponent"
+                ]
+            },
             "spaces.AgentSpace": {
                 "properties": {
                     "canCreateProject": {
@@ -653,6 +1622,23 @@
                     },
                     "role": {
                         "description": "Role is RoleOwner | RoleMember, or \"admin\" for a space the caller\nsees only as the instance admin.",
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
+            "tools.MoveComponent": {
+                "properties": {
+                    "description": {
+                        "type": "string"
+                    },
+                    "id": {
+                        "type": "string"
+                    },
+                    "matchHint": {
+                        "type": "string"
+                    },
+                    "name": {
                         "type": "string"
                     }
                 },
@@ -776,6 +1762,1082 @@
         "version": "1"
     },
     "paths": {
+        "/api/v1/issues": {
+            "get": {
+                "description": "Returns a page of issues — the same list as the MCP tool skein_list, in its two modes:\n- with project (a UUID, prefix, alias or name of a project within reach): the issues of that project, newest change first, with the filters statuses, priority, assignee, createdBy, acceptedAt, origin, parentId, pinned, source, text, labels, isBlocked;\n- without project: the issues of every project the key's owner sees within the key's scope, with q (full-text search over the title, the description, the acceptance criteria, the design and the notes, ordered by relevance), space, one status, type, assignee, createdBy, acceptedAt, origin, isBlocked.\nA filter of the other mode is refused, never ignored. Each item is the issue's summary: its fields, labels, components, assignee, its lock holder and whether it is blocked — counted over the blockers the caller sees and the hidden ones of his spaces, as everywhere (US-3). Keyset paging: pass nextCursor back as cursor while hasMore is true. Read-only.",
+                "operationId": "listIssues",
+                "parameters": [
+                    {
+                        "description": "Project handle: UUID, prefix, alias or name. Omitted: every project within reach",
+                        "in": "query",
+                        "name": "project",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "Full-text query (without project only)",
+                        "in": "query",
+                        "name": "q",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "Short id of a space (without project only)",
+                        "in": "query",
+                        "name": "space",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "Issue type (without project only)",
+                        "in": "query",
+                        "name": "type",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "Comma-separated statuses: open, in_progress, deferred, closed, standing; at most one without project",
+                        "in": "query",
+                        "name": "statuses",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "Exact priority 0..4 (with project only)",
+                        "in": "query",
+                        "name": "priority",
+                        "schema": {
+                            "type": "integer"
+                        }
+                    },
+                    {
+                        "description": "Assignee username, or me",
+                        "in": "query",
+                        "name": "assignee",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "me or not-me",
+                        "in": "query",
+                        "name": "createdBy",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "null or not-null",
+                        "in": "query",
+                        "name": "acceptedAt",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "human-driven, agent-autonomous or all",
+                        "in": "query",
+                        "name": "origin",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "Exact parent id (with project only)",
+                        "in": "query",
+                        "name": "parentId",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "The pinned flag (with project only)",
+                        "in": "query",
+                        "name": "pinned",
+                        "schema": {
+                            "type": "boolean"
+                        }
+                    },
+                    {
+                        "description": "Exact source: human, agent_directed, agent_autonomous or api (with project only)",
+                        "in": "query",
+                        "name": "source",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "Title substring (with project only)",
+                        "in": "query",
+                        "name": "text",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "Comma-separated labels, any of them (with project only)",
+                        "in": "query",
+                        "name": "labels",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "true or false",
+                        "in": "query",
+                        "name": "isBlocked",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "updated (default) or created",
+                        "in": "query",
+                        "name": "sortBy",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "Page size, 1..100 (default 25)",
+                        "in": "query",
+                        "name": "limit",
+                        "schema": {
+                            "type": "integer"
+                        }
+                    },
+                    {
+                        "description": "The nextCursor of the previous page",
+                        "in": "query",
+                        "name": "cursor",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "Comma-separated fields of each item to return (plus id)",
+                        "in": "query",
+                        "name": "fields",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.List-issues_IssueSummary"
+                                }
+                            }
+                        },
+                        "description": "A page of issues"
+                    },
+                    "400": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Unknown or repeated parameter, a value outside its set, a filter of the other mode, limit out of range, a foreign cursor (code validation_error)"
+                    },
+                    "401": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "No key, or the key is invalid, expired or revoked (code unauthenticated)"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The key lacks the read right (code insufficient_scope)"
+                    },
+                    "422": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The project of the filter is not within reach (code project_not_found) or ambiguous (code ambiguous_project)"
+                    },
+                    "429": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Rate limited (code rate_limited, Retry-After)"
+                    },
+                    "500": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Internal error (code internal_error)"
+                    },
+                    "503": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The database is unavailable (code database_unavailable)"
+                    }
+                },
+                "security": [
+                    {
+                        "SkeinApiKey": [
+                            "read"
+                        ]
+                    }
+                ],
+                "summary": "List issues",
+                "tags": [
+                    "Issues"
+                ]
+            }
+        },
+        "/api/v1/issues/ready": {
+            "get": {
+                "description": "Returns the open issues of a project that nothing blocks — no open blocks or waits-for edge, counting the blockers the caller cannot see (US-3) — by priority, then age: the same list as the MCP tool skein_ready. It is not paged: up to limit issues; hasMore is true when more ready issues exist (raise limit), nextCursor is always null. Read-only.",
+                "operationId": "listReadyIssues",
+                "parameters": [
+                    {
+                        "description": "Project handle: UUID, prefix, alias or name",
+                        "in": "query",
+                        "name": "project",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "Exact assignee username",
+                        "in": "query",
+                        "name": "assignee",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "Issues with priority <= N (0..4)",
+                        "in": "query",
+                        "name": "priorityMax",
+                        "schema": {
+                            "type": "integer"
+                        }
+                    },
+                    {
+                        "description": "Exact issue type",
+                        "in": "query",
+                        "name": "type",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "How many, 1..100 (default 25)",
+                        "in": "query",
+                        "name": "limit",
+                        "schema": {
+                            "type": "integer"
+                        }
+                    },
+                    {
+                        "description": "Comma-separated fields of each item to return (plus id)",
+                        "in": "query",
+                        "name": "fields",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.List-dependencies_IssueSummary"
+                                }
+                            }
+                        },
+                        "description": "The ready issues"
+                    },
+                    "400": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "project missing, an unknown parameter, a value out of range (code validation_error)"
+                    },
+                    "401": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "No key, or the key is invalid, expired or revoked (code unauthenticated)"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The key lacks the read right (code insufficient_scope)"
+                    },
+                    "422": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The project is not within reach (code project_not_found) or ambiguous (code ambiguous_project)"
+                    },
+                    "429": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Rate limited (code rate_limited, Retry-After)"
+                    },
+                    "500": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Internal error (code internal_error)"
+                    },
+                    "503": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The database is unavailable (code database_unavailable)"
+                    }
+                },
+                "security": [
+                    {
+                        "SkeinApiKey": [
+                            "read"
+                        ]
+                    }
+                ],
+                "summary": "List ready issues",
+                "tags": [
+                    "Issues"
+                ]
+            }
+        },
+        "/api/v1/issues/{issue}": {
+            "get": {
+                "description": "Returns the issue named by the path — its hierarchical id — with every field, its labels, components, commits, its lock holder (the MCP session or the REST executor api:<keyId>[:<workerId>] holding it) and its blockers as the caller sees them. The ETag header is the issue's version: send it as If-Match with a change. The ETag validates the version, not the representation — labels and the review flag change without a new version — so no 304 is ever answered. The same issue as the MCP tool skein_show; an issue out of reach answers as a missing one. Read-only.",
+                "operationId": "getIssue",
+                "parameters": [
+                    {
+                        "description": "The issue's hierarchical id, e.g. sk-42",
+                        "in": "path",
+                        "name": "issue",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "Comma-separated fields to return (plus id)",
+                        "in": "query",
+                        "name": "fields",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/issues.IssueDetail"
+                                }
+                            }
+                        },
+                        "description": "The issue; ETag is its version",
+                        "headers": {
+                            "ETag": {
+                                "description": "The version of the issue, as a strong entity tag",
+                                "schema": {
+                                    "type": "string"
+                                }
+                            }
+                        }
+                    },
+                    "400": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Unknown parameter or field (code validation_error)"
+                    },
+                    "401": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "No key, or the key is invalid, expired or revoked (code unauthenticated)"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The key lacks the read right (code insufficient_scope)"
+                    },
+                    "404": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "No such issue within reach (code issue_not_found)"
+                    },
+                    "429": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Rate limited (code rate_limited, Retry-After)"
+                    },
+                    "500": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Internal error (code internal_error)"
+                    },
+                    "503": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The database is unavailable (code database_unavailable)"
+                    }
+                },
+                "security": [
+                    {
+                        "SkeinApiKey": [
+                            "read"
+                        ]
+                    }
+                ],
+                "summary": "Get an issue",
+                "tags": [
+                    "Issues"
+                ]
+            }
+        },
+        "/api/v1/issues/{issue}/comments": {
+            "get": {
+                "description": "Returns the comments of the issue named by the path, oldest first, each with its author, the author's kind (human, agent_directed, agent_autonomous, api), its version, the mentions it makes and its edit and delete times; a deleted comment stays in the thread as a tombstone with an empty body. The same thread as the comments of the MCP tool skein_show. Keyset paging: pass nextCursor back as cursor while hasMore is true. Read-only.",
+                "operationId": "listComments",
+                "parameters": [
+                    {
+                        "description": "The issue's hierarchical id",
+                        "in": "path",
+                        "name": "issue",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "Page size, 1..100 (default 50)",
+                        "in": "query",
+                        "name": "limit",
+                        "schema": {
+                            "type": "integer"
+                        }
+                    },
+                    {
+                        "description": "The nextCursor of the previous page",
+                        "in": "query",
+                        "name": "cursor",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "Comma-separated fields of each item to return (plus id)",
+                        "in": "query",
+                        "name": "fields",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.List-issues_CommentDTO"
+                                }
+                            }
+                        },
+                        "description": "A page of comments"
+                    },
+                    "400": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Unknown parameter or field, limit out of range, a foreign cursor (code validation_error)"
+                    },
+                    "401": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "No key, or the key is invalid, expired or revoked (code unauthenticated)"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The key lacks the read right (code insufficient_scope)"
+                    },
+                    "404": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "No such issue within reach (code issue_not_found)"
+                    },
+                    "429": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Rate limited (code rate_limited, Retry-After)"
+                    },
+                    "500": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Internal error (code internal_error)"
+                    },
+                    "503": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The database is unavailable (code database_unavailable)"
+                    }
+                },
+                "security": [
+                    {
+                        "SkeinApiKey": [
+                            "read"
+                        ]
+                    }
+                ],
+                "summary": "List the comments of an issue",
+                "tags": [
+                    "Issues"
+                ]
+            }
+        },
+        "/api/v1/issues/{issue}/dependencies": {
+            "get": {
+                "description": "Returns the edges of the issue named by the path — blocks, waits-for, related, discovered-from, supersedes, duplicates, parent-child — outgoing (the issue is the from-side) then incoming, each with the other end's summary. An edge whose other end the caller cannot see within the key's scope is returned redacted: no issue, a synthetic hidden-N id — as for a project the owner does not see (US-3). type and direction narrow the list. The same edges as the deps block of the MCP tool skein_show. Not paged: every edge, nextCursor is always null. Read-only.",
+                "operationId": "listDependencies",
+                "parameters": [
+                    {
+                        "description": "The issue's hierarchical id",
+                        "in": "path",
+                        "name": "issue",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "Edge type: blocks, waits-for, related, discovered-from, supersedes, duplicates, parent-child",
+                        "in": "query",
+                        "name": "type",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "outgoing, incoming or both (default)",
+                        "in": "query",
+                        "name": "direction",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "Comma-separated fields of each item to return",
+                        "in": "query",
+                        "name": "fields",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.List-publicapi_DependencyItem"
+                                }
+                            }
+                        },
+                        "description": "The edges"
+                    },
+                    "400": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Unknown parameter or field, a type or direction outside its set (code validation_error)"
+                    },
+                    "401": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "No key, or the key is invalid, expired or revoked (code unauthenticated)"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The key lacks the read right (code insufficient_scope)"
+                    },
+                    "404": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "No such issue within reach (code issue_not_found)"
+                    },
+                    "429": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Rate limited (code rate_limited, Retry-After)"
+                    },
+                    "500": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Internal error (code internal_error)"
+                    },
+                    "503": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The database is unavailable (code database_unavailable)"
+                    }
+                },
+                "security": [
+                    {
+                        "SkeinApiKey": [
+                            "read"
+                        ]
+                    }
+                ],
+                "summary": "List the dependencies of an issue",
+                "tags": [
+                    "Issues"
+                ]
+            }
+        },
+        "/api/v1/issues/{issue}/events": {
+            "get": {
+                "description": "Returns the events of the issue named by the path, newest first — creation, every field and status change, claims, closes, links, comments — each with its time, type, the actor, the actor's type (human or agent; a write by key is an agent's) and session, the field it changed and its reason. The same events as the events block of the MCP tool skein_show. Keyset paging: pass nextCursor back as cursor while hasMore is true. Read-only.",
+                "operationId": "listIssueEvents",
+                "parameters": [
+                    {
+                        "description": "The issue's hierarchical id",
+                        "in": "path",
+                        "name": "issue",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "Page size, 1..100 (default 20)",
+                        "in": "query",
+                        "name": "limit",
+                        "schema": {
+                            "type": "integer"
+                        }
+                    },
+                    {
+                        "description": "The nextCursor of the previous page",
+                        "in": "query",
+                        "name": "cursor",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "Comma-separated fields of each item to return (plus id)",
+                        "in": "query",
+                        "name": "fields",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.List-issues_EventDTO"
+                                }
+                            }
+                        },
+                        "description": "A page of events"
+                    },
+                    "400": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Unknown parameter or field, limit out of range, a foreign cursor (code validation_error)"
+                    },
+                    "401": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "No key, or the key is invalid, expired or revoked (code unauthenticated)"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The key lacks the read right (code insufficient_scope)"
+                    },
+                    "404": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "No such issue within reach (code issue_not_found)"
+                    },
+                    "429": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Rate limited (code rate_limited, Retry-After)"
+                    },
+                    "500": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Internal error (code internal_error)"
+                    },
+                    "503": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The database is unavailable (code database_unavailable)"
+                    }
+                },
+                "security": [
+                    {
+                        "SkeinApiKey": [
+                            "read"
+                        ]
+                    }
+                ],
+                "summary": "List the events of an issue",
+                "tags": [
+                    "Issues"
+                ]
+            }
+        },
+        "/api/v1/issues/{issue}/move-plan": {
+            "get": {
+                "description": "Returns the plan of moving the issue named by the path to the project of targetProject — the same plan as the MCP tool skein_move. Skein has no in-place move: the hierarchical id lives in commits, chats and other references, so the move is a copy in the target plus a supersedes edge plus a close of the source. The plan only prepares: nextSteps are createIssue on the target with the source's fields (a supersedes edge to the source, a moved-from footer) and closeIssue of the source as superseded, its If-Match the source's version now. Pick a component, run step 1, put the new id into step 2's placeholders, run step 2.\n\nAllowed when the key's owner may write in both projects, and the two are in one space (a target in another space is answered as a missing project). Writes nothing.",
+                "operationId": "getIssueMovePlan",
+                "parameters": [
+                    {
+                        "description": "The issue's hierarchical id",
+                        "in": "path",
+                        "name": "issue",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "The target project: UUID, prefix, alias or name",
+                        "in": "query",
+                        "name": "targetProject",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "Comma-separated fields to return",
+                        "in": "query",
+                        "name": "fields",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.MovePlan"
+                                }
+                            }
+                        },
+                        "description": "The plan"
+                    },
+                    "400": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "targetProject missing, an unknown parameter or field (code validation_error)"
+                    },
+                    "401": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "No key, or the key is invalid, expired or revoked (code unauthenticated)"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The key lacks the read right (code insufficient_scope); the owner may not write in the source or the target (code forbidden)"
+                    },
+                    "404": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "No such issue within reach (code issue_not_found)"
+                    },
+                    "422": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The target is not within reach or in another space (code project_not_found), ambiguous (code ambiguous_project), or the issue's own project (code validation_error)"
+                    },
+                    "429": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Rate limited (code rate_limited, Retry-After)"
+                    },
+                    "500": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Internal error (code internal_error)"
+                    },
+                    "503": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The database is unavailable (code database_unavailable)"
+                    }
+                },
+                "security": [
+                    {
+                        "SkeinApiKey": [
+                            "read"
+                        ]
+                    }
+                ],
+                "summary": "Plan moving an issue to another project",
+                "tags": [
+                    "Issues"
+                ]
+            }
+        },
         "/api/v1/me": {
             "get": {
                 "description": "Returns the identity the API key acts as: the user (id, email, username, name, role), the executor of this request (agent: sessionId is the lock holder api:<keyId>[:<workerId>] of X-Skein-Worker-Id, with when it was first and last seen), the projects the user sees within the key's scope (at most 100, by name, with the user's role and the space; projectsTotal counts all of them and projectsTruncated marks the cut), the spaces the user is in and whether the user is an instance admin.\n\nThe same answer as the MCP tool skein_whoami. Any key may call it, whatever its rights. Read-only; the request still counts as activity of its executor.",
@@ -2498,6 +4560,212 @@
                 "summary": "Add a project member or change the role",
                 "tags": [
                     "Projects"
+                ]
+            }
+        },
+        "/api/v1/search": {
+            "get": {
+                "description": "Searches the issues, comments, projects and components the key's owner sees within the key's scope — full-text, reranked by meaning when the instance has an embedder — the same search as the MCP tool skein_search. kinds narrows what is searched; the issue filters apply to issues only. Keyset paging: pass nextCursor back as cursor while hasMore is true. Read-only.",
+                "operationId": "search",
+                "parameters": [
+                    {
+                        "description": "The query, 1..500 characters",
+                        "in": "query",
+                        "name": "query",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "Narrow to one project: UUID, prefix, alias or name",
+                        "in": "query",
+                        "name": "project",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "Narrow to one space by its short id",
+                        "in": "query",
+                        "name": "space",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "Comma-separated kinds: issue, comment, project, component (default all)",
+                        "in": "query",
+                        "name": "kinds",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "Comma-separated issue statuses",
+                        "in": "query",
+                        "name": "statuses",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "Comma-separated issue priorities 0..4",
+                        "in": "query",
+                        "name": "priorities",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "Comma-separated issue types",
+                        "in": "query",
+                        "name": "types",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "Comma-separated issue labels",
+                        "in": "query",
+                        "name": "labels",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "Issue source: human, agent_directed, agent_autonomous or api",
+                        "in": "query",
+                        "name": "source",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "Comma-separated comment author kinds: human, agent_directed, agent_autonomous, api",
+                        "in": "query",
+                        "name": "commentAuthorKinds",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "Page size (default 20)",
+                        "in": "query",
+                        "name": "limit",
+                        "schema": {
+                            "type": "integer"
+                        }
+                    },
+                    {
+                        "description": "The nextCursor of the previous page",
+                        "in": "query",
+                        "name": "cursor",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "Comma-separated fields of each item to return (plus id)",
+                        "in": "query",
+                        "name": "fields",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.List-search_Item"
+                                }
+                            }
+                        },
+                        "description": "A page of hits"
+                    },
+                    "400": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "query missing or too long, an unknown parameter or field, a value outside its set, a foreign cursor (code validation_error)"
+                    },
+                    "401": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "No key, or the key is invalid, expired or revoked (code unauthenticated)"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The key lacks the read right (code insufficient_scope)"
+                    },
+                    "422": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The project is not within reach (code project_not_found) or ambiguous (code ambiguous_project)"
+                    },
+                    "429": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Rate limited (code rate_limited, Retry-After)"
+                    },
+                    "500": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Internal error (code internal_error)"
+                    },
+                    "503": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The database is unavailable (code database_unavailable)"
+                    }
+                },
+                "security": [
+                    {
+                        "SkeinApiKey": [
+                            "read"
+                        ]
+                    }
+                ],
+                "summary": "Search",
+                "tags": [
+                    "Search"
                 ]
             }
         }

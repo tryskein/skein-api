@@ -5316,6 +5316,33 @@ SELECT id, occurred_at, type, actor, actor_session_id, actor_type, field, reason
 	return out, rows.Err()
 }
 
+// ListEventsPage returns a keyset page of the events of one issue, newest
+// first: at most limit events with an id below before (nil = from the
+// newest), with the narrow projection of ListEvents. The page of the public
+// API's event list (sk-878.3.1 T023); the caller bounds limit.
+func (s *Store) ListEventsPage(ctx context.Context, issueID string, before *int64, limit int) ([]EventDTO, error) {
+	rows, err := s.pool.Query(ctx, `
+SELECT id, occurred_at, type, actor, actor_session_id, actor_type, field, reason
+  FROM events
+ WHERE entity_type = 'issue' AND entity_id = $1
+   AND ($2::bigint IS NULL OR id < $2::bigint)
+ ORDER BY id DESC
+ LIMIT $3`, issueID, before, limit)
+	if err != nil {
+		return nil, fmt.Errorf("listing a page of events: %w", err)
+	}
+	defer rows.Close()
+	out := make([]EventDTO, 0, limit)
+	for rows.Next() {
+		var e EventDTO
+		if err := rows.Scan(&e.ID, &e.OccurredAt, &e.Type, &e.Actor, &e.ActorSessionID, &e.ActorType, &e.Field, &e.Reason); err != nil {
+			return nil, fmt.Errorf("scanning event row: %w", err)
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
 // RecentEventsForUser returns the most recent N issue-related events the
 // caller is involved in — either as actor (they did the thing) or as
 // the assignee/creator of the affected issue. Used by skein_prime to
@@ -5476,7 +5503,9 @@ func (s *Store) ListComments(ctx context.Context, issueID string, origin Comment
 	}
 	where := "issue_id = $1" + whereExtra + sinceClause
 
-	// total AFTER since/origin filter, BEFORE limit (FR-004 / US-5).
+	// total AFTER since/origin filter, BEFORE limit (FR-004 / US-5); a
+	// keyset page counts the whole filtered thread too, not the rest past
+	// its position.
 	var total int
 	if err := s.pool.QueryRow(ctx,
 		`SELECT count(*) FROM comments WHERE `+where, args...).Scan(&total); err != nil {
@@ -5499,7 +5528,22 @@ func (s *Store) ListComments(ctx context.Context, issueID string, origin Comment
 		rows pgx.Rows
 		err  error
 	)
-	if opts.Limit > 0 {
+	if opts.First > 0 {
+		// A keyset page: the first First rows after the position, ASC.
+		pageArgs := append([]any{}, args...)
+		pageWhere := where
+		if opts.After != nil {
+			pageArgs = append(pageArgs, opts.After.CreatedAt.UTC(), opts.After.ID)
+			pageWhere += fmt.Sprintf(" AND (created_at, id) > ($%d, $%d)", len(pageArgs)-1, len(pageArgs))
+		}
+		pageArgs = append(pageArgs, opts.First)
+		rows, err = s.pool.Query(ctx, `
+SELECT `+innerCols+`
+  FROM comments
+ WHERE `+pageWhere+`
+ ORDER BY created_at ASC, id ASC
+ LIMIT $`+fmt.Sprint(len(pageArgs)), pageArgs...)
+	} else if opts.Limit > 0 {
 		// last-N of filtered population: DESC pick, outer ASC + id tiebreak.
 		limitArg := append(args, opts.Limit)
 		limitPlaceholder := fmt.Sprintf("$%d", len(limitArg))
