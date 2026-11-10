@@ -165,6 +165,30 @@ func TestBulk_Batches(t *testing.T) {
 		}
 	})
 
+	// A batch does not accept Idempotency-Key (spec, edge cases; OST-2-7):
+	// 400 idempotency_not_supported, nothing runs.
+	t.Run("Idempotency-Key is refused", func(t *testing.T) {
+		a := w.issue("idem")
+		v := w.version(a)
+		for _, c := range []struct {
+			path string
+			body map[string]any
+		}{
+			{"/api/v1/issues/bulk-update", map[string]any{"items": []map[string]any{{"id": a, "expectedVersion": v, "title": "idem"}}}},
+			{"/api/v1/issues/bulk-close", map[string]any{"items": []map[string]any{{"id": a, "expectedVersion": v, "reason": "r", "closeOutcome": "done"}}}},
+			{"/api/v1/issues/dependencies/bulk-add", map[string]any{"items": []map[string]any{{"fromId": a, "toId": w.issue("idem to"), "type": "related"}}}},
+		} {
+			since := lastEventID(t, pool)
+			r := rg.rest(kw, http.MethodPost, c.path, c.body, map[string]string{"Idempotency-Key": "k-" + uuid.NewString()})
+			if r.status != http.StatusBadRequest || r.code() != "idempotency_not_supported" {
+				t.Errorf("%s with Idempotency-Key: %d %s, want 400 idempotency_not_supported", c.path, r.status, r.body)
+			}
+			if w.version(a) != v || len(w.issueEvents(a, since)) != 0 {
+				t.Errorf("%s with Idempotency-Key wrote", c.path)
+			}
+		}
+	})
+
 	t.Run("bulkAddDependencies", func(t *testing.T) {
 		q, qPrefix := seedProject(t, pool, w.owner, w.space, "wrd")
 		outside := testsupport.SeedIssue(t, pool, q, w.owner, qPrefix+"-1", "outside", "open", 2)
