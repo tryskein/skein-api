@@ -174,6 +174,10 @@ func Setup(pool *pgxpool.Pool, heartbeatInterval time.Duration, registerTools fu
 		// add per-user / per-project dynamic tools we'll flip this and
 		// emit notifications/tools/list_changed; not in R2.1.
 		server.WithToolCapabilities(false),
+		// The key-rights matrix (authz.MCPToolRequirement): the first
+		// middleware, so a call the key may not make is refused before any
+		// other step and before the tool looks anything up.
+		server.WithToolHandlerMiddleware(KeyRights),
 		// sk-275: one WARN line per tool_call_syntax_leaked rejection,
 		// carrying what actually arrived (literal, bounded window around
 		// it, field, number of text fields in the call). Registered here

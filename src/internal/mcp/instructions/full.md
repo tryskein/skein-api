@@ -207,6 +207,9 @@ A wrong hash is removed with `skein_commits_detach`.
   have written — re-read and resend only rows whose live state is wrong.
 - A business failure is JSON with a stable `error` code
   (`{"error":"…"}`); never parse it as success.
+- `insufficient_scope`: your API key lacks the right (`required`:
+  read ⊂ write ⊂ manage, or admin; `force=true` needs manage). Nothing
+  ran; ask the key's owner.
 
 ## Anti-patterns
 

@@ -92,7 +92,7 @@ func RegisterUnclaim(s *server.MCPServer, pool *pgxpool.Pool, issuesStore *issue
 			mcpgo.Description("Free-form reason annotation (non-empty after trim). Lands on issue.unclaimed.reason and, when status changed, issue.status_changed.reason."),
 		),
 		mcpgo.WithBoolean("force",
-			mcpgo.Description("Bypass the lock-holder predicate. Needs force_unlock on the issue's project (project owner, space owner, instance admin); others get `force_unlock_forbidden`. Default: false."),
+			mcpgo.Description("Bypass the lock-holder predicate. Needs the key right `manage` (else `insufficient_scope`) and force_unlock on the issue's project (project owner, space owner, instance admin); others get `force_unlock_forbidden`. Default: false."),
 			mcpgo.DefaultBool(false),
 		),
 		mcpgo.WithBoolean("verbose",

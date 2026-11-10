@@ -99,7 +99,7 @@ func RegisterCommitsDetach(s *server.MCPServer, pool *pgxpool.Pool, issuesStore 
 			}),
 		),
 		mcpgo.WithBoolean("force",
-			mcpgo.Description("Bypass lock predicate. Needs force_unlock on the issue's project (project owner, space owner, instance admin); others get `force_unlock_forbidden`. Default: false."),
+			mcpgo.Description("Bypass lock predicate. Needs the key right `manage` (else `insufficient_scope`) and force_unlock on the issue's project (project owner, space owner, instance admin); others get `force_unlock_forbidden`. Default: false."),
 			mcpgo.DefaultBool(false),
 		),
 		mcpgo.WithBoolean("verbose",

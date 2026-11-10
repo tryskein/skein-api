@@ -174,7 +174,7 @@ func RegisterUpdate(s *server.MCPServer, pool *pgxpool.Pool, issuesStore *issues
 				"`skein_show`."),
 		),
 		mcpgo.WithBoolean("force",
-			mcpgo.Description("Bypass lock + version + pinned predicates. Needs force_unlock on the issue's project (project owner, space owner, instance admin); others get `force_unlock_forbidden`. Default: false."),
+			mcpgo.Description("Bypass lock + version + pinned predicates. Needs the key right `manage` (else `insufficient_scope`) and force_unlock on the issue's project (project owner, space owner, instance admin); others get `force_unlock_forbidden`. Default: false."),
 			mcpgo.DefaultBool(false),
 		),
 		mcpgo.WithBoolean("verbose",

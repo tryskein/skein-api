@@ -273,5 +273,9 @@ func mcpRegisterToolsFn(d mcpDeps) func(*server.MCPServer) {
 		// other projects under the same api key — context with no action for
 		// the reader. The middleware, its storage and its unit tests stay;
 		// re-enabling it is an owner decision, not a config switch.
+
+		// Every tool and action registered above has a row in the
+		// key-rights matrix the /mcp middleware applies (mcp.KeyRights).
+		mcptools.MustCoverKeyRights(s)
 	}
 }

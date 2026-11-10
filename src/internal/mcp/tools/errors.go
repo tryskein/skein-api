@@ -334,6 +334,14 @@ const (
 	// exist (never minted, or already purged by cleanup) get this same code,
 	// so the refusal never reveals that another user's monitor exists.
 	ErrCodeMonitorNotFound = "monitor_not_found"
+
+	// ErrCodeInsufficientScope — the API key does not hold the right the
+	// call requires (read, write, manage, admin; force=true on a guarded
+	// tool requires manage). Refused before the tool runs, so it never
+	// reveals whether the named object exists. The error carries `required`,
+	// `tool` and, for a consolidated tool, `action`. Declared with its class
+	// and transience in internal/errcode.
+	ErrCodeInsufficientScope = "insufficient_scope"
 )
 
 // ErrCodeLockRequiredSessionID is returned when a tool requires Mcp-Session-Id
