@@ -120,7 +120,7 @@ session — the response stays in the transcript.
 | e2e | via skein-frontend | none of its own; the product e2e suite of skein-frontend runs against a live stack built with this image | from the top of `skein/`: `./scripts/e2e-test.sh` | `./scripts/e2e-test.sh -- -g '<title>'` | `skein-frontend/browser/e2e/` |
 | smoke (image contract) | not used | — | — | — | — |
 | mutation | not used | — | — | — | — |
-| source-reading checks | one permitted | routes of the **assembled** router under `/agent/v1` are GET/HEAD only; needed until it is decided that `/agent/v1` gets a write route | part of unit | `cd src && go test -count=1 -run TestAgentRoutes_ReadOnly ./cmd/api/` | `src/cmd/api/agent_routes_readonly_test.go` |
+| source-reading checks | two permitted | (1) routes of the **assembled** router under `/agent/v1` are GET/HEAD only; needed until it is decided that `/agent/v1` gets a write route. (2) routes of the **assembled** public router (`chi.Walk`) ↔ paths and methods of the embedded public OpenAPI document, both ways, with the permission of each operation; permitted by the owner because the public spec is declared apart from the routes, needed while that stays so | part of unit | (1) `cd src && go test -count=1 -run TestAgentRoutes_ReadOnly ./cmd/api/`; (2) `cd src && go test -count=1 -run TestPublicRoutesMatchOpenAPI ./cmd/api/` | (1) `src/cmd/api/agent_routes_readonly_test.go`; (2) `src/cmd/api/public_routes_spec_test.go` |
 | artifact contract | not used | — | — | — | — |
 
 Python runner tests (from the repository root):
@@ -133,12 +133,15 @@ Python runner tests (from the repository root):
 
 - Unit and integration are one suite; `TEST_DATABASE_URL` separates them, not
   build tags.
-- No other source-reading checks are added. Existing structural guards (users
-  of `internal/astguard`) are left as they are — neither removed nor extended.
+- No source-reading checks are added beyond the two in the table. Existing
+  structural guards (users of `internal/astguard`) are left as they are —
+  neither removed nor extended.
 - Checks that are not tests but must stay green: `cd src && go vet ./...`,
-  `cd src && gofmt -l .` (empty output), and the sqlc check
+  `cd src && gofmt -l .` (empty output), the sqlc check
   `cd src && sqlc generate && git status --porcelain --untracked-files=all -- internal/storage/generated`
-  (empty output).
+  (empty output), and the public OpenAPI check
+  `scripts/generate-public-openapi.sh && git status --porcelain --untracked-files=all -- src/internal/publicapi/openapi`
+  (empty output; `ci.yml` job `public-openapi`).
 
 ### Prerequisites
 
@@ -157,7 +160,7 @@ Python runner tests (from the repository root):
 
 | Event | unit | integration | e2e | smoke | mutation | other |
 |---|---|---|---|---|---|---|
-| pull request | `ci.yml` job `unit` | `ci.yml` job `integration` | not run | not used | not run | `ci.yml` jobs `lint`, `sqlc-generated`; `theme-mirror.yml` when `src/internal/themes/**` changes |
+| pull request | `ci.yml` job `unit` | `ci.yml` job `integration` | not run | not used | not run | `ci.yml` jobs `lint`, `sqlc-generated`, `public-openapi`; `theme-mirror.yml` when `src/internal/themes/**` changes |
 | push to `main` | same as pull request | same | not run | not used | not run | same |
 | release tag `X.Y.Z` | `ci.yml`, called by `release.yml` | same | not run | not used | not run | `release.yml` publishes `ghcr.io/tryskein/skein-api` |
 | tag `X.Y.Z-rc.N` | nothing | nothing | nothing | nothing | nothing | nothing is published |
@@ -166,6 +169,8 @@ Workflows live in `.github/workflows/`. `ci.yml` also runs on `workflow_call`.
 `integration` uses a `pgvector/pgvector:pg18` service container, creates
 `pg_trgm` and `vector`, applies `src/migrations` with golang-migrate and runs
 `go test -v -p 1 -count=1 ./...`; a run with zero passed tests is red.
+`public-openapi` runs `scripts/generate-public-openapi.sh` and is red when
+`src/internal/publicapi/openapi` differs from the committed document.
 `release.yml` starts only for a tag matching `X.Y.Z`, checks that the tagged
 commit is on `main`, runs `ci.yml`, builds `linux/amd64` and `linux/arm64`
 natively, publishes the manifest (`X.Y.Z` and `latest`) from jobs bound to the
