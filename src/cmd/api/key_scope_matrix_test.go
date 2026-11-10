@@ -310,10 +310,16 @@ func TestKeyScope_ObjectOutsideTheScopeIsAsNotVisible(t *testing.T) {
 		if !hidden.isError || errShape(t, []byte(hidden.text)) != errShape(t, []byte(missing.text)) {
 			t.Errorf("skein_show of Q's issue = %s, want the nonexistent answer %s", hidden.text, missing.text)
 		}
-		created := k.tool(t, "skein_create", map[string]any{"project": Q.ID.String(), "title": "must not land", "kind": "autonomous"})
-		absent := k.tool(t, "skein_create", map[string]any{"project": uuid.NewString(), "title": "must not land", "kind": "autonomous"})
+		created := k.tool(t, "skein_create", map[string]any{"project": Q.ID.String(), "title": "must not land", "type": "task", "kind": "autonomous"})
+		absent := k.tool(t, "skein_create", map[string]any{"project": uuid.NewString(), "title": "must not land", "type": "task", "kind": "autonomous"})
 		if !created.isError || errShape(t, []byte(created.text)) != errShape(t, []byte(absent.text)) {
 			t.Errorf("skein_create in Q = %s, want the nonexistent-project answer %s", created.text, absent.text)
+		}
+		var refusal struct {
+			Error string `json:"error"`
+		}
+		if err := json.Unmarshal([]byte(created.text), &refusal); err != nil || refusal.Error != "project_not_found" {
+			t.Errorf("skein_create in Q refused with %q (%v), want project_not_found", refusal.Error, err)
 		}
 		var n int
 		if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM issues WHERE project_id = $1 AND title = 'must not land'`, Q.ID).Scan(&n); err != nil || n != 0 {
