@@ -274,11 +274,12 @@ func TestIdempotencyOps_RealOperations(t *testing.T) {
 func TestIdempotencyOps_CreateComment(t *testing.T) {
 	w := newClassWorld(t)
 	key := w.key(w.owner, levelKey(apikeys.LevelWrite))
-	// The member watches the project: a comment of the owner notifies him,
-	// so "no new notification" is asked of a count that a write moves.
-	w.exec(`INSERT INTO project_watchers (project_id, user_id) VALUES ($1, $2)`, w.p, w.member)
 	idem := func() map[string]string { return map[string]string{"Idempotency-Key": "k-" + uuid.NewString()} }
 	issue := w.freshIssue(w.p)
+	// The comment mentions the member of the project: a mention notifies
+	// him even of an agent's write (a subscriber is silenced by default), so
+	// "no new notification" is asked of a count that the write moves.
+	mention := "@" + testsupport.Username(t, w.pool, w.member)
 	comments := func() int { return w.idemCount(`SELECT count(*) FROM comments WHERE issue_id = $1`, issue) }
 	events := func() int { return w.idemCount(`SELECT count(*) FROM events WHERE project_id = $1`, w.p) }
 	notifications := func() int {
@@ -287,7 +288,7 @@ func TestIdempotencyOps_CreateComment(t *testing.T) {
 	path := "/api/v1/issues/" + issue + "/comments"
 
 	t.Run("2xx with a write", func(t *testing.T) {
-		c, h := opCall{http.MethodPost, path, map[string]any{"body": "once " + w.fresh("c")}, nil}, idem()
+		c, h := opCall{http.MethodPost, path, map[string]any{"body": "once " + w.fresh("c") + " " + mention}, nil}, idem()
 		n0, nt0 := comments(), notifications()
 		first := w.do(key, c, "", h)
 		if first.status != http.StatusCreated {

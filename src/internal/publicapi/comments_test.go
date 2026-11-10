@@ -246,7 +246,12 @@ func TestComments_OutsideTheScopeIsMissing(t *testing.T) {
 	pool := testsupport.NewTestPool(t)
 	rg := newResourceRig(t, pool)
 	w := seedWriteWorld(t, pool)
-	q, qPrefix := seedProject(t, pool, w.member, w.space, "cmo")
+	// Q lies in a space of the member, where the owner of the key is a
+	// participant only: as the owner of his own space he would hold
+	// delete_any_comment there.
+	memberSpace, _ := seedOwnSpace(t, pool, w.member)
+	testsupport.AddSpaceMember(t, pool, memberSpace, w.owner)
+	q, qPrefix := seedProject(t, pool, w.member, memberSpace, "cmo")
 	addMember(t, pool, q, w.owner, "member")
 	qIssue := testsupport.SeedIssue(t, pool, q, w.member, qPrefix+"-1", "outside", "open", 2)
 	t.Cleanup(func() {
