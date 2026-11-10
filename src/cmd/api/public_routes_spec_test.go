@@ -147,7 +147,11 @@ func TestPublicRoutesMatchOpenAPI(t *testing.T) {
 	})
 
 	t.Run("operationId, key right and force of each route", func(t *testing.T) {
-		for _, rt := range publicapi.ProductRoutes(publicapi.Deps{}) {
+		routes := publicapi.ProductRoutes(publicapi.Deps{})
+		if len(routes) == 0 {
+			t.Fatal("the product route table is empty")
+		}
+		for _, rt := range routes {
 			op := documentOperation(doc, rt.Method, rt.Path)
 			if op == nil {
 				t.Errorf("%s: no operation %s %s in the document", rt.OperationID, rt.Method, rt.Path)
@@ -311,6 +315,9 @@ func TestPublicResponsesMatchOpenAPI(t *testing.T) {
 	routes := map[string]publicapi.Route{}
 	for _, rt := range publicapi.ProductRoutes(publicapi.Deps{}) {
 		routes[rt.OperationID] = rt
+	}
+	if len(routes) == 0 {
+		t.Fatal("the product route table is empty")
 	}
 	// keyOf is a fresh key for op: the run makes more requests than one
 	// key's rate limit lets through in a minute.
