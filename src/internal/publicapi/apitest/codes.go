@@ -107,6 +107,11 @@ var Codes = map[string]Expect{
 	// Unavailable dependency.
 	"attachments_unavailable": every(503, true),
 	"preview_unavailable":     every(503, true),
+	"database_unavailable":    every(503, true),
+
+	// Rate limit or failed-authentication limit; the window ends without the
+	// client.
+	"rate_limited": every(429, true),
 
 	// Internal failure.
 	"internal_error": every(500, false),

@@ -40,6 +40,14 @@ type RouterOptions struct {
 	// ends after it, so a transaction still open by then is rolled back.
 	// Must be > 0.
 	OperationTimeout time.Duration
+	// Chain is put in front of the handler of every route (the request
+	// chain of the public entry, Chain.Wrap); nil leaves the handlers bare.
+	Chain RouteWrapper
+}
+
+// RouteWrapper wraps the handler of a route.
+type RouteWrapper interface {
+	Wrap(rt Route, next http.Handler) http.Handler
 }
 
 // routeContextKey carries the route of the request.
@@ -94,11 +102,11 @@ func NewRouter(opts RouterOptions, routes []Route) http.Handler {
 	return mux
 }
 
-// routeHandler wraps the handler of rt: the route goes into the context, the
-// body is checked (media type, size), and the operation runs under its
-// deadline.
+// routeHandler wraps the handler of rt: the operation runs under its
+// deadline with the route in its context; the request chain comes first,
+// then the body is checked (media type, size).
 func routeHandler(opts RouterOptions, rt Route) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if hasBody(r) {
 			if !isJSON(r.Header.Get("Content-Type")) {
 				WriteProblem(w, Problem{Code: errcode.UnsupportedMediaType, Origin: OriginParse})
@@ -110,10 +118,17 @@ func routeHandler(opts RouterOptions, rt Route) http.Handler {
 			}
 			r.Body = http.MaxBytesReader(w, r.Body, MaxBodyBytes)
 		}
+		rt.Handler.ServeHTTP(w, r)
+	})
+	var chained http.Handler = inner
+	if opts.Chain != nil {
+		chained = opts.Chain.Wrap(rt, inner)
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(r.Context(), opts.OperationTimeout)
 		defer cancel()
 		ctx = context.WithValue(ctx, routeContextKey{}, rt)
-		rt.Handler.ServeHTTP(w, r.WithContext(ctx))
+		chained.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
 

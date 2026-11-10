@@ -173,6 +173,10 @@ func TestErrCodes_ClassAndTransience(t *testing.T) {
 		// Unavailable dependency (503), transient.
 		"attachments_unavailable": {errcode.ClassUnavailable, true},
 		"preview_unavailable":     {errcode.ClassUnavailable, true},
+		"database_unavailable":    {errcode.ClassUnavailable, true},
+		// Rate limit of the public API (429), transient: the window ends
+		// without the client.
+		"rate_limited": {errcode.ClassRateLimited, true},
 		// Internal (500).
 		"internal_error": {errcode.ClassInternal, false},
 		// Business (422), transient.

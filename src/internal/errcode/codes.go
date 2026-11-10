@@ -63,6 +63,14 @@ var (
 	// Unavailable dependencies.
 	AttachmentsUnavailable = define("attachments_unavailable", ClassUnavailable, Transient)
 	PreviewUnavailable     = define("preview_unavailable", ClassUnavailable, Transient)
+	// DatabaseUnavailable — the database could not be reached (a closed
+	// pool, a refused or broken connection).
+	DatabaseUnavailable = define("database_unavailable", ClassUnavailable, Transient)
+
+	// RateLimited — the key made more requests in the current minute than
+	// the public API allows, or the client address failed authentication
+	// too often; Retry-After says when the window ends.
+	RateLimited = define("rate_limited", ClassRateLimited, Transient)
 
 	// Failures inside the service.
 	InternalError = define("internal_error", ClassInternal, Permanent)

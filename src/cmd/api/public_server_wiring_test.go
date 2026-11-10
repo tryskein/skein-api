@@ -81,7 +81,7 @@ func TestPublicServerWiring_WarningTimeoutsAndShutdown(t *testing.T) {
 
 	t.Run("enabled without the address: one warning naming the variable", func(t *testing.T) {
 		rec := &recordingHandler{}
-		srv, err := publicServer(publicConfig(true, port, ""), slog.New(rec))
+		srv, err := publicServer(publicConfig(true, port, ""), nil, slog.New(rec))
 		if err != nil || srv == nil {
 			t.Fatalf("publicServer = %v, %v; want a server", srv, err)
 		}
@@ -93,7 +93,7 @@ func TestPublicServerWiring_WarningTimeoutsAndShutdown(t *testing.T) {
 
 	t.Run("enabled with the address: no warning", func(t *testing.T) {
 		rec := &recordingHandler{}
-		srv, err := publicServer(publicConfig(true, port, "https://api.skein.example"), slog.New(rec))
+		srv, err := publicServer(publicConfig(true, port, "https://api.skein.example"), nil, slog.New(rec))
 		if err != nil || srv == nil {
 			t.Fatalf("publicServer = %v, %v; want a server", srv, err)
 		}
@@ -104,7 +104,7 @@ func TestPublicServerWiring_WarningTimeoutsAndShutdown(t *testing.T) {
 
 	t.Run("disabled: no server, no warning", func(t *testing.T) {
 		rec := &recordingHandler{}
-		srv, err := publicServer(publicConfig(false, port, ""), slog.New(rec))
+		srv, err := publicServer(publicConfig(false, port, ""), nil, slog.New(rec))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -118,7 +118,7 @@ func TestPublicServerWiring_WarningTimeoutsAndShutdown(t *testing.T) {
 
 	t.Run("timeouts, port and shutdown", func(t *testing.T) {
 		cfg := publicConfig(true, port, "https://api.skein.example")
-		srv, err := publicServer(cfg, slog.New(&recordingHandler{}))
+		srv, err := publicServer(cfg, nil, slog.New(&recordingHandler{}))
 		if err != nil || srv == nil {
 			t.Fatalf("publicServer = %v, %v; want a server", srv, err)
 		}
@@ -173,7 +173,7 @@ func TestPublicServerWiring_WarningTimeoutsAndShutdown(t *testing.T) {
 // internal API and /mcp are 404 there, the document of the API is 200. Red
 // when the wiring hangs the internal router or an empty handler on it.
 func TestPublicServerWiring_HandlerIsThePublicRouter(t *testing.T) {
-	srv, err := publicServer(publicConfig(true, freePort(t), ""), slog.New(&recordingHandler{}))
+	srv, err := publicServer(publicConfig(true, freePort(t), ""), nil, slog.New(&recordingHandler{}))
 	if err != nil || srv == nil {
 		t.Fatalf("publicServer = %v, %v; want a server", srv, err)
 	}

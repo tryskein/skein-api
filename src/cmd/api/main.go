@@ -390,8 +390,10 @@ const publicAPIURLVariable = "SKEIN_PUBLIC_API_URL"
 // and nothing is logged — otherwise a server on that port whose router
 // carries only the public API's route table. Enabled without
 // SKEIN_PUBLIC_API_URL it logs one warning naming the variable: the API
-// works, but its OpenAPI document carries no servers.
-func publicServer(cfg *config.Config, logger *slog.Logger) (*http.Server, error) {
+// works, but its OpenAPI document carries no servers. chain is the request
+// chain put in front of every operation that authenticates with a key
+// (publicapi.NewProductChain in production).
+func publicServer(cfg *config.Config, chain publicapi.RouteWrapper, logger *slog.Logger) (*http.Server, error) {
 	if !cfg.PublicAPIEnabled {
 		return nil, nil
 	}
@@ -404,7 +406,7 @@ func publicServer(cfg *config.Config, logger *slog.Logger) (*http.Server, error)
 		return nil, err
 	}
 	router := publicapi.NewRouter(
-		publicapi.RouterOptions{OperationTimeout: cfg.PublicAPIWriteTimeout},
+		publicapi.RouterOptions{OperationTimeout: cfg.PublicAPIWriteTimeout, Chain: chain},
 		publicapi.ProductRoutes(doc),
 	)
 	return publicapi.NewServer(":"+cfg.PublicAPIPort, router, cfg.PublicAPIWriteTimeout), nil
@@ -1040,7 +1042,12 @@ func main() {
 
 	// The public API, its own server on its own port (nil when
 	// SKEIN_PUBLIC_API_ENABLED=false).
-	pubSrv, err := publicServer(cfg, slog.Default())
+	var pubChain publicapi.RouteWrapper
+	if cfg.PublicAPIEnabled {
+		pubChain = publicapi.NewProductChain(pool, cfg.BcryptCost,
+			cfg.PublicAPIRateLimitPerMinute, cfg.PublicAPIAuthFailuresPerMinute, cfg.PublicAPITrustedProxies)
+	}
+	pubSrv, err := publicServer(cfg, pubChain, slog.Default())
 	if err != nil {
 		slog.Error("public API setup failed", "error", err.Error())
 		os.Exit(1)

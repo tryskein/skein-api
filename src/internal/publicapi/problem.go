@@ -91,6 +91,8 @@ func Status(code errcode.Code, origin Origin) int {
 		return http.StatusRequestEntityTooLarge
 	case errcode.ClassMediaType:
 		return http.StatusUnsupportedMediaType
+	case errcode.ClassRateLimited:
+		return http.StatusTooManyRequests
 	}
 	return http.StatusInternalServerError
 }

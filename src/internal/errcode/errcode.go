@@ -44,11 +44,14 @@ const (
 	ClassPayloadTooLarge
 	// ClassMediaType — the request body is not of a supported media type.
 	ClassMediaType
+	// ClassRateLimited — a rate limit of the public API refuses the request
+	// until its window ends.
+	ClassRateLimited
 )
 
 // lastClass is the last class of the closed set; define refuses any class
 // after it.
-const lastClass = ClassMediaType
+const lastClass = ClassRateLimited
 
 // String names the class.
 func (c Class) String() string {
@@ -75,6 +78,8 @@ func (c Class) String() string {
 		return "payload_too_large"
 	case ClassMediaType:
 		return "media_type"
+	case ClassRateLimited:
+		return "rate_limited"
 	}
 	return fmt.Sprintf("class(%d)", uint8(c))
 }
