@@ -74,7 +74,7 @@ func newResourceRig(t *testing.T, pool *pgxpool.Pool) *resourceRig {
 		publicapi.ProductRoutes(publicapi.Deps{
 			Doc: doc, Pool: pool, Projects: projectsStore, Users: usersStore,
 			DefaultVisibility: spaces.VisibilityMembers,
-			Issues: issuesStore, Dependencies: depsStore, Search: searchSvc,
+			Issues:            issuesStore, Dependencies: depsStore, Search: searchSvc,
 		}))
 	mcpHandler, _ := mcppkg.Setup(pool, 0, func(s *server.MCPServer) {
 		tools.RegisterWhoami(s, pool)
