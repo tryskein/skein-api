@@ -666,8 +666,13 @@ func TestIssuesWrite_ForceNeedsManage(t *testing.T) {
 			if a := rg.rest(kw, op.method, issuePath(id, op.suffix)+"?force=true", op.body, hdr); a.status != http.StatusForbidden || a.code() != "insufficient_scope" {
 				t.Errorf("force with write: %d %s", a.status, a.body)
 			}
-			if a := rg.rest(km, op.method, issuePath(id, op.suffix)+"?force=true", op.body, hdr); a.status != http.StatusOK {
-				t.Errorf("force with manage and force_unlock: %d %s", a.status, a.body)
+			// Every DELETE of the API answers 204 (decision R8-06).
+			want := http.StatusOK
+			if op.method == http.MethodDelete {
+				want = http.StatusNoContent
+			}
+			if a := rg.rest(km, op.method, issuePath(id, op.suffix)+"?force=true", op.body, hdr); a.status != want {
+				t.Errorf("force with manage and force_unlock: %d %s, want %d", a.status, a.body, want)
 			}
 		})
 	}
