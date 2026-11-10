@@ -61,6 +61,9 @@ type APIKey struct {
 	// ProjectNames and SpaceNames name the scope members.
 	ProjectNames map[uuid.UUID]string
 	SpaceNames   map[uuid.UUID]string
+	// SpaceShortIDs gives each scope space its short id, the form every
+	// surface identifies a space by.
+	SpaceShortIDs map[uuid.UUID]string
 }
 
 // LookupResult is what the MCP middleware needs to authorize a request:
@@ -350,6 +353,8 @@ SELECT k.id, k.label, k.prefix, k.created_at, k.last_used_at, k.revoked_at,
        ARRAY(SELECT sx.id FROM api_key_scope_spaces ss JOIN spaces sx ON sx.id = ss.space_id
               WHERE ss.api_key_id = k.id ORDER BY sx.id),
        ARRAY(SELECT sx.name FROM api_key_scope_spaces ss JOIN spaces sx ON sx.id = ss.space_id
+              WHERE ss.api_key_id = k.id ORDER BY sx.id),
+       ARRAY(SELECT sx.short_id FROM api_key_scope_spaces ss JOIN spaces sx ON sx.id = ss.space_id
               WHERE ss.api_key_id = k.id ORDER BY sx.id)
   FROM api_keys k
   JOIN users u ON u.id = k.user_id
@@ -368,10 +373,10 @@ SELECT k.id, k.label, k.prefix, k.created_at, k.last_used_at, k.revoked_at,
 		var level *string
 		var mode string
 		var ownerAdmin bool
-		var projectNames, spaceNames []string
+		var projectNames, spaceNames, spaceShortIDs []string
 		if err := rows.Scan(&k.ID, &k.Label, &k.Prefix, &k.CreatedAt, &k.LastUsedAt, &k.RevokedAt,
 			&level, &k.Grant.Admin, &mode, &k.Grant.ExpiresAt, &k.ReissuedFromID, &ownerAdmin,
-			&k.Grant.Scope.Projects, &projectNames, &k.Grant.Scope.Spaces, &spaceNames); err != nil {
+			&k.Grant.Scope.Projects, &projectNames, &k.Grant.Scope.Spaces, &spaceNames, &spaceShortIDs); err != nil {
 			return nil, fmt.Errorf("scanning api key: %w", err)
 		}
 		if level != nil {
@@ -383,8 +388,10 @@ SELECT k.id, k.label, k.prefix, k.created_at, k.last_used_at, k.revoked_at,
 			k.ProjectNames[id] = projectNames[i]
 		}
 		k.SpaceNames = make(map[uuid.UUID]string, len(spaceNames))
+		k.SpaceShortIDs = make(map[uuid.UUID]string, len(spaceShortIDs))
 		for i, id := range k.Grant.Scope.Spaces {
 			k.SpaceNames[id] = spaceNames[i]
+			k.SpaceShortIDs[id] = spaceShortIDs[i]
 		}
 		k.Grant = k.Grant.normalized()
 		k.EffectiveAdmin = k.Grant.Admin && ownerAdmin

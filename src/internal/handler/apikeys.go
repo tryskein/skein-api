@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -97,7 +98,7 @@ type apiKeyPermissions struct {
 
 // apiKeyScopeMember is one project or space of a key's scope.
 type apiKeyScopeMember struct {
-	// ID of the project or space.
+	// ID of the member: the project UUID, or the space short id.
 	ID string `json:"id"`
 	// Name of the project or space.
 	Name string `json:"name"`
@@ -177,7 +178,7 @@ func toAPIKeyView(k apikeys.APIKey, now time.Time) apiKeyView {
 		v.Scope.Projects = append(v.Scope.Projects, apiKeyScopeMember{ID: id.String(), Name: k.ProjectNames[id]})
 	}
 	for _, id := range k.Grant.Scope.Spaces {
-		v.Scope.Spaces = append(v.Scope.Spaces, apiKeyScopeMember{ID: id.String(), Name: k.SpaceNames[id]})
+		v.Scope.Spaces = append(v.Scope.Spaces, apiKeyScopeMember{ID: k.SpaceShortIDs[id], Name: k.SpaceNames[id]})
 	}
 	if k.Grant.Admin && !k.EffectiveAdmin {
 		v.UnavailablePermissions = append(v.UnavailablePermissions, "admin")
@@ -195,8 +196,8 @@ type apiKeyScopeInput struct {
 	Mode string `json:"mode" enums:"projects,spaces,all"`
 	// Projects (ids) of a projects scope; omitted otherwise.
 	Projects []uuid.UUID `json:"projects"`
-	// Spaces (ids) of a spaces scope; omitted otherwise.
-	Spaces []uuid.UUID `json:"spaces"`
+	// Spaces (short ids) of a spaces scope; omitted otherwise.
+	Spaces []string `json:"spaces"`
 }
 
 // createAPIKeyRequest is the JSON body for POST /me/api-keys. Label,
@@ -249,7 +250,7 @@ type apiKeysSettingsView struct {
 // @Summary Create an API key of the caller
 // @Description Creates an API key for the signed-in user with the chosen permissions, scope and lifetime, and returns its secret once.
 // @Description
-// @Description Algorithm: decode the body; label, permissions and scope are required, expiresAt is optional. A body without permissions and scope is the shape of a page loaded before keys had grants: 400 validation_error with details.staleClient = true, and no key is created. Then the grant is checked — at least one permission (a level or admin), admin only with scope all and only for an instance admin, the scope members visible to the caller, and an expiresAt, when given, after now and no later than now + the maximum lifetime of GET /settings. Without expiresAt the key lives the default lifetime of GET /settings. A fresh secret is generated (crypto/rand), bcrypt-hashed and stored with the grant; only its hash and non-secret prefix are kept.
+// @Description Algorithm: decode the body; label, permissions and scope are required, expiresAt is optional. A body without permissions and scope is the shape of a page loaded before keys had grants: 400 validation_error with details.staleClient = true, and no key is created. Then the grant is checked — at least one permission (a level or admin), admin only with scope all and only for an instance admin, the scope members visible to the caller (scope projects are given by UUID, scope spaces by short id; a malformed, unknown or unreachable member answers 422 invalid_grant scope_unavailable), and an expiresAt, when given, after now and no later than now + the maximum lifetime of GET /settings. Without expiresAt the key lives the default lifetime of GET /settings. A fresh secret is generated (crypto/rand), bcrypt-hashed and stored with the grant; only its hash and non-secret prefix are kept.
 // @Description
 // @Description Side effects: one api_keys row and its scope rows. The secret appears only in this response.
 // @Tags Me
@@ -301,6 +302,9 @@ func (h *APIKeysHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 	grant, ok := parseGrant(w, req.Permissions, req.Scope)
 	if !ok {
+		return
+	}
+	if !h.resolveScopeSpaces(w, r, userID, &grant, req.Scope.Spaces) {
 		return
 	}
 	// Nil gives the policy default in the store.
@@ -385,7 +389,7 @@ func (h *APIKeysHandler) List(w http.ResponseWriter, r *http.Request) {
 // @Summary Narrow an API key of the caller
 // @Description Replaces the grant of one of the caller's keys with a narrower one, in place: the level no higher, admin not added, the scope a subset of the current one, the expiry no later (and in the future). Widening is possible only with a new key.
 // @Description
-// @Description Algorithm: decode the body (permissions and scope required; expiresAt omitted keeps the current expiry), check that the caller reaches every project and space of the new scope (a hidden member answers the same as a missing one: 422 invalid_grant scope_unavailable), check the grant rules as on create, then narrow under a row lock. While the key has admin its scope stays all. A refused change leaves the key unchanged.
+// @Description Algorithm: decode the body (permissions and scope required; expiresAt omitted keeps the current expiry), check that the caller reaches every project (UUID) and space (short id) of the new scope (a malformed, unknown or hidden member answers the same as a missing one: 422 invalid_grant scope_unavailable), check the grant rules as on create, then narrow under a row lock. While the key has admin its scope stays all. A refused change leaves the key unchanged.
 // @Description
 // @Description Side effects: the key's grant and scope rows change; requests with the key see the new grant from the next request on.
 // @Tags Me
@@ -444,10 +448,12 @@ func (h *APIKeysHandler) Narrow(w http.ResponseWriter, r *http.Request) {
 	if next.ExpiresAt == nil {
 		next.ExpiresAt = cur.Grant.ExpiresAt
 	}
+	if !h.resolveScopeSpaces(w, r, userID, &next, req.Scope.Spaces) {
+		return
+	}
 	// The new scope must be one the owner reaches now, as on create: a
 	// narrowing never tells a hidden project from a missing one.
-	role, _ := auth.UserRoleFrom(ctx)
-	if !h.checkScopeForOwner(w, r, userID, role == "admin" && !auth.IsExternalFrom(ctx), next.Scope) {
+	if !h.checkScopeForOwner(w, r, userID, next.Scope) {
 		return
 	}
 
@@ -656,7 +662,8 @@ func parseGrant(w http.ResponseWriter, p *apiKeyPermissions, sc *apiKeyScopeInpu
 	}
 	switch m := apikeys.ScopeMode(sc.Mode); m {
 	case apikeys.ScopeProjects, apikeys.ScopeSpaces, apikeys.ScopeAll:
-		g.Scope = apikeys.Scope{Mode: m, Projects: sc.Projects, Spaces: sc.Spaces}
+		// Spaces arrive as short ids; resolveScopeSpaces fills them in.
+		g.Scope = apikeys.Scope{Mode: m, Projects: sc.Projects}
 	default:
 		writeProblem(w, http.StatusBadRequest, "validation_error", "scope.mode must be projects, spaces or all",
 			map[string]any{"details": map[string]any{"field": "scope.mode"}})
@@ -667,9 +674,9 @@ func parseGrant(w http.ResponseWriter, p *apiKeyPermissions, sc *apiKeyScopeInpu
 
 // checkGrantForOwner checks, before a key is created, the rules that depend
 // on its owner: admin only for an internal instance admin, every scope
-// project visible to the owner, every scope space one the owner belongs to
-// (any space for an instance admin). A member out of reach answers the same
-// as a missing one. Refusals answer 422 invalid_grant.
+// project visible to the owner (the scope spaces are already the owner's:
+// resolveScopeSpaces). A member out of reach answers the same as a missing
+// one. Refusals answer 422 invalid_grant.
 func (h *APIKeysHandler) checkGrantForOwner(w http.ResponseWriter, r *http.Request, userID uuid.UUID, g apikeys.Grant) bool {
 	ctx := r.Context()
 	if err := g.Validate(); err != nil {
@@ -681,15 +688,15 @@ func (h *APIKeysHandler) checkGrantForOwner(w http.ResponseWriter, r *http.Reque
 		writeInvalidGrant(w, grantRuleAdminUnavailable, "only an instance admin can give a key the admin permission")
 		return false
 	}
-	return h.checkScopeForOwner(w, r, userID, ownerAdmin, g.Scope)
+	return h.checkScopeForOwner(w, r, userID, g.Scope)
 }
 
 // checkScopeForOwner answers 422 invalid_grant / scope_unavailable unless the
 // owner reaches every member of sc — on create and on narrowing alike, so a
 // member out of reach answers the same as a missing one.
-func (h *APIKeysHandler) checkScopeForOwner(w http.ResponseWriter, r *http.Request, userID uuid.UUID, ownerAdmin bool, sc apikeys.Scope) bool {
+func (h *APIKeysHandler) checkScopeForOwner(w http.ResponseWriter, r *http.Request, userID uuid.UUID, sc apikeys.Scope) bool {
 	ctx := r.Context()
-	reachable, err := h.scopeReachable(ctx, userID, ownerAdmin, sc)
+	reachable, err := h.scopeReachable(ctx, sc)
 	if err != nil {
 		slog.ErrorContext(ctx, "failed to check api key scope", "userId", userID.String(), "error", err.Error())
 		writeProblem(w, http.StatusInternalServerError, "internal_error", "failed to check scope", nil)
@@ -702,8 +709,51 @@ func (h *APIKeysHandler) checkScopeForOwner(w http.ResponseWriter, r *http.Reque
 	return true
 }
 
-// scopeReachable reports whether the owner reaches every member of sc.
-func (h *APIKeysHandler) scopeReachable(ctx context.Context, userID uuid.UUID, ownerAdmin bool, sc apikeys.Scope) (bool, error) {
+// resolveScopeSpaces turns the requested space short ids into the spaces
+// the owner belongs to (any space for an instance admin) and sets them on
+// g. A malformed, unknown or unreachable short id answers 422
+// invalid_grant / scope_unavailable — the same answer as a project out of
+// reach, so a space the owner is not in cannot be told from a missing one.
+func (h *APIKeysHandler) resolveScopeSpaces(w http.ResponseWriter, r *http.Request, userID uuid.UUID, g *apikeys.Grant, shortIDs []string) bool {
+	if len(shortIDs) == 0 {
+		return true
+	}
+	ctx := r.Context()
+	role, _ := auth.UserRoleFrom(ctx)
+	ownerAdmin := role == "admin" && !auth.IsExternalFrom(ctx)
+	rows, err := h.pool.Query(ctx, `
+SELECT s.id
+  FROM unnest($1::text[]) AS x(short_id)
+  LEFT JOIN spaces s ON s.short_id = x.short_id
+                    AND ($3 OR EXISTS (SELECT 1 FROM space_members m
+                                        WHERE m.space_id = s.id AND m.user_id = $2))`,
+		shortIDs, userID, ownerAdmin)
+	if err != nil {
+		slog.ErrorContext(ctx, "failed to resolve api key scope spaces", "userId", userID.String(), "error", err.Error())
+		writeProblem(w, http.StatusInternalServerError, "internal_error", "failed to check scope", nil)
+		return false
+	}
+	ids, err := pgx.CollectRows(rows, pgx.RowTo[*uuid.UUID])
+	if err != nil {
+		slog.ErrorContext(ctx, "failed to resolve api key scope spaces", "userId", userID.String(), "error", err.Error())
+		writeProblem(w, http.StatusInternalServerError, "internal_error", "failed to check scope", nil)
+		return false
+	}
+	g.Scope.Spaces = make([]uuid.UUID, 0, len(ids))
+	for _, id := range ids {
+		if id == nil {
+			writeInvalidGrant(w, grantRuleScopeUnavailable, "a project or space of the scope does not exist or is not available to you")
+			return false
+		}
+		g.Scope.Spaces = append(g.Scope.Spaces, *id)
+	}
+	return true
+}
+
+// scopeReachable reports whether the owner reaches every project of sc.
+// Spaces need no check here: resolveScopeSpaces keeps only the spaces the
+// owner reaches.
+func (h *APIKeysHandler) scopeReachable(ctx context.Context, sc apikeys.Scope) (bool, error) {
 	switch sc.Mode {
 	case apikeys.ScopeProjects:
 		visible, err := authz.VisibleAmong(ctx, h.pool, authz.FromContext(ctx), sc.Projects)
@@ -715,18 +765,6 @@ func (h *APIKeysHandler) scopeReachable(ctx context.Context, userID uuid.UUID, o
 				return false, nil
 			}
 		}
-	case apikeys.ScopeSpaces:
-		var missing bool
-		if err := h.pool.QueryRow(ctx, `
-SELECT EXISTS (
-    SELECT 1 FROM unnest($1::uuid[]) AS x(space_id)
-     WHERE NOT EXISTS (SELECT 1 FROM spaces s WHERE s.id = x.space_id
-                          AND ($3 OR EXISTS (SELECT 1 FROM space_members m
-                                              WHERE m.space_id = s.id AND m.user_id = $2))))`,
-			sc.Spaces, userID, ownerAdmin).Scan(&missing); err != nil {
-			return false, err
-		}
-		return !missing, nil
 	}
 	return true, nil
 }

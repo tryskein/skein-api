@@ -24,6 +24,11 @@ package handler
 // A narrowing to a project the owner does not see answers the same as one to
 // a missing project, and leaves the key unchanged (review C2-01).
 //
+// Spaces of a key scope are given and returned by their short id, as on the
+// rest of the surface; projects by UUID (spec Changelog 2026-11-10, US-10).
+// A short id of a space the owner is not in, an unknown one and a space UUID
+// in its place are one refusal, on create and on narrowing alike.
+//
 // The handler is mounted on the same paths as in buildRouter, behind a stand-in
 // for the BFF identity middleware; that the routes exist only behind the BFF
 // identity is row 16 (cmd/api/apikeys_routes_test.go).
@@ -439,6 +444,85 @@ func TestAPIKeysCabinet_Revoke(t *testing.T) {
 		}
 		if row := sc.row(foreign.ID); row.Status != "active" {
 			t.Errorf("the other user's key is %q, want active", row.Status)
+		}
+	})
+}
+
+func spaceShortID(t *testing.T, pool *pgxpool.Pool, space uuid.UUID) string {
+	t.Helper()
+	var short string
+	if err := pool.QueryRow(context.Background(), `SELECT short_id FROM spaces WHERE id = $1`, space).Scan(&short); err != nil {
+		t.Fatal(err)
+	}
+	return short
+}
+
+func TestAPIKeysCabinet_ScopeSpacesByShortID(t *testing.T) {
+	pool := newMeTestPool(t)
+	user, _ := testsupport.SeedUser(t, pool, "user")
+	stranger, _ := testsupport.SeedUser(t, pool, "user")
+	own := testsupport.SeedSpace(t, pool, user)
+	foreign := testsupport.SeedSpace(t, pool, stranger)
+	ownShort, foreignShort := spaceShortID(t, pool, own), spaceShortID(t, pool, foreign)
+	c := newKeysCaller(t, keysTestHandler(pool, true, keysTestPublicURL), user, "user")
+	expires := time.Now().UTC().Add(30 * 24 * time.Hour).Truncate(time.Second)
+	spacesScope := func(ids ...string) map[string]any { return map[string]any{"mode": "spaces", "spaces": ids} }
+	refusals := map[string]string{
+		"a space the owner is not in": foreignShort,
+		"an unknown short id":         "zzzzzzzz",
+		"the space UUID":              own.String(),
+	}
+
+	t.Run("create takes and the list returns the short id", func(t *testing.T) {
+		k := c.create(keyBody("by space", "read", false, spacesScope(ownShort), expires))
+		row := c.row(k.ID)
+		if row.Scope.Mode != "spaces" || len(row.Scope.Spaces) != 1 || row.Scope.Spaces[0].ID != ownShort || row.Scope.Spaces[0].Name != "ts space" {
+			t.Errorf("scope %+v, want spaces {%s ts space}", row.Scope, ownShort)
+		}
+		var stored uuid.UUID
+		if err := pool.QueryRow(context.Background(),
+			`SELECT space_id FROM api_key_scope_spaces WHERE api_key_id = $1`, k.ID).Scan(&stored); err != nil || stored != own {
+			t.Errorf("stored scope space %v (%v), want %v", stored, err, own)
+		}
+	})
+
+	t.Run("create refuses a member out of reach and creates nothing", func(t *testing.T) {
+		before := keyCount(t, pool, user)
+		for name, id := range refusals {
+			code, raw := c.do(http.MethodPost, "", keyBody(name, "read", false, spacesScope(id), expires))
+			errCode, details := problemCode(t, raw)
+			if code != http.StatusUnprocessableEntity || errCode != "invalid_grant" || details["rule"] != "scope_unavailable" {
+				t.Errorf("%s: %d %s, want 422 invalid_grant scope_unavailable", name, code, raw)
+			}
+		}
+		if n := keyCount(t, pool, user); n != before {
+			t.Errorf("keys after the refusals = %d, want %d", n, before)
+		}
+	})
+
+	t.Run("PATCH narrows to a space by short id and refuses one out of reach", func(t *testing.T) {
+		k := c.create(keyBody("narrow to space", "read", false, scopeAll, expires))
+		code, raw := c.do(http.MethodPatch, "/"+k.ID, map[string]any{
+			"permissions": map[string]any{"level": "read", "admin": false}, "scope": spacesScope(ownShort),
+		})
+		if code != http.StatusOK {
+			t.Fatalf("narrow to the own space: %d %s", code, raw)
+		}
+		got := decodeKeys[apiKeyView](t, raw)
+		if got.Scope.Mode != "spaces" || len(got.Scope.Spaces) != 1 || got.Scope.Spaces[0].ID != ownShort {
+			t.Errorf("narrowed scope %+v, want spaces {%s}", got.Scope, ownShort)
+		}
+		for name, id := range refusals {
+			code, raw := c.do(http.MethodPatch, "/"+k.ID, map[string]any{
+				"permissions": map[string]any{"level": "read", "admin": false}, "scope": spacesScope(id),
+			})
+			errCode, details := problemCode(t, raw)
+			if code != http.StatusUnprocessableEntity || errCode != "invalid_grant" || details["rule"] != "scope_unavailable" {
+				t.Errorf("narrow to %s: %d %s, want 422 invalid_grant scope_unavailable", name, code, raw)
+			}
+		}
+		if after := c.row(k.ID); len(after.Scope.Spaces) != 1 || after.Scope.Spaces[0].ID != ownShort {
+			t.Errorf("after refused narrowing scope %+v, want spaces {%s}", after.Scope, ownShort)
 		}
 	})
 }
