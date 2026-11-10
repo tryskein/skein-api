@@ -483,6 +483,40 @@ SELECT k.id, k.user_id, u.role, u.is_external, k.key_hash
 	return r, nil
 }
 
+// Candidate is a stored key whose prefix matches a presented key: its id and
+// the bcrypt hash to verify the presented key against.
+type Candidate struct {
+	KeyID   uuid.UUID
+	KeyHash string
+}
+
+// CandidatesByPrefix returns every key stored with this prefix, whatever its
+// state — active, revoked or expired, its owner active or not — the active
+// one first. Authentication verifies the presented key against them and only
+// then reads the matching key's Status, so a revoked or expired key and an
+// inactive owner are told apart from an unknown key only to a caller that
+// holds the key itself. The prefix is unique among active keys; a revoked key
+// may share it, hence a slice. Empty slice, nil error, when no key has it.
+func (s *Store) CandidatesByPrefix(ctx context.Context, prefix string) ([]Candidate, error) {
+	rows, err := s.pool.Query(ctx, `
+SELECT id, key_hash
+  FROM api_keys
+ WHERE prefix = $1
+ ORDER BY revoked_at IS NOT NULL, created_at DESC`, prefix)
+	if err != nil {
+		return nil, fmt.Errorf("listing api keys by prefix: %w", err)
+	}
+	out, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (Candidate, error) {
+		var c Candidate
+		err := row.Scan(&c.KeyID, &c.KeyHash)
+		return c, err
+	})
+	if err != nil {
+		return nil, fmt.Errorf("reading api keys by prefix: %w", err)
+	}
+	return out, nil
+}
+
 // KeyStatus is what a request authenticated by a key may act as, read
 // fresh on every request (sk-674.18 K-16): the key's grant and state and its
 // owner's role, external flag and activity.

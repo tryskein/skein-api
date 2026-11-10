@@ -19,9 +19,8 @@ func (f *fakeClock) Advance(d time.Duration) {
 
 func newTestEntry(ok bool) apiKeyCacheEntry {
 	return apiKeyCacheEntry{
-		keyID:  uuid.New(),
-		userID: uuid.New(),
-		ok:     ok,
+		keyID: uuid.New(),
+		ok:    ok,
 	}
 }
 
@@ -40,7 +39,7 @@ func TestAPIKeyCache_HitMiss(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected hit on cached key")
 	}
-	if got.keyID != want.keyID || got.userID != want.userID || got.ok != want.ok {
+	if got.keyID != want.keyID || got.ok != want.ok {
 		t.Fatalf("entry mismatch on hit: got=%+v want=%+v", got, want)
 	}
 }

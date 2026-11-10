@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"skein-api/internal/apikeys"
 	"skein-api/internal/auth"
 	"skein-api/internal/testsupport"
 )
@@ -202,5 +203,8 @@ func withCtx(t *testing.T, userID uuid.UUID, role string) context.Context {
 	// it, agent-only behaviours (e.g. skein_create's `kind` requirement)
 	// are silently skipped in tests.
 	ctx = auth.WithAPIKeyID(ctx, uuid.Must(uuid.NewRandom()))
+	// The key's grant rides with its id (a key id without a grant is
+	// refused): the full grant, so tests see the owner's own reach.
+	ctx = auth.WithKeyGrant(ctx, apikeys.Grant{Level: apikeys.LevelManage, Admin: role == "admin", Scope: apikeys.Scope{Mode: apikeys.ScopeAll}})
 	return ctx
 }

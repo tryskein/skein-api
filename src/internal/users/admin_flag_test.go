@@ -110,6 +110,7 @@ func TestAdminFlag_NoPathGivesTheAdminRole(t *testing.T) {
 		s := server.NewMCPServer("admin-flag", "1", server.WithToolCapabilities(true))
 		mcptools.RegisterUser(s, store, pool, spacesSvc)
 		ctx := auth.WithAPIKeyID(auth.WithUserRole(auth.WithUserID(context.Background(), admin), "admin"), uuid.New())
+		ctx = auth.WithKeyGrant(ctx, apikeys.Grant{Level: apikeys.LevelManage, Admin: true, Scope: apikeys.Scope{Mode: apikeys.ScopeAll}})
 		return func(args map[string]any) (bool, map[string]any) {
 			raw, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": 1, "method": "tools/call",
 				"params": map[string]any{"name": "skein_user", "arguments": args}})

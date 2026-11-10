@@ -48,6 +48,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"skein-api/internal/accounts"
+	"skein-api/internal/apikeys"
 	"skein-api/internal/auth"
 	"skein-api/internal/handler"
 	"skein-api/internal/invitations"
@@ -329,7 +330,9 @@ func TestInvitationAgentForbiddenThroughRoutes(t *testing.T) {
 
 	routes := invitationRoutes(svc)
 	agent := http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
-		routes.ServeHTTP(rw, r.WithContext(auth.WithAPIKeyID(r.Context(), uuid.New())))
+		ctx := auth.WithAPIKeyID(r.Context(), uuid.New())
+		ctx = auth.WithKeyGrant(ctx, apikeys.Grant{Level: apikeys.LevelManage, Admin: false, Scope: apikeys.Scope{Mode: apikeys.ScopeAll}})
+		routes.ServeHTTP(rw, r.WithContext(ctx))
 	})
 	for _, c := range []struct {
 		name   string

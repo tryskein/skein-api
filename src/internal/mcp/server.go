@@ -210,6 +210,11 @@ func Setup(pool *pgxpool.Pool, heartbeatInterval time.Duration, registerTools fu
 			if id, ok := auth.APIKeyIDFrom(r.Context()); ok {
 				ctx = auth.WithAPIKeyID(ctx, id)
 			}
+			// The key's grant: scope and key rights read it from the
+			// per-RPC ctx; a key id without it is refused there.
+			if g, ok := auth.KeyGrantFrom(r.Context()); ok {
+				ctx = auth.WithKeyGrant(ctx, g)
+			}
 			if sid := auth.SessionIDFrom(r.Context()); sid != "" {
 				ctx = auth.WithSessionID(ctx, sid)
 			}

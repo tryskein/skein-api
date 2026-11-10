@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 
+	"skein-api/internal/apikeys"
 	"skein-api/internal/auth"
 	"skein-api/internal/dependencies"
 	"skein-api/internal/issues"
@@ -370,7 +371,8 @@ func withCtxFrom(parent context.Context, userID uuid.UUID, role string) context.
 	ctx := auth.WithUserID(parent, userID)
 	ctx = auth.WithUserRole(ctx, role)
 	ctx = auth.WithSessionID(ctx, "test-session-"+userID.String()[:8])
-	return auth.WithAPIKeyID(ctx, uuid.Must(uuid.NewRandom()))
+	ctx = auth.WithAPIKeyID(ctx, uuid.Must(uuid.NewRandom()))
+	return auth.WithKeyGrant(ctx, apikeys.Grant{Level: apikeys.LevelManage, Admin: role == "admin", Scope: apikeys.Scope{Mode: apikeys.ScopeAll}})
 }
 
 var rowStops = []struct {

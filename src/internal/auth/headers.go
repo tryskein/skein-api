@@ -5,6 +5,8 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
+
+	"skein-api/internal/apikeys"
 )
 
 // Header names that flow from skein-web (BFF) into skein-api on every
@@ -121,6 +123,7 @@ const (
 	ctxKeyIsExternal
 	ctxKeyAPIKeyID
 	ctxKeyMcpSessionID
+	ctxKeyKeyGrant
 )
 
 // WithUserID stores a parsed user UUID in ctx. Used by ParseUserHeaders
@@ -199,6 +202,23 @@ func WithAPIKeyID(ctx context.Context, id uuid.UUID) context.Context {
 // (e.g. cookie-authenticated calls into /api/v1/*) from a real Nil UUID.
 func APIKeyIDFrom(ctx context.Context) (uuid.UUID, bool) {
 	v, ok := ctx.Value(ctxKeyAPIKeyID).(uuid.UUID)
+	return v, ok
+}
+
+// WithKeyGrant stashes the grant of the key the request authenticated with
+// (RequestGrant: Admin is the effective flag). Every request authenticated by
+// a key carries one; a request that carries a key id and no grant is refused
+// by the grant's consumers (scope, key rights) — absence never means "no
+// limit".
+func WithKeyGrant(ctx context.Context, g apikeys.Grant) context.Context {
+	return context.WithValue(ctx, ctxKeyKeyGrant, g)
+}
+
+// KeyGrantFrom returns the grant stashed by WithKeyGrant. The bool is false
+// on a request not authenticated by a key, and on a key request whose grant
+// was not carried over — the consumer refuses that one.
+func KeyGrantFrom(ctx context.Context) (apikeys.Grant, bool) {
+	v, ok := ctx.Value(ctxKeyKeyGrant).(apikeys.Grant)
 	return v, ok
 }
 

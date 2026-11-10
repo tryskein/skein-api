@@ -8,12 +8,10 @@ import (
 	"github.com/google/uuid"
 )
 
-// apiKeyCacheTTL bounds how long a verified (or negatively-cached) lookup
-// stays in memory. Matches the SQL touchThrottle window in
-// internal/apikeys/store.go: a revoked key remains usable for at most one
-// TTL, which matches the existing audit granularity. Shortening this
-// reduces revoke latency at the cost of more bcrypt verifies; lengthening
-// it amortises better but lets revoked keys live longer in the hot path.
+// apiKeyCacheTTL bounds how long a bcrypt result (match or mismatch) stays
+// in memory. It bounds only how often bcrypt runs for a key: whether the
+// matched key is still usable is read on every request (see below), so the
+// TTL never extends a revoked, expired or deactivated key.
 const apiKeyCacheTTL = 60 * time.Second
 
 // apiKeyCacheCapacity caps memory. 1024 entries × ~120 B/entry ≈ 120 KB
@@ -33,19 +31,20 @@ const apiKeyCacheCapacity = 1024
 // going through LookupByPrefix so the W1 dummy-bcrypt mitigation gets
 // the same code path each time.
 //
-// A positive entry maps the key to its id and owner ONLY (sk-674.18 K-16):
-// whether the key is still usable, and the owner's role, external flag,
-// deactivation and deletion, are read on every request
-// (apikeys.Store.Status), so no cached entry outlives a revocation.
+// An entry is the result of the bcrypt verification and nothing else
+// (D-4): a positive entry names the key id the presented key verified
+// against. Whether that key is still usable — revocation, expiry, the
+// owner's activity — and what it grants are read on every request
+// (apikeys.Store.Status), so no cached entry outlives a revocation or a
+// narrowed grant.
 type apiKeyCacheEntry struct {
 	keyID     uuid.UUID
-	userID    uuid.UUID
 	ok        bool
 	expiresAt time.Time
 }
 
-// apiKeyCache is a fixed-capacity LRU for (plain key) → (resolved
-// identity). Used by the MCP middleware to avoid running
+// apiKeyCache is a fixed-capacity LRU for (plain key) → (bcrypt result).
+// Used by APIKeyAuthenticator to avoid running
 // bcrypt.CompareHashAndPassword on every single /mcp request — the
 // realistic hot path is one client repeatedly calling tools/list +
 // tools/call within a single conversation, so amortising bcrypt to

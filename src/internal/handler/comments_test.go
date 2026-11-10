@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"skein-api/internal/apikeys"
 	"skein-api/internal/auth"
 	"skein-api/internal/dependencies"
 	"skein-api/internal/issues"
@@ -62,6 +63,7 @@ func callPostComment(t *testing.T, h *IssuesHandler, projectID, issueID string, 
 	ctx = auth.WithUserRole(ctx, role)
 	if apiKeyID != uuid.Nil {
 		ctx = auth.WithAPIKeyID(ctx, apiKeyID)
+		ctx = auth.WithKeyGrant(ctx, apikeys.Grant{Level: apikeys.LevelManage, Admin: role == "admin", Scope: apikeys.Scope{Mode: apikeys.ScopeAll}})
 	}
 	req = req.WithContext(ctx)
 	req = withChiURLParams(req, projectID, issueID)

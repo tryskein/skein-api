@@ -18,6 +18,7 @@ import (
 
 	"github.com/mark3labs/mcp-go/server"
 
+	"skein-api/internal/apikeys"
 	"skein-api/internal/auth"
 	"skein-api/internal/monitorcreds"
 	"skein-api/internal/testsupport"
@@ -67,6 +68,7 @@ func TestMCPRegisterTools_NoMonitorStalled(t *testing.T) {
 	ctx = auth.WithUserID(ctx, owner)
 	ctx = auth.WithUserRole(ctx, "user")
 	ctx = auth.WithAPIKeyID(ctx, keyID)
+	ctx = auth.WithKeyGrant(ctx, apikeys.Grant{Level: apikeys.LevelManage, Admin: false, Scope: apikeys.Scope{Mode: apikeys.ScopeAll}})
 	ctx = auth.WithSessionID(ctx, session)
 
 	for _, tc := range []struct {
