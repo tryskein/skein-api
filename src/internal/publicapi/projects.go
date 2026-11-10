@@ -1199,24 +1199,31 @@ func (a *projectsAPI) createComponent(w http.ResponseWriter, r *http.Request) {
 	WriteJSON(w, r, http.StatusCreated, dto)
 }
 
-// pathComponent parses the {component} of the path. A malformed id is the
-// refusal of the MCP tool for it.
+// pathComponent parses the {component} of the path. A value that is not a
+// UUID names no component: 404 component_not_found, as a missing one.
 func pathComponent(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
 	raw := chi.URLParam(r, "component")
 	id, err := uuid.Parse(strings.TrimSpace(raw))
 	if err != nil {
-		writeCode(w, errcode.ValidationError, OriginDomain, "id must be a UUID", map[string]any{"id": raw})
+		writeCode(w, errcode.ComponentNotFound, OriginPath, "component not found in this project", map[string]any{"componentId": raw})
 		return uuid.Nil, false
 	}
 	return id, true
 }
 
 // writeComponentError answers a refusal of a component write with the code
-// of the MCP tool: a component that is not in the project is
-// validation_error, as MCP answers it (it has no component_not_found).
+// of the MCP tool, but for the component of the path: one that is not in
+// the project is 404 component_not_found (spec, «Response codes»; MCP names
+// the component by argument and answers validation_error). componentID is
+// that component, uuid.Nil when the path names none.
 func writeComponentError(w http.ResponseWriter, r *http.Request, err error, componentID uuid.UUID, what string) {
 	if ve, ok := projects.IsValidationError(err); ok {
 		writeCode(w, errcode.ValidationError, OriginDomain, ve.Message, map[string]any{"validation": ve.Code})
+		return
+	}
+	if errors.Is(err, projects.ErrNotFound) && componentID != uuid.Nil {
+		writeCode(w, errcode.ComponentNotFound, OriginPath, "component not found in this project",
+			map[string]any{"componentId": componentID.String()})
 		return
 	}
 	if errors.Is(err, projects.ErrNotFound) {
@@ -1269,10 +1276,10 @@ type updateComponentBody struct {
 // @Failure 400 {object} ProblemDocument "Malformed body, unknown field or parameter, a kind outside directed|autonomous (code validation_error)"
 // @Failure 401 {object} ProblemDocument "No key, or the key is invalid, expired or revoked (code unauthenticated)"
 // @Failure 403 {object} ProblemDocument "The key lacks manage (code insufficient_scope); the owner may not manage the project (code forbidden)"
-// @Failure 404 {object} ProblemDocument "No such project within reach (code project_not_found)"
+// @Failure 404 {object} ProblemDocument "No such project within reach (code project_not_found); the component of the path is not in the project (code component_not_found)"
 // @Failure 413 {object} ProblemDocument "Body over 1 MiB (code payload_too_large)"
 // @Failure 415 {object} ProblemDocument "Body is not application/json (code unsupported_media_type)"
-// @Failure 422 {object} ProblemDocument "The component is not in the project, the id is not a UUID, a value is invalid, nothing to change, archived combined with another change (code validation_error); name taken (code id_taken)"
+// @Failure 422 {object} ProblemDocument "A value is invalid, nothing to change, archived combined with another change (code validation_error); name taken (code id_taken)"
 // @Failure 429 {object} ProblemDocument "Rate limited (code rate_limited, Retry-After)"
 // @Failure 500 {object} ProblemDocument "Internal error (code internal_error)"
 // @Failure 503 {object} ProblemDocument "The database is unavailable (code database_unavailable)"
@@ -1351,8 +1358,7 @@ func (a *projectsAPI) updateComponent(w http.ResponseWriter, r *http.Request) {
 // @Failure 400 {object} ProblemDocument "Unknown parameter, a body that is not a JSON object (code validation_error)"
 // @Failure 401 {object} ProblemDocument "No key, or the key is invalid, expired or revoked (code unauthenticated)"
 // @Failure 403 {object} ProblemDocument "The key lacks manage (code insufficient_scope); the owner may not manage the project (code forbidden)"
-// @Failure 404 {object} ProblemDocument "No such project within reach (code project_not_found)"
-// @Failure 422 {object} ProblemDocument "The component is not in the project or the id is not a UUID (code validation_error)"
+// @Failure 404 {object} ProblemDocument "No such project within reach (code project_not_found); the component of the path is not in the project (code component_not_found)"
 // @Failure 429 {object} ProblemDocument "Rate limited (code rate_limited, Retry-After)"
 // @Failure 500 {object} ProblemDocument "Internal error (code internal_error)"
 // @Failure 503 {object} ProblemDocument "The database is unavailable (code database_unavailable)"

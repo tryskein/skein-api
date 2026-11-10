@@ -75,6 +75,7 @@ var Codes = map[string]Expect{
 	"reminder_not_found":   notFound(),
 	"comment_not_found":    notFound(),
 	"monitor_not_found":    notFound(),
+	"component_not_found":  notFound(),
 	// No operation has the path: only ever the object of the path.
 	"route_not_found": {Status: map[Origin]int{Path: 404}},
 

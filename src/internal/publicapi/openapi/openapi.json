@@ -7338,7 +7338,7 @@
                                 }
                             }
                         },
-                        "description": "No such project within reach (code project_not_found)"
+                        "description": "No such project within reach (code project_not_found); the component of the path is not in the project (code component_not_found)"
                     },
                     "413": {
                         "content": {
@@ -7368,7 +7368,7 @@
                                 }
                             }
                         },
-                        "description": "The component is not in the project, the id is not a UUID, a value is invalid, nothing to change, archived combined with another change (code validation_error); name taken (code id_taken)"
+                        "description": "A value is invalid, nothing to change, archived combined with another change (code validation_error); name taken (code id_taken)"
                     },
                     "429": {
                         "content": {
@@ -7487,17 +7487,7 @@
                                 }
                             }
                         },
-                        "description": "No such project within reach (code project_not_found)"
-                    },
-                    "422": {
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
-                                }
-                            }
-                        },
-                        "description": "The component is not in the project or the id is not a UUID (code validation_error)"
+                        "description": "No such project within reach (code project_not_found); the component of the path is not in the project (code component_not_found)"
                     },
                     "429": {
                         "content": {

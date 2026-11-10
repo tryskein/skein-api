@@ -21,6 +21,10 @@ var (
 	ReminderNotFound   = define("reminder_not_found", ClassNotFound, Permanent)
 	CommentNotFound    = define("comment_not_found", ClassNotFound, Permanent)
 	MonitorNotFound    = define("monitor_not_found", ClassNotFound, Permanent)
+	// ComponentNotFound — the {component} of a public API path is not a
+	// component of the project (MCP names a component by argument and
+	// answers validation_error).
+	ComponentNotFound = define("component_not_found", ClassNotFound, Permanent)
 	// RouteNotFound — no operation of the public API has this path.
 	RouteNotFound = define("route_not_found", ClassNotFound, Permanent)
 

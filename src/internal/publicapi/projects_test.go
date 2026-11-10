@@ -522,10 +522,28 @@ func TestProjects_ParityWithMCP(t *testing.T) {
 		mupd := rg.tool(ko, "skein_component", mcpArgs(pm, "action", "update", "id", mc, "name", cname+"2"))
 		parity(t, "updateComponent", upd, mupd, "")
 		sameEvents(t, "updateComponent", eventsSince(t, pool, pr, before), eventsSince(t, pool, pm, before))
+		// The component of the path that is not in the project is a missing
+		// object of the path: 404 component_not_found; MCP names it by
+		// argument and answers validation_error (spec, «Response codes»).
 		missing := uuid.NewString()
-		parity(t, "updateComponent of a component outside the project",
+		noComponent := func(op string, rest restCall, mcp toolAnswer) {
+			t.Helper()
+			if rest.status != http.StatusNotFound || rest.code() != "component_not_found" {
+				t.Errorf("%s: REST answered %d %s, want 404 component_not_found", op, rest.status, rest.body)
+			}
+			if mcp.code != "validation_error" {
+				t.Errorf("%s: MCP answered %q (%s), want validation_error", op, mcp.code, mcp.text)
+			}
+		}
+		noComponent("updateComponent of a component outside the project",
 			rg.rest(ko, http.MethodPatch, path(pm, "/components/"+missing), map[string]any{"name": "z"}, nil),
-			rg.tool(ko, "skein_component", mcpArgs(pm, "action", "update", "id", missing, "name", "z")), "validation_error")
+			rg.tool(ko, "skein_component", mcpArgs(pm, "action", "update", "id", missing, "name", "z")))
+		noComponent("updateComponent of a component of another project",
+			rg.rest(ko, http.MethodPatch, path(pm, "/components/"+rc), map[string]any{"name": "z"}, nil),
+			rg.tool(ko, "skein_component", mcpArgs(pm, "action", "update", "id", rc, "name", "z")))
+		if a := rg.rest(ko, http.MethodPatch, path(pm, "/components/not-a-uuid"), map[string]any{"name": "z"}, nil); a.status != http.StatusNotFound || a.code() != "component_not_found" {
+			t.Errorf("updateComponent of a path that is not a UUID: %d %s, want 404 component_not_found", a.status, a.body)
+		}
 
 		before = lastEventID(t, pool)
 		arc := rg.rest(ko, http.MethodPost, path(pr, "/components/"+rc+"/archive"), nil, nil)
@@ -533,9 +551,9 @@ func TestProjects_ParityWithMCP(t *testing.T) {
 		marc := rg.tool(ko, "skein_component", mcpArgs(pm, "action", "archive", "id", mc))
 		parity(t, "archiveComponent", arc, marc, "")
 		sameEvents(t, "archiveComponent", eventsSince(t, pool, pr, before), eventsSince(t, pool, pm, before))
-		parity(t, "archiveComponent of a component outside the project",
+		noComponent("archiveComponent of a component outside the project",
 			rg.rest(ko, http.MethodPost, path(pm, "/components/"+missing+"/archive"), nil, nil),
-			rg.tool(ko, "skein_component", mcpArgs(pm, "action", "archive", "id", missing)), "validation_error")
+			rg.tool(ko, "skein_component", mcpArgs(pm, "action", "archive", "id", missing)))
 
 		// Restoring from the archive is updateComponent with archived false.
 		before = lastEventID(t, pool)
