@@ -15,6 +15,7 @@ import (
 
 	"skein-api/internal/auth"
 	"skein-api/internal/authz"
+	"skein-api/internal/issueops"
 	"skein-api/internal/issues"
 	skmcp "skein-api/internal/mcp"
 	"skein-api/internal/projects"
@@ -31,7 +32,7 @@ var jsonUnmarshalString = func(s string, v any) error {
 // Matches the REST BulkHandler bulkMaxIDs (=100) so the contract is the
 // same across MCP and REST surfaces. Larger jobs should be a background
 // task, not a synchronous round-trip.
-const batchMaxItems = 100
+const batchMaxItems = issueops.BatchMaxItems
 
 // batchResultRow is the per-row entry in any batch tool's `results`
 // array. ok=true success carries a Version (post-state); ok=false

@@ -2,20 +2,15 @@ package tools
 
 import (
 	"context"
-	"errors"
-	"log/slog"
-	"strings"
-	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 
+	"skein-api/internal/issueops"
 	"skein-api/internal/issues"
 	skmcp "skein-api/internal/mcp"
-	"skein-api/internal/projects"
-	"skein-api/internal/spaces"
 )
 
 // RegisterAccept wires the skein_accept tool. Phase 2 of the ui-redesign
@@ -86,143 +81,22 @@ func RegisterAccept(s *server.MCPServer, pool *pgxpool.Pool, issuesStore *issues
 }
 
 func handleAccept(pool *pgxpool.Pool, issuesStore *issues.Store) server.ToolHandlerFunc {
+	d := issueops.Deps{Pool: pool, Issues: issuesStore}
 	return func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-		start := time.Now()
 		userID, errResp := skmcp.RequireUser(ctx)
 		if errResp != nil {
 			return errResp, nil
 		}
-		rawID, err := req.RequireString("id")
-		if err != nil {
-			return skmcp.ToolError(ErrCodeValidationError, "id is required", nil), nil
+		res, f := issueops.Accept(ctx, d, userID, issueops.Args(req.GetArguments()))
+		if f != nil {
+			return toolFailure(f), nil
 		}
-		id := strings.TrimSpace(rawID)
-		// INV-17 (sk-674.18 T029): the Inbox shows the caller's pending
-		// space invitations too; accepting or declining one is a person's
-		// act in the web UI, so an invitation id is refused with its own
-		// code, not answered as a missing issue.
-		if invID, perr := uuid.Parse(id); perr == nil {
-			isInv, ierr := spaces.IsInvitationTo(ctx, pool, invID, userID)
-			if ierr != nil {
-				slog.ErrorContext(ctx, "mcp tool error",
-					"tool", "skein_accept", "reason", "invitation lookup failed",
-					"userId", userID.String(), "error", ierr.Error())
-				return skmcp.ToolError(ErrCodeInternalError, "failed to read the invitation", nil), nil
-			}
-			if isInv {
-				return skmcp.ToolError(ErrCodeInvitationAgentForbidden,
-					"an agent cannot accept or decline a space invitation; the person does it in the web UI",
-					map[string]any{"id": id}), nil
-			}
-		}
-		if !looksLikeHierarchicalID(id) {
-			return skmcp.ToolError(ErrCodeValidationError,
-				"id must be a full hierarchical id like \"demo-42\"",
-				map[string]any{"id": rawID}), nil
-		}
-
-		// expectedVersion is optional: GetInt returns 0 when the param
-		// was omitted (matches MCP-go's `default` zero behaviour). We
-		// translate 0/absent → nil ExpectedVersion so the store skips
-		// the optimistic-concurrency check entirely. Any positive
-		// value is honoured.
-		var expectedVersionPtr *int
-		if v := req.GetInt("expectedVersion", 0); v > 0 {
-			expectedVersionPtr = &v
-		}
-
-		// Visibility check — must come before the store call so a
-		// caller who can't see the project gets `issue_not_found`
-		// rather than `forbidden` (matches the unified visibility
-		// pattern used by skein_close / skein_unclaim).
-		issue, err := issuesStore.GetIssue(ctx, id)
-		if err != nil {
-			if errors.Is(err, issues.ErrNotFound) {
-				return skmcp.ToolError(ErrCodeIssueNotFound,
-					"issue does not exist or is not visible",
-					map[string]any{"id": id}), nil
-			}
-			slog.ErrorContext(ctx, "mcp tool error",
-				"tool", "skein_accept",
-				"reason", "load issue failed",
-				"userId", userID.String(), "issueId", id, "error", err.Error())
-			return skmcp.ToolError(ErrCodeInternalError, "failed to load issue", nil), nil
-		}
-		if _, vErr := projects.EnsureProjectVisible(ctx, pool, issue.ProjectID, userID); vErr != nil {
-			if errors.Is(vErr, projects.ErrProjectNotVisible) {
-				return skmcp.ToolError(ErrCodeIssueNotFound,
-					"issue does not exist or is not visible",
-					map[string]any{"id": id}), nil
-			}
-			slog.ErrorContext(ctx, "mcp tool error",
-				"tool", "skein_accept",
-				"reason", "visibility check failed",
-				"userId", userID.String(), "issueId", id, "error", vErr.Error())
-			return skmcp.ToolError(ErrCodeInternalError, "visibility check failed", nil), nil
-		}
-
-		// Actor.Role stays 'agent' (audit-trail actor type); only the
-		// assignee accepts — there is no admin override (US-6).
-		actor := IssuesAgentActor(ctx, pool, userID)
-
-		dto, err := issuesStore.Accept(ctx, issues.AcceptInput{
-			ID:              id,
-			ExpectedVersion: expectedVersionPtr,
-			Actor:           actor,
-		})
-		if err != nil {
-			return mapAcceptError(ctx, err, userID, id), nil
-		}
-
-		slog.InfoContext(ctx, "mcp tool ok",
-			"tool", "skein_accept",
-			"userId", userID.String(), "issueId", id,
-			"version", dto.Version,
-			"latencyMs", time.Since(start).Milliseconds())
-		// The acceptance stamp is the ONLY proof this write applied —
-		// accept changes no status and a repeat is a version-less no-op
-		// — so this surface, and only this one, carries it. See
-		// ackFromAcceptedIssue.
+		id, dto := res.IssueID, res.Issue
 		return writeIssueAcceptanceAck(ctx, "skein_accept", userID.String(), id,
 			dto, req.GetBool("verbose", false))
 	}
 }
 
-// mapAcceptError preserves the distinction between a transient abort and a
-// genuine optimistic-version mismatch for the acceptance surface.
 func mapAcceptError(ctx context.Context, err error, userID uuid.UUID, id string) *mcpgo.CallToolResult {
-	if code, message, ok := contextStop(ctx, ctx, err); ok {
-		return skmcp.ToolError(code, message, map[string]any{"id": id})
-	}
-	if errors.Is(err, issues.ErrNotFound) {
-		return skmcp.ToolError(ErrCodeIssueNotFound,
-			"issue does not exist or is not visible",
-			map[string]any{"id": id})
-	}
-	if errors.Is(err, issues.ErrCannotAcceptClosed) {
-		return skmcp.ToolError(ErrCodeCannotAcceptClosed,
-			"cannot accept a closed issue — reopen it first",
-			map[string]any{"id": id})
-	}
-	if errors.Is(err, issues.ErrForbidden) {
-		return skmcp.ToolError(ErrCodeForbidden,
-			"only the issue's assignee can accept",
-			map[string]any{"id": id})
-	}
-	if errors.Is(err, issues.ErrSerializationRetry) {
-		return skmcp.ToolError(ErrCodeSerializationRetry,
-			"the write transaction lost a serialization race and made no change; retry the request",
-			map[string]any{"id": id})
-	}
-	var verr *issues.ErrVersionConflict
-	if errors.As(err, &verr) {
-		return skmcp.ToolError(ErrCodeVersionConflict,
-			"the issue was modified by another writer",
-			map[string]any{"currentVersion": verr.CurrentVersion})
-	}
-	slog.ErrorContext(ctx, "mcp tool error",
-		"tool", "skein_accept",
-		"reason", "store call failed",
-		"userId", userID.String(), "issueId", id, "error", err.Error())
-	return skmcp.ToolError(ErrCodeInternalError, "accept failed", nil)
+	return toolFailure(issueops.MapAcceptError(ctx, err, userID, id))
 }

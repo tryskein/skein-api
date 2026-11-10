@@ -2,17 +2,12 @@ package tools
 
 import (
 	"context"
-	"errors"
-	"log/slog"
-	"strings"
-	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 
-	"skein-api/internal/auth"
-	"skein-api/internal/authz"
+	"skein-api/internal/issueops"
 	"skein-api/internal/issues"
 	skmcp "skein-api/internal/mcp"
 )
@@ -109,128 +104,17 @@ func RegisterUnclaim(s *server.MCPServer, pool *pgxpool.Pool, issuesStore *issue
 }
 
 func handleUnclaim(pool *pgxpool.Pool, issuesStore *issues.Store) server.ToolHandlerFunc {
+	d := issueops.Deps{Pool: pool, Issues: issuesStore}
 	return func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-		start := time.Now()
 		userID, errResp := skmcp.RequireUser(ctx)
 		if errResp != nil {
 			return errResp, nil
 		}
-
-		rawID, err := req.RequireString("id")
-		if err != nil {
-			return skmcp.ToolError(ErrCodeValidationError, "id is required", nil), nil
+		res, f := issueops.Unclaim(ctx, d, userID, issueops.Args(req.GetArguments()))
+		if f != nil {
+			return toolFailure(f), nil
 		}
-		id := strings.TrimSpace(rawID)
-		if !looksLikeHierarchicalID(id) {
-			return skmcp.ToolError(ErrCodeValidationError,
-				"id must be a full hierarchical id like \"demo-42\"",
-				map[string]any{"id": rawID}), nil
-		}
-
-		force := req.GetBool("force", false)
-		// sk-674.18 T034 (K-28): force is force_unlock of US-6, checked
-		// on the issue's project (forceUnlockGate), not by the role.
-
-		// sk-19: nextStatus + reason are required. Validate at the
-		// MCP boundary so failures short-circuit before the visibility
-		// check + the SERIALIZABLE tx the store layer would open.
-		nextStatusRaw, err := req.RequireString("nextStatus")
-		if err != nil {
-			return skmcp.ToolError(ErrCodeValidationError,
-				"nextStatus is required — one of: in_progress, open, deferred",
-				nil), nil
-		}
-		nextStatus := strings.TrimSpace(nextStatusRaw)
-		switch nextStatus {
-		case "in_progress", "open", "deferred":
-		case "closed":
-			return skmcp.ToolError(ErrCodeValidationError,
-				"nextStatus=closed is rejected — use skein_close to close an issue",
-				map[string]any{"nextStatus": nextStatus}), nil
-		default:
-			return skmcp.ToolError(ErrCodeValidationError,
-				"nextStatus must be one of: in_progress, open, deferred",
-				map[string]any{"nextStatus": nextStatus}), nil
-		}
-
-		reasonRaw, err := req.RequireString("reason")
-		if err != nil {
-			return skmcp.ToolError(ErrCodeValidationError,
-				"reason is required (non-empty after trim)", nil), nil
-		}
-		reason := strings.TrimSpace(reasonRaw)
-		if reason == "" {
-			return skmcp.ToolError(ErrCodeValidationError,
-				"reason is required (non-empty after trim)", nil), nil
-		}
-		if vErr := issues.ValidateProse("reason", reason); vErr != nil {
-			return validationToolError(vErr), nil
-		}
-
-		// Visibility check.
-		issue, err := issuesStore.GetIssue(ctx, id)
-		if err != nil {
-			if errors.Is(err, issues.ErrNotFound) {
-				return skmcp.ToolError(ErrCodeIssueNotFound,
-					"issue does not exist or is not visible",
-					map[string]any{"id": id}), nil
-			}
-			slog.ErrorContext(ctx, "mcp tool error",
-				"tool", "skein_unclaim",
-				"reason", "load issue failed",
-				"userId", userID.String(), "issueId", id, "error", err.Error())
-			return skmcp.ToolError(ErrCodeInternalError, "failed to load issue", nil), nil
-		}
-		// sk-674.18 T066: releasing one's own claim moves the issue's
-		// status — ActionWrite of US-6. force=true releases ANOTHER
-		// holder's claim: that is force_unlock (T034, K-28) — the project
-		// owner, the space owner, the instance admin.
-		if force {
-			if res := forceUnlockGate(ctx, pool, "skein_unclaim", "id", id, issue.ProjectID, userID); res != nil {
-				return res, nil
-			}
-		} else if res := issueActionGate(ctx, pool, "skein_unclaim", "id", id, issue.ProjectID, userID, authz.ActionWrite); res != nil {
-			return res, nil
-		}
-
-		sessionID := auth.SessionIDFrom(ctx)
-		actor := IssuesAgentActor(ctx, pool, userID)
-
-		dto, err := issuesStore.Unclaim(ctx, issues.UnclaimInput{
-			ID:         id,
-			SessionID:  sessionID,
-			Force:      force,
-			NextStatus: nextStatus,
-			Reason:     reason,
-			Actor:      actor,
-		})
-		if err != nil {
-			if errors.Is(err, issues.ErrNotFound) {
-				return skmcp.ToolError(ErrCodeIssueNotFound,
-					"issue does not exist or is not visible",
-					map[string]any{"id": id}), nil
-			}
-			if errors.Is(err, issues.ErrNotLockHolder) {
-				return skmcp.ToolError(ErrCodeNotLockHolder,
-					"caller session does not hold the lock on this issue",
-					map[string]any{"id": id}), nil
-			}
-			if vErr, ok := issues.IsValidationError(err); ok {
-				return skmcp.ToolError(ErrCodeValidationError, vErr.Message,
-					map[string]any{"code": vErr.Code}), nil
-			}
-			slog.ErrorContext(ctx, "mcp tool error",
-				"tool", "skein_unclaim",
-				"reason", "store call failed",
-				"userId", userID.String(), "issueId", id, "error", err.Error())
-			return skmcp.ToolError(ErrCodeInternalError, "unclaim failed", nil), nil
-		}
-
-		slog.InfoContext(ctx, "mcp tool ok",
-			"tool", "skein_unclaim",
-			"userId", userID.String(), "issueId", id,
-			"version", dto.Version,
-			"latencyMs", time.Since(start).Milliseconds())
+		id, dto := res.IssueID, res.Issue
 		return writeIssueAck(ctx, "skein_unclaim", userID.String(), id,
 			dto, req.GetBool("verbose", false))
 	}

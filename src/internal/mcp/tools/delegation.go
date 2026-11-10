@@ -2,18 +2,14 @@ package tools
 
 import (
 	"context"
-	"errors"
-	"log/slog"
-	"strings"
-	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 
+	"skein-api/internal/issueops"
 	"skein-api/internal/issues"
 	skmcp "skein-api/internal/mcp"
-	"skein-api/internal/projects"
 )
 
 // RegisterDropDelegated wires the skein_drop_delegated tool. sk-34 —
@@ -122,103 +118,21 @@ func RegisterResumeDelegated(s *server.MCPServer, pool *pgxpool.Pool, issuesStor
 // they differ only in which store method they call. drop=true routes
 // to DismissDelegated; drop=false routes to ResumeDelegated.
 func handleDelegationAction(pool *pgxpool.Pool, issuesStore *issues.Store, drop bool) server.ToolHandlerFunc {
+	d := issueops.Deps{Pool: pool, Issues: issuesStore}
 	toolName := "skein_resume_delegated"
 	if drop {
 		toolName = "skein_drop_delegated"
 	}
 	return func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-		start := time.Now()
 		userID, errResp := skmcp.RequireUser(ctx)
 		if errResp != nil {
 			return errResp, nil
 		}
-		rawID, err := req.RequireString("id")
-		if err != nil {
-			return skmcp.ToolError(ErrCodeValidationError, "id is required", nil), nil
+		res, f := issueops.Delegation(ctx, d, userID, issueops.Args(req.GetArguments()), drop)
+		if f != nil {
+			return toolFailure(f), nil
 		}
-		id := strings.TrimSpace(rawID)
-		if !looksLikeHierarchicalID(id) {
-			return skmcp.ToolError(ErrCodeValidationError,
-				"id must be a full hierarchical id like \"demo-42\"",
-				map[string]any{"id": rawID}), nil
-		}
-
-		// Visibility check — same pattern as skein_accept. A caller
-		// who can't see the project gets issue_not_found rather than
-		// a confusing forbidden, matching the unified visibility
-		// pattern used by every issue-write tool.
-		issue, err := issuesStore.GetIssue(ctx, id)
-		if err != nil {
-			if errors.Is(err, issues.ErrNotFound) {
-				return skmcp.ToolError(ErrCodeIssueNotFound,
-					"issue does not exist or is not visible",
-					map[string]any{"id": id}), nil
-			}
-			slog.ErrorContext(ctx, "mcp tool error",
-				"tool", toolName,
-				"reason", "load issue failed",
-				"userId", userID.String(), "issueId", id, "error", err.Error())
-			return skmcp.ToolError(ErrCodeInternalError, "failed to load issue", nil), nil
-		}
-		if _, vErr := projects.EnsureProjectVisible(ctx, pool, issue.ProjectID, userID); vErr != nil {
-			if errors.Is(vErr, projects.ErrProjectNotVisible) {
-				return skmcp.ToolError(ErrCodeIssueNotFound,
-					"issue does not exist or is not visible",
-					map[string]any{"id": id}), nil
-			}
-			slog.ErrorContext(ctx, "mcp tool error",
-				"tool", toolName,
-				"reason", "visibility check failed",
-				"userId", userID.String(), "issueId", id, "error", vErr.Error())
-			return skmcp.ToolError(ErrCodeInternalError, "visibility check failed", nil), nil
-		}
-
-		actor := IssuesAgentActor(ctx, pool, userID)
-		input := issues.DelegationActionInput{ID: id, Actor: actor}
-
-		var dto *issues.IssueDetail
-		var actionErr error
-		if drop {
-			dto, actionErr = issuesStore.DismissDelegated(ctx, input)
-		} else {
-			dto, actionErr = issuesStore.ResumeDelegated(ctx, input)
-		}
-		if actionErr != nil {
-			if errors.Is(actionErr, issues.ErrNotFound) {
-				return skmcp.ToolError(ErrCodeIssueNotFound,
-					"issue does not exist or is not visible",
-					map[string]any{"id": id}), nil
-			}
-			// sk-34 review Go-W2: DismissDelegated rejects callers who
-			// aren't in the delegation chain (creator or past assignee)
-			// with code="not_in_chain". Surface as a validation_error
-			// so MCP clients get the structured payload + code.
-			if vErr, ok := issues.IsValidationError(actionErr); ok {
-				return skmcp.ToolError(ErrCodeValidationError, vErr.Message,
-					map[string]any{"code": vErr.Code, "id": id}), nil
-			}
-			slog.ErrorContext(ctx, "mcp tool error",
-				"tool", toolName,
-				"reason", "store call failed",
-				"userId", userID.String(), "issueId", id, "error", actionErr.Error())
-			return skmcp.ToolError(ErrCodeInternalError, toolName+" failed", nil), nil
-		}
-
-		slog.InfoContext(ctx, "mcp tool ok",
-			"tool", toolName,
-			"userId", userID.String(), "issueId", id,
-			"version", dto.Version,
-			"latencyMs", time.Since(start).Milliseconds())
-		// These two tools were wired before any of the response work and
-		// kept returning the full IssueDetail, prose included — an echo the
-		// caller never asked for, since the arguments are just an id
-		// (sk-248 audit). sk-233 cut the prose; sk-282 replaced the card.
-		//
-		// The DELEGATION acknowledgement rather than the common one: these
-		// two tools move neither status, nor version, nor any lock stamp,
-		// so the common row would answer drop and resume identically — and
-		// identically to the state before the call. `dismissed` is the one
-		// thing they actually change. See ackFromDelegatedIssue.
+		id, dto := res.IssueID, res.Issue
 		return writeIssueDelegationAck(ctx, toolName,
 			userID, id, dto, req.GetBool("verbose", false))
 	}
