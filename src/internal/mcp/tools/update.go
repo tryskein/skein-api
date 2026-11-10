@@ -67,7 +67,7 @@ func RegisterUpdate(s *server.MCPServer, pool *pgxpool.Pool, issuesStore *issues
 		),
 		mcpgo.WithNumber("expectedVersion",
 			mcpgo.Required(),
-			mcpgo.Description("The version the agent expects to see on the issue. The update only proceeds when the live version matches; otherwise returns version_conflict with the live version."),
+			mcpgo.Description("The version the agent expects to see on the issue. Every update — components and labels alone included — only proceeds when the live version matches; otherwise returns version_conflict with the live version. force=true skips the check."),
 			mcpgo.Min(1),
 		),
 		mcpgo.WithString("title",

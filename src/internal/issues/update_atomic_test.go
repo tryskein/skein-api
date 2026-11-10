@@ -288,6 +288,51 @@ func TestUpdateIssue_RefusalAtAnyStepWritesNothing(t *testing.T) {
 		}
 	})
 
+	// Review C5-01 (INV-7, US-6): a change made only of components or only
+	// of labels checks the caller's version too.
+	for _, only := range []struct {
+		name   string
+		change func(id string, version int) UpdateIssueInput
+	}{
+		{"components only", func(id string, version int) UpdateIssueInput {
+			return UpdateIssueInput{ID: id, ExpectedVersion: version, Actor: f.actor,
+				ReplaceComponents: true, Components: []uuid.UUID{f.component}}
+		}},
+		{"labels only", func(id string, version int) UpdateIssueInput {
+			return UpdateIssueInput{ID: id, ExpectedVersion: version, Actor: f.actor,
+				LabelsAdd: []string{"new"}, LabelsRemove: []string{"old"}}
+		}},
+	} {
+		t.Run(only.name+" with a stale version is a version conflict and writes nothing", func(t *testing.T) {
+			id := f.seed(t)
+			before := readAtomicSnapshot(t, f.pool, id)
+
+			_, err := f.store.UpdateIssue(context.Background(), only.change(id, before.version+1))
+			var conflict *ErrVersionConflict
+			if !errors.As(err, &conflict) || conflict.CurrentVersion != before.version {
+				t.Fatalf("UpdateIssue with version %d on %d = %v, want ErrVersionConflict{%d}",
+					before.version+1, before.version, err, before.version)
+			}
+			assertNothingWritten(t, before, readAtomicSnapshot(t, f.pool, id))
+		})
+		t.Run(only.name+": a serialization conflict answers serialization_retry", func(t *testing.T) {
+			id := f.seed(t)
+			table := "issue_labels"
+			if only.name == "components only" {
+				table = "issue_components"
+			}
+			installFailingTrigger(t, f.pool, table, "BEFORE INSERT",
+				fmt.Sprintf("NEW.issue_id = '%s'", id), "40001")
+			before := readAtomicSnapshot(t, f.pool, id)
+
+			_, err := f.store.UpdateIssue(context.Background(), only.change(id, before.version))
+			if !errors.Is(err, ErrSerializationRetry) {
+				t.Fatalf("UpdateIssue = %v, want ErrSerializationRetry", err)
+			}
+			assertNothingWritten(t, before, readAtomicSnapshot(t, f.pool, id))
+		})
+	}
+
 	t.Run("a serialization conflict answers serialization_retry and writes nothing", func(t *testing.T) {
 		id := f.seed(t)
 		installFailingTrigger(t, f.pool, "issue_labels", "BEFORE INSERT",

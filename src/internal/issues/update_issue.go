@@ -44,10 +44,14 @@ func (e *LabelNotPresentError) Error() string {
 //
 // ExpectedVersion, Force, SessionID and Actor are the change's own; they
 // override the same fields inside Patch, Status and Close. The caller's
-// version is checked by the first of patch / status / close that is set;
-// the steps after it run on the version the transaction itself moved. A
-// change made only of components and labels checks no version — the
-// contract those writers always had.
+// version is checked for every change (INV-7, US-6): by the first of
+// patch / status / close that is set, or — for a change made only of
+// components and labels — against the row read at the start of the
+// transaction, after the lock check. The steps after the check run on the
+// version the transaction itself moved. Force skips the check, as on every
+// writer. The single-step component and label writers of /ui/v1
+// (ReplaceComponentsNoLoad, AddLabelNoLoad, RemoveLabelNoLoad) keep their
+// own contract and check no version.
 type UpdateIssueInput struct {
 	ID              string
 	ExpectedVersion int
@@ -140,6 +144,9 @@ func (s *Store) runUpdateIssue(ctx context.Context, in UpdateIssueInput, op upda
 	if !versioned && !in.ReplaceComponents && len(in.LabelsAdd) == 0 && len(in.LabelsRemove) == 0 {
 		return UpdateIssueResult{}, fmt.Errorf("update issue %s: no step to apply", in.ID)
 	}
+	// A change of components and labels only: its version check is the
+	// transaction's first read (C5-01; INV-7, US-6).
+	checkFirst := !versioned && !in.Force && in.ExpectedVersion >= 1
 
 	// Every check that needs no transaction runs before it opens, for every
 	// step: a bad label at the end of the change refuses the change before
@@ -183,6 +190,20 @@ func (s *Store) runUpdateIssue(ctx context.Context, in UpdateIssueInput, op upda
 		// A replayed attempt starts from scratch (sk-622.21, R17).
 		res = UpdateIssueResult{}
 		chained := false
+		if checkFirst {
+			old, err := s.fetchIssueInTx(ctx, tx, in.ID)
+			if err != nil {
+				return err
+			}
+			// Lock first, as every writer does: a locked issue answers
+			// locked_by_other, not a version mismatch.
+			if err := lockGuard(old, in.SessionID, in.Actor.UserID, in.Force); err != nil {
+				return err
+			}
+			if old.Version != in.ExpectedVersion {
+				return &ErrVersionConflict{CurrentVersion: old.Version}
+			}
+		}
 		if in.Patch != nil {
 			var link CloseLinkState
 			if err := s.patchIssueInTx(ctx, tx, in.ID, patch, in.Actor, chained, &link); err != nil {
@@ -235,8 +256,10 @@ func (s *Store) runUpdateIssue(ctx context.Context, in UpdateIssueInput, op upda
 		return nil
 	})
 	if err != nil {
+		// A declared version lets a serialization abort be told from a real
+		// conflict: unchanged live version → serialization_retry.
 		var expected *int
-		if versioned {
+		if in.ExpectedVersion >= 1 {
 			expected = &in.ExpectedVersion
 		}
 		return UpdateIssueResult{}, s.degradeSerializationAbort(ctx, err, op.name, in.ID, expected)
