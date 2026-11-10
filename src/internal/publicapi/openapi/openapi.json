@@ -1,5 +1,766 @@
 {
     "components": {
+        "schemas": {
+            "projects.ComponentDTO": {
+                "properties": {
+                    "archivedAt": {
+                        "type": "string"
+                    },
+                    "blockedCount": {
+                        "type": "integer"
+                    },
+                    "createdAt": {
+                        "type": "string"
+                    },
+                    "createdBy": {
+                        "type": "string"
+                    },
+                    "description": {
+                        "type": "string"
+                    },
+                    "id": {
+                        "type": "string"
+                    },
+                    "inProgressCount": {
+                        "type": "integer"
+                    },
+                    "myOutboxBlockedCount": {
+                        "type": "integer"
+                    },
+                    "myOutboxInProgressCount": {
+                        "type": "integer"
+                    },
+                    "myOutboxOpenCount": {
+                        "description": "MyOutbox{Open,InProgress,Blocked}Count narrow component issue\naggregates to \"issues the caller created AND delegated to someone\nelse\" — created_by = caller AND assignee IS NOT NULL AND\nLOWER(assignee) <> LOWER(callerUsername).\n\nNOTE: the component path intentionally uses this narrower\ncreated_by-only predicate (unlike ProjectListItem.MyOutbox*, which\nincludes the sk-34 previous_assignees / dismissed_by chain). Aligning\ncomponents to the full Delegated lens is a separate follow-up.\nListComponents fills these only when the caller is known; Get /\nPatch / Create leave them at zero.",
+                        "type": "integer"
+                    },
+                    "myOutboxStandingCount": {
+                        "description": "MyOutboxStandingCount is the outbox-scoped standing aggregate — the\n\"Standing\" pill under outboxMode. Same created_by-only Delegated\npredicate as MyOutboxOpenCount, narrowed to status='standing'.",
+                        "type": "integer"
+                    },
+                    "name": {
+                        "type": "string"
+                    },
+                    "onMeBlockedCount": {
+                        "type": "integer"
+                    },
+                    "onMeInProgressCount": {
+                        "type": "integer"
+                    },
+                    "onMeOpenCount": {
+                        "description": "OnMe{Open,InProgress,Blocked}Count are the \"On me\" lens\ncounterparts (sk-30): per-status aggregates narrowed to \"issues\nassigned to the caller by someone else that the caller has\naccepted\" — LOWER(assignee) = LOWER(callerUsername) AND\ncreated_by <> caller AND accepted_at IS NOT NULL. Same fill rules\nas MyOutbox*.",
+                        "type": "integer"
+                    },
+                    "openCount": {
+                        "description": "OpenCount / InProgressCount / BlockedCount are populated by\nListComponents via a LEFT JOIN against issue_components + issues.\nGet / Patch / Create paths leave them at zero (the caller doesn't\nrender right-aligned counts in those flows).\n\nsk-423: as on the project row, «blocked» here and in every\n*BlockedCount below (open / in_progress being its disjoint\ncomplement) counts only blockers in projects the CALLER can see.",
+                        "type": "integer"
+                    },
+                    "paths": {
+                        "items": {
+                            "$ref": "#/components/schemas/projects.ComponentPath"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
+                    },
+                    "projectId": {
+                        "type": "string"
+                    },
+                    "standingCount": {
+                        "description": "StandingCount is the count of standing (perpetual-obligation) issues\nattached to the component. Its OWN pill (sk-118.8, decision #4):\nstanding is EXCLUDED from OpenCount / InProgressCount / BlockedCount\n(which route through status.ActiveWork) and reported here. Filled only\nby ListComponents; Get / Patch / Create leave it zero.",
+                        "type": "integer"
+                    },
+                    "updatedAt": {
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
+            "projects.ComponentPath": {
+                "properties": {
+                    "glob": {
+                        "type": "string"
+                    },
+                    "repoId": {
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
+            "projects.MemberDTO": {
+                "properties": {
+                    "addedAt": {
+                        "type": "string"
+                    },
+                    "addedBy": {
+                        "type": "string"
+                    },
+                    "deleted": {
+                        "description": "Deleted — the account was deleted (INV-18).",
+                        "type": "boolean"
+                    },
+                    "departed": {
+                        "description": "Departed — the person has left the space of this context (the\nissue's project); shown greyed. Never set together with Deleted.",
+                        "type": "boolean"
+                    },
+                    "name": {
+                        "type": "string"
+                    },
+                    "pseudonym": {
+                        "description": "Pseudonym — the stable alias of a deleted account\n(users.pseudonym, `deleted-<8hex>`); absent otherwise.",
+                        "type": "string"
+                    },
+                    "role": {
+                        "type": "string"
+                    },
+                    "userId": {
+                        "type": "string"
+                    },
+                    "username": {
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
+            "projects.ProjectDTO": {
+                "properties": {
+                    "archivedAt": {
+                        "type": "string"
+                    },
+                    "componentsCount": {
+                        "type": "integer"
+                    },
+                    "createdAt": {
+                        "type": "string"
+                    },
+                    "createdBy": {
+                        "type": "string"
+                    },
+                    "defaultIdMode": {
+                        "type": "string"
+                    },
+                    "description": {
+                        "type": "string"
+                    },
+                    "gitRepos": {
+                        "items": {
+                            "$ref": "#/components/schemas/projects.Repo"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
+                    },
+                    "gitlabGroup": {
+                        "type": "string"
+                    },
+                    "id": {
+                        "type": "string"
+                    },
+                    "idPrefix": {
+                        "type": "string"
+                    },
+                    "membersCount": {
+                        "type": "integer"
+                    },
+                    "name": {
+                        "type": "string"
+                    },
+                    "reposCount": {
+                        "type": "integer"
+                    },
+                    "spaceId": {
+                        "description": "SpaceID is the short id of the project's space (sk-674.18, never\nnull since T024).",
+                        "type": "string"
+                    },
+                    "stats": {
+                        "$ref": "#/components/schemas/projects.ProjectStats"
+                    },
+                    "updatedAt": {
+                        "type": "string"
+                    },
+                    "visibility": {
+                        "description": "Visibility is \"space\" (every participant of the space sees it) or\n\"members\" (only its members and the space owner).",
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
+            "projects.ProjectListItem": {
+                "properties": {
+                    "archivedAt": {
+                        "type": "string"
+                    },
+                    "blockedCount": {
+                        "type": "integer"
+                    },
+                    "componentsCount": {
+                        "description": "ComponentsCount is the number of NON-archived components of the\nproject (sk-551.53) — the same figure GET /projects/{id} reports as\nProjectDTO.ComponentsCount; archived components are not counted. A\nproject with no active component reports 0. It is a property of the\nproject, not of the caller's issues, so it is identical under every\nlens and toggle (no myOutbox / onMe variant). Lets the shell decide\nwhether a project row can expand into components without a per-row\nrequest.",
+                        "type": "integer"
+                    },
+                    "createdAt": {
+                        "type": "string"
+                    },
+                    "defaultIdMode": {
+                        "type": "string"
+                    },
+                    "description": {
+                        "type": "string"
+                    },
+                    "epicsEligibleCount": {
+                        "description": "EpicsEligibleCount is the number of epic-typed, non-closed issues\nin this project whose child set is non-empty AND every child is\nclosed — i.e. epics the UI should surface as \"ready to close\"\n(sk-32). Empty epics never qualify. Children sourced from the\ndependencies graph (parent-child edges). sk-35 restored this as\ncanonical. Computed in the same SELECT as the row-level status\ncounters so we don't pay a second round-trip.",
+                        "type": "integer"
+                    },
+                    "id": {
+                        "type": "string"
+                    },
+                    "idPrefix": {
+                        "type": "string"
+                    },
+                    "inProgressCount": {
+                        "type": "integer"
+                    },
+                    "myOutboxBlockedCount": {
+                        "type": "integer"
+                    },
+                    "myOutboxInProgressCount": {
+                        "type": "integer"
+                    },
+                    "myOutboxOpenCount": {
+                        "description": "MyOutbox{Open,InProgress,Blocked}Count are the same per-status\naggregates scoped to the caller's Delegated (outbox) lens (sk-34):\n\n\t(created_by = caller\n\t  AND assignee IS NOT NULL AND LOWER(assignee) <> LOWER(callerUsername))\n\tOR (caller = ANY(previous_assignees)\n\t  AND NOT caller = ANY(dismissed_by)\n\t  AND assignee IS NOT NULL AND LOWER(assignee) <> LOWER(callerUsername))\n\nPowers the shell's `My-assigned mode` (outboxMode) header toggle so\nevery row count flips to the caller's delegated scope when ON.\nFilled only when the caller identity is known (CallerID != uuid.Nil);\notherwise stays at zero.",
+                        "type": "integer"
+                    },
+                    "myOutboxStandingCount": {
+                        "description": "MyOutboxStandingCount is the outbox-scoped standing aggregate — the\n\"Standing\" pill under the `My-assigned mode` (outboxMode) toggle.\nSame Delegated predicate as MyOutboxOpenCount, narrowed to\nstatus='standing'. Honors the outboxMode invariant (CLAUDE.md).",
+                        "type": "integer"
+                    },
+                    "name": {
+                        "type": "string"
+                    },
+                    "onMeBlockedCount": {
+                        "type": "integer"
+                    },
+                    "onMeInProgressCount": {
+                        "type": "integer"
+                    },
+                    "onMeOpenCount": {
+                        "description": "OnMe{Open,InProgress,Blocked}Count are the \"On me\" lens\ncounterparts (sk-30): per-status aggregates narrowed to \"issues\nassigned to the caller by SOMEONE ELSE that the caller has already\naccepted\" — LOWER(assignee) = LOWER(callerUsername) AND\ncreated_by <> caller AND accepted_at IS NOT NULL. Powers the\nheader \"On me\" toggle so every row count flips to the caller's\nactive-work scope when ON. Filled only when the caller identity\nis known; collapses to zero otherwise.",
+                        "type": "integer"
+                    },
+                    "openCount": {
+                        "description": "OpenCount / InProgressCount / BlockedCount are aggregated in the\nsame SELECT as the row itself via LEFT JOIN issues + COUNT(*)\nFILTER. Issues have no archived_at — `status = 'closed'` is the\nterminal state, so the filters key off status alone.\n\nsk-423: «blocked» here — and in every *BlockedCount below, with the\nopen / in_progress counts as its disjoint complement — means blocked\nby a blocks / waits-for target that gates readiness AND lives in a\nproject the CALLER can see (authz.ReaderBlockedExpr). An issue\nblocked only from outside the caller's horizon counts as open /\nin_progress: counting it as blocked would reveal whether that hidden\nblocker is closed. Readiness (skein_ready) still counts every blocker.",
+                        "type": "integer"
+                    },
+                    "spaceId": {
+                        "description": "SpaceID is the short id of the project's space (sk-674.18 T024).",
+                        "type": "string"
+                    },
+                    "standingCount": {
+                        "description": "StandingCount is the count of standing (perpetual-obligation) issues\non the project row. Surfaced as its OWN pill (sk-118.8, decision #4):\nstanding is EXCLUDED from OpenCount / InProgressCount / BlockedCount\n(which route through status.ActiveWork) and reported here so the board\nrenders a distinct \"Standing\" pill rather than folding it into open.",
+                        "type": "integer"
+                    },
+                    "updatedAt": {
+                        "type": "string"
+                    },
+                    "visibility": {
+                        "description": "Visibility is \"space\" or \"members\" (sk-674.18 T024).",
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
+            "projects.ProjectStats": {
+                "properties": {
+                    "blocked": {
+                        "type": "integer"
+                    },
+                    "closed": {
+                        "type": "integer"
+                    },
+                    "deferred": {
+                        "type": "integer"
+                    },
+                    "done": {
+                        "description": "Done / NoWork split Closed by the CLOSE OUTCOME (sk-494, on the rule\nsk-489 normalised): \"closed\" does not equal \"done\". Done counts closed\nissues whose outcome is `done`; NoWork counts the other three\noutcomes — \"won't do\", \"duplicate\", \"superseded\" — the ones the\nspec calls \"closed without work\".\n\n⚠ Closed KEEPS ITS MEANING — it is still every closed issue, at any\noutcome (sk-489 INV-3, and the spec's \"all breakdowns BY STATUS\nstay unchanged\": this block is a status breakdown). The split\nis ADDED beside it, so `Done + NoWork = Closed` is an identity that\nholds on the wire at any data — that identity is what a reader uses\nto tell «this api knows outcomes» from «it does not», and it is what\n`close_outcome_stats_test.go#TestGetProjectWithStats_CloseOutcomeSplit`\nasserts.\n\nWhy NoWork is the leg SQL counts and Done is derived in Go: exactly\nas in `issues/store.go#epicSummaryNoWorkExpr`, one correlated leg\ncannot drift from Closed the way two independent spellings of\n«visible» and «closed» could. Same predicate, same spelling:\n`status = 'closed' AND close_outcome <> 'done'`.\n\nBoth are project-wide, like every other count here except MyAssigned\n/ MyCreated — the issue's own outcome is not horizon-dependent, and\na project the caller can read they can read whole.",
+                        "type": "integer"
+                    },
+                    "inProgress": {
+                        "type": "integer"
+                    },
+                    "lastActivity": {
+                        "type": "string"
+                    },
+                    "myAssigned": {
+                        "type": "integer"
+                    },
+                    "myCreated": {
+                        "type": "integer"
+                    },
+                    "noWork": {
+                        "type": "integer"
+                    },
+                    "open": {
+                        "description": "Open / InProgress / Blocked are disjoint; «blocked» counts only\nblockers in projects the caller can see (sk-423, the same rule as\nProjectListItem.BlockedCount).",
+                        "type": "integer"
+                    },
+                    "standingCount": {
+                        "description": "Standing is the count of perpetual-obligation issues (status='standing')\nin the project. It is surfaced as its OWN aggregate (sk-118.8,\ndecision #4): standing issues are EXCLUDED from Open / InProgress /\nBlocked / MyAssigned (which all route through status.ActiveWork) and\nreported here instead, so the board can render a distinct \"Standing\"\npill rather than folding standing into open work.",
+                        "type": "integer"
+                    },
+                    "total": {
+                        "type": "integer"
+                    }
+                },
+                "type": "object"
+            },
+            "projects.Repo": {
+                "properties": {
+                    "defaultBranch": {
+                        "type": "string"
+                    },
+                    "id": {
+                        "type": "string"
+                    },
+                    "name": {
+                        "type": "string"
+                    },
+                    "url": {
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
+            "publicapi.List-projects_ComponentDTO": {
+                "properties": {
+                    "hasMore": {
+                        "type": "boolean"
+                    },
+                    "items": {
+                        "items": {
+                            "$ref": "#/components/schemas/projects.ComponentDTO"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
+                    },
+                    "nextCursor": {
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
+            "publicapi.List-projects_MemberDTO": {
+                "properties": {
+                    "hasMore": {
+                        "type": "boolean"
+                    },
+                    "items": {
+                        "items": {
+                            "$ref": "#/components/schemas/projects.MemberDTO"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
+                    },
+                    "nextCursor": {
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
+            "publicapi.List-projects_ProjectListItem": {
+                "properties": {
+                    "hasMore": {
+                        "type": "boolean"
+                    },
+                    "items": {
+                        "items": {
+                            "$ref": "#/components/schemas/projects.ProjectListItem"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
+                    },
+                    "nextCursor": {
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
+            "publicapi.ProblemDocument": {
+                "properties": {
+                    "code": {
+                        "description": "Code is the machine code of the refusal — the same one MCP answers.",
+                        "type": "string"
+                    },
+                    "detail": {
+                        "description": "Detail explains the refusal to a human.",
+                        "type": "string"
+                    },
+                    "retryable": {
+                        "description": "Retryable is true for a transient code: the same request may succeed\nlater without any change.",
+                        "type": "boolean"
+                    },
+                    "status": {
+                        "description": "Status is the HTTP status.",
+                        "type": "integer"
+                    },
+                    "title": {
+                        "description": "Title is the phrase of the status.",
+                        "type": "string"
+                    },
+                    "type": {
+                        "description": "Type is always \"about:blank\": the code says what happened.",
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
+            "publicapi.ResolveCandidate": {
+                "properties": {
+                    "id": {
+                        "description": "ID is the project's UUID; address the project by it.",
+                        "type": "string"
+                    },
+                    "idPrefix": {
+                        "description": "IDPrefix is the project's prefix of issue ids.",
+                        "type": "string"
+                    },
+                    "matchedVia": {
+                        "description": "MatchedVia is the form that matched: id, id_prefix, alias, name,\nrepo_url or search.",
+                        "type": "string"
+                    },
+                    "name": {
+                        "description": "Name is the project's name.",
+                        "type": "string"
+                    },
+                    "score": {
+                        "description": "Score is the relevance of the candidate, 1 for an exact match.",
+                        "type": "number"
+                    }
+                },
+                "type": "object"
+            },
+            "publicapi.ResolveResult": {
+                "properties": {
+                    "candidates": {
+                        "description": "Candidates are up to 10 alternatives when there is no confident\nmatch.",
+                        "items": {
+                            "$ref": "#/components/schemas/publicapi.ResolveCandidate"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
+                    },
+                    "match": {
+                        "$ref": "#/components/schemas/publicapi.ResolveCandidate",
+                        "description": "Match is the project the handle names when the resolver is\nconfident; null otherwise."
+                    }
+                },
+                "type": "object"
+            },
+            "publicapi.componentBody": {
+                "properties": {
+                    "description": {
+                        "description": "Description is free-form markdown.",
+                        "type": "string"
+                    },
+                    "kind": {
+                        "description": "Kind of the write: directed or autonomous. A component records no\norigin; the value is checked like on every write.",
+                        "type": "string"
+                    },
+                    "name": {
+                        "description": "Name of the component, unique in the project. Required on create.",
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
+            "publicapi.createProjectBody": {
+                "properties": {
+                    "aliases": {
+                        "description": "Aliases of the project; each unique across projects, and none may\nrepeat another project's prefix or the reserved word \"resolve\".",
+                        "items": {
+                            "type": "string"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
+                    },
+                    "defaultIdMode": {
+                        "description": "DefaultIDMode is the id-generation mode of the project's issues:\ncounter (default), hash or custom.",
+                        "type": "string"
+                    },
+                    "description": {
+                        "description": "Description is free-form markdown.",
+                        "type": "string"
+                    },
+                    "gitRepos": {
+                        "description": "GitRepos are the repositories of the project.",
+                        "items": {
+                            "$ref": "#/components/schemas/publicapi.gitRepoInput"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
+                    },
+                    "idPrefix": {
+                        "description": "IDPrefix is the prefix of the project's issue ids, ^[a-z][a-z0-9_-]{0,49}$\n(case does not matter). Omitted: the first free prefix derived from the\nname. It may not repeat another project's prefix or alias, nor the\nreserved word \"resolve\".",
+                        "type": "string"
+                    },
+                    "kind": {
+                        "description": "Kind of the write: directed or autonomous. A project records no\norigin; the value is checked like on every write.",
+                        "type": "string"
+                    },
+                    "name": {
+                        "description": "Name is the display name, 1..200 characters after trim. Required.",
+                        "type": "string"
+                    },
+                    "space": {
+                        "description": "Space is the short id of the space of the project (getMe lists them).\nOmitted: the one space the caller may create projects in.",
+                        "type": "string"
+                    },
+                    "visibility": {
+                        "description": "Visibility: space (every member of the space sees the project) or\nmembers (only its members and the space owner). Omitted: the\ninstallation's default; always members in a personal space.",
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
+            "publicapi.gitRepoInput": {
+                "properties": {
+                    "defaultBranch": {
+                        "description": "DefaultBranch is the default branch, e.g. \"main\". Optional.",
+                        "type": "string"
+                    },
+                    "name": {
+                        "description": "Name of the repository within the project. Required.",
+                        "type": "string"
+                    },
+                    "url": {
+                        "description": "URL is the git remote (https, ssh or git). Required.",
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
+            "publicapi.putMemberBody": {
+                "properties": {
+                    "kind": {
+                        "description": "Kind of the write: directed or autonomous. A membership records no\norigin; the value is checked like on every write.",
+                        "type": "string"
+                    },
+                    "role": {
+                        "description": "Role of the member: owner or member. Required.",
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
+            "publicapi.updateComponentBody": {
+                "properties": {
+                    "archived": {
+                        "description": "Archived false restores an archived component, true archives it (as\narchiveComponent). Sent alone: it is not combined with name or\ndescription.",
+                        "type": "boolean"
+                    },
+                    "description": {
+                        "description": "Description replaces the description; an empty string clears it.",
+                        "type": "string"
+                    },
+                    "kind": {
+                        "description": "Kind of the write: directed or autonomous. A component records no\norigin; the value is checked like on every write.",
+                        "type": "string"
+                    },
+                    "name": {
+                        "description": "Name replaces the name; unique in the project.",
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
+            "publicapi.updateProjectBody": {
+                "properties": {
+                    "aliasesAdd": {
+                        "description": "AliasesAdd are aliases to add; each must be free and may not repeat\nanother project's prefix or the reserved word \"resolve\".",
+                        "items": {
+                            "type": "string"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
+                    },
+                    "aliasesRemove": {
+                        "description": "AliasesRemove are aliases of this project to remove.",
+                        "items": {
+                            "type": "string"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
+                    },
+                    "archived": {
+                        "description": "Archived: true archives the project, false restores it; a no-op when\nit is already so.",
+                        "type": "boolean"
+                    },
+                    "description": {
+                        "description": "Description replaces the description; an empty string clears it.",
+                        "type": "string"
+                    },
+                    "gitReposAdd": {
+                        "description": "GitReposAdd are repositories to add; the server generates their ids.",
+                        "items": {
+                            "$ref": "#/components/schemas/publicapi.gitRepoInput"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
+                    },
+                    "gitReposRemove": {
+                        "description": "GitReposRemove are the UUIDs of repositories to remove.",
+                        "items": {
+                            "type": "string"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
+                    },
+                    "gitlabGroup": {
+                        "description": "GitlabGroup replaces the GitLab group binding; an empty string clears it.",
+                        "type": "string"
+                    },
+                    "kind": {
+                        "description": "Kind of the write: directed or autonomous. A project records no\norigin; the value is checked like on every write.",
+                        "type": "string"
+                    },
+                    "name": {
+                        "description": "Name replaces the name, 1..200 characters after trim.",
+                        "type": "string"
+                    },
+                    "space": {
+                        "description": "Space is not supported: a project never moves to another space. Any\nvalue but null is refused with space_change_forbidden.",
+                        "type": "string"
+                    },
+                    "visibility": {
+                        "description": "Visibility switches who sees the project: space or members.",
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
+            "spaces.AgentSpace": {
+                "properties": {
+                    "canCreateProject": {
+                        "description": "CanCreateProject — the caller is a member (never with admin access).",
+                        "type": "boolean"
+                    },
+                    "id": {
+                        "description": "ID is the short id — the value of every `space` parameter.",
+                        "type": "string"
+                    },
+                    "kind": {
+                        "description": "Kind is KindPersonal | KindCommon | KindRegular.",
+                        "type": "string"
+                    },
+                    "name": {
+                        "type": "string"
+                    },
+                    "role": {
+                        "description": "Role is RoleOwner | RoleMember, or \"admin\" for a space the caller\nsees only as the instance admin.",
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
+            "tools.WhoamiAgent": {
+                "properties": {
+                    "firstSeenAt": {
+                        "type": "string"
+                    },
+                    "lastSeenAt": {
+                        "type": "string"
+                    },
+                    "sessionId": {
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
+            "tools.WhoamiProject": {
+                "properties": {
+                    "id": {
+                        "type": "string"
+                    },
+                    "idPrefix": {
+                        "type": "string"
+                    },
+                    "name": {
+                        "type": "string"
+                    },
+                    "role": {
+                        "description": "Role is the caller's access level on this project, as the access\nrelation gives it (authz): owner / member, or \"admin\" for an\ninstance admin's reach (we do NOT pretend an admin is an \"owner\" on\nevery project — distinguishing the two matters for audit).",
+                        "type": "string"
+                    },
+                    "spaceId": {
+                        "description": "SpaceID is the short id of the project's space — it tells the\nsame-named projects of different spaces apart.",
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
+            "tools.WhoamiResponse": {
+                "properties": {
+                    "agent": {
+                        "$ref": "#/components/schemas/tools.WhoamiAgent"
+                    },
+                    "isAdmin": {
+                        "type": "boolean"
+                    },
+                    "projects": {
+                        "items": {
+                            "$ref": "#/components/schemas/tools.WhoamiProject"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
+                    },
+                    "projectsHint": {
+                        "type": "string"
+                    },
+                    "projectsTotal": {
+                        "description": "ProjectsTotal is the count of projects visible to the caller.\n>= len(Projects); greater when the projects[] slice was capped.\nAlways populated so callers can tell whether they got the full list.",
+                        "type": "integer"
+                    },
+                    "projectsTruncated": {
+                        "description": "ProjectsTruncated is true when projects[] was capped\n(whoamiProjectsCap).",
+                        "type": "boolean"
+                    },
+                    "spaces": {
+                        "description": "Spaces are the spaces the caller sees (sk-674.18 T024, US-12), in\nthe order of the projects column, capped like projects[].",
+                        "items": {
+                            "$ref": "#/components/schemas/spaces.AgentSpace"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
+                    },
+                    "spacesTotal": {
+                        "type": "integer"
+                    },
+                    "spacesTruncated": {
+                        "type": "boolean"
+                    },
+                    "user": {
+                        "$ref": "#/components/schemas/tools.WhoamiUser"
+                    }
+                },
+                "type": "object"
+            },
+            "tools.WhoamiUser": {
+                "properties": {
+                    "email": {
+                        "type": "string"
+                    },
+                    "id": {
+                        "type": "string"
+                    },
+                    "name": {
+                        "type": "string"
+                    },
+                    "role": {
+                        "type": "string"
+                    },
+                    "username": {
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            }
+        },
         "securitySchemes": {
             "SkeinApiKey": {
                 "description": "API key of a Skein user (prefix ska_), created in the API keys section of the user's account.",
@@ -15,6 +776,83 @@
         "version": "1"
     },
     "paths": {
+        "/api/v1/me": {
+            "get": {
+                "description": "Returns the identity the API key acts as: the user (id, email, username, name, role), the executor of this request (agent: sessionId is the lock holder api:<keyId>[:<workerId>] of X-Skein-Worker-Id, with when it was first and last seen), the projects the user sees within the key's scope (at most 100, by name, with the user's role and the space; projectsTotal counts all of them and projectsTruncated marks the cut), the spaces the user is in and whether the user is an instance admin.\n\nThe same answer as the MCP tool skein_whoami. Any key may call it, whatever its rights. Read-only; the request still counts as activity of its executor.",
+                "operationId": "getMe",
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/tools.WhoamiResponse"
+                                }
+                            }
+                        },
+                        "description": "The caller"
+                    },
+                    "401": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "No key, or the key is invalid, expired or revoked, or its owner is deactivated (code unauthenticated)"
+                    },
+                    "404": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The key's owner no longer exists (code user_not_found)"
+                    },
+                    "429": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Request limit of the key or failed-authentication limit of the address exceeded (code rate_limited, Retry-After)"
+                    },
+                    "500": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Internal error (code internal_error)"
+                    },
+                    "503": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The database is unavailable (code database_unavailable)"
+                    }
+                },
+                "security": [
+                    {
+                        "SkeinApiKey": []
+                    }
+                ],
+                "summary": "Get the caller",
+                "tags": [
+                    "Me"
+                ]
+            }
+        },
         "/api/v1/openapi.json": {
             "get": {
                 "description": "Returns the OpenAPI 3.1 document of this instance's public API: every operation, the right of an API key each one requires and the security scheme of the key.\n\nThe document is embedded in the server and is the same on every replica of a release. When the instance sets SKEIN_PUBLIC_API_URL, servers[0].url is that address; otherwise the document has no servers member.\n\nNo API key is needed; the request has no side effects.",
@@ -34,6 +872,1632 @@
                 "summary": "Get the OpenAPI document of the public API",
                 "tags": [
                     "Meta"
+                ]
+            }
+        },
+        "/api/v1/projects": {
+            "get": {
+                "description": "Returns a page of the projects the key's owner can see within the key's scope: the instance admin sees every project but other users' personal spaces; anyone else the projects of the spaces he takes part in that he has access to, his own personal space and the projects he was added to. Each item carries the project's settings, its space and visibility, the caller's role and the issue counters.\n\nWithout q the items are ordered by recent activity; with q they are ordered by relevance (full-text search over the name, the description, the prefix and the aliases, reranked by meaning when the instance has an embedder). The page is a keyset cursor: pass nextCursor back as cursor while hasMore is true.\n\nThe same set as the MCP tool skein_project_list, whose rows cut the description; this list carries it whole. Read-only.",
+                "operationId": "listProjects",
+                "parameters": [
+                    {
+                        "description": "Which projects: false (active, the default), true (archived only) or all",
+                        "in": "query",
+                        "name": "archived",
+                        "schema": {
+                            "enum": [
+                                "false",
+                                "true",
+                                "all"
+                            ],
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "Free-form search query; orders the items by relevance",
+                        "in": "query",
+                        "name": "q",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "Page size, 1..100 (default 50); a value outside the range is refused, never clamped",
+                        "in": "query",
+                        "name": "limit",
+                        "schema": {
+                            "type": "integer"
+                        }
+                    },
+                    {
+                        "description": "The nextCursor of the previous page",
+                        "in": "query",
+                        "name": "cursor",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "Comma-separated fields of each item to return (plus id)",
+                        "in": "query",
+                        "name": "fields",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.List-projects_ProjectListItem"
+                                }
+                            }
+                        },
+                        "description": "A page of projects"
+                    },
+                    "400": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Unknown parameter, limit out of range, a cursor this list did not issue, an unknown field in fields (code validation_error)"
+                    },
+                    "401": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "No key, or the key is invalid, expired or revoked (code unauthenticated)"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The key lacks the read right (code insufficient_scope)"
+                    },
+                    "429": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Rate limited (code rate_limited, Retry-After)"
+                    },
+                    "500": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Internal error (code internal_error)"
+                    },
+                    "503": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The database is unavailable (code database_unavailable)"
+                    }
+                },
+                "security": [
+                    {
+                        "SkeinApiKey": [
+                            "read"
+                        ]
+                    }
+                ],
+                "summary": "List projects",
+                "tags": [
+                    "Projects"
+                ]
+            },
+            "post": {
+                "description": "Creates a project in a space; the key's owner becomes its owner. The same operation as the MCP tool skein_project_create:\n1. The name and the optional prefix, id mode, description, aliases and repositories are validated; an omitted prefix is the first free one derived from the name.\n2. The space is the one named, or the only space the owner may create projects in (several — space_required with their list). A key limited to spaces creates only inside them; a key limited to projects cannot create one (insufficient_scope, requiredScope).\n3. In one transaction, under the space's lock: the owner must still take part in the space, the space's project quota must allow one more, the prefix must be free (no project, deleted project, alias or reserved word holds it), the name free in the space, every alias free; then the project, the owner's membership, the members of a space-visible project and the aliases and repositories are written, with the project.created event. Any refusal writes nothing.\n\nSide effects: project.created event; every member of the space who sees the project gains it in live updates. The Location header names the new project.",
+                "operationId": "createProject",
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/publicapi.createProjectBody",
+                                "summary": "body",
+                                "description": "The project"
+                            }
+                        }
+                    },
+                    "description": "The project",
+                    "required": true
+                },
+                "responses": {
+                    "201": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/projects.ProjectDTO"
+                                }
+                            }
+                        },
+                        "description": "The project created"
+                    },
+                    "400": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Malformed body, unknown field or parameter, a kind outside directed|autonomous (code validation_error)"
+                    },
+                    "401": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "No key, or the key is invalid, expired or revoked (code unauthenticated)"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The key lacks manage or is limited to projects (code insufficient_scope); an external user (code external_cannot_create_project); the space is seen only as the instance admin (code not_space_member)"
+                    },
+                    "413": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Body over 1 MiB (code payload_too_large)"
+                    },
+                    "415": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Body is not application/json (code unsupported_media_type)"
+                    },
+                    "422": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Validation of a value (code validation_error, prefix_invalid); prefix taken (code prefix_taken, with suggestions); name taken in the space (code project_name_taken); alias taken (code id_taken); space quota reached (code project_quota); space unknown (code space_not_found); several spaces possible (code space_required); concurrent change of the space (code concurrent_change)"
+                    },
+                    "429": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Rate limited (code rate_limited, Retry-After)"
+                    },
+                    "500": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Internal error (code internal_error)"
+                    },
+                    "503": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The database is unavailable (code database_unavailable)"
+                    }
+                },
+                "security": [
+                    {
+                        "SkeinApiKey": [
+                            "manage"
+                        ]
+                    }
+                ],
+                "summary": "Create a project",
+                "tags": [
+                    "Projects"
+                ]
+            }
+        },
+        "/api/v1/projects/resolve": {
+            "get": {
+                "description": "Resolves a free-form string naming a project — its UUID, prefix, alias, name, a repository URL or a fuzzy, mistyped name — among the projects the key's owner may access within the key's scope. Exact forms are tried first, in the order UUID → prefix → alias → name: a hit on a unique form wins; the exact name of several accessible projects is refused as ambiguous. Then an exact repository URL, then lexical relevance, where a single confident candidate is the match.\n\nReturns match (the project) or match: null with up to 10 candidates. No match at all is not an error: match is null and candidates are empty. This path is always this operation: a project whose prefix or alias is \"resolve\" is addressed by its UUID. The same answer as the MCP tool skein_project_resolve. Read-only.",
+                "operationId": "resolveProject",
+                "parameters": [
+                    {
+                        "description": "The handle to resolve",
+                        "in": "query",
+                        "name": "q",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "Comma-separated fields of the answer to return",
+                        "in": "query",
+                        "name": "fields",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ResolveResult"
+                                }
+                            }
+                        },
+                        "description": "The match or the candidates"
+                    },
+                    "400": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "q missing, an unknown parameter or field (code validation_error)"
+                    },
+                    "401": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "No key, or the key is invalid, expired or revoked (code unauthenticated)"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The key lacks the read right (code insufficient_scope)"
+                    },
+                    "422": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The name matches several accessible projects (code ambiguous_project, with their candidates: prefix, name and space of each)"
+                    },
+                    "429": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Rate limited (code rate_limited, Retry-After)"
+                    },
+                    "500": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Internal error (code internal_error)"
+                    },
+                    "503": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The database is unavailable (code database_unavailable)"
+                    }
+                },
+                "security": [
+                    {
+                        "SkeinApiKey": [
+                            "read"
+                        ]
+                    }
+                ],
+                "summary": "Resolve a project handle",
+                "tags": [
+                    "Projects"
+                ]
+            }
+        },
+        "/api/v1/projects/{project}": {
+            "get": {
+                "description": "Returns the project named by the path — its UUID, prefix (case does not matter) or alias, matched in that order among the projects the key's owner may access within the key's scope — with its settings, space, visibility, aliases, repositories and issue counters (the caller's own counters included). A project out of reach answers exactly as a missing one. A name is not accepted here: resolve it with resolveProject first. Read-only.",
+                "operationId": "getProject",
+                "parameters": [
+                    {
+                        "description": "The project's UUID, prefix or alias (URL-encoded)",
+                        "in": "path",
+                        "name": "project",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "Comma-separated fields to return (plus id)",
+                        "in": "query",
+                        "name": "fields",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/projects.ProjectDTO"
+                                }
+                            }
+                        },
+                        "description": "The project"
+                    },
+                    "400": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Unknown parameter or field (code validation_error)"
+                    },
+                    "401": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "No key, or the key is invalid, expired or revoked (code unauthenticated)"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The key lacks the read right (code insufficient_scope)"
+                    },
+                    "404": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "No such project within reach (code project_not_found)"
+                    },
+                    "429": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Rate limited (code rate_limited, Retry-After)"
+                    },
+                    "500": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Internal error (code internal_error)"
+                    },
+                    "503": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The database is unavailable (code database_unavailable)"
+                    }
+                },
+                "security": [
+                    {
+                        "SkeinApiKey": [
+                            "read"
+                        ]
+                    }
+                ],
+                "summary": "Get a project",
+                "tags": [
+                    "Projects"
+                ]
+            },
+            "patch": {
+                "description": "Changes the project named by the path in one command — the same operation as the MCP tool skein_project_update. Allowed to the project's owner, the owner of its space and the instance admin.\n1. Every part of the body is validated first; at least one must be present. A space value is refused (a project never moves).\n2. All changes land in one SERIALIZABLE transaction — name, description, GitLab group, visibility, archive flag, aliases added and removed, repositories added and removed. Any refusal (an alias taken, an alias not on the project, a repository still used by a component) writes nothing.\n\nA project has no version: the request takes no If-Match and the last write wins, as in MCP and the UI. Side effects: the project.* events of what changed; a visibility change gives the project to, or takes it from, the members of the space.",
+                "operationId": "updateProject",
+                "parameters": [
+                    {
+                        "description": "The project's UUID, prefix or alias (URL-encoded)",
+                        "in": "path",
+                        "name": "project",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/publicapi.updateProjectBody",
+                                "summary": "body",
+                                "description": "The changes"
+                            }
+                        }
+                    },
+                    "description": "The changes",
+                    "required": true
+                },
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/projects.ProjectDTO"
+                                }
+                            }
+                        },
+                        "description": "The project after the change"
+                    },
+                    "400": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Malformed body, unknown field or parameter, a kind outside directed|autonomous (code validation_error)"
+                    },
+                    "401": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "No key, or the key is invalid, expired or revoked (code unauthenticated)"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The key lacks manage (code insufficient_scope); the owner is not the project's owner, the space owner or an admin (code forbidden)"
+                    },
+                    "404": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "No such project within reach (code project_not_found)"
+                    },
+                    "413": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Body over 1 MiB (code payload_too_large)"
+                    },
+                    "415": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Body is not application/json (code unsupported_media_type)"
+                    },
+                    "422": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Nothing to change or an invalid value (code validation_error); an alias taken (code id_taken); the name taken in the space (code project_name_taken); a space given (code space_change_forbidden); concurrent change (code concurrent_change)"
+                    },
+                    "429": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Rate limited (code rate_limited, Retry-After)"
+                    },
+                    "500": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Internal error (code internal_error)"
+                    },
+                    "503": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The database is unavailable (code database_unavailable)"
+                    }
+                },
+                "security": [
+                    {
+                        "SkeinApiKey": [
+                            "manage"
+                        ]
+                    }
+                ],
+                "summary": "Update a project",
+                "tags": [
+                    "Projects"
+                ]
+            }
+        },
+        "/api/v1/projects/{project}/components": {
+            "get": {
+                "description": "Returns the components of the project named by the path with their issue counters — the same set as the MCP tool skein_component, action list. The list is not paged: nextCursor is always null and hasMore false. Read-only.",
+                "operationId": "listComponents",
+                "parameters": [
+                    {
+                        "description": "The project's UUID, prefix or alias (URL-encoded)",
+                        "in": "path",
+                        "name": "project",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "Which components: false (active, the default), true (archived only) or all",
+                        "in": "query",
+                        "name": "archived",
+                        "schema": {
+                            "enum": [
+                                "false",
+                                "true",
+                                "all"
+                            ],
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "Comma-separated fields of each item to return (plus id)",
+                        "in": "query",
+                        "name": "fields",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.List-projects_ComponentDTO"
+                                }
+                            }
+                        },
+                        "description": "The components"
+                    },
+                    "400": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Unknown parameter or field, archived outside false|true|all (code validation_error)"
+                    },
+                    "401": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "No key, or the key is invalid, expired or revoked (code unauthenticated)"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The key lacks the read right (code insufficient_scope)"
+                    },
+                    "404": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "No such project within reach (code project_not_found)"
+                    },
+                    "429": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Rate limited (code rate_limited, Retry-After)"
+                    },
+                    "500": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Internal error (code internal_error)"
+                    },
+                    "503": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The database is unavailable (code database_unavailable)"
+                    }
+                },
+                "security": [
+                    {
+                        "SkeinApiKey": [
+                            "read"
+                        ]
+                    }
+                ],
+                "summary": "List the components of a project",
+                "tags": [
+                    "Projects"
+                ]
+            },
+            "post": {
+                "description": "Creates a component of the project named by the path — the same operation as the MCP tool skein_component, action create. Allowed to the project's owner, the owner of its space and the instance admin. The name is unique in the project.\n\nSide effects: the component.created event. The Location header names the new component.",
+                "operationId": "createComponent",
+                "parameters": [
+                    {
+                        "description": "The project's UUID, prefix or alias (URL-encoded)",
+                        "in": "path",
+                        "name": "project",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/publicapi.componentBody",
+                                "summary": "body",
+                                "description": "The component"
+                            }
+                        }
+                    },
+                    "description": "The component",
+                    "required": true
+                },
+                "responses": {
+                    "201": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/projects.ComponentDTO"
+                                }
+                            }
+                        },
+                        "description": "The component created"
+                    },
+                    "400": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Malformed body, unknown field or parameter, a kind outside directed|autonomous (code validation_error)"
+                    },
+                    "401": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "No key, or the key is invalid, expired or revoked (code unauthenticated)"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The key lacks manage (code insufficient_scope); the owner may not manage the project (code forbidden)"
+                    },
+                    "404": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "No such project within reach (code project_not_found)"
+                    },
+                    "413": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Body over 1 MiB (code payload_too_large)"
+                    },
+                    "415": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Body is not application/json (code unsupported_media_type)"
+                    },
+                    "422": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Name missing or invalid (code validation_error); name taken in the project (code id_taken)"
+                    },
+                    "429": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Rate limited (code rate_limited, Retry-After)"
+                    },
+                    "500": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Internal error (code internal_error)"
+                    },
+                    "503": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The database is unavailable (code database_unavailable)"
+                    }
+                },
+                "security": [
+                    {
+                        "SkeinApiKey": [
+                            "manage"
+                        ]
+                    }
+                ],
+                "summary": "Create a component",
+                "tags": [
+                    "Projects"
+                ]
+            }
+        },
+        "/api/v1/projects/{project}/components/{component}": {
+            "patch": {
+                "description": "Changes the name or the description of a component of the project named by the path — the same operation as the MCP tool skein_component, action update — or, with archived alone, archives (true) or restores (false) it, as the action archive does; a component already in the requested state is answered as it is. Allowed to the project's owner, the owner of its space and the instance admin. A component has no version: no If-Match, the last write wins.\n\nSide effects: the component.updated, component.archived or component.unarchived event of the change.",
+                "operationId": "updateComponent",
+                "parameters": [
+                    {
+                        "description": "The project's UUID, prefix or alias (URL-encoded)",
+                        "in": "path",
+                        "name": "project",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "The component's UUID",
+                        "in": "path",
+                        "name": "component",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/publicapi.updateComponentBody",
+                                "summary": "body",
+                                "description": "The changes"
+                            }
+                        }
+                    },
+                    "description": "The changes",
+                    "required": true
+                },
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/projects.ComponentDTO"
+                                }
+                            }
+                        },
+                        "description": "The component after the change"
+                    },
+                    "400": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Malformed body, unknown field or parameter, a kind outside directed|autonomous (code validation_error)"
+                    },
+                    "401": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "No key, or the key is invalid, expired or revoked (code unauthenticated)"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The key lacks manage (code insufficient_scope); the owner may not manage the project (code forbidden)"
+                    },
+                    "404": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "No such project within reach (code project_not_found)"
+                    },
+                    "413": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Body over 1 MiB (code payload_too_large)"
+                    },
+                    "415": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Body is not application/json (code unsupported_media_type)"
+                    },
+                    "422": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The component is not in the project, the id is not a UUID, a value is invalid, nothing to change, archived combined with another change (code validation_error); name taken (code id_taken)"
+                    },
+                    "429": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Rate limited (code rate_limited, Retry-After)"
+                    },
+                    "500": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Internal error (code internal_error)"
+                    },
+                    "503": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The database is unavailable (code database_unavailable)"
+                    }
+                },
+                "security": [
+                    {
+                        "SkeinApiKey": [
+                            "manage"
+                        ]
+                    }
+                ],
+                "summary": "Update a component",
+                "tags": [
+                    "Projects"
+                ]
+            }
+        },
+        "/api/v1/projects/{project}/components/{component}/archive": {
+            "post": {
+                "description": "Archives the component of the project named by the path — the same operation as the MCP tool skein_component, action archive. A component already archived is answered as it is. Restore it with updateComponent and archived false. Allowed to the project's owner, the owner of its space and the instance admin.\n\nSide effects: the component.archived event when the state changed.",
+                "operationId": "archiveComponent",
+                "parameters": [
+                    {
+                        "description": "The project's UUID, prefix or alias (URL-encoded)",
+                        "in": "path",
+                        "name": "project",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "The component's UUID",
+                        "in": "path",
+                        "name": "component",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/projects.ComponentDTO"
+                                }
+                            }
+                        },
+                        "description": "The component, archived"
+                    },
+                    "400": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Unknown parameter, a body that is not a JSON object (code validation_error)"
+                    },
+                    "401": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "No key, or the key is invalid, expired or revoked (code unauthenticated)"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The key lacks manage (code insufficient_scope); the owner may not manage the project (code forbidden)"
+                    },
+                    "404": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "No such project within reach (code project_not_found)"
+                    },
+                    "422": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The component is not in the project or the id is not a UUID (code validation_error)"
+                    },
+                    "429": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Rate limited (code rate_limited, Retry-After)"
+                    },
+                    "500": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Internal error (code internal_error)"
+                    },
+                    "503": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The database is unavailable (code database_unavailable)"
+                    }
+                },
+                "security": [
+                    {
+                        "SkeinApiKey": [
+                            "manage"
+                        ]
+                    }
+                ],
+                "summary": "Archive a component",
+                "tags": [
+                    "Projects"
+                ]
+            }
+        },
+        "/api/v1/projects/{project}/members": {
+            "get": {
+                "description": "Returns every member of the project named by the path with their role (owner or member) and how they take part (added manually, through the space or both). The list is not paged: nextCursor is always null and hasMore false. The same set as the MCP tool skein_project_members, action list. Read-only.",
+                "operationId": "listProjectMembers",
+                "parameters": [
+                    {
+                        "description": "The project's UUID, prefix or alias (URL-encoded)",
+                        "in": "path",
+                        "name": "project",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "Comma-separated fields of each item to return",
+                        "in": "query",
+                        "name": "fields",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.List-projects_MemberDTO"
+                                }
+                            }
+                        },
+                        "description": "The members"
+                    },
+                    "400": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Unknown parameter or field (code validation_error)"
+                    },
+                    "401": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "No key, or the key is invalid, expired or revoked (code unauthenticated)"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The key lacks the read right (code insufficient_scope)"
+                    },
+                    "404": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "No such project within reach (code project_not_found)"
+                    },
+                    "429": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Rate limited (code rate_limited, Retry-After)"
+                    },
+                    "500": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Internal error (code internal_error)"
+                    },
+                    "503": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The database is unavailable (code database_unavailable)"
+                    }
+                },
+                "security": [
+                    {
+                        "SkeinApiKey": [
+                            "read"
+                        ]
+                    }
+                ],
+                "summary": "List the members of a project",
+                "tags": [
+                    "Projects"
+                ]
+            }
+        },
+        "/api/v1/projects/{project}/members/{user}": {
+            "delete": {
+                "description": "Removes the user named by the path (UUID or username) from the project — the same operation as the MCP tool skein_project_members, action remove. The key's owner may always remove himself (leave the project); removing anyone else is allowed to the project's owner, the owner of its space and the instance admin. A member who sees the project through its space cannot be removed here: switch the project's visibility to members or remove them from the space.\n\nSide effects: the project.member_removed event; the user loses the project in live updates. Answers 204 without a body.",
+                "operationId": "deleteProjectMember",
+                "parameters": [
+                    {
+                        "description": "The project's UUID, prefix or alias (URL-encoded)",
+                        "in": "path",
+                        "name": "project",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "The user's UUID or username",
+                        "in": "path",
+                        "name": "user",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "Removed"
+                    },
+                    "400": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Unknown parameter, a body that is not a JSON object (code validation_error)"
+                    },
+                    "401": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "No key, or the key is invalid, expired or revoked (code unauthenticated)"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The key lacks manage (code insufficient_scope); the owner may not remove others (code forbidden)"
+                    },
+                    "404": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "No such project within reach (code project_not_found); no such username (code user_not_found)"
+                    },
+                    "422": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The user is not a member (code member_not_found); the member takes part through the space (code member_via_space); concurrent change (code concurrent_change)"
+                    },
+                    "429": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Rate limited (code rate_limited, Retry-After)"
+                    },
+                    "500": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Internal error (code internal_error)"
+                    },
+                    "503": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The database is unavailable (code database_unavailable)"
+                    }
+                },
+                "security": [
+                    {
+                        "SkeinApiKey": [
+                            "manage"
+                        ]
+                    }
+                ],
+                "summary": "Remove a project member",
+                "tags": [
+                    "Projects"
+                ]
+            },
+            "put": {
+                "description": "Makes the user named by the path (UUID or username) a member of the project with the given role, or changes the role of an existing member — the same operation as the MCP tool skein_project_members, action add. Allowed to the project's owner, the owner of its space and the instance admin. An external user can only be a member, never an owner.\n\nSide effects: the project.member_added or project.member_role_changed event; the user gains the project in live updates.",
+                "operationId": "putProjectMember",
+                "parameters": [
+                    {
+                        "description": "The project's UUID, prefix or alias (URL-encoded)",
+                        "in": "path",
+                        "name": "project",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "The user's UUID or username",
+                        "in": "path",
+                        "name": "user",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/publicapi.putMemberBody",
+                                "summary": "body",
+                                "description": "The role"
+                            }
+                        }
+                    },
+                    "description": "The role",
+                    "required": true
+                },
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/projects.MemberDTO"
+                                }
+                            }
+                        },
+                        "description": "The membership"
+                    },
+                    "400": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Malformed body, unknown field or parameter, a kind outside directed|autonomous (code validation_error)"
+                    },
+                    "401": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "No key, or the key is invalid, expired or revoked (code unauthenticated)"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The key lacks manage (code insufficient_scope); the owner may not manage members (code forbidden)"
+                    },
+                    "404": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "No such project within reach (code project_not_found); no such username (code user_not_found)"
+                    },
+                    "413": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Body over 1 MiB (code payload_too_large)"
+                    },
+                    "415": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Body is not application/json (code unsupported_media_type)"
+                    },
+                    "422": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "role is not owner or member, or an external user as owner (code validation_error); the user id does not exist (code user_not_found); concurrent change (code concurrent_change)"
+                    },
+                    "429": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Rate limited (code rate_limited, Retry-After)"
+                    },
+                    "500": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Internal error (code internal_error)"
+                    },
+                    "503": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The database is unavailable (code database_unavailable)"
+                    }
+                },
+                "security": [
+                    {
+                        "SkeinApiKey": [
+                            "manage"
+                        ]
+                    }
+                ],
+                "summary": "Add a project member or change the role",
+                "tags": [
+                    "Projects"
                 ]
             }
         }

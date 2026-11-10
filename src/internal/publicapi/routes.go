@@ -12,7 +12,11 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	"skein-api/internal/authz"
+	"skein-api/internal/projects"
+	"skein-api/internal/users"
 )
 
 // PathPrefix is the prefix of every route of the public API. The public port
@@ -177,10 +181,43 @@ func validRoute(rt Route) string {
 	return ""
 }
 
+// Deps are what the operations of the product table read and write
+// through: the same stores the MCP tools use (R-3).
+type Deps struct {
+	// Doc is the OpenAPI document served by getOpenApi.
+	Doc *OpenAPIDocument
+	// Pool is the database.
+	Pool *pgxpool.Pool
+	// Projects is the projects store.
+	Projects *projects.Store
+	// Users is the users store (username lookups).
+	Users *users.Store
+	// ProjectsEmbedder reranks listProjects by meaning; nil — full-text
+	// search only.
+	ProjectsEmbedder projects.QueryEmbedder
+	// DefaultVisibility is SKEIN_PROJECT_DEFAULT_VISIBILITY.
+	DefaultVisibility string
+}
+
 // ProductRoutes is the route table of the public API. Every operation of
 // the API is a row here; the resource operations are added by their own
 // changes.
-func ProductRoutes(doc *OpenAPIDocument) []Route {
+func ProductRoutes(d Deps) []Route {
+	pa := &projectsAPI{
+		pool: d.Pool, projects: d.Projects, users: d.Users,
+		embedder: d.ProjectsEmbedder, defaultVisibility: d.DefaultVisibility,
+	}
+	read := authz.KeyRequirement{Right: authz.KeyRightRead}
+	manage := authz.KeyRequirement{Right: authz.KeyRightManage}
+	key := func(id, method, path string, req authz.KeyRequirement, obj ActionObject, actions []authz.Action, h http.HandlerFunc) Route {
+		return Route{
+			OperationID: id, Method: method, Path: PathPrefix + path, Auth: AuthKey,
+			Key: req, Object: obj, Actions: actions, Handler: h,
+		}
+	}
+	view := []authz.Action{authz.ActionView}
+	manageProject := []authz.Action{authz.ActionManageProject}
+	manageMembers := []authz.Action{authz.ActionManageMembers}
 	return []Route{
 		{
 			OperationID: OperationGetOpenAPI,
@@ -188,7 +225,23 @@ func ProductRoutes(doc *OpenAPIDocument) []Route {
 			Path:        OpenAPIPath,
 			Auth:        AuthNone,
 			Key:         authz.KeyRequirement{Right: authz.KeyRightNone},
-			Handler:     doc,
+			Handler:     d.Doc,
 		},
+
+		// Projects (T022).
+		key(OperationGetMe, http.MethodGet, "me", authz.KeyRequirement{Right: authz.KeyRightNone}, ObjectNone, nil, pa.getMe),
+		key(OperationListProjects, http.MethodGet, "projects", read, ObjectNone, nil, pa.listProjects),
+		key(OperationResolveProject, http.MethodGet, "projects/resolve", read, ObjectNone, nil, pa.resolveProject),
+		key(OperationCreateProject, http.MethodPost, "projects",
+			authz.KeyRequirement{Right: authz.KeyRightManage, WideScope: true}, ObjectNone, nil, pa.createProject),
+		key(OperationGetProject, http.MethodGet, "projects/{project}", read, ObjectPathProject, view, pa.getProject),
+		key(OperationUpdateProject, http.MethodPatch, "projects/{project}", manage, ObjectPathProject, manageProject, pa.updateProject),
+		key(OperationListProjectMembers, http.MethodGet, "projects/{project}/members", read, ObjectPathProject, view, pa.listProjectMembers),
+		key(OperationPutProjectMember, http.MethodPut, "projects/{project}/members/{user}", manage, ObjectPathProject, manageMembers, pa.putProjectMember),
+		key(OperationDeleteProjectMember, http.MethodDelete, "projects/{project}/members/{user}", manage, ObjectPathProject, manageMembers, pa.deleteProjectMember),
+		key(OperationListComponents, http.MethodGet, "projects/{project}/components", read, ObjectPathProject, view, pa.listComponents),
+		key(OperationCreateComponent, http.MethodPost, "projects/{project}/components", manage, ObjectPathProject, manageProject, pa.createComponent),
+		key(OperationUpdateComponent, http.MethodPatch, "projects/{project}/components/{component}", manage, ObjectPathProject, manageProject, pa.updateComponent),
+		key(OperationArchiveComponent, http.MethodPost, "projects/{project}/components/{component}/archive", manage, ObjectPathProject, manageProject, pa.archiveComponent),
 	}
 }

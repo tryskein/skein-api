@@ -196,16 +196,25 @@ func (s *Store) PrefixAlternatives(ctx context.Context, name string) ([]string, 
 }
 
 // takenPrefixes reports which of candidates are taken: the prefix of any
-// project of the installation or a reserved prefix of a deleted one.
+// project of the installation, a reserved prefix of a deleted one, an alias
+// of any project or a reserved word of the public API's paths
+// (ReservedHandles) — a new prefix may take none of them.
 func (s *Store) takenPrefixes(ctx context.Context, candidates []string) (map[string]bool, error) {
 	out := make(map[string]bool, len(candidates))
 	if len(candidates) == 0 {
 		return out, nil
 	}
+	for _, c := range candidates {
+		if IsReservedHandle(c) {
+			out[c] = true
+		}
+	}
 	rows, err := s.pool.Query(ctx, `
 SELECT lower(id_prefix) FROM projects WHERE lower(id_prefix) = ANY($1::text[])
 UNION
-SELECT prefix FROM reserved_prefixes WHERE prefix = ANY($1::text[])`, candidates)
+SELECT prefix FROM reserved_prefixes WHERE prefix = ANY($1::text[])
+UNION
+SELECT alias FROM project_aliases WHERE alias = ANY($1::text[])`, candidates)
 	if err != nil {
 		return nil, fmt.Errorf("reading taken prefixes: %w", err)
 	}

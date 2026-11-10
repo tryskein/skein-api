@@ -1,0 +1,739 @@
+package main
+
+// public_api_classes_test.go — the class rows of the public API over the
+// operations of the product route table (sk-878.3.1, rows 100–104, 106,
+// 129): the key right of each operation, fields= on reads, Prefer on
+// writes, If-Match and Idempotency-Key, the origin of a write by key, the
+// key's scope on every list, the owner's role on every write to a project,
+// a key migrated by the backfill of US-13, and the strict parsing of the
+// query and the body.
+//
+// The reference is publicOps: a literal of the operations, written from the
+// table «API surface» of the spec and its rules for Prefer, If-Match and
+// Idempotency-Key — not from routes.go. It is compared with the flags of
+// routes.go both ways (a wrong flag must not become a wrong reference), and
+// every class is asked of every operation in it. The literal grows with the
+// tasks that add operations (T022 creates it, T023–T028 add their slices).
+//
+// The server is the product one: publicAPIServer over config.Load, the real
+// request chain in front of the product route table.
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"io"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"os"
+	"slices"
+	"strings"
+	"testing"
+
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
+
+	"skein-api/internal/apikeys"
+	"skein-api/internal/auth"
+	"skein-api/internal/config"
+	"skein-api/internal/projects"
+	"skein-api/internal/publicapi"
+	"skein-api/internal/testsupport"
+	"skein-api/internal/users"
+)
+
+// publicOp is one operation of the spec: its route, the right of its key,
+// and the request rules of the surface.
+type publicOp struct {
+	id     string
+	method string
+	path   string // under /api/v1/, as routes.go writes it
+	right  string // none | read | write | manage | admin
+	// read: a read (fields= applies). prefer: Prefer: return=minimal
+	// applies. ifMatch: required | optional | "" (not checked).
+	// idempotent: accepts Idempotency-Key. body: takes a JSON body.
+	read, prefer bool
+	ifMatch      string
+	idempotent   bool
+	body         bool
+	// projectWrite: a write on an object of a project, refused to an owner
+	// without the role (row 104).
+	projectWrite bool
+	// field is the field a read keeps with fields= (row 101).
+	field string
+}
+
+// publicOps is the literal of the spec, the operations of T022.
+var publicOps = []publicOp{
+	{id: "getMe", method: http.MethodGet, path: "me", right: "none", read: true, field: "isAdmin"},
+	{id: "listProjects", method: http.MethodGet, path: "projects", right: "read", read: true, field: "name"},
+	{id: "resolveProject", method: http.MethodGet, path: "projects/resolve", right: "read", read: true, field: "match"},
+	{id: "createProject", method: http.MethodPost, path: "projects", right: "manage", body: true},
+	{id: "getProject", method: http.MethodGet, path: "projects/{project}", right: "read", read: true, field: "name"},
+	{id: "updateProject", method: http.MethodPatch, path: "projects/{project}", right: "manage", body: true, projectWrite: true},
+	{id: "listProjectMembers", method: http.MethodGet, path: "projects/{project}/members", right: "read", read: true, field: "role"},
+	{id: "putProjectMember", method: http.MethodPut, path: "projects/{project}/members/{user}", right: "manage", body: true, projectWrite: true},
+	{id: "deleteProjectMember", method: http.MethodDelete, path: "projects/{project}/members/{user}", right: "manage", body: true, projectWrite: true},
+	{id: "listComponents", method: http.MethodGet, path: "projects/{project}/components", right: "read", read: true, field: "name"},
+	{id: "createComponent", method: http.MethodPost, path: "projects/{project}/components", right: "manage", body: true, projectWrite: true},
+	{id: "updateComponent", method: http.MethodPatch, path: "projects/{project}/components/{component}", right: "manage", body: true, projectWrite: true},
+	{id: "archiveComponent", method: http.MethodPost, path: "projects/{project}/components/{component}/archive", right: "manage", body: true, projectWrite: true},
+}
+
+// TestPublicAPIClasses_LiteralIsRoutesGo — rows 100 and 101, the literal
+// against the flags of routes.go, both ways: every operation of the literal
+// is a route with its method, path, right, Prefer, If-Match and
+// Idempotency-Key, and every route of the table is in the literal. Red when
+// a flag of routes.go differs from the spec.
+func TestPublicAPIClasses_LiteralIsRoutesGo(t *testing.T) {
+	routes := map[string]publicapi.Route{}
+	for _, rt := range publicapi.ProductRoutes(publicapi.Deps{}) {
+		if rt.OperationID != publicapi.OperationGetOpenAPI {
+			routes[rt.OperationID] = rt
+		}
+	}
+	ifMatch := map[string]publicapi.IfMatch{"": publicapi.IfMatchNone, "required": publicapi.IfMatchRequired, "optional": publicapi.IfMatchOptional}
+	for _, op := range publicOps {
+		rt, ok := routes[op.id]
+		if !ok {
+			t.Errorf("%s: not in routes.go", op.id)
+			continue
+		}
+		delete(routes, op.id)
+		if rt.Method != op.method || rt.Path != publicapi.PathPrefix+op.path {
+			t.Errorf("%s: routes.go %s %s, spec %s %s", op.id, rt.Method, rt.Path, op.method, publicapi.PathPrefix+op.path)
+		}
+		if got := rt.Key.Right.String(); got != op.right {
+			t.Errorf("%s: right %s, spec %s", op.id, got, op.right)
+		}
+		if rt.Prefer != op.prefer {
+			t.Errorf("%s: Prefer %v, spec %v", op.id, rt.Prefer, op.prefer)
+		}
+		if rt.IfMatch != ifMatch[op.ifMatch] {
+			t.Errorf("%s: If-Match %v, spec %q", op.id, rt.IfMatch, op.ifMatch)
+		}
+		if rt.Idempotent != op.idempotent {
+			t.Errorf("%s: Idempotency-Key %v, spec %v", op.id, rt.Idempotent, op.idempotent)
+		}
+	}
+	for id := range routes {
+		t.Errorf("%s: in routes.go but not in the spec's literal", id)
+	}
+	// createProject is the one operation that also needs a wide scope.
+	for _, rt := range publicapi.ProductRoutes(publicapi.Deps{}) {
+		if rt.Key.WideScope != (rt.OperationID == "createProject") {
+			t.Errorf("%s: wide scope %v", rt.OperationID, rt.Key.WideScope)
+		}
+	}
+}
+
+// classWorld is the seed of the class tests: an owner with two projects in
+// his space, a member of the first, an instance admin, the product server.
+type classWorld struct {
+	t          *testing.T
+	pool       *pgxpool.Pool
+	h          http.Handler
+	owner      uuid.UUID
+	member     uuid.UUID
+	admin      uuid.UUID
+	spaceShort string
+	p, q       uuid.UUID
+	pPrefix    string
+	qPrefix    string
+	qName      string
+	sfx        string
+	n          int
+}
+
+// newClassWorld seeds the world and builds the product public server from
+// config.Load.
+func newClassWorld(t *testing.T) *classWorld {
+	t.Helper()
+	pool := testsupport.NewTestPool(t)
+	t.Setenv("DATABASE_URL", os.Getenv("TEST_DATABASE_URL"))
+	t.Setenv("SKEIN_INTERNAL_SECRET", wiringInternalSecret)
+	t.Setenv("SKEIN_BCRYPT_COST", "4")
+	t.Setenv("ENVIRONMENT", "development")
+	t.Setenv("SKEIN_AGENT_PUBLIC_URL", "http://skein-classes.test")
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("config.Load: %v", err)
+	}
+	srv, err := publicAPIServer(cfg, pool, classDeps(pool), slog.New(&recordingHandler{}))
+	if err != nil || srv == nil {
+		t.Fatalf("publicAPIServer: %v %v", srv, err)
+	}
+	w := &classWorld{t: t, pool: pool, h: srv.Handler, sfx: strings.ReplaceAll(uuid.NewString()[:8], "-", "")}
+	w.owner, _ = testsupport.SeedUser(t, pool, "")
+	w.member, _ = testsupport.SeedUser(t, pool, "")
+	w.admin, _ = testsupport.SeedUser(t, pool, "admin")
+	space := testsupport.SeedSpace(t, pool, w.owner)
+	if err := pool.QueryRow(context.Background(), `SELECT short_id FROM spaces WHERE id = $1`, space).Scan(&w.spaceShort); err != nil {
+		t.Fatalf("read space: %v", err)
+	}
+	w.p, w.pPrefix = testsupport.SeedProjectInSpace(t, pool, w.owner, space, "clsp")
+	w.q, w.qPrefix = testsupport.SeedProjectInSpace(t, pool, w.owner, space, "clsq")
+	if err := pool.QueryRow(context.Background(), `SELECT name FROM projects WHERE id = $1`, w.q).Scan(&w.qName); err != nil {
+		t.Fatalf("read name: %v", err)
+	}
+	w.exec(`INSERT INTO project_members (project_id, user_id, role, added_at, added_by) VALUES ($1, $2, 'member', now(), $3)`,
+		w.p, w.member, w.owner)
+	for _, p := range []uuid.UUID{w.p, w.q} {
+		w.component(p)
+	}
+	t.Cleanup(func() {
+		ctx := context.Background()
+		like := "%" + w.sfx + "%"
+		_, _ = pool.Exec(ctx, `DELETE FROM events WHERE project_id IN (SELECT id FROM projects WHERE name LIKE $1)`, like)
+		_, _ = pool.Exec(ctx, `DELETE FROM projects WHERE name LIKE $1`, like)
+	})
+	return w
+}
+
+// classDeps are the stores of the product, as main builds them.
+func classDeps(pool *pgxpool.Pool) publicapi.Deps {
+	return publicapi.Deps{
+		Projects: projects.NewStore(pool),
+		Users:    users.NewStore(pool, auth.MinBcryptCost, apikeys.New(pool), "local", "", nil),
+	}
+}
+
+func (w *classWorld) exec(sql string, args ...any) {
+	w.t.Helper()
+	if _, err := w.pool.Exec(context.Background(), sql, args...); err != nil {
+		w.t.Fatalf("exec %q: %v", sql, err)
+	}
+}
+
+// fresh is a name unique to the test.
+func (w *classWorld) fresh(what string) string {
+	w.n++
+	return "cls" + what + w.sfx + "x" + strings.Repeat("a", w.n%5) + string(rune('a'+w.n%26)) + uuid.NewString()[:4]
+}
+
+// component inserts a component of project and returns its id.
+func (w *classWorld) component(project uuid.UUID) uuid.UUID {
+	w.t.Helper()
+	id := uuid.New()
+	w.exec(`INSERT INTO components (id, project_id, name, description, paths, created_by, created_at, updated_at)
+VALUES ($1, $2, $3, '', '[]'::jsonb, $4, now(), now())`, id, project, w.fresh("comp"), w.owner)
+	return id
+}
+
+// key mints a key of user with grant.
+func (w *classWorld) key(user uuid.UUID, g apikeys.Grant) string {
+	w.t.Helper()
+	plain, prefix, hash, err := auth.GenerateAPIKey(auth.MinBcryptCost)
+	if err != nil {
+		w.t.Fatalf("GenerateAPIKey: %v", err)
+	}
+	c, err := apikeys.New(w.pool).Create(context.Background(), apikeys.NewKey{
+		UserID: user, Label: "classes", Prefix: prefix, Hash: hash, Grant: g,
+	}, testsupport.KeyTTLPolicy)
+	if err != nil {
+		w.t.Fatalf("create key: %v", err)
+	}
+	w.t.Cleanup(func() {
+		_, _ = w.pool.Exec(context.Background(), `DELETE FROM agents WHERE api_key_id = $1`, c.ID)
+		_, _ = w.pool.Exec(context.Background(), `DELETE FROM api_keys WHERE id = $1`, c.ID)
+	})
+	return plain
+}
+
+func levelKey(l apikeys.Level) apikeys.Grant {
+	return apikeys.Grant{Level: l, Scope: apikeys.Scope{Mode: apikeys.ScopeAll}}
+}
+
+// opCall is one request of an operation.
+type opCall struct {
+	method, path string
+	body         map[string]any
+}
+
+// call is a request of op that succeeds for the owner of project p: the
+// state it needs (a member to remove, a component to change) is seeded
+// first.
+func (w *classWorld) call(op publicOp, p uuid.UUID) opCall {
+	w.t.Helper()
+	base := "/api/v1/"
+	proj := base + "projects/" + p.String()
+	switch op.id {
+	case "getMe":
+		return opCall{http.MethodGet, base + "me", nil}
+	case "listProjects":
+		return opCall{http.MethodGet, base + "projects", nil}
+	case "resolveProject":
+		return opCall{http.MethodGet, base + "projects/resolve?q=" + url.QueryEscape(w.pPrefix), nil}
+	case "createProject":
+		return opCall{http.MethodPost, base + "projects", map[string]any{"name": w.fresh("proj"), "space": w.spaceShort}}
+	case "getProject":
+		return opCall{http.MethodGet, proj, nil}
+	case "updateProject":
+		return opCall{http.MethodPatch, proj, map[string]any{"description": w.fresh("desc")}}
+	case "listProjectMembers":
+		return opCall{http.MethodGet, proj + "/members", nil}
+	case "putProjectMember":
+		u, _ := testsupport.SeedUser(w.t, w.pool, "")
+		return opCall{http.MethodPut, proj + "/members/" + u.String(), map[string]any{"role": "member"}}
+	case "deleteProjectMember":
+		u, _ := testsupport.SeedUser(w.t, w.pool, "")
+		w.exec(`INSERT INTO project_members (project_id, user_id, role, added_at, added_by) VALUES ($1, $2, 'member', now(), $3)`,
+			p, u, w.owner)
+		return opCall{http.MethodDelete, proj + "/members/" + u.String(), nil}
+	case "listComponents":
+		return opCall{http.MethodGet, proj + "/components", nil}
+	case "createComponent":
+		return opCall{http.MethodPost, proj + "/components", map[string]any{"name": w.fresh("comp")}}
+	case "updateComponent":
+		return opCall{http.MethodPatch, proj + "/components/" + w.component(p).String(), map[string]any{"name": w.fresh("comp")}}
+	case "archiveComponent":
+		return opCall{http.MethodPost, proj + "/components/" + w.component(p).String() + "/archive", nil}
+	}
+	w.t.Fatalf("no request for %s", op.id)
+	return opCall{}
+}
+
+// answer is one response of the server.
+type answer struct {
+	status int
+	header http.Header
+	body   []byte
+}
+
+func (a answer) object(t *testing.T) map[string]any {
+	t.Helper()
+	var m map[string]any
+	if err := json.Unmarshal(a.body, &m); err != nil {
+		t.Fatalf("answer %d is not a JSON object: %v (%s)", a.status, err, a.body)
+	}
+	return m
+}
+
+func (a answer) code() string {
+	var p struct {
+		Code string `json:"code"`
+	}
+	_ = json.Unmarshal(a.body, &p)
+	return p.Code
+}
+
+// do sends c with key and headers; query is added to the path's query.
+func (w *classWorld) do(key string, c opCall, query string, headers map[string]string) answer {
+	w.t.Helper()
+	path := c.path
+	if query != "" {
+		if strings.Contains(path, "?") {
+			path += "&" + query
+		} else {
+			path += "?" + query
+		}
+	}
+	var rd io.Reader = http.NoBody
+	if c.body != nil {
+		raw, err := json.Marshal(c.body)
+		if err != nil {
+			w.t.Fatalf("marshal: %v", err)
+		}
+		rd = bytes.NewReader(raw)
+	}
+	req := httptest.NewRequest(c.method, path, rd)
+	if c.body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	req.Header.Set(auth.HeaderAPIKey, key)
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+	rec := httptest.NewRecorder()
+	w.h.ServeHTTP(rec, req)
+	return answer{status: rec.Code, header: rec.Header(), body: rec.Body.Bytes()}
+}
+
+// withBody is c with the members of extra added to its body.
+func withBody(c opCall, extra map[string]any) opCall {
+	body := map[string]any{}
+	for k, v := range c.body {
+		body[k] = v
+	}
+	for k, v := range extra {
+		body[k] = v
+	}
+	c.body = body
+	return c
+}
+
+// lastEvent is the id of the latest event: the baseline of «nothing written».
+func (w *classWorld) lastEvent() int64 {
+	w.t.Helper()
+	var id int64
+	if err := w.pool.QueryRow(context.Background(), `SELECT coalesce(max(id), 0) FROM events`).Scan(&id); err != nil {
+		w.t.Fatalf("read the last event: %v", err)
+	}
+	return id
+}
+
+// actorsSince are the actor types of the events written after since.
+func (w *classWorld) actorsSince(since int64) []string {
+	w.t.Helper()
+	rows, err := w.pool.Query(context.Background(), `SELECT actor_type FROM events WHERE id > $1 ORDER BY id`, since)
+	if err != nil {
+		w.t.Fatalf("read events: %v", err)
+	}
+	defer rows.Close()
+	out := []string{}
+	for rows.Next() {
+		var a string
+		if err := rows.Scan(&a); err != nil {
+			w.t.Fatalf("scan: %v", err)
+		}
+		out = append(out, a)
+	}
+	return out
+}
+
+// wantNothingWritten asserts that no event was written after since.
+func (w *classWorld) wantNothingWritten(t *testing.T, what string, since int64) {
+	t.Helper()
+	if got := w.actorsSince(since); len(got) != 0 {
+		t.Errorf("%s: %d events written, want none", what, len(got))
+	}
+}
+
+func success(status int) bool { return status >= 200 && status < 300 }
+
+// below is the grant one level below right: a key without a level (admin
+// only, of an admin owner) for read, read for write, write for manage.
+func (w *classWorld) below(right string) (owner uuid.UUID, g apikeys.Grant) {
+	switch right {
+	case "read":
+		return w.admin, apikeys.Grant{Admin: true, Scope: apikeys.Scope{Mode: apikeys.ScopeAll}}
+	case "write":
+		return w.owner, levelKey(apikeys.LevelRead)
+	case "manage":
+		return w.owner, levelKey(apikeys.LevelWrite)
+	}
+	w.t.Fatalf("no level below %s", right)
+	return uuid.Nil, apikeys.Grant{}
+}
+
+// TestPublicAPIClasses_KeyRight — row 100 (SC-002). For each operation, a
+// key one level below its right gets 403 insufficient_scope naming the
+// right and the operation, and nothing is written. Red when the right of an
+// operation in routes.go is below the spec's.
+func TestPublicAPIClasses_KeyRight(t *testing.T) {
+	w := newClassWorld(t)
+	for _, op := range publicOps {
+		if op.right == "none" {
+			continue
+		}
+		t.Run(op.id, func(t *testing.T) {
+			owner, g := w.below(op.right)
+			key := w.key(owner, g)
+			c := w.call(op, w.p)
+			since := w.lastEvent()
+			a := w.do(key, c, "", nil)
+			if a.status != http.StatusForbidden || a.code() != "insufficient_scope" {
+				t.Fatalf("%d %s, want 403 insufficient_scope", a.status, a.body)
+			}
+			if p := a.object(t); p["requiredRight"] != op.right || p["operationId"] != op.id {
+				t.Errorf("refusal names %v / %v, want %s / %s", p["requiredRight"], p["operationId"], op.right, op.id)
+			}
+			w.wantNothingWritten(t, op.id, since)
+		})
+	}
+}
+
+// TestPublicAPIClasses_FieldsAndPrefer — row 101 (US-8, SC-008, OST-3-7).
+// Each read keeps with fields= the named field plus id — on each item of a
+// list, whose nextCursor and hasMore stay — and refuses an unknown field
+// with 400; each write refuses fields= with 400 and writes nothing; each
+// write where Prefer does not apply answers Prefer: return=minimal as
+// without it, with no Preference-Applied. Red when a flag of routes.go
+// differs from the literal.
+func TestPublicAPIClasses_FieldsAndPrefer(t *testing.T) {
+	w := newClassWorld(t)
+	key := w.key(w.owner, levelKey(apikeys.LevelManage))
+	for _, op := range publicOps {
+		t.Run(op.id, func(t *testing.T) {
+			if op.read {
+				c := w.call(op, w.p)
+				full := w.do(key, c, "", nil).object(t)
+				a := w.do(key, c, "fields="+op.field, nil)
+				if a.status != http.StatusOK {
+					t.Fatalf("fields=%s: %d %s", op.field, a.status, a.body)
+				}
+				got := a.object(t)
+				if items, isList := full["items"]; isList {
+					for _, k := range []string{"items", "nextCursor", "hasMore"} {
+						if _, ok := got[k]; !ok {
+							t.Errorf("fields= on a list dropped %s: %s", k, a.body)
+						}
+					}
+					list, _ := got["items"].([]any)
+					if fullList, _ := items.([]any); len(fullList) == 0 || len(list) != len(fullList) {
+						t.Fatalf("fields= on a list: %d items of %d (the list must not be empty)", len(list), len(fullList))
+					}
+					for _, it := range list {
+						m, _ := it.(map[string]any)
+						if _, ok := m[op.field]; !ok {
+							t.Errorf("item without %s: %v", op.field, m)
+						}
+						for k := range m {
+							if k != op.field && k != "id" {
+								t.Errorf("item kept %s besides %s and id", k, op.field)
+							}
+						}
+					}
+				} else {
+					want := map[string]bool{op.field: true}
+					if _, ok := full["id"]; ok {
+						want["id"] = true
+					}
+					if len(got) != len(want) {
+						t.Errorf("fields=%s kept %v, want %v", op.field, keysOf(got), want)
+					}
+					for k := range want {
+						if _, ok := got[k]; !ok {
+							t.Errorf("fields=%s dropped %s", op.field, k)
+						}
+					}
+				}
+				if a := w.do(key, c, "fields=nosuchfield", nil); a.status != http.StatusBadRequest || a.code() != "validation_error" {
+					t.Errorf("an unknown field: %d %s, want 400 validation_error", a.status, a.body)
+				}
+				return
+			}
+			c := w.call(op, w.p)
+			since := w.lastEvent()
+			if a := w.do(key, c, "fields=id", nil); a.status != http.StatusBadRequest || a.code() != "validation_error" {
+				t.Errorf("fields= on a write: %d %s, want 400 validation_error", a.status, a.body)
+			}
+			w.wantNothingWritten(t, op.id+" with fields=", since)
+			if op.prefer {
+				t.Fatalf("%s: a write of T022 has no Prefer", op.id)
+			}
+			a := w.do(key, c, "", map[string]string{"Prefer": "return=minimal"})
+			if !success(a.status) {
+				t.Fatalf("with Prefer: %d %s", a.status, a.body)
+			}
+			if h := a.header.Get("Preference-Applied"); h != "" {
+				t.Errorf("Preference-Applied %q on an operation Prefer does not apply to", h)
+			}
+			if len(a.body) > 0 {
+				m := a.object(t)
+				extra := false
+				for k := range m {
+					if k != "id" && k != "version" {
+						extra = true
+					}
+				}
+				if !extra {
+					t.Errorf("Prefer shortened the answer to %s", a.body)
+				}
+			}
+		})
+	}
+}
+
+func keysOf(m map[string]any) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	slices.Sort(out)
+	return out
+}
+
+// TestPublicAPIClasses_OriginOfAWrite — row 102 (SC-014, INV-4, INV-5,
+// OST-2-8). Each write by key — without kind, with kind directed and with
+// kind autonomous — writes its events as an agent, never as a human; a kind
+// outside the two is refused with 400. An alias added by key carries the
+// agent's added_by_kind (updateProject, createProject). Red when a write by
+// key is recorded as a human one.
+func TestPublicAPIClasses_OriginOfAWrite(t *testing.T) {
+	w := newClassWorld(t)
+	key := w.key(w.owner, levelKey(apikeys.LevelManage))
+	for _, op := range publicOps {
+		if op.read {
+			continue
+		}
+		t.Run(op.id, func(t *testing.T) {
+			for _, kind := range []string{"", "directed", "autonomous"} {
+				c := w.call(op, w.p)
+				if kind != "" {
+					c = withBody(c, map[string]any{"kind": kind})
+				}
+				since := w.lastEvent()
+				a := w.do(key, c, "", nil)
+				if !success(a.status) {
+					t.Fatalf("kind %q: %d %s", kind, a.status, a.body)
+				}
+				actors := w.actorsSince(since)
+				if len(actors) == 0 {
+					t.Fatalf("kind %q: no event written", kind)
+				}
+				for _, at := range actors {
+					if at != "agent" {
+						t.Errorf("kind %q: an event of actor type %q, want agent", kind, at)
+					}
+				}
+			}
+			c := withBody(w.call(op, w.p), map[string]any{"kind": "human"})
+			since := w.lastEvent()
+			if a := w.do(key, c, "", nil); a.status != http.StatusBadRequest || a.code() != "validation_error" {
+				t.Errorf("kind human: %d %s, want 400 validation_error", a.status, a.body)
+			}
+			w.wantNothingWritten(t, op.id+" with kind human", since)
+		})
+	}
+	t.Run("aliases added by key", func(t *testing.T) {
+		updated := w.fresh("al")
+		if a := w.do(key, opCall{http.MethodPatch, "/api/v1/projects/" + w.p.String(), map[string]any{"aliasesAdd": []string{updated}}}, "", nil); !success(a.status) {
+			t.Fatalf("updateProject: %d %s", a.status, a.body)
+		}
+		created := w.fresh("al")
+		if a := w.do(key, opCall{http.MethodPost, "/api/v1/projects", map[string]any{"name": w.fresh("proj"), "space": w.spaceShort, "aliases": []string{created}}}, "", nil); !success(a.status) {
+			t.Fatalf("createProject: %d %s", a.status, a.body)
+		}
+		for _, alias := range []string{updated, created} {
+			var kind string
+			if err := w.pool.QueryRow(context.Background(), `SELECT added_by_kind FROM project_aliases WHERE alias = $1`, alias).Scan(&kind); err != nil {
+				t.Fatalf("read alias %s: %v", alias, err)
+			}
+			if kind != "agent" {
+				t.Errorf("alias %s added by key has added_by_kind %q, want agent", alias, kind)
+			}
+		}
+	})
+}
+
+// TestPublicAPIClasses_KeyScope — row 103 (SC-003, INV-2). With a key of
+// scope «project P», every list, search and GET /me of the owner shows
+// nothing of Q, his other project, and Q answers as a missing project; with
+// a key of scope «all» the same owner sees Q in the same answers (base
+// line). Red when an answer of the P key carries Q.
+func TestPublicAPIClasses_KeyScope(t *testing.T) {
+	w := newClassWorld(t)
+	scoped := w.key(w.owner, apikeys.Grant{Level: apikeys.LevelRead, Scope: apikeys.Scope{Mode: apikeys.ScopeProjects, Projects: []uuid.UUID{w.p}}})
+	all := w.key(w.owner, levelKey(apikeys.LevelRead))
+	q := w.q.String()
+	get := func(key, path string) answer { return w.do(key, opCall{http.MethodGet, path, nil}, "", nil) }
+
+	for _, c := range []struct {
+		name, path string
+	}{
+		{"getMe", "/api/v1/me"},
+		{"listProjects", "/api/v1/projects?limit=100"},
+		{"listProjects by search", "/api/v1/projects?q=" + url.QueryEscape(w.qName)},
+		{"resolveProject", "/api/v1/projects/resolve?q=" + url.QueryEscape(w.qPrefix)},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			s, a := get(scoped, c.path), get(all, c.path)
+			if s.status != http.StatusOK || a.status != http.StatusOK {
+				t.Fatalf("answers %d %s / %d %s", s.status, s.body, a.status, a.body)
+			}
+			if strings.Contains(string(s.body), q) {
+				t.Errorf("the P key's answer carries Q: %s", s.body)
+			}
+			if !strings.Contains(string(a.body), q) {
+				t.Errorf("the base line does not show Q: %s", a.body)
+			}
+		})
+	}
+	for _, path := range []string{"/api/v1/projects/" + q, "/api/v1/projects/" + q + "/members",
+		"/api/v1/projects/" + q + "/components", "/api/v1/projects/" + w.qPrefix} {
+		t.Run(path, func(t *testing.T) {
+			if s := get(scoped, path); s.status != http.StatusNotFound || s.code() != "project_not_found" {
+				t.Errorf("the P key: %d %s, want 404 project_not_found", s.status, s.body)
+			}
+			if a := get(all, path); a.status != http.StatusOK {
+				t.Errorf("the base line: %d %s", a.status, a.body)
+			}
+		})
+	}
+}
+
+// TestPublicAPIClasses_OwnerRole — row 104 (SC-015, INV-1). The owner of a
+// manage key who is a plain member of P gets 403 forbidden — the code of
+// the role, not insufficient_scope — on every write to an object of P, and
+// nothing is written; the same key passes once its owner holds the role.
+// Red when the key's right widens the owner's role.
+func TestPublicAPIClasses_OwnerRole(t *testing.T) {
+	w := newClassWorld(t)
+	key := w.key(w.member, levelKey(apikeys.LevelManage))
+	for _, op := range publicOps {
+		if !op.projectWrite {
+			continue
+		}
+		t.Run(op.id, func(t *testing.T) {
+			c := w.call(op, w.p)
+			since := w.lastEvent()
+			if a := w.do(key, c, "", nil); a.status != http.StatusForbidden || a.code() != "forbidden" {
+				t.Fatalf("a member: %d %s, want 403 forbidden", a.status, a.body)
+			}
+			w.wantNothingWritten(t, op.id, since)
+			w.exec(`UPDATE project_members SET role = 'owner' WHERE project_id = $1 AND user_id = $2`, w.p, w.member)
+			defer w.exec(`UPDATE project_members SET role = 'member' WHERE project_id = $1 AND user_id = $2`, w.p, w.member)
+			if a := w.do(key, w.call(op, w.p), "", nil); !success(a.status) {
+				t.Errorf("the owner: %d %s", a.status, a.body)
+			}
+		})
+	}
+}
+
+// TestPublicAPIClasses_BackfilledKey — row 106 (SC-013, US-13). A key in
+// the state the backfill of migration 000086 leaves an old key in — level
+// manage, the admin flag only of an admin owner, scope all, no expiry —
+// makes the representative operations of the public API: reads and writes.
+// Red when the migrated key is refused.
+func TestPublicAPIClasses_BackfilledKey(t *testing.T) {
+	w := newClassWorld(t)
+	plain, prefix, hash, err := auth.GenerateAPIKey(auth.MinBcryptCost)
+	if err != nil {
+		t.Fatalf("GenerateAPIKey: %v", err)
+	}
+	var keyID uuid.UUID
+	if err := w.pool.QueryRow(context.Background(), `
+INSERT INTO api_keys (user_id, key_hash, prefix, label, level, is_admin, scope_mode, expires_at)
+VALUES ($1, $2, $3, 'backfilled', 'manage', false, 'all', NULL) RETURNING id`, w.owner, hash, prefix).Scan(&keyID); err != nil {
+		t.Fatalf("seed a backfilled key: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = w.pool.Exec(context.Background(), `DELETE FROM agents WHERE api_key_id = $1`, keyID)
+		_, _ = w.pool.Exec(context.Background(), `DELETE FROM api_keys WHERE id = $1`, keyID)
+	})
+	for _, op := range publicOps {
+		t.Run(op.id, func(t *testing.T) {
+			if a := w.do(plain, w.call(op, w.p), "", nil); !success(a.status) {
+				t.Errorf("%d %s", a.status, a.body)
+			}
+		})
+	}
+}
+
+// TestPublicAPIClasses_StrictParsing — row 129 («General rules of the
+// surface», OST-3-7). Every operation refuses an unknown query parameter
+// with 400, and every operation with a body an unknown body field with 400;
+// the operation is not run. Red when an unknown parameter or field is
+// silently ignored.
+func TestPublicAPIClasses_StrictParsing(t *testing.T) {
+	w := newClassWorld(t)
+	key := w.key(w.owner, levelKey(apikeys.LevelManage))
+	for _, op := range publicOps {
+		t.Run(op.id, func(t *testing.T) {
+			c := w.call(op, w.p)
+			since := w.lastEvent()
+			if a := w.do(key, c, "nosuchparam=1", nil); a.status != http.StatusBadRequest || a.code() != "validation_error" {
+				t.Errorf("an unknown parameter: %d %s, want 400 validation_error", a.status, a.body)
+			}
+			if op.body {
+				if a := w.do(key, withBody(c, map[string]any{"nosuchfield": 1}), "", nil); a.status != http.StatusBadRequest || a.code() != "validation_error" {
+					t.Errorf("an unknown body field: %d %s, want 400 validation_error", a.status, a.body)
+				}
+			}
+			w.wantNothingWritten(t, op.id, since)
+		})
+	}
+}

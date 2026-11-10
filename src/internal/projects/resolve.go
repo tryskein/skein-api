@@ -75,6 +75,52 @@ func (s *Store) Resolve(ctx context.Context, q string, callerID uuid.UUID) (*Res
 	return &ResolveResult{Match: nil, Candidates: candidates}, nil
 }
 
+// ResolvePathHandle finds the project a path of the public API names by a
+// unique handle (spec sk-878.3.1, "Addressing"): the exact forms of Resolve
+// without the name — its UUID, then its prefix (without case), then its
+// alias. The candidates are the projects the caller may access, narrowed to
+// the scope of the request's API key, BEFORE a match is looked for: a
+// project outside the scope takes part in no form, so its prefix or alias
+// never shadows a project inside it (INV-2). No match is ErrNotFound — the
+// same answer for a missing project and one out of reach.
+func (s *Store) ResolvePathHandle(ctx context.Context, handle string, callerID uuid.UUID) (uuid.UUID, error) {
+	q := strings.TrimSpace(handle)
+	if q == "" {
+		return uuid.Nil, ErrNotFound
+	}
+	_, visible, err := authz.ScopeFor(ctx, callerID).Bind(ctx, s.pool)
+	if err != nil {
+		return uuid.Nil, err
+	}
+	var asID *uuid.UUID
+	if id, perr := uuid.Parse(q); perr == nil {
+		asID = &id
+	}
+	perm := authz.VisibleExpr("p.id", "false", "$2")
+	var id uuid.UUID
+	err = s.pool.QueryRow(ctx, `
+SELECT id FROM (
+  SELECT p.id, 1 AS prio FROM projects p
+   WHERE $3::uuid IS NOT NULL AND p.id = $3::uuid AND `+perm+`
+  UNION ALL
+  SELECT p.id, 2 FROM projects p
+   WHERE lower(p.id_prefix) = $1 AND `+perm+`
+  UNION ALL
+  SELECT p.id, 3 FROM projects p
+    JOIN project_aliases a ON a.project_id = p.id
+   WHERE a.alias = $1 AND `+perm+`
+) exact
+ORDER BY prio, id
+LIMIT 1`, strings.ToLower(q), visible, asID).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return uuid.Nil, ErrNotFound
+	}
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("resolving the project of a path: %w", err)
+	}
+	return id, nil
+}
+
 // AmbiguousCandidates is the `candidates` of spaces.CodeAmbiguousProject
 // for matches — the same body in REST and MCP (contract T013): enough to
 // tell same-named projects apart and re-call with an exact handle.

@@ -92,6 +92,68 @@ func (s *Store) SetPrefixMinLength(n *int) {
 	s.prefixMinLength = *n
 }
 
+// ReservedHandles are the words the paths of the public API give a meaning of
+// their own where a project handle stands: GET /api/v1/projects/resolve is
+// always the resolution of a handle, the static segment winning over a
+// project whose prefix or alias is "resolve" (spec sk-878.3.1,
+// "Addressing"). A new prefix or alias may not take one; a project that
+// already has one keeps it and is addressed by its UUID.
+var ReservedHandles = []string{"resolve"}
+
+// projectAliasesPKey is the unique constraint of project_aliases (the alias
+// is its primary key, migration 000003).
+const projectAliasesPKey = "project_aliases_pkey"
+
+// IsReservedHandle reports whether handle, compared without case, is one of
+// ReservedHandles.
+func IsReservedHandle(handle string) bool {
+	h := strings.ToLower(strings.TrimSpace(handle))
+	for _, r := range ReservedHandles {
+		if h == r {
+			return true
+		}
+	}
+	return false
+}
+
+// newPrefixHeldInTx reports whether a new project's prefix is held by a
+// handle outside the prefixes themselves: a reserved word or an alias of any
+// project. A prefix and an alias name a project in the same place of a path
+// (UUID → prefix → alias), so a new one may not repeat the other kind
+// (spec sk-878.3.1, "Addressing"). Runs inside the creating SERIALIZABLE
+// transaction, so a concurrent alias insert of the same value conflicts.
+func newPrefixHeldInTx(ctx context.Context, tx pgx.Tx, prefix string) (bool, error) {
+	if IsReservedHandle(prefix) {
+		return true, nil
+	}
+	var held bool
+	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM project_aliases WHERE alias = lower($1))`,
+		prefix).Scan(&held); err != nil {
+		return false, fmt.Errorf("reading aliases equal to the prefix: %w", err)
+	}
+	return held, nil
+}
+
+// checkNewAliasInTx refuses a new alias of projectID that is a reserved word
+// or the prefix of another project, with *ErrAliasTaken — the same refusal
+// as an alias another project already has (spec sk-878.3.1, "Addressing").
+// Equal to the project's own prefix is allowed: both name the same project.
+// Runs inside the inserting SERIALIZABLE transaction.
+func checkNewAliasInTx(ctx context.Context, tx pgx.Tx, projectID uuid.UUID, alias string) error {
+	if IsReservedHandle(alias) {
+		return &ErrAliasTaken{Alias: alias}
+	}
+	var held bool
+	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM projects WHERE lower(id_prefix) = lower($1) AND id <> $2)`,
+		alias, projectID).Scan(&held); err != nil {
+		return fmt.Errorf("reading prefixes equal to the alias: %w", err)
+	}
+	if held {
+		return &ErrAliasTaken{Alias: alias}
+	}
+	return nil
+}
+
 // CheckPrefixRules validates a new project's prefix against the prefix rule
 // (ValidateIDPrefix) and SKEIN_PROJECT_PREFIX_MIN_LENGTH, and returns its
 // canonical form. Refusal: a ValidationError with CodePrefixInvalid.
@@ -338,6 +400,11 @@ func (s *Store) CreateProject(ctx context.Context, args CreateProjectArgs) (*Pro
 		if reserved {
 			return ErrPrefixTaken
 		}
+		if held, err := newPrefixHeldInTx(ctx, tx, args.IDPrefix); err != nil {
+			return err
+		} else if held {
+			return ErrPrefixTaken
+		}
 		// INV-15: projects of the space, archived included, stay within the
 		// quota — counted under the space's lock, so two creations for the
 		// last slot are one after the other. A lowered quota leaves the
@@ -431,6 +498,9 @@ ON CONFLICT (project_id) DO NOTHING`,
 			addedByKind = "human"
 		}
 		for _, alias := range args.Aliases {
+			if err := checkNewAliasInTx(ctx, tx, dto.ID, alias); err != nil {
+				return err
+			}
 			if _, err := tx.Exec(ctx, `
 INSERT INTO project_aliases (alias, project_id, added_by, added_by_kind, created_at)
 VALUES ($1, $2, $3, $4, now())`,
@@ -495,6 +565,14 @@ SELECT sm.user_id FROM space_members sm
 				return nil, ErrPrefixTaken
 			}
 			return nil, &ErrConflict{Constraint: name}
+		}
+		// An alias refused by checkNewAliasInTx (a reserved word, another
+		// project's prefix) is the refusal of an alias already taken: on
+		// this path that is the unique violation of project_aliases, which
+		// every caller already answers.
+		var aliasTaken *ErrAliasTaken
+		if errors.As(err, &aliasTaken) {
+			return nil, &ErrConflict{Constraint: projectAliasesPKey}
 		}
 		// Backstop: if the PRIMARY app-gate above was somehow bypassed (e.g.
 		// a future caller forgets to stash is_external in ctx), the 000034

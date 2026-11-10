@@ -21,7 +21,7 @@ func productRouter(t *testing.T) http.Handler {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return publicapi.NewRouter(publicapi.RouterOptions{OperationTimeout: 30 * time.Second}, publicapi.ProductRoutes(doc))
+	return publicapi.NewRouter(publicapi.RouterOptions{OperationTimeout: 30 * time.Second}, publicapi.ProductRoutes(publicapi.Deps{Doc: doc}))
 }
 
 // testRoutes is a table of this test's own: a POST collection that reads

@@ -9,6 +9,10 @@
 # moved to its committed path, src/internal/publicapi/openapi/openapi.json.
 # CI runs this same script and fails when the committed file differs.
 #
+# The operations answer with the domain types of other packages of this module
+# (projects.ProjectDTO, …), so swag parses the models of the dependencies
+# (--parseDependencyLevel 1, models only) including internal packages.
+#
 # Needs go (the swag tool comes from go.mod) and python3 (stdlib only).
 #
 # Usage: scripts/generate-public-openapi.sh   (from any directory)
@@ -23,6 +27,7 @@ trap 'rm -rf "$tmp_dir"' EXIT
 cd "$src_dir"
 go tool github.com/swaggo/swag/v2/cmd/swag init --v3.1 --quiet \
   -g doc.go -d internal/publicapi \
+  --parseInternal --parseDependencyLevel 1 \
   --instanceName public --outputTypes json -o "$tmp_dir"
 
 # swag v2 always writes "externalDocs": {"description": "", "url": ""} when no

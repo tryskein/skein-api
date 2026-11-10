@@ -393,8 +393,9 @@ const publicAPIURLVariable = "SKEIN_PUBLIC_API_URL"
 // SKEIN_PUBLIC_API_URL it logs one warning naming the variable: the API
 // works, but its OpenAPI document carries no servers. chain is the request
 // chain put in front of every operation that authenticates with a key
-// (publicapi.NewProductChain in production).
-func publicServer(cfg *config.Config, chain publicapi.RouteWrapper, logger *slog.Logger) (*http.Server, error) {
+// (publicapi.NewProductChain in production); deps are the stores its
+// operations read and write through (Doc is filled here).
+func publicServer(cfg *config.Config, chain publicapi.RouteWrapper, deps publicapi.Deps, logger *slog.Logger) (*http.Server, error) {
 	if !cfg.PublicAPIEnabled {
 		return nil, nil
 	}
@@ -406,11 +407,28 @@ func publicServer(cfg *config.Config, chain publicapi.RouteWrapper, logger *slog
 	if err != nil {
 		return nil, err
 	}
+	deps.Doc = doc
 	router := publicapi.NewRouter(
 		publicapi.RouterOptions{OperationTimeout: cfg.PublicAPIWriteTimeout, Chain: chain},
-		publicapi.ProductRoutes(doc),
+		publicapi.ProductRoutes(deps),
 	)
 	return publicapi.NewServer(":"+cfg.PublicAPIPort, router, cfg.PublicAPIWriteTimeout), nil
+}
+
+// publicAPIServer is the public API server of the process, wired from cfg:
+// the request chain with the limits and the trusted proxies of the
+// configuration (publicapi.NewProductChain) in front of the product route
+// table over pool and the stores of deps, with the operation deadline of
+// SKEIN_PUBLIC_API_WRITE_TIMEOUT. nil while SKEIN_PUBLIC_API_ENABLED=false.
+func publicAPIServer(cfg *config.Config, pool *pgxpool.Pool, deps publicapi.Deps, logger *slog.Logger) (*http.Server, error) {
+	var chain publicapi.RouteWrapper
+	if cfg.PublicAPIEnabled {
+		chain = publicapi.NewProductChain(pool, cfg.BcryptCost,
+			cfg.PublicAPIRateLimitPerMinute, cfg.PublicAPIAuthFailuresPerMinute, cfg.PublicAPITrustedProxies)
+	}
+	deps.Pool = pool
+	deps.DefaultVisibility = cfg.ProjectDefaultVisibility
+	return publicServer(cfg, chain, deps, logger)
 }
 
 // main wires and runs skein-api.
@@ -1048,12 +1066,11 @@ func main() {
 
 	// The public API, its own server on its own port (nil when
 	// SKEIN_PUBLIC_API_ENABLED=false).
-	var pubChain publicapi.RouteWrapper
-	if cfg.PublicAPIEnabled {
-		pubChain = publicapi.NewProductChain(pool, cfg.BcryptCost,
-			cfg.PublicAPIRateLimitPerMinute, cfg.PublicAPIAuthFailuresPerMinute, cfg.PublicAPITrustedProxies)
-	}
-	pubSrv, err := publicServer(cfg, pubChain, slog.Default())
+	pubSrv, err := publicAPIServer(cfg, pool, publicapi.Deps{
+		Projects:         projectsStore,
+		Users:            usersStore,
+		ProjectsEmbedder: projectsEmbedder,
+	}, slog.Default())
 	if err != nil {
 		slog.Error("public API setup failed", "error", err.Error())
 		os.Exit(1)

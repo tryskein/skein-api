@@ -116,6 +116,25 @@ type Problem struct {
 	Extensions map[string]any
 }
 
+// ProblemDocument is the body of every error response, as the OpenAPI
+// document describes it (WriteProblem writes it; a refusal may carry more
+// members, named in the operation's description).
+type ProblemDocument struct {
+	// Type is always "about:blank": the code says what happened.
+	Type string `json:"type"`
+	// Title is the phrase of the status.
+	Title string `json:"title"`
+	// Status is the HTTP status.
+	Status int `json:"status"`
+	// Code is the machine code of the refusal — the same one MCP answers.
+	Code string `json:"code"`
+	// Detail explains the refusal to a human.
+	Detail string `json:"detail,omitempty"`
+	// Retryable is true for a transient code: the same request may succeed
+	// later without any change.
+	Retryable bool `json:"retryable,omitempty"`
+}
+
 // problemType is the RFC 9457 type of every problem: the code, not a URI,
 // says what happened, so the type is "about:blank" and the title is the
 // status phrase (RFC 9457, section 4.2.1).

@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"time"
 
@@ -72,13 +73,14 @@ func RegisterWhoami(s *server.MCPServer, pool *pgxpool.Pool) {
 // agents rely on as "my projects", fits under it.
 const whoamiProjectsCap = 100
 
-// whoamiResponse is the JSON shape the tool returns. We keep it stable
+// WhoamiResponse is the JSON shape the tool returns (and getMe of the
+// public API, sk-878.3.1 T022). We keep it stable
 // across releases because agents may parse it field-by-field. New
 // fields are additive only; never rename or remove.
-type whoamiResponse struct {
-	User     whoamiUser      `json:"user"`
-	Agent    *whoamiAgent    `json:"agent,omitempty"`
-	Projects []whoamiProject `json:"projects"`
+type WhoamiResponse struct {
+	User     WhoamiUser      `json:"user"`
+	Agent    *WhoamiAgent    `json:"agent,omitempty"`
+	Projects []WhoamiProject `json:"projects"`
 	// ProjectsTotal is the count of projects visible to the caller.
 	// >= len(Projects); greater when the projects[] slice was capped.
 	// Always populated so callers can tell whether they got the full list.
@@ -95,7 +97,8 @@ type whoamiResponse struct {
 	IsAdmin         bool                `json:"isAdmin"`
 }
 
-type whoamiUser struct {
+// WhoamiUser is the caller of a whoami answer.
+type WhoamiUser struct {
 	ID       string `json:"id"`
 	Email    string `json:"email"`
 	Username string `json:"username"`
@@ -103,20 +106,21 @@ type whoamiUser struct {
 	Role     string `json:"role"`
 }
 
-// whoamiAgent intentionally omits the api_key prefix — the agent already
+// WhoamiAgent intentionally omits the api_key prefix — the agent already
 // has the plain key locally and a server-side echo would add noise plus
 // a small info-leak surface (audit logs that include the prefix). The
 // SessionID is the cross-system join key: it is also written to
 // events.actor_session_id for every action this agent performs, so any
 // external system that captures the agent's conversation can join its
 // logs to skein audit by string-matching on this id.
-type whoamiAgent struct {
+type WhoamiAgent struct {
 	SessionID   string    `json:"sessionId"`
 	FirstSeenAt time.Time `json:"firstSeenAt"`
 	LastSeenAt  time.Time `json:"lastSeenAt"`
 }
 
-type whoamiProject struct {
+// WhoamiProject is one project of a whoami answer.
+type WhoamiProject struct {
 	ID       string `json:"id"`
 	Name     string `json:"name"`
 	IDPrefix string `json:"idPrefix"`
@@ -136,88 +140,101 @@ func handleWhoami(pool *pgxpool.Pool) server.ToolHandlerFunc {
 		if errResp != nil {
 			return errResp, nil
 		}
-
-		// Fetch user core fields. ErrNoRows here means the user was
-		// deleted between the api-key middleware's lookup and now —
-		// extremely unlikely but we still return a clean error.
-		var u whoamiUser
-		var dbIsExternal bool
-		err := pool.QueryRow(ctx, `
-SELECT id::text, email, username, name, role, is_external
-  FROM users
- WHERE id = $1
-`, userID).Scan(&u.ID, &u.Email, &u.Username, &u.Name, &u.Role, &dbIsExternal)
-		if errors.Is(err, pgx.ErrNoRows) {
+		resp, err := LoadWhoami(ctx, pool, userID)
+		if errors.Is(err, ErrWhoamiUserGone) {
 			return skmcp.ToolError(ErrCodeUserNotFound,
 				"user resolved from the API key no longer exists", nil), nil
 		}
 		if err != nil {
-			slog.ErrorContext(ctx, "whoami: user query failed",
+			slog.ErrorContext(ctx, "whoami: load failed",
 				"userId", userID.String(), "error", err.Error())
-			return skmcp.ToolError(ErrCodeInternalError, "failed to load user", nil), nil
+			return skmcp.ToolError(ErrCodeInternalError, "failed to load the identity", nil), nil
 		}
-
-		// Admin-ceiling derivation (sk-163 S2): is_external is re-read from
-		// the same users row as role; an external user is never admin.
-		// Response metadata only — the project list below does not branch
-		// on it.
-		isAdmin := auth.IsAdminRole(u.Role, dbIsExternal)
-
-		// Project list: the caller's visible projects through authz, capped
-		// by size with the total, so truncation is signalled.
-		projects, total, truncated, err := loadProjects(ctx, pool, userID)
-		if err != nil {
-			slog.ErrorContext(ctx, "whoami: project list failed",
-				"userId", userID.String(), "error", err.Error())
-			return skmcp.ToolError(ErrCodeInternalError, "failed to load projects", nil), nil
-		}
-		agentSpaces, err := spaces.AgentSpaces(ctx, pool, userID)
-		if err != nil {
-			slog.ErrorContext(ctx, "whoami: space list failed",
-				"userId", userID.String(), "error", err.Error())
-			return skmcp.ToolError(ErrCodeInternalError, "failed to load spaces", nil), nil
-		}
-		spacesTotal := len(agentSpaces)
-		if spacesTotal > whoamiProjectsCap {
-			agentSpaces = agentSpaces[:whoamiProjectsCap]
-		}
-		hint := ""
-		if truncated {
-			hint = "this list is capped to the first projects by name. " +
+		if resp.ProjectsTruncated {
+			resp.ProjectsHint = "this list is capped to the first projects by name. " +
 				"Use skein_project_resolve(q=...) for a specific project, " +
 				"or skein_project_list for a paginated browse."
 		}
-
-		// Agent block — present only when there's an MCP session id in
-		// ctx. The very first request of a session (initialize) has none;
-		// callers who tool/call before initialize completes (which is
-		// invalid per spec) get a payload without `agent`.
-		var agent *whoamiAgent
-		if sid := auth.SessionIDFrom(ctx); sid != "" {
-			a, err := loadAgent(ctx, pool, userID, sid)
-			if err != nil {
-				slog.WarnContext(ctx, "whoami: agent lookup failed",
-					"userId", userID.String(), "sessionId", sid,
-					"error", err.Error())
-				// Soft-fail: identity payload is still useful without it.
-			} else {
-				agent = a
-			}
-		}
-
-		return skmcp.ToolJSON(whoamiResponse{
-			User:              u,
-			Agent:             agent,
-			Projects:          projects,
-			ProjectsTotal:     total,
-			ProjectsTruncated: truncated,
-			ProjectsHint:      hint,
-			Spaces:            agentSpaces,
-			SpacesTotal:       spacesTotal,
-			SpacesTruncated:   spacesTotal > len(agentSpaces),
-			IsAdmin:           isAdmin,
-		})
+		return skmcp.ToolJSON(resp)
 	}
+}
+
+// ErrWhoamiUserGone — the user the request authenticated as no longer
+// exists (deleted between the key lookup and the read).
+var ErrWhoamiUserGone = errors.New("whoami: the caller's user no longer exists")
+
+// LoadWhoami reads the identity of the caller userID: the user, the agent of
+// the request (the MCP session, or the REST executor of the public API —
+// auth.SessionIDFrom names it in both), the projects and the spaces the
+// caller sees through the scope of the request (the API key's included).
+// ProjectsHint is left empty: it names MCP tools, so the tool adds it.
+// ErrWhoamiUserGone when the user is gone; any other error is internal.
+func LoadWhoami(ctx context.Context, pool *pgxpool.Pool, userID uuid.UUID) (WhoamiResponse, error) {
+	// Fetch user core fields. ErrNoRows here means the user was deleted
+	// between the api-key middleware's lookup and now — extremely unlikely
+	// but we still return a clean error.
+	var u WhoamiUser
+	var dbIsExternal bool
+	err := pool.QueryRow(ctx, `
+SELECT id::text, email, username, name, role, is_external
+  FROM users
+ WHERE id = $1
+`, userID).Scan(&u.ID, &u.Email, &u.Username, &u.Name, &u.Role, &dbIsExternal)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return WhoamiResponse{}, ErrWhoamiUserGone
+	}
+	if err != nil {
+		return WhoamiResponse{}, fmt.Errorf("loading the user: %w", err)
+	}
+
+	// Admin-ceiling derivation (sk-163 S2): is_external is re-read from the
+	// same users row as role; an external user is never admin. Response
+	// metadata only — the project list below does not branch on it.
+	isAdmin := auth.IsAdminRole(u.Role, dbIsExternal)
+
+	// Project list: the caller's visible projects through authz, capped by
+	// size with the total, so truncation is signalled.
+	projects, total, truncated, err := loadProjects(ctx, pool, userID)
+	if err != nil {
+		return WhoamiResponse{}, fmt.Errorf("loading the projects: %w", err)
+	}
+	agentSpaces, err := spaces.AgentSpaces(ctx, pool, userID)
+	if err != nil {
+		return WhoamiResponse{}, fmt.Errorf("loading the spaces: %w", err)
+	}
+	spacesTotal := len(agentSpaces)
+	if spacesTotal > whoamiProjectsCap {
+		agentSpaces = agentSpaces[:whoamiProjectsCap]
+	}
+
+	// Agent block — present only when the request names its agent. The
+	// very first request of an MCP session (initialize) has none; callers
+	// who tool/call before initialize completes (which is invalid per spec)
+	// get a payload without `agent`.
+	var agent *WhoamiAgent
+	if sid := auth.SessionIDFrom(ctx); sid != "" {
+		a, err := loadAgent(ctx, pool, userID, sid)
+		if err != nil {
+			slog.WarnContext(ctx, "whoami: agent lookup failed",
+				"userId", userID.String(), "sessionId", sid,
+				"error", err.Error())
+			// Soft-fail: identity payload is still useful without it.
+		} else {
+			agent = a
+		}
+	}
+
+	return WhoamiResponse{
+		User:              u,
+		Agent:             agent,
+		Projects:          projects,
+		ProjectsTotal:     total,
+		ProjectsTruncated: truncated,
+		Spaces:            agentSpaces,
+		SpacesTotal:       spacesTotal,
+		SpacesTruncated:   spacesTotal > len(agentSpaces),
+		IsAdmin:           isAdmin,
+	}, nil
 }
 
 // loadProjects reads the non-archived projects visible to userID — the
@@ -228,7 +245,7 @@ SELECT id::text, email, username, name, role, is_external
 // The list is capped at whoamiProjectsCap whatever the caller's rights;
 // total counts every visible project, truncated tells the cap applied
 // (no admin / member branch of its own).
-func loadProjects(ctx context.Context, pool *pgxpool.Pool, userID uuid.UUID) ([]whoamiProject, int, bool, error) {
+func loadProjects(ctx context.Context, pool *pgxpool.Pool, userID uuid.UUID) ([]WhoamiProject, int, bool, error) {
 	s := authz.ScopeFor(ctx, userID)
 	// VisibleJoin reads the relation by the caller's id; the key's scope
 	// narrows it here, as Scope.Bind narrows the bound set (D-3).
@@ -250,10 +267,10 @@ SELECT p.project_id::text, p.name, p.id_prefix,
 	}
 	defer rows.Close()
 
-	out := make([]whoamiProject, 0, 8)
+	out := make([]WhoamiProject, 0, 8)
 	total := 0
 	for rows.Next() {
-		var p whoamiProject
+		var p WhoamiProject
 		if err := rows.Scan(&p.ID, &p.Name, &p.IDPrefix, &p.Role, &p.SpaceID, &total); err != nil {
 			return nil, 0, false, err
 		}
@@ -275,8 +292,8 @@ SELECT p.project_id::text, p.name, p.id_prefix,
 // by json.Marshal. We deliberately do NOT format them in SQL (to_char) —
 // that drops sub-second precision, drifts away from the rest of the
 // codebase, and forces every consumer to know the magic format string.
-func loadAgent(ctx context.Context, pool *pgxpool.Pool, userID uuid.UUID, sessionID string) (*whoamiAgent, error) {
-	var a whoamiAgent
+func loadAgent(ctx context.Context, pool *pgxpool.Pool, userID uuid.UUID, sessionID string) (*WhoamiAgent, error) {
+	var a WhoamiAgent
 	a.SessionID = sessionID
 	err := pool.QueryRow(ctx, `
 SELECT first_seen_at, last_seen_at
@@ -285,7 +302,7 @@ SELECT first_seen_at, last_seen_at
 `, userID, sessionID).Scan(&a.FirstSeenAt, &a.LastSeenAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		// No row yet — return what we have without timestamps.
-		return &whoamiAgent{SessionID: sessionID}, nil
+		return &WhoamiAgent{SessionID: sessionID}, nil
 	}
 	if err != nil {
 		return nil, err
