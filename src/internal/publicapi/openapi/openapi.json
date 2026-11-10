@@ -2626,7 +2626,10 @@
                 "properties": {
                     "acceptanceCriteria": {
                         "description": "AcceptanceCriteria; null or \"\" clears it.",
-                        "type": "string"
+                        "type": [
+                            "string",
+                            "null"
+                        ]
                     },
                     "assignee": {
                         "description": "Assignee; \"\" clears it.",
@@ -2650,11 +2653,17 @@
                     },
                     "description": {
                         "description": "Description; null or \"\" clears it.",
-                        "type": "string"
+                        "type": [
+                            "string",
+                            "null"
+                        ]
                     },
                     "design": {
                         "description": "Design; null or \"\" clears it.",
-                        "type": "string"
+                        "type": [
+                            "string",
+                            "null"
+                        ]
                     },
                     "dueAt": {
                         "description": "DueAt, RFC 3339.",
@@ -2670,7 +2679,10 @@
                     },
                     "externalRef": {
                         "description": "ExternalRef; null or \"\" clears it.",
-                        "type": "string"
+                        "type": [
+                            "string",
+                            "null"
+                        ]
                     },
                     "id": {
                         "description": "ID of the issue. Required.",
@@ -2694,7 +2706,10 @@
                     },
                     "notes": {
                         "description": "Notes; null or \"\" clears it.",
-                        "type": "string"
+                        "type": [
+                            "string",
+                            "null"
+                        ]
                     },
                     "priority": {
                         "description": "Priority 0..4.",
@@ -2706,7 +2721,10 @@
                     },
                     "sourceContext": {
                         "description": "SourceContext; null or \"\" clears it.",
-                        "type": "string"
+                        "type": [
+                            "string",
+                            "null"
+                        ]
                     },
                     "status": {
                         "description": "Status: open, in_progress, deferred, closed or standing.",
@@ -3354,7 +3372,10 @@
                 "properties": {
                     "acceptanceCriteria": {
                         "description": "AcceptanceCriteria; null or \"\" clears it.",
-                        "type": "string"
+                        "type": [
+                            "string",
+                            "null"
+                        ]
                     },
                     "assignee": {
                         "description": "Assignee; \"\" clears it.",
@@ -3382,11 +3403,17 @@
                     },
                     "description": {
                         "description": "Description; null or \"\" clears it.",
-                        "type": "string"
+                        "type": [
+                            "string",
+                            "null"
+                        ]
                     },
                     "design": {
                         "description": "Design; null or \"\" clears it.",
-                        "type": "string"
+                        "type": [
+                            "string",
+                            "null"
+                        ]
                     },
                     "dueAt": {
                         "description": "DueAt, RFC 3339.",
@@ -3398,7 +3425,10 @@
                     },
                     "externalRef": {
                         "description": "ExternalRef; null or \"\" clears it.",
-                        "type": "string"
+                        "type": [
+                            "string",
+                            "null"
+                        ]
                     },
                     "kind": {
                         "description": "Kind of the write: directed or autonomous (checked; an issue keeps\nits origin).",
@@ -3422,7 +3452,10 @@
                     },
                     "notes": {
                         "description": "Notes; null or \"\" clears it.",
-                        "type": "string"
+                        "type": [
+                            "string",
+                            "null"
+                        ]
                     },
                     "priority": {
                         "description": "Priority 0..4.",
@@ -3438,7 +3471,10 @@
                     },
                     "sourceContext": {
                         "description": "SourceContext; null or \"\" clears it.",
-                        "type": "string"
+                        "type": [
+                            "string",
+                            "null"
+                        ]
                     },
                     "status": {
                         "description": "Status: open, in_progress, deferred, closed or standing.",
@@ -3511,7 +3547,10 @@
                     },
                     "space": {
                         "description": "Space is not supported: a project never moves to another space. Any\nvalue but null is refused with space_change_forbidden.",
-                        "type": "string"
+                        "type": [
+                            "string",
+                            "null"
+                        ]
                     },
                     "visibility": {
                         "description": "Visibility switches who sees the project: space or members.",

@@ -492,19 +492,19 @@ type updateIssueBody struct {
 	// Title, 1..500 characters.
 	Title *string `json:"title,omitempty"`
 	// Description; null or "" clears it.
-	Description *string `json:"description,omitempty"`
+	Description *string `json:"description,omitempty" extensions:"x-nullable"`
 	// Type of the issue.
 	Type *string `json:"type,omitempty"`
 	// Priority 0..4.
 	Priority *int `json:"priority,omitempty"`
 	// Design; null or "" clears it.
-	Design *string `json:"design,omitempty"`
+	Design *string `json:"design,omitempty" extensions:"x-nullable"`
 	// AcceptanceCriteria; null or "" clears it.
-	AcceptanceCriteria *string `json:"acceptanceCriteria,omitempty"`
+	AcceptanceCriteria *string `json:"acceptanceCriteria,omitempty" extensions:"x-nullable"`
 	// Notes; null or "" clears it.
-	Notes *string `json:"notes,omitempty"`
+	Notes *string `json:"notes,omitempty" extensions:"x-nullable"`
 	// SourceContext; null or "" clears it.
-	SourceContext *string `json:"sourceContext,omitempty"`
+	SourceContext *string `json:"sourceContext,omitempty" extensions:"x-nullable"`
 	// Assignee; "" clears it.
 	Assignee *string `json:"assignee,omitempty"`
 	// DueAt, RFC 3339.
@@ -512,7 +512,7 @@ type updateIssueBody struct {
 	// DeferUntil, RFC 3339.
 	DeferUntil *string `json:"deferUntil,omitempty"`
 	// ExternalRef; null or "" clears it.
-	ExternalRef *string `json:"externalRef,omitempty"`
+	ExternalRef *string `json:"externalRef,omitempty" extensions:"x-nullable"`
 	// EstimatedMinutes, >= 0.
 	EstimatedMinutes *int `json:"estimatedMinutes,omitempty"`
 	// Status: open, in_progress, deferred, closed or standing.

@@ -670,7 +670,7 @@ type updateProjectBody struct {
 	Visibility *string `json:"visibility,omitempty"`
 	// Space is not supported: a project never moves to another space. Any
 	// value but null is refused with space_change_forbidden.
-	Space *string `json:"space,omitempty"`
+	Space *string `json:"space,omitempty" extensions:"x-nullable"`
 	// Archived: true archives the project, false restores it; a no-op when
 	// it is already so.
 	Archived *bool `json:"archived,omitempty"`
