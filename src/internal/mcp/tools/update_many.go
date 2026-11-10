@@ -32,7 +32,8 @@ import (
 // THAT row in partial state but the rest of the batch keeps running.
 // See plan §C-2 / risks §H.
 //
-// `force=true` is admin-only and applied uniformly across the batch.
+// `force=true` needs the key right manage and force_unlock on each row's
+// project, and applies uniformly across the batch.
 func RegisterUpdateMany(s *server.MCPServer, pool *pgxpool.Pool, issuesStore *issues.Store) {
 	tool := mcpgo.NewTool(
 		"skein_update_many",
@@ -62,8 +63,8 @@ func RegisterUpdateMany(s *server.MCPServer, pool *pgxpool.Pool, issuesStore *is
 				"No per-row `closeTarget`: close an OPEN issue as duplicate / "+
 				"superseded with skein_close / skein_update. "+
 				"Caps at 100 items per call. "+
-				"`force=true` requires admin and applies uniformly to "+
-				"every row. "+
+				"`force=true` needs the key right `manage` and force_unlock "+
+				"on each row's project, and applies uniformly to every row. "+
 				"`reviewRequired` is NOT accepted here: the review flag "+
 				"travels its own path (it moves neither version nor "+
 				"updated_at, so a batch row could not report it). A row "+
