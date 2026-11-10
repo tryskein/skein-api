@@ -210,7 +210,7 @@ func TestMCPKeyRights_RefusedBeforeTheTool(t *testing.T) {
 	t.Run("skein_create force=true with a write key passes", func(t *testing.T) {
 		k := mintGrantKey(t, s, testsupport.ActorParticipantNoMembers, grantAll(apikeys.LevelWrite))
 		res := k.tool(t, "skein_create", map[string]any{
-			"project": P.ID.String(), "title": "created with force by a write key", "type": "task", "force": true,
+			"project": P.ID.String(), "title": "created with force by a write key", "type": "task", "force": true, "kind": "autonomous",
 		})
 		if res.isError {
 			t.Fatalf("skein_create force=true with a write key: %s", res.text)

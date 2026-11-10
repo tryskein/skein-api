@@ -43,6 +43,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"skein-api/internal/apikeys"
 	"skein-api/internal/auth"
 	"skein-api/internal/config"
 	"skein-api/internal/dependencies"
@@ -52,6 +53,7 @@ import (
 	"skein-api/internal/projects"
 	"skein-api/internal/search"
 	"skein-api/internal/testsupport"
+	"skein-api/internal/users"
 )
 
 type parityStack struct {
@@ -137,7 +139,7 @@ func newParityStack(t *testing.T) *parityStack {
 		nil, nil, nil, // apiKeysH, usersH, issuesMeH
 		handler.NewIssuesAllHandler(pool, issuesStore, nil),
 		nil, nil, // activityH, dashboardH
-		nil,                                         // usersStore
+		users.NewStore(pool, auth.MinBcryptCost, apikeys.New(pool), "local", "", nil), // usersStore: skein_user over /mcp
 		issuesStore,                                 // issuesStore
 		depsStore,                                   // depsStore
 		projectsStore,                               // projectsStore
