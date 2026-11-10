@@ -31,6 +31,7 @@ import (
 	"net/url"
 	"slices"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -412,6 +413,56 @@ ON CONFLICT DO NOTHING`, id, both.ID); err != nil {
 		}
 		if !slices.Contains(got, P.IssueID) || slices.Contains(got, Q.IssueID) {
 			t.Errorf("Watching cards with scope P = %v, want %s and not %s", got, P.IssueID, Q.IssueID)
+		}
+	})
+
+	t.Run("watcher list (issue and project subscriptions)", func(t *testing.T) {
+		for _, id := range []string{P.IssueID, Q.IssueID} {
+			if _, err := s.pool.Exec(ctx, `INSERT INTO issue_watchers (issue_id, user_id, reasons) VALUES ($1, $2, '{manual}')
+ON CONFLICT DO NOTHING`, id, both.ID); err != nil {
+				t.Fatal(err)
+			}
+		}
+		for _, id := range []uuid.UUID{P.ID, Q.ID} {
+			if _, err := s.pool.Exec(ctx, `INSERT INTO project_watchers (project_id, user_id, reasons) VALUES ($1, $2, '{manual}')
+ON CONFLICT DO NOTHING`, id, both.ID); err != nil {
+				t.Fatal(err)
+			}
+		}
+		res := k.tool(t, "skein_watchers", map[string]any{"action": "list"})
+		if res.isError {
+			t.Fatalf("skein_watchers list: %s", res.text)
+		}
+		var w struct {
+			Issues []struct {
+				IssueID   string `json:"issueId"`
+				ProjectID string `json:"projectId"`
+			} `json:"issues"`
+			Projects []struct {
+				ProjectID string `json:"projectId"`
+			} `json:"projects"`
+		}
+		if err := json.Unmarshal([]byte(res.text), &w); err != nil {
+			t.Fatalf("decode watcher list: %v", err)
+		}
+		var issuesSeen, projectsSeen []string
+		for _, i := range w.Issues {
+			issuesSeen = append(issuesSeen, i.IssueID)
+			if outsideIDs[i.ProjectID] {
+				t.Errorf("watcher list with scope P holds %s of a project outside the scope", i.IssueID)
+			}
+		}
+		for _, p := range w.Projects {
+			projectsSeen = append(projectsSeen, p.ProjectID)
+			if outsideIDs[p.ProjectID] {
+				t.Errorf("watcher list with scope P holds the subscription to project %s, outside the scope", p.ProjectID)
+			}
+		}
+		if !slices.Contains(issuesSeen, P.IssueID) || !slices.Contains(projectsSeen, P.ID.String()) {
+			t.Errorf("watcher list with scope P = issues %v, projects %v; want the subscriptions of P", issuesSeen, projectsSeen)
+		}
+		if strings.Contains(res.text, Q.IssueID) || strings.Contains(res.text, Q.Name) {
+			t.Errorf("watcher list with scope P names Q: %s", res.text)
 		}
 	})
 

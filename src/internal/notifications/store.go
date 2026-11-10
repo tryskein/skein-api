@@ -1871,16 +1871,22 @@ func (s *Store) DeleteCustomWatcher(ctx context.Context, userID, watcherID uuid.
 // flag truncation in the response. The cap is applied SQL-side via
 // LIMIT to keep the payload bounded.
 func (s *Store) ListAllWatchers(ctx context.Context, userID uuid.UUID) (*AllWatchersDTO, error) {
-	const issueSQL = `
+	// sk-878.3.1 D-3, US-3: a request by a key lists only the subscriptions
+	// inside its scope, as every other section of this answer; without a
+	// key the condition is the literal true and the statements are unchanged.
+	key := authz.ScopeFor(ctx, userID).KeyLimit()
+	issueArgs := []any{userID}
+	issueSQL := `
 SELECT iw.issue_id, COALESCE(i.title, ''), i.project_id, COALESCE(p.id_prefix, ''), iw.reasons, iw.since
   FROM issue_watchers iw
   JOIN issues i   ON i.id = iw.issue_id
   JOIN projects p ON p.id = i.project_id
  WHERE iw.user_id = $1
+   AND ` + key.Expr("i.project_id", authz.Placeholders(&issueArgs)) + `
  ORDER BY iw.since DESC
  LIMIT 50`
 
-	rows, err := s.pool.Query(ctx, issueSQL, userID)
+	rows, err := s.pool.Query(ctx, issueSQL, issueArgs...)
 	if err != nil {
 		return nil, fmt.Errorf("listing my issue watchers: %w", err)
 	}
@@ -1898,17 +1904,19 @@ SELECT iw.issue_id, COALESCE(i.title, ''), i.project_id, COALESCE(p.id_prefix, '
 		return nil, err
 	}
 
-	const projectSQL = `
+	projectArgs := []any{userID}
+	projectSQL := `
 SELECT pw.project_id, COALESCE(p.name, ''), COALESCE(p.id_prefix, ''),
        pw.reasons, pw.since, pw.event_types
   FROM project_watchers pw
   JOIN projects p ON p.id = pw.project_id
  WHERE pw.user_id = $1
    AND NOT 'unwatched' = ANY(pw.reasons)
+   AND ` + key.Expr("pw.project_id", authz.Placeholders(&projectArgs)) + `
  ORDER BY pw.since DESC
  LIMIT 50`
 
-	rows2, err := s.pool.Query(ctx, projectSQL, userID)
+	rows2, err := s.pool.Query(ctx, projectSQL, projectArgs...)
 	if err != nil {
 		return nil, fmt.Errorf("listing my project watchers: %w", err)
 	}
