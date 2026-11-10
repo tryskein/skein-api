@@ -694,12 +694,19 @@ type Config struct {
 	// reach it. Optional: it has no default, and without it the OpenAPI
 	// document carries no servers. Set = an absolute http(s) URL.
 	PublicAPIURL string `env:"SKEIN_PUBLIC_API_URL"`
+	// The values below are read as text and parsed by Load only while the
+	// public API is enabled: a disabled public API ignores them entirely, so
+	// switching it off never depends on their values. The parsed fields stay
+	// zero while it is disabled.
+	PublicAPIRateLimitPerMinuteRaw    string `env:"SKEIN_PUBLIC_API_RATE_LIMIT_PER_MINUTE" envDefault:"100"`
+	PublicAPIAuthFailuresPerMinuteRaw string `env:"SKEIN_PUBLIC_API_AUTH_FAILURES_PER_MINUTE" envDefault:"20"`
+	PublicAPIWriteTimeoutRaw          string `env:"SKEIN_PUBLIC_API_WRITE_TIMEOUT" envDefault:"30s"`
 	// PublicAPIRateLimitPerMinute — REST requests per minute per API key on
-	// the public port (one counter per replica). Must be > 0.
-	PublicAPIRateLimitPerMinute int `env:"SKEIN_PUBLIC_API_RATE_LIMIT_PER_MINUTE" envDefault:"100"`
+	// the public port (one counter per replica). > 0.
+	PublicAPIRateLimitPerMinute int
 	// PublicAPIAuthFailuresPerMinute — failed authentications per minute per
-	// client IP on the public port before the key is checked. Must be > 0.
-	PublicAPIAuthFailuresPerMinute int `env:"SKEIN_PUBLIC_API_AUTH_FAILURES_PER_MINUTE" envDefault:"20"`
+	// client IP on the public port before the key is checked. > 0.
+	PublicAPIAuthFailuresPerMinute int
 	// PublicAPITrustedProxiesRaw — the CIDR list as set; Load parses it into
 	// PublicAPITrustedProxies. Empty = no trusted proxy: forwarding headers
 	// are ignored and the client IP is the direct peer.
@@ -707,8 +714,8 @@ type Config struct {
 	// PublicAPITrustedProxies — the parsed SKEIN_PUBLIC_API_TRUSTED_PROXIES.
 	PublicAPITrustedProxies []netip.Prefix
 	// PublicAPIWriteTimeout — the write timeout of the public server, which
-	// bounds the execution of one request. Must be > 0.
-	PublicAPIWriteTimeout time.Duration `env:"SKEIN_PUBLIC_API_WRITE_TIMEOUT" envDefault:"30s"`
+	// bounds the execution of one request. > 0.
+	PublicAPIWriteTimeout time.Duration
 
 	// APIKeyMaxTTL — the longest API key lifetime allowed (365 days, the
 	// ceiling: an operator may only lower it). 0 < max <= 365 days.
@@ -1152,9 +1159,9 @@ const APIKeyTTLCeiling = 365 * 24 * time.Hour
 // SKEIN_API_KEY_DEFAULT_TTL is unset (90 days), unless the maximum is lower.
 const APIKeyDefaultTTLFallback = 90 * 24 * time.Hour
 
-// validatePublicAPI checks the settings of the public API server and parses
-// its trusted proxies. Nothing is checked while the server is disabled: none
-// of these settings is read then.
+// validatePublicAPI parses and checks the settings of the public API server.
+// Nothing is parsed or checked while the server is disabled: none of these
+// settings is read then.
 func validatePublicAPI(cfg *Config) error {
 	if !cfg.PublicAPIEnabled {
 		return nil
@@ -1174,19 +1181,25 @@ func validatePublicAPI(cfg *Config) error {
 			return fmt.Errorf("skein_public_api_url must be the absolute http(s) address of the public API: %w", err)
 		}
 	}
-	if cfg.PublicAPIRateLimitPerMinute <= 0 {
-		return fmt.Errorf("skein_public_api_rate_limit_per_minute must be > 0; got %d", cfg.PublicAPIRateLimitPerMinute)
+	rate, err := strconv.Atoi(cfg.PublicAPIRateLimitPerMinuteRaw)
+	if err != nil || rate <= 0 {
+		return fmt.Errorf("skein_public_api_rate_limit_per_minute must be an integer > 0; got %q", cfg.PublicAPIRateLimitPerMinuteRaw)
 	}
-	if cfg.PublicAPIAuthFailuresPerMinute <= 0 {
-		return fmt.Errorf("skein_public_api_auth_failures_per_minute must be > 0; got %d", cfg.PublicAPIAuthFailuresPerMinute)
+	authFailures, err := strconv.Atoi(cfg.PublicAPIAuthFailuresPerMinuteRaw)
+	if err != nil || authFailures <= 0 {
+		return fmt.Errorf("skein_public_api_auth_failures_per_minute must be an integer > 0; got %q", cfg.PublicAPIAuthFailuresPerMinuteRaw)
 	}
-	if cfg.PublicAPIWriteTimeout <= 0 {
-		return fmt.Errorf("skein_public_api_write_timeout must be > 0; got %s", cfg.PublicAPIWriteTimeout)
+	writeTimeout, err := time.ParseDuration(cfg.PublicAPIWriteTimeoutRaw)
+	if err != nil || writeTimeout <= 0 {
+		return fmt.Errorf("skein_public_api_write_timeout must be a duration > 0; got %q", cfg.PublicAPIWriteTimeoutRaw)
 	}
 	proxies, err := parseTrustedProxies(cfg.PublicAPITrustedProxiesRaw)
 	if err != nil {
 		return fmt.Errorf("skein_public_api_trusted_proxies: %w", err)
 	}
+	cfg.PublicAPIRateLimitPerMinute = rate
+	cfg.PublicAPIAuthFailuresPerMinute = authFailures
+	cfg.PublicAPIWriteTimeout = writeTimeout
 	cfg.PublicAPITrustedProxies = proxies
 	return nil
 }

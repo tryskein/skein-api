@@ -1307,6 +1307,9 @@ func TestLoad_PublicAPIRefusals(t *testing.T) {
 		{"auth failure limit negative", map[string]string{"SKEIN_PUBLIC_API_AUTH_FAILURES_PER_MINUTE": "-5"}, true},
 		{"write timeout zero", map[string]string{"SKEIN_PUBLIC_API_WRITE_TIMEOUT": "0s"}, true},
 		{"write timeout negative", map[string]string{"SKEIN_PUBLIC_API_WRITE_TIMEOUT": "-1s"}, true},
+		{"rate limit not a number", map[string]string{"SKEIN_PUBLIC_API_RATE_LIMIT_PER_MINUTE": "many"}, true},
+		{"auth failure limit not a number", map[string]string{"SKEIN_PUBLIC_API_AUTH_FAILURES_PER_MINUTE": "1.5"}, true},
+		{"write timeout without a unit", map[string]string{"SKEIN_PUBLIC_API_WRITE_TIMEOUT": "30"}, true},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -1375,5 +1378,34 @@ func TestLoad_APIKeyDefaultTTL(t *testing.T) {
 				t.Errorf("APIKeyDefaultTTL = %s, want %s", cfg.APIKeyDefaultTTL, c.want)
 			}
 		})
+	}
+}
+
+// TestLoad_PublicAPIDisabledIgnoresItsSettings — with the public API switched
+// off, none of its settings is parsed or checked: values that refuse the start
+// while it is enabled do not stop it, and no parsed value is left behind.
+func TestLoad_PublicAPIDisabledIgnoresItsSettings(t *testing.T) {
+	withPublicAPIEnv(t, map[string]string{
+		"SKEIN_PUBLIC_API_ENABLED":                  "false",
+		"PORT":                                      "5100",
+		"SKEIN_PUBLIC_API_PORT":                     "5100",
+		"SKEIN_PUBLIC_API_URL":                      "api.example.com",
+		"SKEIN_PUBLIC_API_RATE_LIMIT_PER_MINUTE":    "many",
+		"SKEIN_PUBLIC_API_AUTH_FAILURES_PER_MINUTE": "0",
+		"SKEIN_PUBLIC_API_TRUSTED_PROXIES":          "proxy",
+		"SKEIN_PUBLIC_API_WRITE_TIMEOUT":            "30",
+	})
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() = %v, want success: a disabled public API reads none of its settings", err)
+	}
+	if cfg.PublicAPIEnabled {
+		t.Errorf("PublicAPIEnabled = true, want false")
+	}
+	if cfg.PublicAPIRateLimitPerMinute != 0 || cfg.PublicAPIAuthFailuresPerMinute != 0 ||
+		cfg.PublicAPIWriteTimeout != 0 || len(cfg.PublicAPITrustedProxies) != 0 {
+		t.Errorf("parsed settings of a disabled public API = %d, %d, %s, %v; want all zero",
+			cfg.PublicAPIRateLimitPerMinute, cfg.PublicAPIAuthFailuresPerMinute,
+			cfg.PublicAPIWriteTimeout, cfg.PublicAPITrustedProxies)
 	}
 }

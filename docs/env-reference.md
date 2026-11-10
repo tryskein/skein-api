@@ -1024,7 +1024,8 @@ migration, before the HTTP listener opens:
   key) is served on its own port.
 - **Required:** no · **Default:** `true` · **Format:** boolean.
 - **If unset:** `true`. With `false` none of the other `SKEIN_PUBLIC_API_*`
-  variables is validated or read.
+  variables is parsed, validated or read: a value of theirs that would abort
+  startup while the public API is enabled does not stop it.
 
 #### `SKEIN_PUBLIC_API_PORT`
 
