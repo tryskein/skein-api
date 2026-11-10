@@ -67,7 +67,12 @@ type parityStack struct {
 
 func newParityStack(t *testing.T) *parityStack {
 	t.Helper()
-	pool := testsupport.NewTestPool(t)
+	return newParityStackOn(t, testsupport.NewTestPool(t))
+}
+
+// newParityStackOn is newParityStack on a given pool (one with a tracer, say).
+func newParityStackOn(t *testing.T, pool *pgxpool.Pool) *parityStack {
+	t.Helper()
 	ctx := context.Background()
 
 	t.Setenv("DATABASE_URL", os.Getenv("TEST_DATABASE_URL"))
