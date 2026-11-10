@@ -413,7 +413,8 @@ func TestAuthChain_RequestLimitPerKey(t *testing.T) {
 // TestAuthChain_KeyRightBeforeTheOperation — row 63 (US-2, SC-002). A key
 // without the right of the operation gets 403 insufficient_scope naming the
 // right and the operationId, before the operation runs; force=true on a
-// guarded operation raises the right to manage.
+// guarded operation raises the right to manage; force on an operation that
+// is not guarded is 400 as an unknown parameter (review R6-04).
 func TestAuthChain_KeyRightBeforeTheOperation(t *testing.T) {
 	pool := testsupport.NewTestPool(t)
 	owner, _ := testsupport.SeedUser(t, pool, "user")
@@ -458,6 +459,24 @@ func TestAuthChain_KeyRightBeforeTheOperation(t *testing.T) {
 			rec := rig.do(t, req{method: http.MethodPost, path: tc.path, ip: "203.0.113.30", key: tc.key})
 			if rec.Code != tc.status {
 				t.Errorf("status %d, want %d (body %q)", rec.Code, tc.status, rec.Body.String())
+			}
+		})
+	}
+
+	// force on an operation that is not guarded is an unknown parameter
+	// (spec «Passing force»): 400 before the operation, whatever its value.
+	for _, value := range []string{"true", "false"} {
+		t.Run("force="+value+" on an operation that is not guarded", func(t *testing.T) {
+			before := rig.calls.Load()
+			rec := rig.do(t, req{method: http.MethodPost, path: pathWrite + "?force=" + value, ip: "203.0.113.30", key: manage})
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status %d, want 400 (body %q)", rec.Code, rec.Body.String())
+			}
+			if p := problem(t, rec); p["code"] != "validation_error" {
+				t.Errorf("code %v, want validation_error", p["code"])
+			}
+			if rig.calls.Load() != before {
+				t.Error("the operation ran")
 			}
 		})
 	}

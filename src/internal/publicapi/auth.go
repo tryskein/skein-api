@@ -198,10 +198,19 @@ func (c *Chain) Wrap(rt Route, next http.Handler) http.Handler {
 
 		// 6. The right of the operation, in the request's mode, before any
 		// object is looked up.
-		mode, ok := modeOf(r)
-		if !ok {
+		// Only a guarded operation has a mode; force on any other is an
+		// unknown parameter (spec «Passing force»), refused here, before
+		// Idempotency and the operation.
+		var mode Mode
+		if rt.Guarded {
+			if mode, ok = modeOf(r); !ok {
+				WriteProblem(w, Problem{Code: errcode.ValidationError, Origin: OriginParse,
+					Detail: "force must be true or false"})
+				return
+			}
+		} else if _, sent := r.URL.Query()[forceParam]; sent {
 			WriteProblem(w, Problem{Code: errcode.ValidationError, Origin: OriginParse,
-				Detail: "force must be true or false"})
+				Detail: "unknown query parameter: " + forceParam})
 			return
 		}
 		grant := auth.RequestGrant(key)
