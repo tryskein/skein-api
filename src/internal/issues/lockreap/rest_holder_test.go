@@ -162,6 +162,65 @@ func TestReaper_RESTHolders(t *testing.T) {
 		released(t, id)
 	})
 
+	// Review C5-05: a revoked key, an expired key, and a key scoped by spaces.
+	t.Run("a revoked key keeps no lock however active", func(t *testing.T) {
+		key := seedGrantKey(t, pool, owner, apikeys.LevelWrite, writeAll)
+		holder := agents.RESTHolder(key, "revoked")
+		seedKeyedAgent(t, pool, owner, holder, key, "revoked", time.Minute)
+		if _, err := pool.Exec(context.Background(), `UPDATE api_keys SET revoked_at = now() WHERE id = $1`, key); err != nil {
+			t.Fatalf("revoke the key: %v", err)
+		}
+		id := issue(holder)
+
+		newReaper(pool).Tick(context.Background())
+
+		released(t, id)
+	})
+
+	t.Run("an expired key keeps no lock however active", func(t *testing.T) {
+		key := seedGrantKey(t, pool, owner, apikeys.LevelWrite, writeAll)
+		holder := agents.RESTHolder(key, "expired")
+		seedKeyedAgent(t, pool, owner, holder, key, "expired", time.Minute)
+		if _, err := pool.Exec(context.Background(),
+			`UPDATE api_keys SET expires_at = now() - interval '1 minute' WHERE id = $1`, key); err != nil {
+			t.Fatalf("expire the key: %v", err)
+		}
+		id := issue(holder)
+
+		newReaper(pool).Tick(context.Background())
+
+		released(t, id)
+	})
+
+	var issueSpace uuid.UUID
+	if err := pool.QueryRow(context.Background(), `SELECT space_id FROM projects WHERE id = $1`, pid).Scan(&issueSpace); err != nil {
+		t.Fatalf("read the project's space: %v", err)
+	}
+	t.Run("a key scoped to the issue's space keeps the lock of an active holder", func(t *testing.T) {
+		key := seedGrantKey(t, pool, owner, apikeys.LevelWrite,
+			apikeys.Scope{Mode: apikeys.ScopeSpaces, Spaces: []uuid.UUID{issueSpace}})
+		holder := agents.RESTHolder(key, "in-space")
+		seedKeyedAgent(t, pool, owner, holder, key, "in-space", time.Minute)
+		id := issue(holder)
+
+		newReaper(pool).Tick(context.Background())
+
+		kept(t, id, holder)
+	})
+
+	t.Run("a key scoped to another space keeps no lock however active", func(t *testing.T) {
+		other := testsupport.SeedSpace(t, pool, owner)
+		key := seedGrantKey(t, pool, owner, apikeys.LevelWrite,
+			apikeys.Scope{Mode: apikeys.ScopeSpaces, Spaces: []uuid.UUID{other}})
+		holder := agents.RESTHolder(key, "out-of-space")
+		seedKeyedAgent(t, pool, owner, holder, key, "out-of-space", time.Minute)
+		id := issue(holder)
+
+		newReaper(pool).Tick(context.Background())
+
+		released(t, id)
+	})
+
 	t.Run("a lock younger than the threshold stays whatever the key", func(t *testing.T) {
 		key := seedGrantKey(t, pool, owner, apikeys.LevelRead, writeAll)
 		holder := agents.RESTHolder(key, "fresh")
