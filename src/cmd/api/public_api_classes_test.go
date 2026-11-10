@@ -177,6 +177,7 @@ type classWorld struct {
 	owner      uuid.UUID
 	member     uuid.UUID
 	admin      uuid.UUID
+	space      uuid.UUID
 	spaceShort string
 	p, q       uuid.UUID
 	pPrefix    string
@@ -216,6 +217,9 @@ func newClassWorld(t *testing.T) *classWorld {
 	w.member, _ = testsupport.SeedUser(t, pool, "")
 	w.admin, _ = testsupport.SeedUser(t, pool, "admin")
 	space := testsupport.SeedSpace(t, pool, w.owner)
+	w.space = space
+	// A project member of a non-personal space is a participant of it.
+	testsupport.AddSpaceMember(t, pool, space, w.member)
 	if err := pool.QueryRow(context.Background(), `SELECT short_id FROM spaces WHERE id = $1`, space).Scan(&w.spaceShort); err != nil {
 		t.Fatalf("read space: %v", err)
 	}
@@ -376,6 +380,7 @@ func (w *classWorld) call(op publicOp, p uuid.UUID, key string) opCall {
 		return opCall{http.MethodGet, proj + "/members", nil, nil}
 	case "putProjectMember":
 		u, _ := testsupport.SeedUser(w.t, w.pool, "")
+		testsupport.AddSpaceMember(w.t, w.pool, w.space, u)
 		return opCall{http.MethodPut, proj + "/members/" + u.String(), map[string]any{"role": "member"}, nil}
 	case "deleteProjectMember":
 		u, _ := testsupport.SeedUser(w.t, w.pool, "")
@@ -732,12 +737,14 @@ func keysOf(m map[string]any) []string {
 // key is recorded as a human one.
 func TestPublicAPIClasses_OriginOfAWrite(t *testing.T) {
 	w := newClassWorld(t)
-	key := w.key(w.owner, levelKey(apikeys.LevelManage))
 	for _, op := range publicOps {
 		if op.read {
 			continue
 		}
 		t.Run(op.id, func(t *testing.T) {
+			// A key per operation: the run makes more requests than one key's
+			// rate limit lets through in a minute.
+			key := w.key(w.owner, levelKey(apikeys.LevelManage))
 			for _, kind := range []string{"", "directed", "autonomous"} {
 				c := w.call(op, w.p, key)
 				if kind != "" {
@@ -777,6 +784,7 @@ func TestPublicAPIClasses_OriginOfAWrite(t *testing.T) {
 		})
 	}
 	t.Run("aliases added by key", func(t *testing.T) {
+		key := w.key(w.owner, levelKey(apikeys.LevelManage))
 		updated := w.fresh("al")
 		if a := w.do(key, opCall{http.MethodPatch, "/api/v1/projects/" + w.p.String(), map[string]any{"aliasesAdd": []string{updated}}, nil}, "", nil); !success(a.status) {
 			t.Fatalf("updateProject: %d %s", a.status, a.body)
@@ -897,8 +905,8 @@ func TestPublicAPIClasses_BackfilledKey(t *testing.T) {
 	}
 	var keyID uuid.UUID
 	if err := w.pool.QueryRow(context.Background(), `
-INSERT INTO api_keys (user_id, key_hash, prefix, label, level, is_admin, scope_mode, expires_at)
-VALUES ($1, $2, $3, 'backfilled', 'manage', false, 'all', NULL) RETURNING id`, w.owner, hash, prefix).Scan(&keyID); err != nil {
+INSERT INTO api_keys (id, user_id, key_hash, prefix, label, level, is_admin, scope_mode, expires_at)
+VALUES ($1, $2, $3, $4, 'backfilled', 'manage', false, 'all', NULL) RETURNING id`, uuid.New(), w.owner, hash, prefix).Scan(&keyID); err != nil {
 		t.Fatalf("seed a backfilled key: %v", err)
 	}
 	t.Cleanup(func() {

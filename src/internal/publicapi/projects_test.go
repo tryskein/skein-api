@@ -258,6 +258,8 @@ func TestProjects_ParityWithMCP(t *testing.T) {
 	space, spaceShort := seedOwnSpace(t, pool, owner)
 	other, otherShort := seedOwnSpace(t, pool, owner)
 	testsupport.AddSpaceMember(t, pool, space, member)
+	// A project member of a non-personal space is a participant of it.
+	testsupport.AddSpaceMember(t, pool, space, newcomer)
 
 	pr, prPrefix := seedProject(t, pool, owner, space, "parr")
 	pm, pmPrefix := seedProject(t, pool, owner, space, "parm")
