@@ -209,7 +209,7 @@ func checkKind(w http.ResponseWriter, kind *string) bool {
 // getMe answers who the key belongs to.
 //
 // @Summary Get the caller
-// @Description Returns the identity the API key acts as: the user (id, email, username, name, role), the executor of this request (agent: sessionId is the lock holder api:<keyId>[:<workerId>] of X-Skein-Worker-Id, with when it was first and last seen), the projects the user sees within the key's scope (at most 100, by name, with the user's role and the space; projectsTotal counts all of them and projectsTruncated marks the cut), the spaces the user is in and whether the user is an instance admin.
+// @Description Returns the identity the API key acts as: the user (id, email, username, name, role), the executor of this request (agent: sessionId is the lock holder api:<keyId>[:<workerId>] of X-Skein-Worker-Id, with when it was first and last seen), the projects the user sees within the key's scope (at most 100, by name, with the user's role and the space; projectsTotal counts all of them and projectsTruncated marks the cut), the spaces the user is in within the key's scope (canCreateProject only where the key may create a project: the right manage and a scope of spaces or all) and whether the user is an instance admin.
 // @Description
 // @Description The same answer as the MCP tool skein_whoami. Any key may call it, whatever its rights. Read-only; the request still counts as activity of its executor.
 // @Tags Me

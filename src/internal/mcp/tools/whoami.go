@@ -13,6 +13,7 @@ import (
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 
+	"skein-api/internal/apikeys"
 	"skein-api/internal/auth"
 	"skein-api/internal/authz"
 	skmcp "skein-api/internal/mcp"
@@ -42,7 +43,8 @@ func RegisterWhoami(s *server.MCPServer, pool *pgxpool.Pool) {
 			"Returns the current MCP session identity: the resolved user, the "+
 				"agent (this MCP session), the spaces the user is in (their "+
 				"short ids are the `space` of skein_project_create) and the "+
-				"projects the user can see with their role and space. Read-only, idempotent. Call once at "+
+				"projects the user can see with their role and space, both within the API key's scope; "+
+				"canCreateProject also needs a key that may create projects. Read-only, idempotent. Call once at "+
 				"session start so future tool calls have the user's permission "+
 				"context cached on your side.",
 		),
@@ -89,8 +91,9 @@ type WhoamiResponse struct {
 	// (whoamiProjectsCap).
 	ProjectsTruncated bool   `json:"projectsTruncated,omitempty"`
 	ProjectsHint      string `json:"projectsHint,omitempty"`
-	// Spaces are the spaces the caller sees (sk-674.18 T024, US-12), in
-	// the order of the projects column, capped like projects[].
+	// Spaces are the spaces the caller sees (sk-674.18 T024, US-12)
+	// within the API key's scope (sk-878.3.1 US-3), in the order of the
+	// projects column, capped like projects[].
 	Spaces          []spaces.AgentSpace `json:"spaces"`
 	SpacesTotal     int                 `json:"spacesTotal"`
 	SpacesTruncated bool                `json:"spacesTruncated,omitempty"`
@@ -198,7 +201,11 @@ SELECT id::text, email, username, name, role, is_external
 	if err != nil {
 		return WhoamiResponse{}, fmt.Errorf("loading the projects: %w", err)
 	}
-	agentSpaces, err := spaces.AgentSpaces(ctx, pool, userID)
+	limit, err := keySpaceLimit(ctx, pool)
+	if err != nil {
+		return WhoamiResponse{}, fmt.Errorf("reading the spaces of the key scope: %w", err)
+	}
+	agentSpaces, err := spaces.AgentSpacesWithin(ctx, pool, userID, limit)
 	if err != nil {
 		return WhoamiResponse{}, fmt.Errorf("loading the spaces: %w", err)
 	}
@@ -235,6 +242,52 @@ SELECT id::text, email, username, name, role, is_external
 		SpacesTruncated:   spacesTotal > len(agentSpaces),
 		IsAdmin:           isAdmin,
 	}, nil
+}
+
+// keySpaceLimit is the narrowing of the spaces of a whoami answer by the API
+// key of the request (sk-878.3.1 US-3, INV-2): scope "projects" keeps the
+// spaces of its projects, "spaces" the chosen spaces, "all" every space; a
+// key request without its grant keeps none. canCreateProject stays only for
+// a key that may create a project — the right manage and a scope of spaces
+// or all, as createProject requires. A request without a key is not
+// narrowed.
+func keySpaceLimit(ctx context.Context, pool *pgxpool.Pool) (spaces.AgentSpaceLimit, error) {
+	if _, isKey := auth.APIKeyIDFrom(ctx); !isKey {
+		return spaces.AgentSpaceLimit{}, nil
+	}
+	g, ok := auth.KeyGrantFrom(ctx)
+	if !ok {
+		return spaces.AgentSpaceLimit{Limited: true, NoCreate: true}, nil
+	}
+	limit := spaces.AgentSpaceLimit{
+		NoCreate: !authz.KeyMeets(g, authz.KeyRequirement{Right: authz.KeyRightManage, WideScope: true}),
+	}
+	switch g.Scope.Mode {
+	case apikeys.ScopeAll:
+	case apikeys.ScopeSpaces:
+		limit.Limited, limit.Spaces = true, g.Scope.Spaces
+	case apikeys.ScopeProjects:
+		limit.Limited = true
+		rows, err := pool.Query(ctx, `SELECT DISTINCT space_id FROM projects WHERE id = ANY($1::uuid[])`, g.Scope.Projects)
+		if err != nil {
+			return spaces.AgentSpaceLimit{}, err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var id uuid.UUID
+			if err := rows.Scan(&id); err != nil {
+				return spaces.AgentSpaceLimit{}, err
+			}
+			limit.Spaces = append(limit.Spaces, id)
+		}
+		if err := rows.Err(); err != nil {
+			return spaces.AgentSpaceLimit{}, err
+		}
+	default:
+		// A mode outside the closed set reaches nothing.
+		limit.Limited = true
+	}
+	return limit, nil
 }
 
 // loadProjects reads the non-archived projects visible to userID — the

@@ -9,6 +9,7 @@ package publicapi_test
 
 import (
 	"context"
+	"maps"
 	"net/http"
 	"net/url"
 	"slices"
@@ -544,4 +545,69 @@ func TestProjects_ParityWithMCP(t *testing.T) {
 		parity(t, "updateComponent restoring", res, mres, "")
 		sameEvents(t, "updateComponent restoring", eventsSince(t, pool, pr, before), eventsSince(t, pool, pm, before))
 	})
+}
+
+// TestProjects_MeWithinTheKeyScope — row 103 (US-3, INV-2), the spaces of
+// getMe and skein_whoami: a key of scope «spaces {S1}» sees only S1, a key of
+// scope «projects {P2}» only the space of P2, a key of scope «all» both;
+// canCreateProject holds only for a key that may create a project (manage,
+// scope spaces or all). Red when a space outside the key's scope, or the
+// right to create a project the key lacks, is shown.
+func TestProjects_MeWithinTheKeyScope(t *testing.T) {
+	pool := testsupport.NewTestPool(t)
+	rg := newResourceRig(t, pool)
+	owner, _ := testsupport.SeedUser(t, pool, "")
+	s1, s1Short := seedOwnSpace(t, pool, owner)
+	s2, s2Short := seedOwnSpace(t, pool, owner)
+	seedProject(t, pool, owner, s1, "mes")
+	p2, _ := seedProject(t, pool, owner, s2, "mes")
+	key := func(l apikeys.Level, scope apikeys.Scope) string {
+		return rigKey(t, pool, owner, apikeys.Grant{Level: l, Scope: scope})
+	}
+	// spacesOf reads the spaces of an answer: short id → canCreateProject,
+	// only for S1 and S2 (the owner's personal space is not looked at).
+	spacesOf := func(body map[string]any) map[string]bool {
+		out := map[string]bool{}
+		list, _ := body["spaces"].([]any)
+		for _, it := range list {
+			m, _ := it.(map[string]any)
+			id, _ := m["id"].(string)
+			if id == s1Short || id == s2Short {
+				create, _ := m["canCreateProject"].(bool)
+				out[id] = create
+			}
+		}
+		return out
+	}
+	for _, c := range []struct {
+		name string
+		key  string
+		want map[string]bool
+	}{
+		{"spaces S1, manage", key(apikeys.LevelManage, apikeys.Scope{Mode: apikeys.ScopeSpaces, Spaces: []uuid.UUID{s1}}),
+			map[string]bool{s1Short: true}},
+		{"spaces S1, write", key(apikeys.LevelWrite, apikeys.Scope{Mode: apikeys.ScopeSpaces, Spaces: []uuid.UUID{s1}}),
+			map[string]bool{s1Short: false}},
+		{"projects P2, manage", key(apikeys.LevelManage, apikeys.Scope{Mode: apikeys.ScopeProjects, Projects: []uuid.UUID{p2}}),
+			map[string]bool{s2Short: false}},
+		{"all, manage", key(apikeys.LevelManage, apikeys.Scope{Mode: apikeys.ScopeAll}),
+			map[string]bool{s1Short: true, s2Short: true}},
+		{"all, read", key(apikeys.LevelRead, apikeys.Scope{Mode: apikeys.ScopeAll}),
+			map[string]bool{s1Short: false, s2Short: false}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			rest := rg.rest(c.key, http.MethodGet, "/api/v1/me", nil, nil)
+			wantOK(t, "getMe", rest, http.StatusOK)
+			if got := spacesOf(rest.json(t)); !maps.Equal(got, c.want) {
+				t.Errorf("getMe spaces %v, want %v", got, c.want)
+			}
+			mcp := rg.tool(c.key, "skein_whoami", map[string]any{})
+			if mcp.code != "" {
+				t.Fatalf("skein_whoami: %s", mcp.text)
+			}
+			if got := spacesOf(mcp.json(t)); !maps.Equal(got, c.want) {
+				t.Errorf("skein_whoami spaces %v, want %v", got, c.want)
+			}
+		})
+	}
 }

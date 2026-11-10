@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -145,22 +146,42 @@ type AgentSpace struct {
 	// Role is RoleOwner | RoleMember, or "admin" for a space the caller
 	// sees only as the instance admin.
 	Role string `json:"role"`
-	// CanCreateProject — the caller is a member (never with admin access).
+	// CanCreateProject — the caller is a member (never with admin access)
+	// and, for a request by API key, the key may create a project there.
 	CanCreateProject bool `json:"canCreateProject"`
 }
 
 // AgentSpaces returns the spaces the caller sees in column order (the
 // same set and order as GET /me/spaces).
 func AgentSpaces(ctx context.Context, q querier, caller uuid.UUID) ([]AgentSpace, error) {
+	return AgentSpacesWithin(ctx, q, caller, AgentSpaceLimit{})
+}
+
+// AgentSpaceLimit narrows AgentSpaces to what an API key reaches
+// (sk-878.3.1 US-3, INV-2). The zero value narrows nothing.
+type AgentSpaceLimit struct {
+	// Limited — only the spaces of Spaces are kept (none when it is empty).
+	Limited bool
+	Spaces  []uuid.UUID
+	// NoCreate — the key may not create a project: CanCreateProject is
+	// false on every space.
+	NoCreate bool
+}
+
+// AgentSpacesWithin is AgentSpaces narrowed by limit.
+func AgentSpacesWithin(ctx context.Context, q querier, caller uuid.UUID, limit AgentSpaceLimit) ([]AgentSpace, error) {
 	rows, err := seenSpaces(ctx, q, caller, "")
 	if err != nil {
 		return nil, err
 	}
 	out := make([]AgentSpace, 0, len(rows))
 	for _, r := range rows {
+		if limit.Limited && !slices.Contains(limit.Spaces, r.ID) {
+			continue
+		}
 		s := AgentSpace{ID: r.ShortID, Name: r.Name, Kind: r.Kind, Role: "admin"}
 		if r.Role != nil {
-			s.Role, s.CanCreateProject = *r.Role, true
+			s.Role, s.CanCreateProject = *r.Role, !limit.NoCreate
 		}
 		out = append(out, s)
 	}

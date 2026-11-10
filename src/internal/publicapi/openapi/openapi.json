@@ -2799,7 +2799,7 @@
             "spaces.AgentSpace": {
                 "properties": {
                     "canCreateProject": {
-                        "description": "CanCreateProject — the caller is a member (never with admin access).",
+                        "description": "CanCreateProject — the caller is a member (never with admin access)\nand, for a request by API key, the key may create a project there.",
                         "type": "boolean"
                     },
                     "id": {
@@ -2900,7 +2900,7 @@
                         "type": "boolean"
                     },
                     "spaces": {
-                        "description": "Spaces are the spaces the caller sees (sk-674.18 T024, US-12), in\nthe order of the projects column, capped like projects[].",
+                        "description": "Spaces are the spaces the caller sees (sk-674.18 T024, US-12)\nwithin the API key's scope (sk-878.3.1 US-3), in the order of the\nprojects column, capped like projects[].",
                         "items": {
                             "$ref": "#/components/schemas/spaces.AgentSpace"
                         },
@@ -6220,7 +6220,7 @@
         },
         "/api/v1/me": {
             "get": {
-                "description": "Returns the identity the API key acts as: the user (id, email, username, name, role), the executor of this request (agent: sessionId is the lock holder api:<keyId>[:<workerId>] of X-Skein-Worker-Id, with when it was first and last seen), the projects the user sees within the key's scope (at most 100, by name, with the user's role and the space; projectsTotal counts all of them and projectsTruncated marks the cut), the spaces the user is in and whether the user is an instance admin.\n\nThe same answer as the MCP tool skein_whoami. Any key may call it, whatever its rights. Read-only; the request still counts as activity of its executor.",
+                "description": "Returns the identity the API key acts as: the user (id, email, username, name, role), the executor of this request (agent: sessionId is the lock holder api:<keyId>[:<workerId>] of X-Skein-Worker-Id, with when it was first and last seen), the projects the user sees within the key's scope (at most 100, by name, with the user's role and the space; projectsTotal counts all of them and projectsTruncated marks the cut), the spaces the user is in within the key's scope (canCreateProject only where the key may create a project: the right manage and a scope of spaces or all) and whether the user is an instance admin.\n\nThe same answer as the MCP tool skein_whoami. Any key may call it, whatever its rights. Read-only; the request still counts as activity of its executor.",
                 "operationId": "getMe",
                 "responses": {
                     "200": {
