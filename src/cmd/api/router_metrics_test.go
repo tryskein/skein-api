@@ -159,7 +159,7 @@ func scrapeCounter(t *testing.T, r chi.Router, series string) float64 {
 // recorded status depends on the ordering.
 func TestBuildRouter_PanicIsObservedAsServerError(t *testing.T) {
 	const probePath = "/__router_order_probe"
-	const series = `http_requests_total{method="GET",path="` + probePath + `",skein_instance="` + routerTestInstance + `",status="500"}`
+	const series = `http_requests_total{entry="internal",method="GET",path="` + probePath + `",skein_instance="` + routerTestInstance + `",status="500"}`
 
 	r := newRouterUnderTest(t)
 	// Root-level route: no auth middleware (those live on the /api/v1, /mcp
@@ -190,7 +190,7 @@ func TestBuildRouter_PanicIsObservedAsServerError(t *testing.T) {
 // production router here, so a future middleware ordering that put the
 // counter ahead of the exclusion would show up as a series.
 func TestBuildRouter_ProbesAreNotCounted(t *testing.T) {
-	const series = `http_requests_total{method="GET",path="/healthz",skein_instance="` + routerTestInstance + `",status="200"}`
+	const series = `http_requests_total{entry="internal",method="GET",path="/healthz",skein_instance="` + routerTestInstance + `",status="200"}`
 
 	r := newRouterUnderTest(t)
 	before := scrapeCounter(t, r, series)

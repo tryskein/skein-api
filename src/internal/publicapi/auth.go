@@ -131,6 +131,8 @@ func (c *Chain) Wrap(rt Route, next http.Handler) http.Handler {
 		}
 		plain := strings.TrimSpace(r.Header.Get(auth.HeaderAPIKey))
 		if over, retry := c.opts.AuthFailures.Exceeded(ipKey); over && (plain == "" || !c.opts.WarmKeys.IsWarm(plain)) {
+			AuthFailuresTotal.WithLabelValues(reasonFailureLimit).Inc()
+			RateLimitedTotal.WithLabelValues(limitAuthFailures).Inc()
 			writeRateLimited(w, retry)
 			return
 		}
@@ -141,6 +143,7 @@ func (c *Chain) Wrap(rt Route, next http.Handler) http.Handler {
 		case auth.APIKeyAuthenticated:
 		case auth.APIKeyRejected:
 			c.opts.AuthFailures.Add(ipKey)
+			AuthFailuresTotal.WithLabelValues(string(out.Reason)).Inc()
 			slog.WarnContext(ctx, "public API auth failed",
 				"operationId", rt.OperationID,
 				"masked", auth.MaskAPIKey(plain),
@@ -148,6 +151,7 @@ func (c *Chain) Wrap(rt Route, next http.Handler) http.Handler {
 			WriteProblem(w, Problem{Code: errcode.Unauthenticated, Origin: OriginParse})
 			return
 		default:
+			AuthFailuresTotal.WithLabelValues(reasonInternalError).Inc()
 			code := errcode.InternalError
 			if isDatabaseUnavailable(out.Err) {
 				code = errcode.DatabaseUnavailable
@@ -169,6 +173,7 @@ func (c *Chain) Wrap(rt Route, next http.Handler) http.Handler {
 
 		// 4. The request limit of the key.
 		if ok, retry := c.opts.Requests.Take(key.KeyID.String()); !ok {
+			RateLimitedTotal.WithLabelValues(limitRequests).Inc()
 			writeRateLimited(w, retry)
 			return
 		}
@@ -201,6 +206,7 @@ func (c *Chain) Wrap(rt Route, next http.Handler) http.Handler {
 		}
 		grant := auth.RequestGrant(key)
 		if req := rt.KeyRequirement(mode); !authz.KeyMeets(grant, req) {
+			ScopeRefusalsTotal.WithLabelValues(req.Right.String()).Inc()
 			ext := map[string]any{"requiredRight": req.Right.String(), "operationId": rt.OperationID}
 			if req.WideScope {
 				ext["requiredScope"] = "spaces or all"

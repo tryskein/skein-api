@@ -22,11 +22,11 @@ import (
 func newTestCollectors() (*prometheus.CounterVec, *prometheus.HistogramVec) {
 	reqs := prometheus.NewCounterVec(
 		prometheus.CounterOpts{Name: "http_requests_total"},
-		[]string{"method", "path", "status"},
+		[]string{"method", "path", "status", "entry"},
 	)
 	dur := prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{Name: "http_request_duration_seconds", Buckets: prometheus.DefBuckets},
-		[]string{"method", "path"},
+		[]string{"method", "path", "entry"},
 	)
 	return reqs, dur
 }
@@ -35,7 +35,7 @@ func newTestCollectors() (*prometheus.CounterVec, *prometheus.HistogramVec) {
 // root, a parametrised REST route and a mounted subtree standing in for /mcp.
 func newTestRouter(reqs *prometheus.CounterVec, dur *prometheus.HistogramVec) chi.Router {
 	r := chi.NewRouter()
-	r.Use(httpMetricsWith(reqs, dur))
+	r.Use(httpMetricsWith(reqs, dur, EntryInternal))
 
 	ok := func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte(`{}`)) }
 
@@ -83,7 +83,7 @@ func TestHTTPMetrics_PathLabelIsRoutePattern(t *testing.T) {
 			len(ids), got, want)
 	}
 
-	counter := reqs.WithLabelValues(http.MethodGet, "/api/v1/issues/{issueID}", "200")
+	counter := reqs.WithLabelValues(http.MethodGet, "/api/v1/issues/{issueID}", "200", "internal")
 	if got, want := testutil.ToFloat64(counter), float64(len(ids)); got != want {
 		t.Errorf("http_requests_total{method=GET,path=/api/v1/issues/{issueID},status=200} = %v, want %v", got, want)
 	}
@@ -160,7 +160,7 @@ func TestHTTPMetrics_Labels(t *testing.T) {
 				t.Fatalf("%s %s = %d, want %d", tt.method, tt.target, got, tt.wantStatus)
 			}
 
-			counter := reqs.WithLabelValues(tt.wantMethod, tt.wantPath, strconv.Itoa(tt.wantStatus))
+			counter := reqs.WithLabelValues(tt.wantMethod, tt.wantPath, strconv.Itoa(tt.wantStatus), "internal")
 			if got := testutil.ToFloat64(counter); got != 1 {
 				t.Errorf("http_requests_total{method=%q,path=%q,status=%d} = %v, want 1",
 					tt.wantMethod, tt.wantPath, tt.wantStatus, got)
@@ -184,7 +184,7 @@ func TestHTTPMetrics_ObservesPanicAsServerError(t *testing.T) {
 	reqs, dur := newTestCollectors()
 
 	r := chi.NewRouter()
-	r.Use(httpMetricsWith(reqs, dur))
+	r.Use(httpMetricsWith(reqs, dur, EntryInternal))
 	r.Use(recoverer500)
 	r.Get("/api/v1/boom", func(http.ResponseWriter, *http.Request) { panic("boom") })
 
@@ -192,7 +192,7 @@ func TestHTTPMetrics_ObservesPanicAsServerError(t *testing.T) {
 		t.Fatalf("GET /api/v1/boom = %d, want %d", got, http.StatusInternalServerError)
 	}
 
-	counter := reqs.WithLabelValues(http.MethodGet, "/api/v1/boom", "500")
+	counter := reqs.WithLabelValues(http.MethodGet, "/api/v1/boom", "500", "internal")
 	if got := testutil.ToFloat64(counter); got != 1 {
 		t.Errorf("http_requests_total{...,status=500} = %v, want 1", got)
 	}
@@ -213,7 +213,7 @@ func TestHTTPMetrics_PanicAfterWriteKeepsWireStatus(t *testing.T) {
 	reqs, dur := newTestCollectors()
 
 	r := chi.NewRouter()
-	r.Use(httpMetricsWith(reqs, dur))
+	r.Use(httpMetricsWith(reqs, dur, EntryInternal))
 	r.Use(middleware.Recoverer)
 	r.Get("/api/v1/stream", func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte(`{"partial":true}`))
@@ -224,10 +224,10 @@ func TestHTTPMetrics_PanicAfterWriteKeepsWireStatus(t *testing.T) {
 		t.Fatalf("GET /api/v1/stream = %d, want %d (Recoverer cannot re-write a sent header)", got, http.StatusOK)
 	}
 
-	if got := testutil.ToFloat64(reqs.WithLabelValues(http.MethodGet, "/api/v1/stream", "200")); got != 1 {
+	if got := testutil.ToFloat64(reqs.WithLabelValues(http.MethodGet, "/api/v1/stream", "200", "internal")); got != 1 {
 		t.Errorf("http_requests_total{...,status=200} = %v, want 1 — a panic after the header is out is recorded as the status on the wire", got)
 	}
-	if got := testutil.ToFloat64(reqs.WithLabelValues(http.MethodGet, "/api/v1/stream", "500")); got != 0 {
+	if got := testutil.ToFloat64(reqs.WithLabelValues(http.MethodGet, "/api/v1/stream", "500", "internal")); got != 0 {
 		t.Errorf("http_requests_total{...,status=500} = %v, want 0 — recording 500 here would mean the metric saw a status the client never got", got)
 	}
 	if got := testutil.CollectAndCount(dur); got != 1 {
@@ -244,7 +244,7 @@ func TestHTTPMetrics_PanicOnUpgradeKeepsWireStatus(t *testing.T) {
 	reqs, dur := newTestCollectors()
 
 	r := chi.NewRouter()
-	r.Use(httpMetricsWith(reqs, dur))
+	r.Use(httpMetricsWith(reqs, dur, EntryInternal))
 	r.Use(middleware.Recoverer)
 	r.Get("/mcp/*", func(http.ResponseWriter, *http.Request) { panic("boom on upgrade") })
 
@@ -253,10 +253,10 @@ func TestHTTPMetrics_PanicOnUpgradeKeepsWireStatus(t *testing.T) {
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, req)
 
-	if got := testutil.ToFloat64(reqs.WithLabelValues(http.MethodGet, "/mcp/*", "200")); got != 1 {
+	if got := testutil.ToFloat64(reqs.WithLabelValues(http.MethodGet, "/mcp/*", "200", "internal")); got != 1 {
 		t.Errorf("http_requests_total{path=/mcp/*,status=200} = %v, want 1 — Recoverer writes no status for an upgrade panic", got)
 	}
-	if got := testutil.ToFloat64(reqs.WithLabelValues(http.MethodGet, "/mcp/*", "500")); got != 0 {
+	if got := testutil.ToFloat64(reqs.WithLabelValues(http.MethodGet, "/mcp/*", "500", "internal")); got != 0 {
 		t.Errorf("http_requests_total{path=/mcp/*,status=500} = %v, want 0", got)
 	}
 	if got := testutil.CollectAndCount(dur); got != 1 {
@@ -273,7 +273,7 @@ func TestHTTPMetrics_AbortHandlerPanicIsStillObserved(t *testing.T) {
 	reqs, dur := newTestCollectors()
 
 	r := chi.NewRouter()
-	r.Use(httpMetricsWith(reqs, dur))
+	r.Use(httpMetricsWith(reqs, dur, EntryInternal))
 	r.Use(middleware.Recoverer)
 	r.Get("/api/v1/abort", func(http.ResponseWriter, *http.Request) { panic(http.ErrAbortHandler) })
 
@@ -287,7 +287,7 @@ func TestHTTPMetrics_AbortHandlerPanicIsStillObserved(t *testing.T) {
 		r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/abort", nil))
 	}()
 
-	if got := testutil.ToFloat64(reqs.WithLabelValues(http.MethodGet, "/api/v1/abort", "200")); got != 1 {
+	if got := testutil.ToFloat64(reqs.WithLabelValues(http.MethodGet, "/api/v1/abort", "200", "internal")); got != 1 {
 		t.Errorf("http_requests_total after an aborted request = %v, want 1 — the observation must survive an unwinding panic", got)
 	}
 	if got := testutil.CollectAndCount(dur); got != 1 {
@@ -323,7 +323,7 @@ func TestHTTPMetrics_UsesRegisteredCollectors(t *testing.T) {
 	// cannot collide with another test's traffic and `go test -count=N`
 	// stays honest instead of measuring the previous iteration's leftovers.
 	pattern := fmt.Sprintf("/__handler_test/registered/%d/{id}", time.Now().UnixNano())
-	counter := httpRequestsTotal.WithLabelValues(http.MethodGet, pattern, "200")
+	counter := httpRequestsTotal.WithLabelValues(http.MethodGet, pattern, "200", "internal")
 	before := testutil.ToFloat64(counter)
 	durSeriesBefore := testutil.CollectAndCount(httpRequestDuration)
 

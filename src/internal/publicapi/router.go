@@ -24,6 +24,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"skein-api/internal/errcode"
+	"skein-api/internal/handler"
 )
 
 // MaxBodyBytes is the largest request body the public API accepts (1 MiB,
@@ -76,7 +77,9 @@ func NewRouter(opts RouterOptions, routes []Route) http.Handler {
 		panic("publicapi: operation timeout must be > 0")
 	}
 	mux := chi.NewRouter()
-	mux.Use(recoverProblem)
+	// Outside the panic recovery, as on the internal router: a panicking
+	// operation is counted as the 500 the client received.
+	mux.Use(handler.PublicHTTPMetrics, recoverProblem)
 	mux.NotFound(func(w http.ResponseWriter, _ *http.Request) {
 		WriteProblem(w, Problem{Code: errcode.RouteNotFound, Origin: OriginPath})
 	})
