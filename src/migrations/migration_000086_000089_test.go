@@ -146,6 +146,34 @@ func TestMigration000086_000089(t *testing.T) {
 		assertM86KeyIntact(t, pool, regularKey, "regular owner")
 	})
 
+	t.Run("000086 CHECK: at least one permission, admin only with scope all", func(t *testing.T) {
+		// Review C2-05: the constraints that hold the grant rules for a
+		// writer that bypasses the store.
+		insert := func(level any, isAdmin bool, scope string) error {
+			id := uuid.New()
+			_, err := pool.Exec(ctx, `
+INSERT INTO api_keys (id, user_id, key_hash, prefix, label, level, is_admin, scope_mode)
+VALUES ($1, $2, 'h', $3, 'm86 check', $4, $5, $6)`,
+				id, regular, "ska_"+strings.ReplaceAll(id.String()[:13], "-", ""), level, isAdmin, scope)
+			return err
+		}
+		if err := insert(nil, false, "all"); !isCheckViolation(err, "api_keys_has_permission") {
+			t.Errorf("no level and no admin: err %v, want api_keys_has_permission", err)
+		}
+		if err := insert(nil, true, "projects"); !isCheckViolation(err, "api_keys_admin_scope_all") {
+			t.Errorf("admin with scope projects: err %v, want api_keys_admin_scope_all", err)
+		}
+		if err := insert("read", true, "spaces"); !isCheckViolation(err, "api_keys_admin_scope_all") {
+			t.Errorf("admin with scope spaces: err %v, want api_keys_admin_scope_all", err)
+		}
+		if err := insert(nil, true, "all"); err != nil {
+			t.Errorf("admin only, scope all: %v, want accepted", err)
+		}
+		if err := insert("write", false, "projects"); err != nil {
+			t.Errorf("level write, scope projects: %v, want accepted", err)
+		}
+	})
+
 	project, prefix := seedProject(t, pool, regular, "m86")
 	issueID := prefix + "-1"
 	seedIssue(t, pool, issueID, project, regular, "")
