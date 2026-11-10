@@ -172,6 +172,12 @@ func TestErrCodes_ClassAndTransience(t *testing.T) {
 		"version_conflict": {errcode.ClassVersion, false},
 		// No If-Match where the operation requires it (428).
 		"precondition_required": {errcode.ClassPreconditionRequired, false},
+		// Idempotency-Key: the first request still runs (409, transient),
+		// the key reused with another body (422), the key sent to an
+		// operation that does not accept it (400 at the parsing layer).
+		"idempotency_in_progress":   {errcode.ClassConflict, true},
+		"idempotency_key_reused":    biz,
+		"idempotency_not_supported": {errcode.ClassFormat, false},
 		// Unavailable dependency (503), transient.
 		"attachments_unavailable": {errcode.ClassUnavailable, true},
 		"preview_unavailable":     {errcode.ClassUnavailable, true},

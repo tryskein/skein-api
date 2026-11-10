@@ -33,6 +33,7 @@ import (
 	"skein-api/internal/dashboard"
 	"skein-api/internal/dependencies"
 	"skein-api/internal/handler"
+	"skein-api/internal/idempotency"
 	"skein-api/internal/invitations"
 	"skein-api/internal/issues"
 	"skein-api/internal/issues/lockreap"
@@ -909,6 +910,11 @@ func main() {
 		Interval:         cfg.MonitorCredentialCleanupInterval,
 		RevokedRetention: cfg.MonitorCredentialRevokedRetention,
 	})
+
+	// sk-878.3.1 T021 — the cleanup of public API Idempotency-Key outcomes
+	// past their 24-hour retention. Started whether or not the public API is
+	// enabled now: rows of an earlier enabled run must still go.
+	go idempotency.RunCleanup(workerCtx, idempotency.NewStore(pool), idempotency.CleanupInterval)
 
 	// R3.2a — outbox dispatcher. Single goroutine, sibling to the
 	// embedding worker. Lifetime is tied to workerCtx so SIGTERM cancels

@@ -47,7 +47,17 @@ type RouterOptions struct {
 	// Versions reads the current version of the resource of a route that
 	// checks If-Match. Required when the table has such a route.
 	Versions VersionProvider
+	// Idempotency wraps the operation of every route that accepts
+	// Idempotency-Key (idempotency.Middleware in production): it runs after
+	// the request chain and the body checks, before If-Match and Prefer, so
+	// a repeat answered from the stored outcome is not held to the business
+	// preconditions again (US-7). Required when the table has such a route.
+	Idempotency RouteWrapper
 }
+
+// IdempotencyKeyHeader names the key of a request that may be repeated
+// (US-7).
+const IdempotencyKeyHeader = "Idempotency-Key"
 
 // RouteWrapper wraps the handler of a route.
 type RouteWrapper interface {
@@ -101,6 +111,9 @@ func NewRouter(opts RouterOptions, routes []Route) http.Handler {
 		if rt.IfMatch != IfMatchNone && opts.Versions == nil {
 			panic("publicapi: " + rt.OperationID + " checks If-Match but the router has no version provider")
 		}
+		if rt.Idempotent && opts.Idempotency == nil {
+			panic("publicapi: " + rt.OperationID + " accepts Idempotency-Key but the router has no Idempotency middleware")
+		}
 		key := rt.Method + " " + rt.Path
 		if other, dup := seen[key]; dup {
 			panic(fmt.Sprintf("publicapi: %s and %s both route %s", other, rt.OperationID, key))
@@ -113,10 +126,27 @@ func NewRouter(opts RouterOptions, routes []Route) http.Handler {
 
 // routeHandler wraps the handler of rt: the operation runs under its
 // deadline with the route in its context; the request chain comes first,
-// then the body is checked (media type, size), then the request rules of
-// the route — fields=, If-Match, Prefer — all before the operation.
+// then Idempotency-Key is refused on a route that does not accept it, then
+// the body is checked (media type, size), then the request rules of the
+// route — fields=, Idempotency, If-Match, Prefer — all before the
+// operation.
 func routeHandler(opts RouterOptions, rt Route) http.Handler {
+	var op http.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r, ok := checkIfMatch(w, r, rt, opts.Versions)
+		if !ok {
+			return
+		}
+		rt.Handler.ServeHTTP(w, applyPrefer(r, rt))
+	})
+	if rt.Idempotent {
+		op = opts.Idempotency.Wrap(rt, op)
+	}
 	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if _, sent := r.Header[IdempotencyKeyHeader]; sent && !rt.Idempotent {
+			WriteProblem(w, Problem{Code: errcode.IdempotencyNotSupported, Origin: OriginParse,
+				Detail: rt.OperationID + " does not accept " + IdempotencyKeyHeader})
+			return
+		}
 		if hasBody(r) {
 			if !isJSON(r.Header.Get("Content-Type")) {
 				WriteProblem(w, Problem{Code: errcode.UnsupportedMediaType, Origin: OriginParse})
@@ -132,10 +162,7 @@ func routeHandler(opts RouterOptions, rt Route) http.Handler {
 		if !ok {
 			return
 		}
-		if r, ok = checkIfMatch(w, r, rt, opts.Versions); !ok {
-			return
-		}
-		rt.Handler.ServeHTTP(w, applyPrefer(r, rt))
+		op.ServeHTTP(w, r)
 	})
 	var chained http.Handler = inner
 	if opts.Chain != nil {

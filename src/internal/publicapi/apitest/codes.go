@@ -102,6 +102,13 @@ var Codes = map[string]Expect{
 	// No If-Match where the operation requires it.
 	"precondition_required": every(428, false),
 
+	// Idempotency-Key: the first request still runs (409, the repeat may
+	// succeed later), the key reused with another body (422), the key sent
+	// to an operation that does not accept it (400).
+	"idempotency_in_progress":   every(409, true),
+	"idempotency_key_reused":    every(422, false),
+	"idempotency_not_supported": format(),
+
 	// Transport of the public API.
 	"method_not_allowed":     every(405, false),
 	"payload_too_large":      every(413, false),

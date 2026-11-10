@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 
+	"skein-api/internal/authz"
 	"skein-api/internal/errcode"
 )
 
@@ -95,6 +96,8 @@ func Status(code errcode.Code, origin Origin) int {
 		return http.StatusTooManyRequests
 	case errcode.ClassPreconditionRequired:
 		return http.StatusPreconditionRequired
+	case errcode.ClassConflict:
+		return http.StatusConflict
 	}
 	return http.StatusInternalServerError
 }
@@ -146,6 +149,27 @@ func WriteProblem(w http.ResponseWriter, p Problem) {
 		slog.Error("public API: writing a problem response failed",
 			"code", p.Code.String(), "status", status, "error", err.Error())
 	}
+}
+
+// WriteInternalError answers a failure inside the service while serving the
+// route of r, as writeInternal does: logged, then 503 database_unavailable
+// or 500 internal_error.
+func WriteInternalError(w http.ResponseWriter, r *http.Request, what string, err error) {
+	rt, _ := RouteFromContext(r.Context())
+	writeInternal(w, r, rt, what, err)
+}
+
+// WriteInsufficientScope answers a key that does not meet req, the
+// requirement of rt: 403 insufficient_scope naming the required right (and
+// the required scope of a wide-scope operation), counted by
+// ScopeRefusalsTotal.
+func WriteInsufficientScope(w http.ResponseWriter, rt Route, req authz.KeyRequirement) {
+	ScopeRefusalsTotal.WithLabelValues(req.Right.String()).Inc()
+	ext := map[string]any{"requiredRight": req.Right.String(), "operationId": rt.OperationID}
+	if req.WideScope {
+		ext["requiredScope"] = "spaces or all"
+	}
+	WriteProblem(w, Problem{Code: errcode.InsufficientScope, Origin: OriginDomain, Extensions: ext})
 }
 
 // writeInternal logs a failure inside the service and answers it: 503

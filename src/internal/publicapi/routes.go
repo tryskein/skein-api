@@ -7,6 +7,7 @@ package publicapi
 // tables of their own, so a test route never reaches the product.
 
 import (
+	"context"
 	"net/http"
 	"slices"
 	"strings"
@@ -90,8 +91,14 @@ type Route struct {
 	Object ActionObject
 	// IfMatch is the version rule of the route.
 	IfMatch IfMatch
-	// Idempotent marks an operation that accepts Idempotency-Key.
+	// Idempotent marks an operation that accepts Idempotency-Key; a request
+	// with the header to any other operation is refused with 400
+	// idempotency_not_supported.
 	Idempotent bool
+	// Hydrate reads the response of an Idempotent operation again from the
+	// current state of its objects, for a repeat that finds the outcome
+	// recorded without its body (US-7). Required when Idempotent is set.
+	Hydrate Hydrator
 	// Prefer marks an operation whose response honours Prefer:
 	// return=minimal (a single operation returning one resource with its
 	// own version).
@@ -99,6 +106,29 @@ type Route struct {
 	// Handler serves the operation.
 	Handler http.Handler
 }
+
+// ObjectKind is the kind of an object a response refers to.
+type ObjectKind string
+
+// The kinds of response objects.
+const (
+	ObjectIssue   ObjectKind = "issue"
+	ObjectComment ObjectKind = "comment"
+	ObjectProject ObjectKind = "project"
+)
+
+// ObjectRef names one object of a response: an issue by its hierarchical
+// id, a comment or a project by its UUID.
+type ObjectRef struct {
+	Kind ObjectKind `json:"kind"`
+	ID   string     `json:"id"`
+}
+
+// Hydrator builds the response of an operation from the current state of
+// objects, the objects its first execution answered with. The result is
+// encoded as JSON; its id and version members are replaced by the recorded
+// ones.
+type Hydrator func(ctx context.Context, r *http.Request, objects []ObjectRef) (any, error)
 
 // Mode is the part of a request that changes what an operation requires.
 type Mode struct {
@@ -141,6 +171,8 @@ func validRoute(rt Route) string {
 		return rt.OperationID + ": no authentication mode"
 	case rt.Handler == nil:
 		return rt.OperationID + ": no handler"
+	case rt.Idempotent && rt.Hydrate == nil:
+		return rt.OperationID + ": accepts Idempotency-Key without a hydrator"
 	}
 	return ""
 }

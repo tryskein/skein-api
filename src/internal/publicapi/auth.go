@@ -206,12 +206,7 @@ func (c *Chain) Wrap(rt Route, next http.Handler) http.Handler {
 		}
 		grant := auth.RequestGrant(key)
 		if req := rt.KeyRequirement(mode); !authz.KeyMeets(grant, req) {
-			ScopeRefusalsTotal.WithLabelValues(req.Right.String()).Inc()
-			ext := map[string]any{"requiredRight": req.Right.String(), "operationId": rt.OperationID}
-			if req.WideScope {
-				ext["requiredScope"] = "spaces or all"
-			}
-			WriteProblem(w, Problem{Code: errcode.InsufficientScope, Origin: OriginDomain, Extensions: ext})
+			WriteInsufficientScope(w, rt, req)
 			return
 		}
 

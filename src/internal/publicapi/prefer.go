@@ -22,9 +22,9 @@ func preferMinimal(ctx context.Context) bool {
 	return v
 }
 
-// asksMinimal reports whether the Prefer headers of r ask for
+// AsksMinimal reports whether the Prefer headers of r ask for
 // return=minimal.
-func asksMinimal(r *http.Request) bool {
+func AsksMinimal(r *http.Request) bool {
 	for _, h := range r.Header.Values("Prefer") {
 		for _, pref := range strings.Split(h, ",") {
 			name, value, _ := strings.Cut(strings.TrimSpace(pref), "=")
@@ -41,7 +41,7 @@ func asksMinimal(r *http.Request) bool {
 // applyPrefer marks the request when its route honours Prefer and it asks
 // for return=minimal.
 func applyPrefer(r *http.Request, rt Route) *http.Request {
-	if !rt.Prefer || !asksMinimal(r) {
+	if !rt.Prefer || !AsksMinimal(r) {
 		return r
 	}
 	return r.WithContext(context.WithValue(r.Context(), preferMinimalKey{}, true))

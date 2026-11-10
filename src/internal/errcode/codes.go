@@ -63,6 +63,19 @@ var (
 	// resource and the request carries no If-Match.
 	PreconditionRequired = define("precondition_required", ClassPreconditionRequired, Permanent)
 
+	// Idempotency-Key of the public API.
+	//
+	// IdempotencyInProgress — the first request with this Idempotency-Key is
+	// still being executed; the repeat may be sent again later.
+	IdempotencyInProgress = define("idempotency_in_progress", ClassConflict, Transient)
+	// IdempotencyKeyReused — the Idempotency-Key was used for the same
+	// operation on the same target with a different request body.
+	IdempotencyKeyReused = define("idempotency_key_reused", ClassBusiness, Permanent)
+	// IdempotencyNotSupported — the operation does not accept
+	// Idempotency-Key (only createIssue, createEpic, createComment and
+	// closeIssue do; batches never).
+	IdempotencyNotSupported = define("idempotency_not_supported", ClassFormat, Permanent)
+
 	// Unavailable dependencies.
 	AttachmentsUnavailable = define("attachments_unavailable", ClassUnavailable, Transient)
 	PreviewUnavailable     = define("preview_unavailable", ClassUnavailable, Transient)

@@ -50,11 +50,14 @@ const (
 	// ClassPreconditionRequired — the operation requires If-Match and the
 	// request has none.
 	ClassPreconditionRequired
+	// ClassConflict — the request conflicts with another one still being
+	// executed (an Idempotency-Key repeated while its first request runs).
+	ClassConflict
 )
 
 // lastClass is the last class of the closed set; define refuses any class
 // after it.
-const lastClass = ClassPreconditionRequired
+const lastClass = ClassConflict
 
 // String names the class.
 func (c Class) String() string {
@@ -85,6 +88,8 @@ func (c Class) String() string {
 		return "rate_limited"
 	case ClassPreconditionRequired:
 		return "precondition_required"
+	case ClassConflict:
+		return "conflict"
 	}
 	return fmt.Sprintf("class(%d)", uint8(c))
 }
