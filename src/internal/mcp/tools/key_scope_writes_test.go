@@ -283,8 +283,8 @@ func TestKeyScopeWrites_ChangeOnlyInsideTheScope(t *testing.T) {
 	t.Run("a reference to Q in the body is as a nonexistent one", func(t *testing.T) {
 		missingIssue := "nope-" + uuid.NewString()[:8] + "-1"
 
-		parentQ := e.call(t, kctx, "skein_create", map[string]any{"project": e.p.String(), "title": "child of Q", "kind": "autonomous", "parentId": e.qIssue})
-		parentMissing := e.call(t, kctx, "skein_create", map[string]any{"project": e.p.String(), "title": "child of nothing", "kind": "autonomous", "parentId": missingIssue})
+		parentQ := e.call(t, kctx, "skein_create", map[string]any{"project": e.p.String(), "title": "child of Q", "type": "task", "kind": "autonomous", "parentId": e.qIssue})
+		parentMissing := e.call(t, kctx, "skein_create", map[string]any{"project": e.p.String(), "title": "child of nothing", "type": "task", "kind": "autonomous", "parentId": missingIssue})
 		wantSameRefusal(t, "create with a parent in Q", parentQ, parentMissing, ErrCodeParentNotFound)
 
 		depQ := e.call(t, kctx, "skein_dep_add", map[string]any{"fromId": e.pIssue, "toId": e.qIssue, "type": "blocks"})
