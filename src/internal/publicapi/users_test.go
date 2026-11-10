@@ -178,7 +178,8 @@ func TestUsers_KeyWithAdminOnly(t *testing.T) {
 // the key: updateUser with password is 400 (no such field) and the hash
 // stays; the admin role is neither given nor taken and an admin is not
 // deactivated (refused, the row unchanged); deactivating an ordinary user
-// revokes his keys; the admin permission of a key whose owner is no longer
+// revokes his keys and reactivating him does not bring them back; createUser
+// does not create an admin; the admin permission of a key whose owner is no longer
 // an admin passes nothing (403). Red when a key changes a password or the
 // admin role.
 func TestUsers_WhatAKeyCannotChange(t *testing.T) {
@@ -230,6 +231,29 @@ func TestUsers_WhatAKeyCannotChange(t *testing.T) {
 	}
 	if c := rg.rest(victimKey, http.MethodGet, "/api/v1/me", nil, nil); c.status != http.StatusUnauthorized {
 		t.Errorf("the deactivated user's key after: %d, want 401", c.status)
+	}
+	// R8-07: reactivating him does not bring his keys back.
+	if c := rg.rest(key, http.MethodPatch, path(plain), map[string]any{"deactivated": false}, nil); c.status != http.StatusOK {
+		t.Fatalf("reactivate the ordinary user: %d %s", c.status, c.body)
+	}
+	if _, deact, _ := userRow(t, pool, plain); deact {
+		t.Fatalf("the user is still deactivated")
+	}
+	if c := rg.rest(victimKey, http.MethodGet, "/api/v1/me", nil, nil); c.status != http.StatusUnauthorized {
+		t.Errorf("the reactivated user's old key: %d, want 401 (a reactivation does not restore keys)", c.status)
+	}
+
+	// R8-07: createUser through a key does not create an instance admin.
+	sfx := strings.ReplaceAll(uuid.NewString()[:8], "-", "")
+	createdUsers(t, pool, sfx)
+	adminEmail := "admin" + sfx + "@public-users.test"
+	if c := rg.rest(key, http.MethodPost, "/api/v1/users", map[string]any{"email": adminEmail, "name": "A",
+		"password": "initial-pass", "role": "admin"}, nil); c.status != http.StatusForbidden || c.code() != "forbidden" {
+		t.Errorf("createUser with role admin: %d %s, want 403 forbidden", c.status, c.body)
+	}
+	var made int
+	if err := pool.QueryRow(context.Background(), `SELECT count(*) FROM users WHERE email = $1`, adminEmail).Scan(&made); err != nil || made != 0 {
+		t.Errorf("users with the refused email: %d (%v), want 0", made, err)
 	}
 
 	// INV-1: the owner of an admin key who is no longer an admin.
