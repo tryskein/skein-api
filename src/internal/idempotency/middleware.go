@@ -470,7 +470,8 @@ func (m *Middleware) hydrate(ctx context.Context, r *http.Request, rt publicapi.
 	return json.Marshal(obj)
 }
 
-// projectOfSQL reads the project of an issue or of a live comment.
+// projectOfSQL reads the project of an issue or of a comment, a deleted one
+// included.
 const (
 	issueProjectSQL = `SELECT project_id FROM issues WHERE id = $1`
 	// A deleted comment stays a readable tombstone (getComment): its
