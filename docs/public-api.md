@@ -167,6 +167,19 @@ claim of a held issue is 422 `already_claimed`; a change or a close by a
 non-holder is 422 `locked_by_other`. A REST executor and an MCP session are
 never the same holder.
 
+The worker id is not a secret and grants nothing: it is shown to everyone
+who can read the issue, as part of the lock holder (`api:<keyId>:<workerId>`).
+Do not put credentials or personal data in it.
+
+Each request refreshes the activity of its own executor only. The stale-lock
+reaper releases a lock once it is older than `SKEIN_STALE_LOCK_THRESHOLD` and
+its holder has been silent for `SKEIN_STALE_LOCK_AGENT_IDLE` (both 30 minutes
+by default; `internal/issues/lockreap/reaper.go#Reaper`). A lock held through
+a key that is revoked or expired, has no `write`, or no longer covers the
+issue's project is not kept alive by any activity. The owner of the key may
+also release such a lock at once with `releaseIssueLock` from another of his
+keys.
+
 ## Versions
 
 - `getIssue` and `getComment` answer `ETag` = the version. `updateIssue`,
