@@ -2301,9 +2301,11 @@ func buildRouter(
 	}
 
 	// /ui/v1 is the prefix of the internal API. /api/v1 is accepted as well
-	// for one transitional release, so skein-api and skein-web can be rolled
-	// out in any order; the next release of skein-api removes it, and /api/v1
-	// then belongs to the public API only.
+	// for one transitional release, so the browser keeps working while
+	// skein-web still calls /api/v1. Roll skein-api out before skein-web or
+	// together with it: the new skein-web calls /ui/v1 at startup, which an
+	// older skein-api does not serve. The next release of skein-api removes
+	// /api/v1 here, and /api/v1 then belongs to the public API only.
 	r.Route(internalAPIPrefix, mountInternalAPI)
 	r.Route(transitionalInternalAPIPrefix, mountInternalAPI)
 
