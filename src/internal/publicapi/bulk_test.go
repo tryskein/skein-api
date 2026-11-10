@@ -169,15 +169,23 @@ func TestBulk_Batches(t *testing.T) {
 		q, qPrefix := seedProject(t, pool, w.owner, w.space, "wrd")
 		outside := testsupport.SeedIssue(t, pool, q, w.owner, qPrefix+"-1", "outside", "open", 2)
 		scoped := projectsKey(t, pool, w.owner, apikeys.LevelWrite, w.project)
-		a, b := w.issue("da"), w.issue("db")
-		items := []map[string]any{{"fromId": a, "toId": b, "type": "related"}, {"fromId": b, "toId": outside, "type": "related"}}
+		missing := w.prefix + "-99999"
+		a, b, c := w.issue("da"), w.issue("db"), w.issue("dc")
+		items := []map[string]any{{"fromId": a, "toId": b, "type": "related"}, {"fromId": b, "toId": outside, "type": "related"},
+			{"fromId": c, "toId": missing, "type": "related"}}
 		r := rg.rest(scoped, http.MethodPost, "/api/v1/issues/dependencies/bulk-add", map[string]any{"items": items}, nil)
 		wantOK(t, "bulkAddDependencies", r, http.StatusMultiStatus)
 		got := rows(t, r.json(t), "fromId")
-		ma, mb := w.issue("da"), w.issue("db")
+		ma, mb, mc := w.issue("da"), w.issue("db"), w.issue("dc")
 		m := rows(t, rg.tool(scoped, "skein_dep_add_many", map[string]any{"items": []map[string]any{
-			{"fromId": ma, "toId": mb, "type": "related"}, {"fromId": mb, "toId": outside, "type": "related"}}}).json(t), "fromId")
-		if got[a] != "" || got[b] == "" || m[ma] != got[a] || m[mb] != got[b] {
+			{"fromId": ma, "toId": mb, "type": "related"}, {"fromId": mb, "toId": outside, "type": "related"},
+			{"fromId": mc, "toId": missing, "type": "related"}}}).json(t), "fromId")
+		// A target outside the key's scope is refused as a missing one, with
+		// the code of a missing id (US-3), on both channels.
+		if got[a] != "" || got[b] != "issue_not_found" || got[c] != "issue_not_found" {
+			t.Errorf("rows %v, want the first applied and the other two issue_not_found", got)
+		}
+		if m[ma] != got[a] || m[mb] != got[b] || m[mc] != got[c] {
 			t.Errorf("rows %v, MCP %v", got, m)
 		}
 	})
