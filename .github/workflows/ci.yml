@@ -89,6 +89,36 @@ jobs:
           fi
           echo "sqlc output matches the schema"
 
+  # src/internal/publicapi/openapi/openapi.json is committed: the instance
+  # serves it, while the swag output of the internal API is git-ignored. This
+  # job regenerates it with the same script contributors run and fails when
+  # the working tree changes.
+  public-openapi:
+    name: public-openapi
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version-file: src/go.mod
+          cache-dependency-path: src/go.sum
+      - name: Regenerate and compare
+        run: |
+          scripts/generate-public-openapi.sh
+          # --untracked-files=all: a document generated for the first time is
+          # an untracked file that `git diff` alone would not see.
+          changed=$(git status --porcelain --untracked-files=all -- src/internal/publicapi/openapi)
+          if [ -n "$changed" ]; then
+            echo "ERROR: the committed public OpenAPI document does not match the annotations of internal/publicapi."
+            echo "Run 'scripts/generate-public-openapi.sh' and commit the result."
+            echo "$changed"
+            git --no-pager diff -- src/internal/publicapi/openapi || true
+            exit 1
+          fi
+          echo "public OpenAPI document matches the annotations"
+
   # Unit: no database (DB-backed tests skip without TEST_DATABASE_URL), plus
   # the stdlib unittest tests of the served monitor runner.
   unit:

@@ -1,0 +1,23 @@
+{
+    "components": {
+        "securitySchemes": {
+            "SkeinApiKey": {
+                "description": "API key of a Skein user (prefix ska_), created in the API keys section of the user's account.",
+                "in": "header",
+                "name": "X-Skein-Api-Key",
+                "type": "apiKey"
+            }
+        }
+    },
+    "info": {
+        "description": "Public REST API of Skein. Every request authenticates with an API key of a Skein user; the permission an operation requires is listed in its security requirement.",
+        "title": "Skein public API",
+        "version": "1"
+    },
+    "externalDocs": {
+        "description": "",
+        "url": ""
+    },
+    "paths": {},
+    "openapi": "3.1.0"
+}

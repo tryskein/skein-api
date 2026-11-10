@@ -35,6 +35,7 @@ infra/postgres/            Postgres image used by the umbrella stacks (pgvector 
 infra/test-runner/         Go + python3 image for the integration harness
 docs/env-reference.md      every environment variable
 scripts/measure-*.sh       size of MCP tools/list and of tool responses
+scripts/generate-public-openapi.sh  regenerates the committed public OpenAPI 3.1 document
 ```
 
 ## Build and run
@@ -69,12 +70,18 @@ Those three variables are required; the full list is in `docs/env-reference.md`.
   generated files) and commit the result.
 - **Configuration**: `docs/env-reference.md` is the only list of variables. Adding,
   renaming or removing a variable updates that file in the same commit.
-- **API docs**: swag annotations on every handler. Generate the spec (output is
-  git-ignored):
-  `cd src && go tool swag init -g cmd/api/main.go -o docs/ --exclude internal/operator`
-  and `go tool swag init -g server.go -d internal/operator --instanceName operator -o docs/operator`.
-  The `tool github.com/swaggo/swag/cmd/swag` line in `go.mod` keeps the module
-  requirement that the generated `src/docs/docs.go` needs; do not drop it.
+- **API docs**: swag annotations on every handler. `go.mod` declares two swag
+  tools, so `go tool swag` is ambiguous: always call a tool by its full package
+  path.
+  - Internal API and operator API — swag v1 (Swagger 2.0), output git-ignored:
+    `cd src && go tool github.com/swaggo/swag/cmd/swag init -g cmd/api/main.go -o docs/ --exclude internal/operator,internal/publicapi`
+    and `cd src && go tool github.com/swaggo/swag/cmd/swag init -g server.go -d internal/operator --instanceName operator -o docs/operator`.
+    The `tool github.com/swaggo/swag/cmd/swag` line in `go.mod` keeps the module
+    requirement that the generated `src/docs/docs.go` needs; do not drop it.
+  - Public API (`internal/publicapi`) — swag v2 (`github.com/swaggo/swag/v2/cmd/swag`,
+    OpenAPI 3.1): `scripts/generate-public-openapi.sh`. It writes
+    `src/internal/publicapi/openapi/openapi.json`, which is committed; after
+    changing an annotation in `internal/publicapi`, run it and commit the result.
 - **Route list**: `buildRouter` in `src/cmd/api/main.go` is the authoritative
   list of routes.
 - **Theme mirrors**: `internal/themes/schema.go#TokenSchema` mirrors
