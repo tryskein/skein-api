@@ -221,7 +221,10 @@ some, nothing is created and the answer is 422 `duplicate_suspected` with the
 candidates in `duplicates` (`degraded: true` when only the lexical check ran)
 (`internal/errcode/codes.go#DuplicateSuspected`). Repeat with `force: true` in
 the body to create the issue anyway, or with `duplicateOf` to create it as a
-duplicate of a candidate. This refusal is kept by `Idempotency-Key`.
+duplicate of a candidate. This refusal is kept by `Idempotency-Key`: the
+repeat with `force` or `duplicateOf` is another request, so send it with a
+**new** `Idempotency-Key` — under the first one it is 422
+`idempotency_key_reused`.
 `createEpic` has no duplicate gate.
 
 ## Errors
