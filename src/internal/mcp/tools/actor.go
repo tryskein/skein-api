@@ -136,11 +136,13 @@ func ProjectsAgentActor(ctx context.Context, pool *pgxpool.Pool, userID uuid.UUI
 // chain (username → key prefix → "agent") so events.actor is never empty.
 func UsersAgentActor(ctx context.Context, pool *pgxpool.Pool, userID uuid.UUID) users.Actor {
 	b := resolveAgentActor(ctx, pool, userID)
+	_, byKey := auth.APIKeyIDFrom(ctx)
 	return users.Actor{
 		UserID:    b.UserID,
 		Username:  b.Username,
 		Role:      "agent",
 		SessionID: b.SessionID,
+		ByKey:     byKey,
 	}
 }
 

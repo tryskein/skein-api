@@ -81,11 +81,11 @@ func RegisterUser(s *server.MCPServer, store *users.Store, pool *pgxpool.Pool, s
 			"Instance-wide user accounts. ADMIN ONLY — every action returns "+
 				"`not_admin` to a non-admin caller, before any database "+
 				"access. action=\"update\" covers both the patch "+
-				"(name / role / password) and the deactivate / reactivate "+
+				"(name / role) and the deactivate / reactivate "+
 				"flip: deactivating cascades into API key revocation in the "+
 				"same transaction and is reversible with deactivated=false. "+
-				"Role admin is refused with `admin_role_disabled` while the "+
-				"instance admin role is disabled on the installation. "+
+				"An existing user's password, the instance admin role and an "+
+				"admin's deactivation are changed only in the web UI (`forbidden`). "+
 				"action=\"space_add\" makes the user a member of a space at once "+
 				"(no invitation, no consent). "+
 				"Read-only actions: list.",
@@ -97,7 +97,7 @@ func RegisterUser(s *server.MCPServer, store *users.Store, pool *pgxpool.Pool, s
 				"What to do:\n"+
 					"  - \"list\" → users of the instance, cursor-paginated, optionally filtered by `search`.\n"+
 					"  - \"create\" → a new account; the user can sign in immediately with the supplied password.\n"+
-					"  - \"update\" → patch name / role / password, or flip `deactivated`.\n"+
+					"  - \"update\" → patch name / role, or flip `deactivated`.\n"+
 					"  - \"space_add\" → add `userId` to the space `space` at once.",
 			),
 		),
@@ -111,10 +111,10 @@ func RegisterUser(s *server.MCPServer, store *users.Store, pool *pgxpool.Pool, s
 			mcpgo.Description("Display name (free-form, trimmed). Required for create; on update, omit to leave it unchanged."),
 		),
 		mcpgo.WithString("password",
-			mcpgo.Description("Password, at least 8 characters. Required for create; on update, set it to reset the user's password. The user should rotate an admin-supplied password via POST /api/v1/me/password on first sign-in."),
+			mcpgo.Description("Initial password, at least 8 characters. Required for create. Not accepted by update: an existing user's password is changed only in the web UI (`forbidden`). The user should rotate the initial password on first sign-in."),
 		),
 		mcpgo.WithString("role",
-			mcpgo.Description("Role of the account. Required for create; on update, omit to leave it unchanged. Demoting the last active admin returns `last_admin_cannot_demote`; a concurrent change after three attempts returns `concurrent_change` (retry)."),
+			mcpgo.Description("Role of the account: `user`. Required for create; on update, omit to leave it unchanged. The instance admin role is never created, assigned or removed here — only in the web UI (`forbidden`); a concurrent change after three attempts returns `concurrent_change` (retry)."),
 			mcpgo.Enum("admin", "user"),
 		),
 		mcpgo.WithBoolean("is_external",
@@ -131,7 +131,7 @@ func RegisterUser(s *server.MCPServer, store *users.Store, pool *pgxpool.Pool, s
 			mcpgo.Description("Only read by space_add: short id of the space (skein_whoami lists the spaces)."),
 		),
 		mcpgo.WithBoolean("deactivated",
-			mcpgo.Description("Only read by update: true → soft-deactivate (cascades into API key revocation), false → reactivate (does not un-revoke the previous keys). When set, name/role/password are ignored. Deactivating the last active admin returns `last_admin_cannot_demote`; a concurrent change after three attempts returns `concurrent_change` (retry)."),
+			mcpgo.Description("Only read by update: true → soft-deactivate (cascades into API key revocation), false → reactivate (does not un-revoke the previous keys). When set, name/role/password are ignored. An instance admin is not deactivated here — only in the web UI (`forbidden`); a concurrent change after three attempts returns `concurrent_change` (retry)."),
 		),
 		mcpgo.WithBoolean("archived",
 			mcpgo.Description("Only read by list: list deactivated users instead of active ones. Default false."),

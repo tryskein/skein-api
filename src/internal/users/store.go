@@ -91,6 +91,13 @@ var (
 	// agent, SSO provisioning.
 	ErrAdminRoleDisabled = errors.New("the instance admin role is disabled")
 
+	// ErrNotByAPIKey — INV-12, "MCP changes" (2): a call made with an API key
+	// (Actor.ByKey) asked for a change that only the web UI makes: an
+	// existing user's password, assigning or removing the instance admin
+	// role, deactivating an instance admin, creating an admin. Nothing is
+	// written. Wrapped with the field the refusal is about.
+	ErrNotByAPIKey = errors.New("not available with an API key; use the web UI")
+
 	// ErrExternalSSOConflict — sk-163 S5 reverse anti-takeover guard.
 	// Returned by CreateUser when an external account (is_external=true) is
 	// requested for an email that already belongs to a Keycloak SSO identity
@@ -297,6 +304,9 @@ func (s *Store) CreateUser(ctx context.Context, in CreateUserInput, actor Actor)
 	}
 	if in.Role != "admin" && in.Role != "user" {
 		return nil, ErrInvalidRole
+	}
+	if actor.ByKey && in.Role == "admin" {
+		return nil, fmt.Errorf("%w: creating an instance admin", ErrNotByAPIKey)
 	}
 	// sk-163 S3 never-admin: an external account is permanently capped at
 	// role='user'. Reject the admin request up front with a clean business
@@ -828,6 +838,9 @@ func (s *Store) UpdateUser(ctx context.Context, id uuid.UUID, in UpdateUserInput
 	if in.Role != nil && *in.Role != "admin" && *in.Role != "user" {
 		return nil, ErrInvalidRole
 	}
+	if actor.ByKey && in.Password != nil {
+		return nil, fmt.Errorf("%w: changing a password", ErrNotByAPIKey)
+	}
 	if in.Password != nil {
 		if err := validatePassword(*in.Password); err != nil {
 			return nil, err
@@ -853,6 +866,9 @@ func (s *Store) UpdateUser(ctx context.Context, id uuid.UUID, in UpdateUserInput
 		old, err := loadUserInTx(ctx, tx, id)
 		if err != nil {
 			return err
+		}
+		if actor.ByKey && in.Role != nil && (*in.Role == "admin") != (old.Role == "admin") {
+			return fmt.Errorf("%w: assigning or removing the instance admin role", ErrNotByAPIKey)
 		}
 
 		// is_external is not on UserDTO — load once for both the
@@ -1036,6 +1052,9 @@ func (s *Store) DeactivateInTx(ctx context.Context, tx pgx.Tx, id uuid.UUID, act
 	old, err := loadUserInTx(ctx, tx, id)
 	if err != nil {
 		return false, err
+	}
+	if actor.ByKey && old.Role == "admin" {
+		return false, fmt.Errorf("%w: deactivating an instance admin", ErrNotByAPIKey)
 	}
 	if old.DeactivatedAt != nil {
 		// Already deactivated — no-op. Don't write a duplicate event.

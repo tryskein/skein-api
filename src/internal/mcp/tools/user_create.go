@@ -137,6 +137,10 @@ func mapUsersError(ctx context.Context, err error, action, actorUserID string) *
 		// sk-163 S5 — external account requested for an SSO-bound email.
 		return skmcp.ToolError(ErrCodeValidationError, err.Error(),
 			map[string]any{"field": "isExternal"})
+	case errors.Is(err, users.ErrNotByAPIKey):
+		// INV-12, "MCP changes" (2): password, the admin role and an
+		// admin's deactivation are changed only in the web UI.
+		return skmcp.ToolError(ErrCodeForbidden, err.Error()+"; nothing was changed", nil)
 	case errors.Is(err, users.ErrLocalPasswordDisabled):
 		// sk-163 S4a — admin set a local password on an internal account
 		// while OIDC is active. Authorization denial → forbidden.
