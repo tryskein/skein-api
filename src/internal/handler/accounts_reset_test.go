@@ -276,7 +276,7 @@ func TestPasswordReset_EndsSessionsKeepsKeys(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := apikeys.New(env.pool).Create(ctx, u, "reset-test", prefix, hash); err != nil {
+	if _, _, err := testsupport.CreateOwnerKey(ctx, env.pool, u, "reset-test", prefix, hash); err != nil {
 		t.Fatalf("create key: %v", err)
 	}
 	keyChain := auth.RequireAPIKey(env.pool, auth.MinBcryptCost, "")(

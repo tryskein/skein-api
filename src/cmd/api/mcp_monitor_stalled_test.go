@@ -18,7 +18,6 @@ import (
 
 	"github.com/mark3labs/mcp-go/server"
 
-	"skein-api/internal/apikeys"
 	"skein-api/internal/auth"
 	"skein-api/internal/monitorcreds"
 	"skein-api/internal/testsupport"
@@ -33,7 +32,7 @@ func TestMCPRegisterTools_NoMonitorStalled(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GenerateAPIKey: %v", err)
 	}
-	keyID, _, err := apikeys.New(pool).Create(context.Background(), owner, "sk-669", keyPrefix, hash)
+	keyID, _, err := testsupport.CreateOwnerKey(context.Background(), pool, owner, "sk-669", keyPrefix, hash)
 	if err != nil {
 		t.Fatalf("create api key: %v", err)
 	}

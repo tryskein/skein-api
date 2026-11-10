@@ -36,7 +36,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"skein-api/internal/apikeys"
 	"skein-api/internal/auth"
 	"skein-api/internal/config"
 	"skein-api/internal/dependencies"
@@ -94,7 +93,7 @@ func newWiringStack(t *testing.T) *wiringStack {
 	if err != nil {
 		t.Fatalf("GenerateAPIKey: %v", err)
 	}
-	keyID, _, err := apikeys.New(pool).Create(context.Background(), owner, "wiring test", keyPrefix, hash)
+	keyID, _, err := testsupport.CreateOwnerKey(context.Background(), pool, owner, "wiring test", keyPrefix, hash)
 	if err != nil {
 		t.Fatalf("create api key: %v", err)
 	}

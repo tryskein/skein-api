@@ -659,7 +659,7 @@ func main() {
 	dashboardHandler := handler.NewDashboardHandler(pool, dashboardStore, issuesStore)
 	// R2.1 — long-lived API keys (CRUD via Settings UI). MCP middleware
 	// reuses the apikeys.Store directly; the handler is only for /me.
-	apiKeysHandler := handler.NewAPIKeysHandler(pool, cfg.BcryptCost)
+	apiKeysHandler := handler.NewAPIKeysHandler(pool, cfg.BcryptCost, apikeys.TTLPolicy{Default: cfg.APIKeyDefaultTTL, Max: cfg.APIKeyMaxTTL})
 
 	// R3.1 — admin user management. usersStore wraps the users package
 	// and holds the apikeys.Store reference for the deactivation cascade

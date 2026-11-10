@@ -10,7 +10,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"skein-api/internal/apikeys"
+	"skein-api/internal/testsupport"
 )
 
 // newLazyPool returns a pool that is never dialled. pgxpool connects on first
@@ -143,7 +143,7 @@ VALUES ($1, $2, $3, $4, 'user', 'h', false, now(), '{}'::jsonb)`,
 		if err != nil {
 			t.Fatalf("GenerateAPIKey: %v", err)
 		}
-		if _, _, err := apikeys.New(pool).Create(ctx, uid, "challenge-test", prefix, hash); err != nil {
+		if _, _, err := testsupport.CreateOwnerKey(ctx, pool, uid, "challenge-test", prefix, hash); err != nil {
 			t.Fatalf("Create key: %v", err)
 		}
 

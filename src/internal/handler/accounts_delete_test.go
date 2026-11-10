@@ -467,7 +467,7 @@ VALUES ($1, $2, 'abc1234', $3, $4, 'human')`, p.IssueID, uuid.New(), w.name+" <"
 		t.Fatal(err)
 	}
 	w.keyPlain = plain
-	if w.keyID, _, err = apikeys.New(pool).Create(ctx, w.d, w.name+" laptop", prefix, hash); err != nil {
+	if w.keyID, _, err = testsupport.CreateOwnerKey(ctx, pool, w.d, w.name+" laptop", prefix, hash); err != nil {
 		t.Fatalf("create key: %v", err)
 	}
 	exec(`INSERT INTO agents (user_id, session_id) VALUES ($1, 'deleted-test-session')`, w.d)
@@ -1594,7 +1594,7 @@ VALUES ($1, $2, $3, 'en', now() + interval '1 day') RETURNING id`, elsewhere, em
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := apikeys.New(pool).Create(ctx, u, "rollback", keyPrefix, keyHash); err != nil {
+	if _, _, err := testsupport.CreateOwnerKey(ctx, pool, u, "rollback", keyPrefix, keyHash); err != nil {
 		t.Fatal(err)
 	}
 	keyWorks := func() int {

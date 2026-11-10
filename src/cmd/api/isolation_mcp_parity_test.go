@@ -43,7 +43,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"skein-api/internal/apikeys"
 	"skein-api/internal/auth"
 	"skein-api/internal/config"
 	"skein-api/internal/dependencies"
@@ -98,7 +97,7 @@ func newParityStack(t *testing.T) *parityStack {
 		if err != nil {
 			t.Fatalf("GenerateAPIKey: %v", err)
 		}
-		keyID, _, err := apikeys.New(pool).Create(ctx, u.ID, "isolation parity", prefix, hash)
+		keyID, _, err := testsupport.CreateOwnerKey(ctx, pool, u.ID, "isolation parity", prefix, hash)
 		if err != nil {
 			t.Fatalf("create api key for %s: %v", a, err)
 		}

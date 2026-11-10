@@ -16,6 +16,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -65,32 +66,246 @@ type LookupResult struct {
 	KeyHash    string
 }
 
-// Create inserts a new API key. Caller is responsible for generating
-// (plain, prefix, hash) via internal/auth.GenerateAPIKey before calling.
+// NewKey is what Create stores: the owner, the label, the (prefix, hash)
+// pair from internal/auth.GenerateAPIKey and the grant. Grant.ExpiresAt is
+// the requested end of the lifetime; nil gives the policy default.
+type NewKey struct {
+	UserID uuid.UUID
+	Label  string
+	Prefix string
+	Hash   string
+	Grant  Grant
+}
+
+// Created is the server-side part of a new key row.
+type Created struct {
+	ID        uuid.UUID
+	CreatedAt time.Time
+	ExpiresAt time.Time
+}
+
+// Create inserts a new API key with its grant and scope members. Caller is
+// responsible for generating (plain, prefix, hash) via
+// internal/auth.GenerateAPIKey before calling.
 //
-// The id is generated here (UUIDv7-style is overkill for a low-volume
-// table — plain v4 is fine) so handlers don't have to.
+// The grant must pass Grant.Validate. The lifetime follows policy: the
+// requested expiry must be after now and no later than now + policy.Max;
+// without one the key lives policy.Default. Every new key has an expiry.
+// A scope member that does not exist gives ErrScopeUnavailable.
 //
 // On a prefix collision (partial UNIQUE INDEX violation; effectively
 // never — 12 base64-url chars ≈ 71 bits) we return the raw pgx error
 // (errors.As → *pgconn.PgError, Code "23505"). The handler is expected
 // to detect this and retry with a fresh (plain, prefix, hash) tuple
 // rather than surface 500 to the user. Other DB errors propagate
-// verbatim wrapped in a fmt.Errorf for context.
-func (s *Store) Create(ctx context.Context, userID uuid.UUID, label, prefix, hash string) (uuid.UUID, time.Time, error) {
-	id := uuid.New()
-	createdAt := time.Now().UTC()
-	_, err := s.pool.Exec(ctx, `
-INSERT INTO api_keys (id, user_id, key_hash, prefix, label, created_at,
-                      level, is_admin, scope_mode)
-VALUES ($1, $2, $3, $4, $5, $6,
-        'manage', (SELECT role = 'admin' FROM users WHERE id = $2), 'all')
-`,
-		id, userID, hash, prefix, label, createdAt)
-	if err != nil {
-		return uuid.Nil, time.Time{}, fmt.Errorf("inserting api key: %w", err)
+// wrapped in a fmt.Errorf for context.
+func (s *Store) Create(ctx context.Context, k NewKey, policy TTLPolicy) (Created, error) {
+	g := k.Grant.normalized()
+	if err := g.Validate(); err != nil {
+		return Created{}, err
 	}
-	return id, createdAt, nil
+	now := time.Now().UTC()
+	expires, err := policy.expiry(now, g.ExpiresAt)
+	if err != nil {
+		return Created{}, err
+	}
+	c := Created{ID: uuid.New(), CreatedAt: now, ExpiresAt: expires}
+	err = pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, `
+INSERT INTO api_keys (id, user_id, key_hash, prefix, label, created_at,
+                      level, is_admin, scope_mode, expires_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+`,
+			c.ID, k.UserID, k.Hash, k.Prefix, k.Label, c.CreatedAt,
+			levelColumn(g.Level), g.Admin, string(g.Scope.Mode), c.ExpiresAt); err != nil {
+			return fmt.Errorf("inserting api key: %w", err)
+		}
+		return insertScope(ctx, tx, c.ID, g.Scope)
+	})
+	if err != nil {
+		return Created{}, err
+	}
+	return c, nil
+}
+
+// levelColumn maps LevelNone to SQL NULL.
+func levelColumn(l Level) any {
+	if l == LevelNone {
+		return nil
+	}
+	return string(l)
+}
+
+// insertScope writes the scope members of key id. A member that does not
+// exist (foreign key violation) gives ErrScopeUnavailable.
+func insertScope(ctx context.Context, tx pgx.Tx, id uuid.UUID, sc Scope) error {
+	var err error
+	switch sc.Mode {
+	case ScopeProjects:
+		_, err = tx.Exec(ctx, `
+INSERT INTO api_key_scope_projects (api_key_id, project_id)
+SELECT $1, unnest($2::uuid[])`, id, sc.Projects)
+	case ScopeSpaces:
+		_, err = tx.Exec(ctx, `
+INSERT INTO api_key_scope_spaces (api_key_id, space_id)
+SELECT $1, unnest($2::uuid[])`, id, sc.Spaces)
+	}
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.Code == "23503" {
+		return ErrScopeUnavailable
+	}
+	if err != nil {
+		return fmt.Errorf("writing api key scope: %w", err)
+	}
+	return nil
+}
+
+// Key state errors of Narrow and Reissue.
+var (
+	ErrRevoked = errors.New("api key is revoked")
+	ErrExpired = errors.New("api key has expired")
+)
+
+// lockedKey is the row Narrow and Reissue read under FOR UPDATE.
+type lockedKey struct {
+	label     string
+	grant     Grant
+	revokedAt *time.Time
+}
+
+// lockOwnKey reads the key id of userID under a row lock, with its grant.
+// ErrNotFound when the user has no such key.
+func lockOwnKey(ctx context.Context, tx pgx.Tx, userID, id uuid.UUID) (lockedKey, error) {
+	var k lockedKey
+	var level *string
+	var mode string
+	err := tx.QueryRow(ctx, `
+SELECT label, level, is_admin, scope_mode, expires_at, revoked_at,
+       ARRAY(SELECT project_id FROM api_key_scope_projects WHERE api_key_id = k.id),
+       ARRAY(SELECT space_id FROM api_key_scope_spaces WHERE api_key_id = k.id)
+  FROM api_keys k
+ WHERE id = $1 AND user_id = $2
+   FOR UPDATE`, id, userID).Scan(&k.label, &level, &k.grant.Admin, &mode, &k.grant.ExpiresAt,
+		&k.revokedAt, &k.grant.Scope.Projects, &k.grant.Scope.Spaces)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return lockedKey{}, ErrNotFound
+	}
+	if err != nil {
+		return lockedKey{}, fmt.Errorf("reading api key %s: %w", id, err)
+	}
+	if level != nil {
+		k.grant.Level = Level(*level)
+	}
+	k.grant.Scope.Mode = ScopeMode(mode)
+	k.grant = k.grant.normalized()
+	return k, nil
+}
+
+// Narrow replaces the grant of the user's key id with next, which may only
+// narrow it (CheckNarrowing): level, admin flag, scope and expiry. The new
+// expiry, when set, must be in the future. A revoked key gives ErrRevoked,
+// an expired one ErrExpired — neither comes back to life. A refused change
+// leaves the key as it was. ErrNotFound when the user has no such key.
+func (s *Store) Narrow(ctx context.Context, userID, id uuid.UUID, next Grant) error {
+	next = next.normalized()
+	return pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
+		cur, err := lockOwnKey(ctx, tx, userID, id)
+		if err != nil {
+			return err
+		}
+		now := time.Now().UTC()
+		if cur.revokedAt != nil {
+			return ErrRevoked
+		}
+		if cur.grant.ExpiresAt != nil && !cur.grant.ExpiresAt.After(now) {
+			return ErrExpired
+		}
+		if next.ExpiresAt != nil && !next.ExpiresAt.After(now) {
+			return fmt.Errorf("%w: the expiry is not in the future", ErrInvalidExpiry)
+		}
+		spaceOf, err := projectSpaces(ctx, tx, cur.grant.Scope, next.Scope)
+		if err != nil {
+			return err
+		}
+		if err := CheckNarrowing(cur.grant, next, spaceOf); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `
+UPDATE api_keys
+   SET level = $2, is_admin = $3, scope_mode = $4, expires_at = $5
+ WHERE id = $1`, id, levelColumn(next.Level), next.Admin, string(next.Scope.Mode), next.ExpiresAt); err != nil {
+			return fmt.Errorf("narrowing api key %s: %w", id, err)
+		}
+		if _, err := tx.Exec(ctx, `DELETE FROM api_key_scope_projects WHERE api_key_id = $1`, id); err != nil {
+			return fmt.Errorf("clearing api key scope: %w", err)
+		}
+		if _, err := tx.Exec(ctx, `DELETE FROM api_key_scope_spaces WHERE api_key_id = $1`, id); err != nil {
+			return fmt.Errorf("clearing api key scope: %w", err)
+		}
+		return insertScope(ctx, tx, id, next.Scope)
+	})
+}
+
+// projectSpaces reads the space of each project of next when cur is a set of
+// spaces and next a set of projects — the one case CheckNarrowing needs it.
+func projectSpaces(ctx context.Context, tx pgx.Tx, cur, next Scope) (map[uuid.UUID]uuid.UUID, error) {
+	if cur.Mode != ScopeSpaces || next.Mode != ScopeProjects {
+		return nil, nil
+	}
+	rows, err := tx.Query(ctx, `SELECT id, space_id FROM projects WHERE id = ANY($1)`, next.Projects)
+	if err != nil {
+		return nil, fmt.Errorf("reading project spaces: %w", err)
+	}
+	defer rows.Close()
+	out := make(map[uuid.UUID]uuid.UUID, len(next.Projects))
+	for rows.Next() {
+		var p, sp uuid.UUID
+		if err := rows.Scan(&p, &sp); err != nil {
+			return nil, fmt.Errorf("scanning project space: %w", err)
+		}
+		out[p] = sp
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating project spaces: %w", err)
+	}
+	return out, nil
+}
+
+// Reissue creates a new key that replaces the user's key id: a new row and a
+// new secret (prefix, hash) with the same label, level, admin flag and scope,
+// and a lifetime of policy.Default from now — also when the old key had no
+// expiry. The old key is left as it is and works until its own expiry or a
+// revocation. A revoked key gives ErrRevoked; an expired one may be reissued
+// and stays expired. ErrNotFound when the user has no such key. A prefix
+// collision is returned raw, as in Create.
+func (s *Store) Reissue(ctx context.Context, userID, id uuid.UUID, prefix, hash string, policy TTLPolicy) (Created, error) {
+	var c Created
+	err := pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
+		old, err := lockOwnKey(ctx, tx, userID, id)
+		if err != nil {
+			return err
+		}
+		if old.revokedAt != nil {
+			return ErrRevoked
+		}
+		now := time.Now().UTC()
+		c = Created{ID: uuid.New(), CreatedAt: now, ExpiresAt: now.Add(policy.Default)}
+		g := old.grant
+		if _, err := tx.Exec(ctx, `
+INSERT INTO api_keys (id, user_id, key_hash, prefix, label, created_at,
+                      level, is_admin, scope_mode, expires_at, reissued_from_id)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+`,
+			c.ID, userID, hash, prefix, old.label, c.CreatedAt,
+			levelColumn(g.Level), g.Admin, string(g.Scope.Mode), c.ExpiresAt, id); err != nil {
+			return fmt.Errorf("inserting reissued api key: %w", err)
+		}
+		return insertScope(ctx, tx, c.ID, g.Scope)
+	})
+	if err != nil {
+		return Created{}, err
+	}
+	return c, nil
 }
 
 // ListByUser returns every key (active + revoked) belonging to userID,
@@ -214,35 +429,70 @@ SELECT k.id, k.user_id, u.role, u.is_external, k.key_hash
 }
 
 // KeyStatus is what a request authenticated by a key may act as, read
-// fresh on every request (sk-674.18 K-16).
+// fresh on every request (sk-674.18 K-16): the key's grant and state and its
+// owner's role, external flag and activity.
 type KeyStatus struct {
+	KeyID      uuid.UUID
 	UserID     uuid.UUID
 	UserRole   string
 	IsExternal bool
+	Grant      Grant
+	RevokedAt  *time.Time
+	// OwnerActive is false once the owner is deactivated or deleted.
+	OwnerActive bool
+	// EffectiveAdmin is the admin flag of the key as it applies now: set on
+	// the key and the owner an internal instance admin.
+	EffectiveAdmin bool
 }
 
-// Status reads, by the key's primary key, whether the key is still usable —
-// not revoked, its user active and not deleted — and the user's role and
-// external flag (sk-674.18 K-16, INV-26). One indexed read per request: the
-// middleware's cache maps a plain key to its id only, so a revocation, a
-// deactivation, a deletion or a role change takes effect on the next
-// request on every replica. ErrNotFound when the key is not usable.
+// Revoked reports whether the key was revoked.
+func (st KeyStatus) Revoked() bool { return st.RevokedAt != nil }
+
+// Expired reports whether the key's lifetime ended at or before now.
+func (st KeyStatus) Expired(now time.Time) bool {
+	return st.Grant.ExpiresAt != nil && !st.Grant.ExpiresAt.After(now)
+}
+
+// Usable reports whether the key authenticates at now: not revoked, not
+// expired, its owner active.
+func (st KeyStatus) Usable(now time.Time) bool {
+	return !st.Revoked() && !st.Expired(now) && st.OwnerActive
+}
+
+// Status reads, by the key's primary key, the key's grant, expiry and
+// revocation and its owner's role, external flag and activity (sk-674.18
+// K-16, INV-26). One indexed read per request: the middleware's cache maps a
+// plain key to its id only, so a revocation, a deactivation, a deletion, a
+// role change or a narrowed grant takes effect on the next request on every
+// replica. A revoked or expired key and an inactive owner are reported, not
+// hidden; ErrNotFound only when no key has this id.
 func (s *Store) Status(ctx context.Context, keyID uuid.UUID) (KeyStatus, error) {
-	var st KeyStatus
+	st := KeyStatus{KeyID: keyID}
+	var level *string
+	var mode string
 	err := s.pool.QueryRow(ctx, `
-SELECT k.user_id, u.role, u.is_external
+SELECT k.user_id, u.role, u.is_external,
+       u.deactivated_at IS NULL AND u.deleted_at IS NULL,
+       k.level, k.is_admin, k.scope_mode, k.expires_at, k.revoked_at,
+       ARRAY(SELECT project_id FROM api_key_scope_projects WHERE api_key_id = k.id),
+       ARRAY(SELECT space_id FROM api_key_scope_spaces WHERE api_key_id = k.id)
   FROM api_keys k
   JOIN users u ON u.id = k.user_id
- WHERE k.id = $1
-   AND k.revoked_at IS NULL
-   AND u.deactivated_at IS NULL
-   AND u.deleted_at IS NULL`, keyID).Scan(&st.UserID, &st.UserRole, &st.IsExternal)
+ WHERE k.id = $1`, keyID).Scan(&st.UserID, &st.UserRole, &st.IsExternal, &st.OwnerActive,
+		&level, &st.Grant.Admin, &mode, &st.Grant.ExpiresAt, &st.RevokedAt,
+		&st.Grant.Scope.Projects, &st.Grant.Scope.Spaces)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return KeyStatus{}, ErrNotFound
 	}
 	if err != nil {
 		return KeyStatus{}, fmt.Errorf("reading the status of api key %s: %w", keyID, err)
 	}
+	if level != nil {
+		st.Grant.Level = Level(*level)
+	}
+	st.Grant.Scope.Mode = ScopeMode(mode)
+	st.Grant = st.Grant.normalized()
+	st.EffectiveAdmin = st.Grant.Admin && st.UserRole == "admin" && !st.IsExternal
 	return st, nil
 }
 

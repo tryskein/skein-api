@@ -168,7 +168,7 @@ func RequireAPIKey(pool *pgxpool.Pool, bcryptCost int, challenge string) func(ht
 				// are read now, by primary key, so a revocation or a
 				// deactivation answers 401 from the next request on.
 				status, err := store.Status(ctx, entry.keyID)
-				if errors.Is(err, apikeys.ErrNotFound) {
+				if errors.Is(err, apikeys.ErrNotFound) || (err == nil && (status.Revoked() || !status.OwnerActive)) {
 					slog.WarnContext(ctx, "mcp auth failed: key or its user no longer active",
 						"path", r.URL.Path,
 						"masked", MaskAPIKey(plain),

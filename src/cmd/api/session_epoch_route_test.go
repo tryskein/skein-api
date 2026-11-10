@@ -22,7 +22,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
-	"skein-api/internal/apikeys"
 	"skein-api/internal/auth"
 	"skein-api/internal/testsupport"
 	"skein-api/internal/users"
@@ -39,7 +38,7 @@ func TestSessionEpoch_ProductionRouter(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := apikeys.New(pool).Create(ctx, u, "epoch-route", prefix, hash); err != nil {
+	if _, _, err := testsupport.CreateOwnerKey(ctx, pool, u, "epoch-route", prefix, hash); err != nil {
 		t.Fatalf("create key: %v", err)
 	}
 

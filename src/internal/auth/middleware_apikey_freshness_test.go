@@ -42,7 +42,7 @@ func TestDeactivation_RefusesWarmKeyAndSessionAtOnce(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GenerateAPIKey: %v", err)
 	}
-	if _, _, err := apikeys.New(pool).Create(ctx, u, "freshness-test", prefix, hash); err != nil {
+	if _, _, err := testsupport.CreateOwnerKey(ctx, pool, u, "freshness-test", prefix, hash); err != nil {
 		t.Fatalf("create key: %v", err)
 	}
 	ok := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })

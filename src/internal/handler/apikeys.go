@@ -32,14 +32,17 @@ const apiKeyCreateMaxAttempts = 3
 type APIKeysHandler struct {
 	store      *apikeys.Store
 	bcryptCost int
+	ttl        apikeys.TTLPolicy
 }
 
-// NewAPIKeysHandler builds the handler with the given store + bcrypt
-// cost. Build once at startup; reuse across requests.
-func NewAPIKeysHandler(pool *pgxpool.Pool, bcryptCost int) *APIKeysHandler {
+// NewAPIKeysHandler builds the handler with the given store, bcrypt cost
+// and the instance's key lifetime policy. Build once at startup; reuse
+// across requests.
+func NewAPIKeysHandler(pool *pgxpool.Pool, bcryptCost int, ttl apikeys.TTLPolicy) *APIKeysHandler {
 	return &APIKeysHandler{
 		store:      apikeys.New(pool),
 		bcryptCost: bcryptCost,
+		ttl:        ttl,
 	}
 }
 
@@ -122,7 +125,19 @@ func (h *APIKeysHandler) Create(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		id, createdAt, createErr = h.store.Create(ctx, userID, label, prefix, hash)
+		// The owner's own rights, as every key had before grants existed;
+		// the lifetime is the policy default.
+		role, _ := auth.UserRoleFrom(ctx)
+		var created apikeys.Created
+		created, createErr = h.store.Create(ctx, apikeys.NewKey{
+			UserID: userID, Label: label, Prefix: prefix, Hash: hash,
+			Grant: apikeys.Grant{
+				Level: apikeys.LevelManage,
+				Admin: role == "admin" && !auth.IsExternalFrom(ctx),
+				Scope: apikeys.Scope{Mode: apikeys.ScopeAll},
+			},
+		}, h.ttl)
+		id, createdAt = created.ID, created.CreatedAt
 		if createErr == nil {
 			break
 		}

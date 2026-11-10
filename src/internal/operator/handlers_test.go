@@ -93,7 +93,7 @@ func (r *opRig) seedAccount(t *testing.T) account {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := apikeys.New(r.pool).Create(ctx, id, "op-test", prefix, keyHash); err != nil {
+	if _, _, err := testsupport.CreateOwnerKey(ctx, r.pool, id, "op-test", prefix, keyHash); err != nil {
 		t.Fatal(err)
 	}
 	a.key = plain

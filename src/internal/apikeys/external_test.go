@@ -10,6 +10,7 @@ import (
 
 	"skein-api/internal/apikeys"
 	"skein-api/internal/auth"
+	"skein-api/internal/testsupport"
 )
 
 // seedUserWithExternal inserts a user row with an explicit is_external flag
@@ -45,7 +46,7 @@ func TestLookupByPrefix_IsExternal(t *testing.T) {
 		if err != nil {
 			t.Fatalf("GenerateAPIKey: %v", err)
 		}
-		if _, _, err := store.Create(ctx, userID, "ext-lookup-test", prefix, hash); err != nil {
+		if _, _, err := testsupport.CreateOwnerKey(ctx, pool, userID, "ext-lookup-test", prefix, hash); err != nil {
 			t.Fatalf("Create: %v", err)
 		}
 		return prefix
