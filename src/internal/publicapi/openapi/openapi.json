@@ -316,7 +316,10 @@
                         "type": "string"
                     },
                     "gate": {
-                        "type": "string"
+                        "type": [
+                            "string",
+                            "null"
+                        ]
                     },
                     "metadata": {
                         "additionalProperties": {},
@@ -566,7 +569,10 @@
                         "type": "string"
                     },
                     "actorSessionId": {
-                        "type": "string"
+                        "type": [
+                            "string",
+                            "null"
+                        ]
                     },
                     "actorType": {
                         "type": "string"
@@ -1858,7 +1864,10 @@
                         "uniqueItems": false
                     },
                     "nextCursor": {
-                        "type": "string"
+                        "type": [
+                            "string",
+                            "null"
+                        ]
                     }
                 },
                 "type": "object"
@@ -1876,7 +1885,10 @@
                         "uniqueItems": false
                     },
                     "nextCursor": {
-                        "type": "string"
+                        "type": [
+                            "string",
+                            "null"
+                        ]
                     }
                 },
                 "type": "object"
@@ -1894,7 +1906,10 @@
                         "uniqueItems": false
                     },
                     "nextCursor": {
-                        "type": "string"
+                        "type": [
+                            "string",
+                            "null"
+                        ]
                     }
                 },
                 "type": "object"
@@ -1912,7 +1927,10 @@
                         "uniqueItems": false
                     },
                     "nextCursor": {
-                        "type": "string"
+                        "type": [
+                            "string",
+                            "null"
+                        ]
                     }
                 },
                 "type": "object"
@@ -1930,7 +1948,10 @@
                         "uniqueItems": false
                     },
                     "nextCursor": {
-                        "type": "string"
+                        "type": [
+                            "string",
+                            "null"
+                        ]
                     }
                 },
                 "type": "object"
@@ -1948,7 +1969,10 @@
                         "uniqueItems": false
                     },
                     "nextCursor": {
-                        "type": "string"
+                        "type": [
+                            "string",
+                            "null"
+                        ]
                     }
                 },
                 "type": "object"
@@ -1966,7 +1990,10 @@
                         "uniqueItems": false
                     },
                     "nextCursor": {
-                        "type": "string"
+                        "type": [
+                            "string",
+                            "null"
+                        ]
                     }
                 },
                 "type": "object"
@@ -1984,7 +2011,10 @@
                         "uniqueItems": false
                     },
                     "nextCursor": {
-                        "type": "string"
+                        "type": [
+                            "string",
+                            "null"
+                        ]
                     }
                 },
                 "type": "object"
@@ -2002,7 +2032,10 @@
                         "uniqueItems": false
                     },
                     "nextCursor": {
-                        "type": "string"
+                        "type": [
+                            "string",
+                            "null"
+                        ]
                     }
                 },
                 "type": "object"
@@ -2020,7 +2053,10 @@
                         "uniqueItems": false
                     },
                     "nextCursor": {
-                        "type": "string"
+                        "type": [
+                            "string",
+                            "null"
+                        ]
                     }
                 },
                 "type": "object"
@@ -2038,7 +2074,10 @@
                         "uniqueItems": false
                     },
                     "nextCursor": {
-                        "type": "string"
+                        "type": [
+                            "string",
+                            "null"
+                        ]
                     }
                 },
                 "type": "object"
@@ -2056,7 +2095,10 @@
                         "uniqueItems": false
                     },
                     "nextCursor": {
-                        "type": "string"
+                        "type": [
+                            "string",
+                            "null"
+                        ]
                     }
                 },
                 "type": "object"
@@ -2074,7 +2116,10 @@
                         "uniqueItems": false
                     },
                     "nextCursor": {
-                        "type": "string"
+                        "type": [
+                            "string",
+                            "null"
+                        ]
                     }
                 },
                 "type": "object"
@@ -2197,7 +2242,10 @@
                         "uniqueItems": false
                     },
                     "nextCursor": {
-                        "type": "string"
+                        "type": [
+                            "string",
+                            "null"
+                        ]
                     }
                 },
                 "type": "object"
@@ -2274,7 +2322,10 @@
                         "uniqueItems": false
                     },
                     "nextCursor": {
-                        "type": "string"
+                        "type": [
+                            "string",
+                            "null"
+                        ]
                     },
                     "ringingTaskCount": {
                         "description": "RingingTaskCount is the badge: issues with a ringing reminder across\nprojects, of the key's scope (the project filter does not narrow it).",
@@ -2319,8 +2370,15 @@
                         "uniqueItems": false
                     },
                     "match": {
-                        "$ref": "#/components/schemas/publicapi.ResolveCandidate",
-                        "description": "Match is the project the handle names when the resolver is\nconfident; null otherwise."
+                        "description": "Match is the project the handle names when the resolver is\nconfident; null otherwise.",
+                        "anyOf": [
+                            {
+                                "$ref": "#/components/schemas/publicapi.ResolveCandidate"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ]
                     }
                 },
                 "type": "object"
@@ -2345,7 +2403,10 @@
                     },
                     "nextCursor": {
                         "description": "NextCursor is the cursor of the next page, null on the last one.",
-                        "type": "string"
+                        "type": [
+                            "string",
+                            "null"
+                        ]
                     }
                 },
                 "type": "object"
@@ -3772,7 +3833,10 @@
                         "type": "string"
                     },
                     "matchHint": {
-                        "type": "string"
+                        "type": [
+                            "string",
+                            "null"
+                        ]
                     },
                     "name": {
                         "type": "string"

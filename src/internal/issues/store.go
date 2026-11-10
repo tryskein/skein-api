@@ -5276,7 +5276,7 @@ type EventDTO struct {
 	OccurredAt     time.Time `json:"occurredAt"`
 	Type           string    `json:"type"`
 	Actor          string    `json:"actor"`
-	ActorSessionID *string   `json:"actorSessionId"`
+	ActorSessionID *string   `json:"actorSessionId" extensions:"x-nullable"`
 	ActorType      string    `json:"actorType"`
 	Field          *string   `json:"field,omitempty"`
 	Reason         *string   `json:"reason,omitempty"`

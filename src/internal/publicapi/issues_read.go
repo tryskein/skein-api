@@ -1019,7 +1019,7 @@ type SearchPage struct {
 	// Items are the hits, by relevance.
 	Items []search.Item `json:"items"`
 	// NextCursor is the cursor of the next page, null on the last one.
-	NextCursor *string `json:"nextCursor"`
+	NextCursor *string `json:"nextCursor" extensions:"x-nullable"`
 	// HasMore — another page follows.
 	HasMore bool `json:"hasMore"`
 	// Degraded — the meaning reranking was unavailable and the hits are

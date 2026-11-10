@@ -1353,7 +1353,7 @@ type DepDTO struct {
 	From      string         `json:"from"`
 	To        string         `json:"to"`
 	Type      string         `json:"type"`
-	Gate      *string        `json:"gate"`
+	Gate      *string        `json:"gate" extensions:"x-nullable"`
 	Metadata  map[string]any `json:"metadata"`
 	Version   int            `json:"version"`
 	CreatedAt time.Time      `json:"createdAt"`

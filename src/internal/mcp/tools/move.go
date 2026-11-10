@@ -122,7 +122,7 @@ type MoveComponent struct {
 	ID          string  `json:"id"`
 	Name        string  `json:"name"`
 	Description string  `json:"description"`
-	MatchHint   *string `json:"matchHint"`
+	MatchHint   *string `json:"matchHint" extensions:"x-nullable"`
 }
 
 // moveNewIDPlaceholder stands for the id skein_create returns in step 1 of

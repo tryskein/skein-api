@@ -17,7 +17,7 @@ import (
 // page. fields= projects Items; the envelope is always sent.
 type List[T any] struct {
 	Items      []T     `json:"items"`
-	NextCursor *string `json:"nextCursor"`
+	NextCursor *string `json:"nextCursor" extensions:"x-nullable"`
 	HasMore    bool    `json:"hasMore"`
 }
 

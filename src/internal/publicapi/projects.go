@@ -328,7 +328,7 @@ type ResolveCandidate struct {
 type ResolveResult struct {
 	// Match is the project the handle names when the resolver is
 	// confident; null otherwise.
-	Match *ResolveCandidate `json:"match"`
+	Match *ResolveCandidate `json:"match" extensions:"x-nullable"`
 	// Candidates are up to 10 alternatives when there is no confident
 	// match.
 	Candidates []ResolveCandidate `json:"candidates"`
