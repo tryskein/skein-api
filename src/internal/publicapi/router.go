@@ -24,8 +24,8 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"skein-api/internal/errcode"
-	"skein-api/internal/issueops"
 	"skein-api/internal/handler"
+	"skein-api/internal/issueops"
 )
 
 // MaxBodyBytes is the largest request body the public API accepts (1 MiB,
