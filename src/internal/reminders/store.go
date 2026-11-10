@@ -213,10 +213,13 @@ func (s *Store) Snooze(ctx context.Context, id, ownerID uuid.UUID, newRemindAt t
 			issueID    string
 			prevRemind time.Time
 		)
+		args := []any{id, ownerID}
+		inScope := reminderInKeyScope(ctx, ownerID, &args)
 		err := tx.QueryRow(ctx, `
 SELECT issue_id, remind_at FROM reminders
  WHERE id = $1 AND user_id = $2
- FOR UPDATE`, id, ownerID).Scan(&issueID, &prevRemind)
+   AND `+inScope+`
+ FOR UPDATE`, args...).Scan(&issueID, &prevRemind)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrNotFound
 		}
@@ -281,10 +284,13 @@ func (s *Store) Dismiss(ctx context.Context, id, ownerID uuid.UUID, note string,
 			issueID  string
 			remindAt time.Time
 		)
+		args := []any{id, ownerID}
+		inScope := reminderInKeyScope(ctx, ownerID, &args)
 		err := tx.QueryRow(ctx, `
 DELETE FROM reminders
  WHERE id = $1 AND user_id = $2
-RETURNING issue_id, remind_at`, id, ownerID).Scan(&issueID, &remindAt)
+   AND `+inScope+`
+RETURNING issue_id, remind_at`, args...).Scan(&issueID, &remindAt)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrNotFound
 		}
@@ -461,4 +467,18 @@ func (s *Store) ListAndCount(ctx context.Context, ownerID uuid.UUID, filter List
 // request's caller.
 func keyReach(ctx context.Context, ownerID uuid.UUID, args *[]any) string {
 	return authz.ScopeFor(ctx, ownerID).KeyLimit().Expr("i.project_id", authz.Placeholders(args))
+}
+
+// reminderInKeyScope renders, for a statement over the reminders table,
+// the condition «the reminder's issue lies inside the caller's key scope»
+// (sk-878.3.1 US-3): a key snoozes or dismisses a reminder on an issue
+// outside its scope exactly as a reminder that does not exist. The literal
+// true without a key, so the statement is unchanged.
+func reminderInKeyScope(ctx context.Context, ownerID uuid.UUID, args *[]any) string {
+	key := authz.ScopeFor(ctx, ownerID).KeyLimit()
+	if !key.Limits() {
+		return "true"
+	}
+	return "EXISTS (SELECT 1 FROM issues ki WHERE ki.id = reminders.issue_id AND " +
+		key.Expr("ki.project_id", authz.Placeholders(args)) + ")"
 }

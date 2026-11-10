@@ -762,6 +762,16 @@ func (h *NotificationsHandler) CreateCustomWatcher(w http.ResponseWriter, r *htt
 		Filter: req.Filter,
 	})
 	if err != nil {
+		if errors.Is(err, notifications.ErrWatcherProjectNotFound) {
+			writeProblem(w, http.StatusUnprocessableEntity, "project_not_found",
+				"a project of the filter was not found", nil)
+			return
+		}
+		if errors.Is(err, notifications.ErrWatcherAnyProjectNeedsScopeAll) {
+			writeProblem(w, http.StatusForbidden, "forbidden",
+				"a filter over any project needs a key with scope all", nil)
+			return
+		}
 		if errors.Is(err, notifications.ErrTooManyWatchers) {
 			writeProblem(w, http.StatusUnprocessableEntity, "too_many_watchers",
 				fmt.Sprintf("at most %d custom watchers per user", notifications.MaxCustomWatchersPerUser), nil)

@@ -141,6 +141,14 @@ func handleFilterWatchCreate(_ *pgxpool.Pool, notifStore *notifications.Store) s
 			Filter: filter,
 		})
 		if err != nil {
+			if errors.Is(err, notifications.ErrWatcherProjectNotFound) {
+				return skmcp.ToolError(ErrCodeProjectNotFound,
+					"a project of the filter was not found", nil), nil
+			}
+			if errors.Is(err, notifications.ErrWatcherAnyProjectNeedsScopeAll) {
+				return skmcp.ToolError(ErrCodeForbidden,
+					"a filter over any project needs a key with scope all: name the projects", nil), nil
+			}
 			if errors.Is(err, notifications.ErrTooManyWatchers) {
 				return skmcp.ToolError(ErrCodeValidationError,
 					"too_many_watchers: at most 10 custom watchers per user",

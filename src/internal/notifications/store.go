@@ -1196,12 +1196,15 @@ SELECT
 // all (INV-11). Marking such a row read would also be a state change on
 // something no surface can ever show back.
 func (s *Store) MarkRead(ctx context.Context, notificationID int64, userID uuid.UUID) error {
+	args := []any{userID, notificationID}
+	keyed := keyScopeOn(ctx, userID, "n.project_id", &args)
 	n, err := s.updateOwnerRows(ctx, userID, `
 UPDATE notifications n
    SET read_at = COALESCE(n.read_at, now())
   FROM notifications o
  WHERE n.id = $2 AND n.user_id = $1 AND n.feed_channel AND o.id = n.id
-RETURNING n.type, o.read_at IS NULL AS changed`, notificationID)
+   AND `+keyed+`
+RETURNING n.type, o.read_at IS NULL AS changed`, args[1:]...)
 	if err != nil {
 		return fmt.Errorf("mark read: %w", err)
 	}
@@ -1214,12 +1217,15 @@ RETURNING n.type, o.read_at IS NULL AS changed`, notificationID)
 // MarkUnread clears read_at. Idempotent. Feed rows only — see MarkRead
 // for why a push-only row must not be addressable.
 func (s *Store) MarkUnread(ctx context.Context, notificationID int64, userID uuid.UUID) error {
+	args := []any{userID, notificationID}
+	keyed := keyScopeOn(ctx, userID, "n.project_id", &args)
 	n, err := s.updateOwnerRows(ctx, userID, `
 UPDATE notifications n
    SET read_at = NULL
   FROM notifications o
  WHERE n.id = $2 AND n.user_id = $1 AND n.feed_channel AND o.id = n.id
-RETURNING n.type, o.read_at IS NOT NULL AS changed`, notificationID)
+   AND `+keyed+`
+RETURNING n.type, o.read_at IS NOT NULL AS changed`, args[1:]...)
 	if err != nil {
 		return fmt.Errorf("mark unread: %w", err)
 	}
@@ -1233,13 +1239,16 @@ RETURNING n.type, o.read_at IS NOT NULL AS changed`, notificationID)
 // (archived_at IS NOT NULL). Idempotent — re-archiving doesn't bump
 // the timestamp. Feed rows only — see MarkRead.
 func (s *Store) Archive(ctx context.Context, notificationID int64, userID uuid.UUID) error {
+	args := []any{userID, notificationID}
+	keyed := keyScopeOn(ctx, userID, "n.project_id", &args)
 	n, err := s.updateOwnerRows(ctx, userID, `
 UPDATE notifications n
    SET archived_at = COALESCE(n.archived_at, now()),
        read_at     = COALESCE(n.read_at, now())
   FROM notifications o
  WHERE n.id = $2 AND n.user_id = $1 AND n.feed_channel AND o.id = n.id
-RETURNING n.type, (o.archived_at IS NULL OR o.read_at IS NULL) AS changed`, notificationID)
+   AND `+keyed+`
+RETURNING n.type, (o.archived_at IS NULL OR o.read_at IS NULL) AS changed`, args[1:]...)
 	if err != nil {
 		return fmt.Errorf("archive notification: %w", err)
 	}
@@ -1277,6 +1286,7 @@ func (s *Store) MarkAllRead(ctx context.Context, args MarkAllReadArgs) (int64, e
 		params = append(params, *args.ProjectID)
 		clauses = append(clauses, fmt.Sprintf("project_id = $%d", len(params)))
 	}
+	clauses = append(clauses, keyScopeOn(ctx, args.UserID, "project_id", &params))
 	sql := "UPDATE notifications SET read_at = now() WHERE " + joinAnd(clauses) + " RETURNING type, true AS changed"
 	n, err := s.updateOwnerRows(ctx, args.UserID, sql, params[1:]...)
 	if err != nil {
@@ -1304,17 +1314,20 @@ func (s *Store) MarkReadByEntity(
 	}
 
 	if entityType == "issue" {
+		args := []any{userID, entityID}
+		keyed := keyScopeOn(ctx, userID, "project_id", &args)
 		// Cover the issue itself + every comment on the issue. Two
 		// branches unioned via OR (cleaner than two UPDATEs) — the
 		// notifications.event_id IN (...) sub-select short-circuits on
 		// the index. We reuse the events.entity_type/entity_id index.
-		const sql = `
+		sql := `
 UPDATE notifications
    SET read_at = now()
  WHERE user_id = $1
    AND feed_channel
    AND read_at IS NULL
    AND archived_at IS NULL
+   AND ` + keyed + `
    AND event_id IN (
        SELECT e.id
          FROM events e
@@ -1326,7 +1339,7 @@ UPDATE notifications
                ))
    )
 RETURNING type, true AS changed`
-		n, err := s.updateOwnerRows(ctx, userID, sql, entityID)
+		n, err := s.updateOwnerRows(ctx, userID, sql, args[1:]...)
 		if err != nil {
 			return 0, fmt.Errorf("mark read by entity: %w", err)
 		}
@@ -1334,20 +1347,23 @@ RETURNING type, true AS changed`
 	}
 
 	// Generic path: match the entity directly by (type, id).
-	const sql = `
+	args := []any{userID, entityType, entityID}
+	keyed := keyScopeOn(ctx, userID, "project_id", &args)
+	sql := `
 UPDATE notifications
    SET read_at = now()
  WHERE user_id = $1
    AND feed_channel
    AND read_at IS NULL
    AND archived_at IS NULL
+   AND ` + keyed + `
    AND event_id IN (
        SELECT id FROM events
         WHERE entity_type = $2
           AND entity_id   = $3
    )
 RETURNING type, true AS changed`
-	n, err := s.updateOwnerRows(ctx, userID, sql, entityType, entityID)
+	n, err := s.updateOwnerRows(ctx, userID, sql, args[1:]...)
 	if err != nil {
 		return 0, fmt.Errorf("mark read by entity: %w", err)
 	}
@@ -1376,19 +1392,35 @@ func (s *Store) MarkReadCard(ctx context.Context, userID uuid.UUID, cardIssueID 
 	if cardIssueID == "" {
 		return MarkCardReadResult{}, fmt.Errorf("mark read card: card issue id required")
 	}
-	const sql = `
+	// A card with its subtree carries events of descendants that may lie in
+	// other projects: a key reads only those inside its scope.
+	args := []any{userID, cardIssueID}
+	keyed := keyScopeOn(ctx, userID, "project_id", &args)
+	sql := `
 UPDATE notifications
    SET read_at = now()
  WHERE user_id = $1
    AND card_issue_id = $2
    AND read_at IS NULL
    AND archived_at IS NULL
+   AND ` + keyed + `
 RETURNING type, true AS changed`
-	n, err := s.updateOwnerRows(ctx, userID, sql, cardIssueID)
+	n, err := s.updateOwnerRows(ctx, userID, sql, args[1:]...)
 	if err != nil {
 		return MarkCardReadResult{}, fmt.Errorf("mark read card: %w", err)
 	}
 	return MarkCardReadResult{Marked: int(n)}, nil
+}
+
+// keyScopeOn renders the condition of the caller's key scope over the
+// project column col of the caller's notification rows (sk-878.3.1 D-3,
+// US-3 "write acceptance"): a write by a key changes only notifications
+// inside its scope; a row of no project belongs to no project and is not
+// filtered. args are the statement's arguments with $1 = userID first; the
+// scope's value, if any, is appended. Without a key the condition is true.
+func keyScopeOn(ctx context.Context, userID uuid.UUID, col string, args *[]any) string {
+	return "(" + col + " IS NULL OR " +
+		authz.ScopeFor(ctx, userID).KeyLimit().Expr(col, authz.Placeholders(args)) + ")"
 }
 
 // updateOwnerRows runs one autocommit UPDATE over the caller's notification
@@ -1609,9 +1641,60 @@ UPDATE project_watchers
 
 // ----------------- R3.3 — custom watchers -----------------
 
+// ErrWatcherProjectNotFound is returned by AddCustomWatcher when the filter
+// names a project outside the scope of the caller's key: for the key it is
+// a project that does not exist (sk-878.3.1 D-3, US-3).
+var ErrWatcherProjectNotFound = errors.New("custom watcher project not found")
+
+// ErrWatcherAnyProjectNeedsScopeAll is returned by AddCustomWatcher when a
+// key whose scope is not "all" asks for a filter over any project (no
+// project named): such a filter would reach outside the scope (US-3).
+var ErrWatcherAnyProjectNeedsScopeAll = errors.New("a filter over any project needs a key with scope all")
+
+// watchersInKeyScope reports which of filters lie inside the scope of the
+// caller's key: every project the filter names is inside it, and a filter
+// over any project (none named) only under no limit. Without a key every
+// filter is inside. A malformed project id is outside.
+func (s *Store) watchersInKeyScope(ctx context.Context, userID uuid.UUID, filters []CustomWatcherFilter) ([]bool, error) {
+	out := make([]bool, len(filters))
+	key := authz.ScopeFor(ctx, userID).KeyLimit()
+	if !key.Limits() {
+		for i := range out {
+			out[i] = true
+		}
+		return out, nil
+	}
+	var ids []uuid.UUID
+	for _, f := range filters {
+		for _, raw := range f.Projects {
+			if id, err := uuid.Parse(raw); err == nil {
+				ids = append(ids, id)
+			}
+		}
+	}
+	reached, err := authz.KeyReaches(ctx, s.pool, key, ids)
+	if err != nil {
+		return nil, fmt.Errorf("checking custom watchers against the key scope: %w", err)
+	}
+	for i, f := range filters {
+		in := len(f.Projects) > 0
+		for _, raw := range f.Projects {
+			id, err := uuid.Parse(raw)
+			if err != nil || !reached[id] {
+				in = false
+				break
+			}
+		}
+		out[i] = in
+	}
+	return out, nil
+}
+
 // ListCustomWatchers returns every custom_watchers row owned by userID.
 // Sort by created_at ASC so the original watcher appears first — matches
-// the existing pattern used for issue/project watchers.
+// the existing pattern used for issue/project watchers. A request by a key
+// sees only the filters inside its scope (watchersInKeyScope): a filter over
+// a project outside it, or over any project, stays stored and unshown.
 func (s *Store) ListCustomWatchers(ctx context.Context, userID uuid.UUID) ([]CustomWatcherDTO, error) {
 	rows, err := s.pool.Query(ctx, `
 SELECT id, name, filter, created_at
@@ -1639,7 +1722,24 @@ SELECT id, name, filter, created_at
 		}
 		out = append(out, dto)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	filters := make([]CustomWatcherFilter, len(out))
+	for i, w := range out {
+		filters[i] = w.Filter
+	}
+	in, err := s.watchersInKeyScope(ctx, userID, filters)
+	if err != nil {
+		return nil, err
+	}
+	shown := make([]CustomWatcherDTO, 0, len(out))
+	for i, w := range out {
+		if in[i] {
+			shown = append(shown, w)
+		}
+	}
+	return shown, nil
 }
 
 // AddCustomWatcher inserts a new custom_watchers row for userID. Enforces
@@ -1654,6 +1754,18 @@ func (s *Store) AddCustomWatcher(
 	userID uuid.UUID,
 	input CreateCustomWatcherInput,
 ) (*CustomWatcherDTO, error) {
+	if key := authz.ScopeFor(ctx, userID).KeyLimit(); key.Limits() {
+		if len(input.Filter.Projects) == 0 {
+			return nil, ErrWatcherAnyProjectNeedsScopeAll
+		}
+		in, err := s.watchersInKeyScope(ctx, userID, []CustomWatcherFilter{input.Filter})
+		if err != nil {
+			return nil, err
+		}
+		if !in[0] {
+			return nil, ErrWatcherProjectNotFound
+		}
+	}
 	filterBytes, err := json.Marshal(input.Filter)
 	if err != nil {
 		return nil, fmt.Errorf("encoding filter: %w", err)
@@ -1709,7 +1821,34 @@ RETURNING created_at`,
 // Returns ErrNotFound when the row doesn't exist or doesn't belong to
 // the caller — same masking semantics as MarkRead/Archive (we don't want
 // to leak the existence of other users' watchers).
+//
+// A key deletes only a filter inside its scope; one outside it answers
+// ErrNotFound and stays (US-3).
 func (s *Store) DeleteCustomWatcher(ctx context.Context, userID, watcherID uuid.UUID) error {
+	if authz.ScopeFor(ctx, userID).KeyLimit().Limits() {
+		var filterBytes []byte
+		err := s.pool.QueryRow(ctx, `SELECT filter FROM custom_watchers WHERE id = $1 AND user_id = $2`,
+			watcherID, userID).Scan(&filterBytes)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrNotFound
+		}
+		if err != nil {
+			return fmt.Errorf("reading custom watcher: %w", err)
+		}
+		var f CustomWatcherFilter
+		if len(filterBytes) > 0 {
+			if err := json.Unmarshal(filterBytes, &f); err != nil {
+				return fmt.Errorf("decoding custom watcher filter %s: %w", watcherID, err)
+			}
+		}
+		in, err := s.watchersInKeyScope(ctx, userID, []CustomWatcherFilter{f})
+		if err != nil {
+			return err
+		}
+		if !in[0] {
+			return ErrNotFound
+		}
+	}
 	tag, err := s.pool.Exec(ctx,
 		`DELETE FROM custom_watchers WHERE id = $1 AND user_id = $2`,
 		watcherID, userID)
