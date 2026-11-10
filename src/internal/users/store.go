@@ -94,7 +94,8 @@ var (
 	// ErrNotByAPIKey — INV-12, "MCP changes" (2): a call made with an API key
 	// (Actor.ByKey) asked for a change that only the web UI makes: an
 	// existing user's password, assigning or removing the instance admin
-	// role, deactivating an instance admin, creating an admin. Nothing is
+	// role, deactivating or reactivating an instance admin, creating an
+	// admin. Nothing is
 	// written. Wrapped with the field the refusal is about.
 	ErrNotByAPIKey = errors.New("not available with an API key; use the web UI")
 
@@ -1124,6 +1125,9 @@ func (s *Store) Reactivate(ctx context.Context, id uuid.UUID, actor Actor) error
 		old, err := loadUserInTx(ctx, tx, id)
 		if err != nil {
 			return err
+		}
+		if actor.ByKey && old.Role == "admin" {
+			return fmt.Errorf("%w: reactivating an instance admin", ErrNotByAPIKey)
 		}
 		if old.DeactivatedAt == nil {
 			return nil // already active

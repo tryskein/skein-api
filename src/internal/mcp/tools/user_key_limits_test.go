@@ -4,7 +4,8 @@ package tools
 // Reference — the spec, written before the code ("MCP changes" (2), INV-12,
 // INV-3): with an API key, skein_user update never changes an existing
 // user's password, never assigns or removes the instance admin role and
-// never deactivates an admin; skein_user create never creates an admin, and
+// never deactivates or reactivates an admin; skein_user create never
+// creates an admin, and
 // the initial password of a new user is allowed; deactivating an ordinary
 // user revokes his keys, and reactivating him does not bring them back.
 // Each refusal is asserted together with the unchanged stored state.
@@ -105,6 +106,18 @@ func TestUserKeyLimits(t *testing.T) {
 		refused(t, isErr, body)
 		if readUserRow(t, pool, target).deactivated {
 			t.Errorf("the admin is deactivated after the refusal")
+		}
+	})
+
+	t.Run("update does not reactivate an admin", func(t *testing.T) {
+		target, _ := seedUser(t, pool, "admin")
+		if _, err := pool.Exec(context.Background(), `UPDATE users SET deactivated_at = now() WHERE id = $1`, target); err != nil {
+			t.Fatalf("deactivate the admin in the database: %v", err)
+		}
+		isErr, body := callUser(t, update, ctx, map[string]any{"userId": target.String(), "deactivated": false})
+		refused(t, isErr, body)
+		if !readUserRow(t, pool, target).deactivated {
+			t.Errorf("the admin is active again after the refusal")
 		}
 	})
 

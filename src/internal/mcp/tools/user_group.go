@@ -85,7 +85,7 @@ func RegisterUser(s *server.MCPServer, store *users.Store, pool *pgxpool.Pool, s
 				"flip: deactivating cascades into API key revocation in the "+
 				"same transaction and is reversible with deactivated=false. "+
 				"An existing user's password, the instance admin role and an "+
-				"admin's deactivation are changed only in the web UI (`forbidden`). "+
+				"admin's deactivation or reactivation are changed only in the web UI (`forbidden`). "+
 				"action=\"space_add\" makes the user a member of a space at once "+
 				"(no invitation, no consent). "+
 				"Read-only actions: list.",
@@ -131,7 +131,7 @@ func RegisterUser(s *server.MCPServer, store *users.Store, pool *pgxpool.Pool, s
 			mcpgo.Description("Only read by space_add: short id of the space (skein_whoami lists the spaces)."),
 		),
 		mcpgo.WithBoolean("deactivated",
-			mcpgo.Description("Only read by update: true → soft-deactivate (cascades into API key revocation), false → reactivate (does not un-revoke the previous keys). When set, name/role/password are ignored. An instance admin is not deactivated here — only in the web UI (`forbidden`); a concurrent change after three attempts returns `concurrent_change` (retry)."),
+			mcpgo.Description("Only read by update: true → soft-deactivate (cascades into API key revocation), false → reactivate (does not un-revoke the previous keys). When set, name/role/password are ignored. An instance admin is neither deactivated nor reactivated here — only in the web UI (`forbidden`); a concurrent change after three attempts returns `concurrent_change` (retry)."),
 		),
 		mcpgo.WithBoolean("archived",
 			mcpgo.Description("Only read by list: list deactivated users instead of active ones. Default false."),
