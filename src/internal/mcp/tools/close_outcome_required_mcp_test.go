@@ -13,6 +13,7 @@ package tools
 
 import (
 	"context"
+	"skein-api/internal/issueops"
 	"strings"
 	"testing"
 )
@@ -256,7 +257,7 @@ func TestUpdateMCP_OutcomeRequiredSurvivesReopenRaceUnderForce(t *testing.T) {
 	corCloseWith(t, env, id, "wont_do")
 
 	reopenedVersion := 0
-	afterClosePrecheckHook = func(ctx context.Context, issueID string) {
+	issueops.AfterClosePrecheckHook = func(ctx context.Context, issueID string) {
 		if issueID != id {
 			return
 		}
@@ -268,7 +269,7 @@ func TestUpdateMCP_OutcomeRequiredSurvivesReopenRaceUnderForce(t *testing.T) {
 			t.Errorf("reopen inside the race window: %v", err)
 		}
 	}
-	t.Cleanup(func() { afterClosePrecheckHook = nil })
+	t.Cleanup(func() { issueops.AfterClosePrecheckHook = nil })
 
 	body := ucoUpdateAs(t, env, env.adminCtx, map[string]any{
 		"id": id, "expectedVersion": comRead(t, env, id).Version, "force": true,

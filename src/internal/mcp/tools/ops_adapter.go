@@ -18,3 +18,11 @@ func toolFailure(f *issueops.Failure) *mcpgo.CallToolResult {
 	}
 	return skmcp.ToolError(f.Code, f.Message, f.Fields)
 }
+
+// batchErrorFrom is the batch row error of f; nil for nil.
+func batchErrorFrom(f *issueops.Failure) *batchErrorDTO {
+	if f == nil {
+		return nil
+	}
+	return &batchErrorDTO{Code: f.Code, Message: f.Message, Details: f.Fields}
+}
