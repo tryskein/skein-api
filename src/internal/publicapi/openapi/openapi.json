@@ -9875,7 +9875,7 @@
         },
         "/api/v1/me/watch-filters/{filter}": {
             "delete": {
-                "description": "Deletes the subscription filter of the path — the same operation as the MCP tool skein_watchers, action filter_delete. A filter that is missing, another user's or outside the key's scope stays and is refused with the code MCP answers, 422 validation_error. Side effects: no event.",
+                "description": "Deletes the subscription filter of the path — the same operation as the MCP tool skein_watchers, action filter_delete. A filter that is missing, another user's or outside the key's scope stays and is 404 watch_filter_not_found (MCP answers validation_error). Side effects: no event.",
                 "operationId": "deleteWatchFilter",
                 "parameters": [
                     {
@@ -9941,7 +9941,7 @@
                         },
                         "description": "The key lacks write (code insufficient_scope)"
                     },
-                    "422": {
+                    "404": {
                         "content": {
                             "application/json": {
                                 "schema": {
@@ -9949,7 +9949,7 @@
                                 }
                             }
                         },
-                        "description": "No such filter of the caller within reach, or the id is not a UUID (code validation_error, as MCP)"
+                        "description": "No such filter of the caller within reach, or the id is not a UUID (code watch_filter_not_found)"
                     },
                     "429": {
                         "content": {
@@ -10494,7 +10494,7 @@
         },
         "/api/v1/notifications/{notification}/archive": {
             "post": {
-                "description": "Moves the notification of the path into the archive — the same operation as the MCP tool skein_notifications, action archive. A notification that is not the caller's, missing or outside the key's scope is refused with the code MCP answers, 422 validation_error. Side effects: the notification's archive time; no event.",
+                "description": "Moves the notification of the path into the archive — the same operation as the MCP tool skein_notifications, action archive. A notification that is not the caller's, missing or outside the key's scope is 404 notification_not_found (MCP answers validation_error). Side effects: the notification's archive time; no event.",
                 "operationId": "archiveNotification",
                 "parameters": [
                     {
@@ -10560,7 +10560,7 @@
                         },
                         "description": "The key lacks write (code insufficient_scope)"
                     },
-                    "422": {
+                    "404": {
                         "content": {
                             "application/json": {
                                 "schema": {
@@ -10568,7 +10568,7 @@
                                 }
                             }
                         },
-                        "description": "No such notification of the caller within reach, or the id is not a positive integer (code validation_error, as MCP)"
+                        "description": "No such notification of the caller within reach, or the id is not a positive integer (code notification_not_found)"
                     },
                     "429": {
                         "content": {
@@ -10616,7 +10616,7 @@
         },
         "/api/v1/notifications/{notification}/read": {
             "post": {
-                "description": "Marks the notification of the path read — the same operation as the MCP tool skein_notifications, action mark_read. A notification that is not the caller's, missing or outside the key's scope is refused with the code MCP answers, 422 validation_error. Side effects: the notification's read time; no event.",
+                "description": "Marks the notification of the path read — the same operation as the MCP tool skein_notifications, action mark_read. A notification that is not the caller's, missing or outside the key's scope is 404 notification_not_found (MCP answers validation_error). Side effects: the notification's read time; no event.",
                 "operationId": "markNotificationRead",
                 "parameters": [
                     {
@@ -10682,7 +10682,7 @@
                         },
                         "description": "The key lacks write (code insufficient_scope)"
                     },
-                    "422": {
+                    "404": {
                         "content": {
                             "application/json": {
                                 "schema": {
@@ -10690,7 +10690,7 @@
                                 }
                             }
                         },
-                        "description": "No such notification of the caller within reach, or the id is not a positive integer (code validation_error, as MCP)"
+                        "description": "No such notification of the caller within reach, or the id is not a positive integer (code notification_not_found)"
                     },
                     "429": {
                         "content": {

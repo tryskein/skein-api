@@ -150,7 +150,7 @@ func TestErrCodes_ClassAndTransience(t *testing.T) {
 		"user_not_found": nf, "member_not_found": nf, "space_not_found": nf,
 		"attachment_not_found": nf, "repo_not_found": nf, "dependency_not_found": nf,
 		"reminder_not_found": nf, "comment_not_found": nf, "monitor_not_found": nf,
-		"component_not_found": nf,
+		"component_not_found": nf, "notification_not_found": nf, "watch_filter_not_found": nf,
 		// No operation of the public API has the path (404).
 		"route_not_found": nf,
 		// Transport refusals of the public API: method (405), body over

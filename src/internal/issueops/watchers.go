@@ -21,6 +21,11 @@ import (
 
 const watchersTool = "skein_watchers"
 
+// MsgWatchFilterNotFound is the message of the validation_error MCP answers
+// for a filter that is not the caller's within reach; the public API
+// answers it as watch_filter_not_found of its path.
+const MsgWatchFilterNotFound = "custom watcher not found"
+
 // watchIssueArg is the checked issueId of watch and unwatch, and the gate:
 // the issue must be visible to the caller.
 func watchIssueArg(ctx context.Context, d Deps, userID uuid.UUID, a Args) (string, *Failure) {
@@ -241,7 +246,7 @@ func DeleteWatchFilter(ctx context.Context, d Deps, userID uuid.UUID, a Args) (u
 	}
 	if err := d.Notifications.DeleteCustomWatcher(ctx, userID, watcherID); err != nil {
 		if errors.Is(err, notifications.ErrNotFound) {
-			return uuid.Nil, Fail(ErrCodeValidationError, "custom watcher not found", map[string]any{"filterId": rawID})
+			return uuid.Nil, Fail(ErrCodeValidationError, MsgWatchFilterNotFound, map[string]any{"filterId": rawID})
 		}
 		slog.ErrorContext(ctx, logMessage(ctx, "error"),
 			"tool", watchersTool, "action", "filter_delete", "userId", userID.String(),

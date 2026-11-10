@@ -25,6 +25,11 @@ var (
 	// component of the project (MCP names a component by argument and
 	// answers validation_error).
 	ComponentNotFound = define("component_not_found", ClassNotFound, Permanent)
+	// NotificationNotFound and WatchFilterNotFound — the {notification} or
+	// the {filter} of a public API path is not the caller's within reach
+	// (MCP names them by argument and answers validation_error).
+	NotificationNotFound = define("notification_not_found", ClassNotFound, Permanent)
+	WatchFilterNotFound  = define("watch_filter_not_found", ClassNotFound, Permanent)
 	// RouteNotFound — no operation of the public API has this path.
 	RouteNotFound = define("route_not_found", ClassNotFound, Permanent)
 

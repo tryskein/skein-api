@@ -17,7 +17,9 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 
+	"skein-api/internal/errcode"
 	"skein-api/internal/issueops"
 	"skein-api/internal/notifications"
 	"skein-api/internal/spaces"
@@ -202,13 +204,31 @@ func kindArgs(w http.ResponseWriter, r *http.Request) bool {
 
 // pathNotification is the {notification} of the path as the operation's
 // notificationId (a JSON number, as MCP takes it); a value that is not a
-// positive integer is refused as MCP refuses it.
-func pathNotification(r *http.Request) issueops.Args {
+// positive integer names no notification (404 notification_not_found).
+func pathNotification(w http.ResponseWriter, r *http.Request) (issueops.Args, bool) {
 	raw := chi.URLParam(r, "notification")
-	if n, err := strconv.ParseInt(raw, 10, 64); err == nil {
-		return issueops.Args{"notificationId": float64(n)}
+	if n, err := strconv.ParseInt(raw, 10, 64); err == nil && n > 0 {
+		return issueops.Args{"notificationId": float64(n)}, true
 	}
-	return issueops.Args{"notificationId": raw}
+	writeNotFoundOfPath(w, errcode.NotificationNotFound, "notification does not exist or is not yours", "notificationId", raw)
+	return nil, false
+}
+
+// writeNotFoundOfPath answers the object of the path as missing with code.
+func writeNotFoundOfPath(w http.ResponseWriter, code errcode.Code, detail, key string, id any) {
+	WriteProblem(w, Problem{Code: code, Origin: OriginPath, Detail: detail, Extensions: map[string]any{key: id}})
+}
+
+// pathRefusal answers a refusal of an operation on the {notification} or
+// the {filter} of the path: MCP's validation_error for one not the
+// caller's within reach is, for the object of the path, its not-found code
+// (decision of the lead 01a1c6d3; MCP is unchanged).
+func pathRefusal(w http.ResponseWriter, f *issueops.Failure, notFoundMsg string, code errcode.Code, key string, id any) {
+	if f.Code == errcode.ValidationError.String() && f.Message == notFoundMsg {
+		writeNotFoundOfPath(w, code, "the object does not exist or is not yours", key, id)
+		return
+	}
+	writeFailure(w, f)
 }
 
 // listNotifications reads a page of the caller's notifications.
@@ -272,7 +292,7 @@ func (a *issueWrites) listNotifications(w http.ResponseWriter, r *http.Request) 
 // markNotificationRead marks one notification read.
 //
 // @Summary Mark a notification read
-// @Description Marks the notification of the path read — the same operation as the MCP tool skein_notifications, action mark_read. A notification that is not the caller's, missing or outside the key's scope is refused with the code MCP answers, 422 validation_error. Side effects: the notification's read time; no event.
+// @Description Marks the notification of the path read — the same operation as the MCP tool skein_notifications, action mark_read. A notification that is not the caller's, missing or outside the key's scope is 404 notification_not_found (MCP answers validation_error). Side effects: the notification's read time; no event.
 // @Tags Me
 // @Accept json
 // @Produce json
@@ -283,18 +303,22 @@ func (a *issueWrites) listNotifications(w http.ResponseWriter, r *http.Request) 
 // @Failure 400 {object} ProblemDocument "Malformed body, unknown field or parameter, a kind outside directed|autonomous (code validation_error)"
 // @Failure 401 {object} ProblemDocument "No key, or the key is invalid, expired or revoked (code unauthenticated)"
 // @Failure 403 {object} ProblemDocument "The key lacks write (code insufficient_scope)"
-// @Failure 422 {object} ProblemDocument "No such notification of the caller within reach, or the id is not a positive integer (code validation_error, as MCP)"
+// @Failure 404 {object} ProblemDocument "No such notification of the caller within reach, or the id is not a positive integer (code notification_not_found)"
 // @Failure 429 {object} ProblemDocument "Rate limited (code rate_limited, Retry-After)"
 // @Failure 500 {object} ProblemDocument "Internal error (code internal_error)"
 // @Failure 503 {object} ProblemDocument "The database is unavailable (code database_unavailable)"
 // @Router /api/v1/notifications/{notification}/read [post]
 // @ID markNotificationRead
 func (a *issueWrites) markNotificationRead(w http.ResponseWriter, r *http.Request) {
-	if !CheckQuery(w, r) || !kindArgs(w, r) {
+	if !CheckQuery(w, r) {
 		return
 	}
-	if f := issueops.MarkNotificationRead(r.Context(), a.ops, callerOf(r), pathNotification(r)); f != nil {
-		writeFailure(w, f)
+	args, ok := pathNotification(w, r)
+	if !ok || !kindArgs(w, r) {
+		return
+	}
+	if f := issueops.MarkNotificationRead(r.Context(), a.ops, callerOf(r), args); f != nil {
+		pathRefusal(w, f, issueops.MsgNotificationNotFound, errcode.NotificationNotFound, "notificationId", args["notificationId"])
 		return
 	}
 	WriteJSON(w, r, http.StatusOK, NotificationsMarked{Updated: 1})
@@ -340,7 +364,7 @@ func (a *issueWrites) markAllNotificationsRead(w http.ResponseWriter, r *http.Re
 // archiveNotification archives one notification.
 //
 // @Summary Archive a notification
-// @Description Moves the notification of the path into the archive — the same operation as the MCP tool skein_notifications, action archive. A notification that is not the caller's, missing or outside the key's scope is refused with the code MCP answers, 422 validation_error. Side effects: the notification's archive time; no event.
+// @Description Moves the notification of the path into the archive — the same operation as the MCP tool skein_notifications, action archive. A notification that is not the caller's, missing or outside the key's scope is 404 notification_not_found (MCP answers validation_error). Side effects: the notification's archive time; no event.
 // @Tags Me
 // @Accept json
 // @Produce json
@@ -351,19 +375,23 @@ func (a *issueWrites) markAllNotificationsRead(w http.ResponseWriter, r *http.Re
 // @Failure 400 {object} ProblemDocument "Malformed body, unknown field or parameter, a kind outside directed|autonomous (code validation_error)"
 // @Failure 401 {object} ProblemDocument "No key, or the key is invalid, expired or revoked (code unauthenticated)"
 // @Failure 403 {object} ProblemDocument "The key lacks write (code insufficient_scope)"
-// @Failure 422 {object} ProblemDocument "No such notification of the caller within reach, or the id is not a positive integer (code validation_error, as MCP)"
+// @Failure 404 {object} ProblemDocument "No such notification of the caller within reach, or the id is not a positive integer (code notification_not_found)"
 // @Failure 429 {object} ProblemDocument "Rate limited (code rate_limited, Retry-After)"
 // @Failure 500 {object} ProblemDocument "Internal error (code internal_error)"
 // @Failure 503 {object} ProblemDocument "The database is unavailable (code database_unavailable)"
 // @Router /api/v1/notifications/{notification}/archive [post]
 // @ID archiveNotification
 func (a *issueWrites) archiveNotification(w http.ResponseWriter, r *http.Request) {
-	if !CheckQuery(w, r) || !kindArgs(w, r) {
+	if !CheckQuery(w, r) {
 		return
 	}
-	id, f := issueops.ArchiveNotification(r.Context(), a.ops, callerOf(r), pathNotification(r))
+	args, ok := pathNotification(w, r)
+	if !ok || !kindArgs(w, r) {
+		return
+	}
+	id, f := issueops.ArchiveNotification(r.Context(), a.ops, callerOf(r), args)
 	if f != nil {
-		writeFailure(w, f)
+		pathRefusal(w, f, issueops.MsgNotificationNotFound, errcode.NotificationNotFound, "notificationId", args["notificationId"])
 		return
 	}
 	WriteJSON(w, r, http.StatusOK, NotificationArchived{ID: id, Archived: true})
@@ -757,7 +785,7 @@ func (a *issueWrites) createWatchFilter(w http.ResponseWriter, r *http.Request) 
 // deleteWatchFilter deletes a subscription filter.
 //
 // @Summary Delete a subscription filter
-// @Description Deletes the subscription filter of the path — the same operation as the MCP tool skein_watchers, action filter_delete. A filter that is missing, another user's or outside the key's scope stays and is refused with the code MCP answers, 422 validation_error. Side effects: no event.
+// @Description Deletes the subscription filter of the path — the same operation as the MCP tool skein_watchers, action filter_delete. A filter that is missing, another user's or outside the key's scope stays and is 404 watch_filter_not_found (MCP answers validation_error). Side effects: no event.
 // @Tags Me
 // @Accept json
 // @Produce json
@@ -768,19 +796,27 @@ func (a *issueWrites) createWatchFilter(w http.ResponseWriter, r *http.Request) 
 // @Failure 400 {object} ProblemDocument "Malformed body, unknown field or parameter, a kind outside directed|autonomous (code validation_error)"
 // @Failure 401 {object} ProblemDocument "No key, or the key is invalid, expired or revoked (code unauthenticated)"
 // @Failure 403 {object} ProblemDocument "The key lacks write (code insufficient_scope)"
-// @Failure 422 {object} ProblemDocument "No such filter of the caller within reach, or the id is not a UUID (code validation_error, as MCP)"
+// @Failure 404 {object} ProblemDocument "No such filter of the caller within reach, or the id is not a UUID (code watch_filter_not_found)"
 // @Failure 429 {object} ProblemDocument "Rate limited (code rate_limited, Retry-After)"
 // @Failure 500 {object} ProblemDocument "Internal error (code internal_error)"
 // @Failure 503 {object} ProblemDocument "The database is unavailable (code database_unavailable)"
 // @Router /api/v1/me/watch-filters/{filter} [delete]
 // @ID deleteWatchFilter
 func (a *issueWrites) deleteWatchFilter(w http.ResponseWriter, r *http.Request) {
-	if !CheckQuery(w, r) || !kindArgs(w, r) {
+	if !CheckQuery(w, r) {
 		return
 	}
-	id, f := issueops.DeleteWatchFilter(r.Context(), a.ops, callerOf(r), issueops.Args{"filterId": chi.URLParam(r, "filter")})
+	raw := strings.TrimSpace(chi.URLParam(r, "filter"))
+	if _, err := uuid.Parse(raw); err != nil {
+		writeNotFoundOfPath(w, errcode.WatchFilterNotFound, "filter does not exist or is not yours", "filterId", raw)
+		return
+	}
+	if !kindArgs(w, r) {
+		return
+	}
+	id, f := issueops.DeleteWatchFilter(r.Context(), a.ops, callerOf(r), issueops.Args{"filterId": raw})
 	if f != nil {
-		writeFailure(w, f)
+		pathRefusal(w, f, issueops.MsgWatchFilterNotFound, errcode.WatchFilterNotFound, "filterId", raw)
 		return
 	}
 	WriteJSON(w, r, http.StatusOK, WatchFilterDeleted{ID: id.String(), Deleted: true})

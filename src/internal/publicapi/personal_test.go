@@ -153,9 +153,9 @@ func TestPersonal_WritesChangeOnlyInsideTheScope(t *testing.T) {
 		missing := rg.rest(kp, http.MethodDelete, "/api/v1/me/watch-filters/"+uuid.NewString(), nil, nil)
 		for name, id := range map[string]string{"over Q": overQ, "over any project": anyProject} {
 			got := rg.rest(kp, http.MethodDelete, "/api/v1/me/watch-filters/"+id, nil, nil)
-			// MCP answers a missing filter validation_error; the code is
-			// the same on both channels (INV-4).
-			wantSameAnswer(t, "deleteWatchFilter "+name, got, missing, http.StatusUnprocessableEntity, "validation_error")
+			// The filter of the path: 404 watch_filter_not_found (decision of
+			// the lead 01a1c6d3), as for a missing one.
+			wantSameAnswer(t, "deleteWatchFilter "+name, got, missing, http.StatusNotFound, "watch_filter_not_found")
 			if !w.filterExists(id) {
 				t.Errorf("filter %s was deleted by a key of scope P", name)
 			}
@@ -321,11 +321,6 @@ func TestPersonal_ParityWithMCP(t *testing.T) {
 		}, func() toolAnswer {
 			return rg.tool(key, "skein_notifications", map[string]any{"action": "mark_read", "notificationId": w.notification(w.project, w.pIssue, "")})
 		}, ""},
-		{"markNotificationRead of a missing one", func() restCall {
-			return rg.rest(key, http.MethodPost, "/api/v1/notifications/999999999/read", nil, nil)
-		}, func() toolAnswer {
-			return rg.tool(key, "skein_notifications", map[string]any{"action": "mark_read", "notificationId": 999999999})
-		}, "validation_error"},
 		{"archiveNotification", func() restCall {
 			return rg.rest(key, http.MethodPost, "/api/v1/notifications/"+strconv.FormatInt(w.notification(w.project, w.pIssue, ""), 10)+"/archive", nil, nil)
 		}, func() toolAnswer {
@@ -417,4 +412,39 @@ func TestPersonal_ParityWithMCP(t *testing.T) {
 			t.Errorf("limit 101: %d, want 400 (no clamping)", c.status)
 		}
 	})
+}
+
+// TestPersonal_ObjectsOfThePath — decision of the lead 01a1c6d3 (spec
+// «Codes»: an object of the path that does not exist or is outside the
+// key's scope — 404). A notification and a filter of the path that are
+// missing, outside the key's scope or malformed answer one 404 with their
+// own code, and nothing changes; MCP keeps validation_error for them. Red
+// when one of them answers anything else or the codes differ.
+func TestPersonal_ObjectsOfThePath(t *testing.T) {
+	rg, w := seedPersonalWorld(t)
+	kp := projectsKey(t, w.pool, w.owner, apikeys.LevelWrite, w.project)
+	inQ := w.notification(w.q, w.qIssue, "")
+	overQ := w.filter("over Q", notifications.CustomWatcherFilter{Projects: []string{w.q.String()}})
+	for _, c := range []struct {
+		name, method, path, code string
+	}{
+		{"markNotificationRead outside the scope", http.MethodPost, "/api/v1/notifications/" + strconv.FormatInt(inQ, 10) + "/read", "notification_not_found"},
+		{"markNotificationRead of a missing one", http.MethodPost, "/api/v1/notifications/999999999/read", "notification_not_found"},
+		{"markNotificationRead of a malformed id", http.MethodPost, "/api/v1/notifications/abc/read", "notification_not_found"},
+		{"archiveNotification outside the scope", http.MethodPost, "/api/v1/notifications/" + strconv.FormatInt(inQ, 10) + "/archive", "notification_not_found"},
+		{"archiveNotification of a missing one", http.MethodPost, "/api/v1/notifications/999999999/archive", "notification_not_found"},
+		{"deleteWatchFilter outside the scope", http.MethodDelete, "/api/v1/me/watch-filters/" + overQ, "watch_filter_not_found"},
+		{"deleteWatchFilter of a missing one", http.MethodDelete, "/api/v1/me/watch-filters/" + uuid.NewString(), "watch_filter_not_found"},
+		{"deleteWatchFilter of a malformed id", http.MethodDelete, "/api/v1/me/watch-filters/abc", "watch_filter_not_found"},
+	} {
+		if got := rg.rest(kp, c.method, c.path, nil, nil); got.status != http.StatusNotFound || got.code() != c.code {
+			t.Errorf("%s: %d %s, want 404 %s", c.name, got.status, got.body, c.code)
+		}
+	}
+	if w.read(inQ) || !w.filterExists(overQ) {
+		t.Errorf("a refused request changed Q's state: read %v, filter kept %v", w.read(inQ), w.filterExists(overQ))
+	}
+	if ref := rg.tool(kp, "skein_notifications", map[string]any{"action": "mark_read", "notificationId": 999999999}); ref.code != "validation_error" {
+		t.Errorf("MCP mark_read of a missing notification = %q, want validation_error (unchanged)", ref.code)
+	}
 }

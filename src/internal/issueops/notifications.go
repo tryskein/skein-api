@@ -21,6 +21,11 @@ import (
 
 const notificationsTool = "skein_notifications"
 
+// MsgNotificationNotFound is the message of the validation_error MCP
+// answers for a notification that is not the caller's within reach; the
+// public API answers it as notification_not_found of its path.
+const MsgNotificationNotFound = "notification not found"
+
 // InboxResult is a page of the caller's notifications and, on the first
 // page of a live scope, the invitations to him.
 type InboxResult struct {
@@ -145,7 +150,7 @@ func MarkNotificationRead(ctx context.Context, d Deps, userID uuid.UUID, a Args)
 	}
 	if err := d.Notifications.MarkRead(ctx, id, userID); err != nil {
 		if errors.Is(err, notifications.ErrNotFound) {
-			return Fail(ErrCodeValidationError, "notification not found", map[string]any{"notificationId": id})
+			return Fail(ErrCodeValidationError, MsgNotificationNotFound, map[string]any{"notificationId": id})
 		}
 		slog.ErrorContext(ctx, logMessage(ctx, "error"),
 			"tool", notificationsTool, "action", "mark_read",
@@ -279,7 +284,7 @@ func ArchiveNotification(ctx context.Context, d Deps, userID uuid.UUID, a Args) 
 	}
 	if err := d.Notifications.Archive(ctx, id, userID); err != nil {
 		if errors.Is(err, notifications.ErrNotFound) {
-			return 0, Fail(ErrCodeValidationError, "notification not found", map[string]any{"notificationId": id})
+			return 0, Fail(ErrCodeValidationError, MsgNotificationNotFound, map[string]any{"notificationId": id})
 		}
 		slog.ErrorContext(ctx, logMessage(ctx, "error"),
 			"tool", notificationsTool, "action", "archive",
