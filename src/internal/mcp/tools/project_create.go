@@ -13,6 +13,8 @@ import (
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 
+	"skein-api/internal/apikeys"
+	"skein-api/internal/auth"
 	skmcp "skein-api/internal/mcp"
 	"skein-api/internal/projects"
 	"skein-api/internal/spaces"
@@ -218,7 +220,14 @@ func handleProjectCreate(pool *pgxpool.Pool, projectsStore *projects.Store, defa
 			return skmcp.ToolError(ErrCodeValidationError, "visibility must be space or members",
 				map[string]any{"field": "visibility"}), nil
 		}
-		space, err := spaces.ChooseForProject(ctx, pool, userID, strings.TrimSpace(req.GetString("space", "")))
+		// A key limited to spaces creates projects only in them (INV-2,
+		// createProject "inside the chosen spaces"); the key-rights
+		// middleware already refused a key limited to projects.
+		var within []uuid.UUID
+		if g, ok := auth.KeyGrantFrom(ctx); ok && g.Scope.Mode == apikeys.ScopeSpaces {
+			within = append([]uuid.UUID{}, g.Scope.Spaces...)
+		}
+		space, err := spaces.ChooseForProjectWithin(ctx, pool, userID, strings.TrimSpace(req.GetString("space", "")), within)
 		if err != nil {
 			if res, ok := spacesToolError(err); ok {
 				return res, nil

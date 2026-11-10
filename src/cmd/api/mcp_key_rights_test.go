@@ -16,6 +16,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -286,6 +287,117 @@ func TestMCPKeyRights_OutsideTheScopeBeforeTheRole(t *testing.T) {
 		}
 		if code, _ := toolErr(t, inQ); code == "forbidden" {
 			t.Errorf("skein_comment_update in Q = forbidden: the authorship check revealed the comment")
+		}
+	})
+}
+
+// TestMCPKeyRights_CreateProjectInsideTheKeysSpaces — review C4-01 (INV-2,
+// createProject "manage, scope spaces or all, inside the chosen spaces"): a
+// key limited to spaces creates a project only in its spaces. A space
+// outside them answers as one the owner does not see, is never picked and
+// is never listed in space_required. uAB is a participant of A, of B and of
+// his own Personal.
+func TestMCPKeyRights_CreateProjectInsideTheKeysSpaces(t *testing.T) {
+	s := newParityStack(t)
+	f := s.f
+	ctx := context.Background()
+	shortOf := func(id uuid.UUID) string {
+		var short string
+		if err := s.pool.QueryRow(ctx, `SELECT short_id FROM spaces WHERE id = $1`, id).Scan(&short); err != nil {
+			t.Fatalf("short id of space %s: %v", id, err)
+		}
+		return short
+	}
+	aShort, bShort := shortOf(f.SpaceA), shortOf(f.SpaceB)
+	personalShort := shortOf(f.PersonalSpace[testsupport.ActorBoth])
+	spacesKey := func(ids ...uuid.UUID) apikeys.Grant {
+		return apikeys.Grant{Level: apikeys.LevelManage, Scope: apikeys.Scope{Mode: apikeys.ScopeSpaces, Spaces: ids}}
+	}
+	newPrefix := func() string { return "c401" + strings.ReplaceAll(uuid.NewString()[:6], "-", "") }
+	spaceOfProject := func(prefix string) (uuid.UUID, bool) {
+		var space uuid.UUID
+		err := s.pool.QueryRow(ctx, `SELECT space_id FROM projects WHERE id_prefix = $1`, prefix).Scan(&space)
+		if err != nil {
+			return uuid.Nil, false
+		}
+		return space, true
+	}
+	forgetPrefix := func(prefix string) {
+		t.Cleanup(func() {
+			c := context.Background()
+			var id uuid.UUID
+			if err := s.pool.QueryRow(c, `SELECT id FROM projects WHERE id_prefix = $1`, prefix).Scan(&id); err != nil {
+				return
+			}
+			for _, q := range []string{
+				`DELETE FROM events WHERE project_id = $1`,
+				`DELETE FROM project_members WHERE project_id = $1`,
+				`DELETE FROM project_counters WHERE project_id = $1`,
+				`DELETE FROM projects WHERE id = $1`,
+			} {
+				_, _ = s.pool.Exec(c, q, id)
+			}
+		})
+	}
+
+	t.Run("a named space outside the key: as a nonexistent one, nothing created", func(t *testing.T) {
+		k := mintGrantKey(t, s, testsupport.ActorBoth, spacesKey(f.SpaceA))
+		prefix := newPrefix()
+		forgetPrefix(prefix)
+		outside := k.tool(t, "skein_project_create", map[string]any{"name": prefix, "idPrefix": prefix, "space": bShort})
+		none := k.tool(t, "skein_project_create", map[string]any{"name": prefix, "idPrefix": prefix, "space": "aaaaaaaa"})
+		if !outside.isError || errShape(t, []byte(outside.text)) != errShape(t, []byte(none.text)) {
+			t.Errorf("create in B with a key of A = %s, want the answer for a nonexistent space %s", outside.text, none.text)
+		}
+		if code, _ := toolErr(t, outside); code != "space_not_found" {
+			t.Errorf("create in B with a key of A = %s, want space_not_found", code)
+		}
+		if _, created := spaceOfProject(prefix); created {
+			t.Errorf("a project %s was created outside the key's spaces", prefix)
+		}
+	})
+
+	t.Run("no space named: the only space of the key is picked", func(t *testing.T) {
+		k := mintGrantKey(t, s, testsupport.ActorBoth, spacesKey(f.SpaceA))
+		prefix := newPrefix()
+		forgetPrefix(prefix)
+		res := k.tool(t, "skein_project_create", map[string]any{"name": prefix, "idPrefix": prefix})
+		if res.isError {
+			t.Fatalf("create without space with a key of A: %s", res.text)
+		}
+		if got, ok := spaceOfProject(prefix); !ok || got != f.SpaceA {
+			t.Errorf("project %s went to space %s, want A %s", prefix, got, f.SpaceA)
+		}
+	})
+
+	t.Run("space_required lists only the key's spaces", func(t *testing.T) {
+		k := mintGrantKey(t, s, testsupport.ActorBoth, spacesKey(f.SpaceA, f.SpaceB))
+		prefix := newPrefix()
+		forgetPrefix(prefix)
+		res := k.tool(t, "skein_project_create", map[string]any{"name": prefix, "idPrefix": prefix})
+		if code, _ := toolErr(t, res); code != "space_required" {
+			t.Fatalf("create without space with a key of A and B = %s, want space_required", res.text)
+		}
+		var body struct {
+			Spaces []struct {
+				ID string `json:"id"`
+			} `json:"spaces"`
+		}
+		if err := json.Unmarshal([]byte(res.text), &body); err != nil {
+			t.Fatalf("decode %s: %v", res.text, err)
+		}
+		listed := map[string]bool{}
+		for _, sp := range body.Spaces {
+			listed[sp.ID] = true
+		}
+		if !listed[aShort] || !listed[bShort] || len(listed) != 2 {
+			t.Errorf("space_required lists %v, want exactly A %s and B %s", body.Spaces, aShort, bShort)
+		}
+		if listed[personalShort] {
+			t.Errorf("space_required lists the Personal %s, outside the key's spaces", personalShort)
+		}
+		if _, created := spaceOfProject(prefix); created {
+			t.Errorf("a project %s was created on space_required", prefix)
 		}
 	})
 }

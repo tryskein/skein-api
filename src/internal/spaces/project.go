@@ -40,6 +40,16 @@ type ChosenSpace struct {
 //
 // q is a pool or a transaction.
 func ChooseForProject(ctx context.Context, q querier, caller uuid.UUID, short string) (ChosenSpace, error) {
+	return ChooseForProjectWithin(ctx, q, caller, short, nil)
+}
+
+// ChooseForProjectWithin is ChooseForProject limited to the spaces of
+// within — the scope of an API key limited to spaces (INV-2: a key writes
+// only inside its scope). A space outside within is as one the caller does
+// not see: named, it is space_not_found; it is never picked and never
+// listed in space_required. A nil within is no limit; a non-nil empty one
+// leaves no space.
+func ChooseForProjectWithin(ctx context.Context, q querier, caller uuid.UUID, short string, within []uuid.UUID) (ChosenSpace, error) {
 	var external bool
 	err := q.QueryRow(ctx, `SELECT is_external FROM users WHERE id = $1`, caller).Scan(&external)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -55,6 +65,19 @@ func ChooseForProject(ctx context.Context, q querier, caller uuid.UUID, short st
 	rows, err := seenSpaces(ctx, q, caller, "")
 	if err != nil {
 		return ChosenSpace{}, err
+	}
+	if within != nil {
+		allowed := make(map[uuid.UUID]bool, len(within))
+		for _, id := range within {
+			allowed[id] = true
+		}
+		kept := rows[:0:0]
+		for _, r := range rows {
+			if allowed[r.ID] {
+				kept = append(kept, r)
+			}
+		}
+		rows = kept
 	}
 	if short != "" {
 		for _, r := range rows {
