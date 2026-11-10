@@ -76,6 +76,13 @@ object exists. A missing role of the owner is 403 with the code of the role
 key's scope behaves as an object of a project the owner cannot see: 404 when
 the path names it, absent from every list, search and count.
 
+The scope holds for writes as well: a write by key changes only objects
+inside it. `markAllNotificationsRead` and `markWatchingCardRead` mark only the
+notifications of issues inside the scope, the others stay unread; a
+subscription filter over a project outside the scope is neither listed nor
+deleted (404 `watch_filter_not_found`), and a filter over any project (no
+project list) needs a key of scope all (otherwise 403 `forbidden`).
+
 ### The matrix
 
 The right of each operation is the scope of its security requirement in the
@@ -190,6 +197,10 @@ keys.
 - `ETag` validates the version, not the representation: some fields (labels,
   the review flag, counters) change without a new version, and no 304 is ever
   answered.
+- Projects and components have no version: `updateProject`,
+  `updateComponent` and `archiveComponent` take no `If-Match`, and the last
+  write wins. Read the resource again before changing it if another client
+  may write it too.
 - Batches carry the expected version in each item; a conflict is that item's
   `version_conflict` in the 207 answer.
 
