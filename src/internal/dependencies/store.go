@@ -1282,6 +1282,13 @@ func (s *Store) ListReady(
         )`, addArg(*filters.ComponentID)))
 	}
 
+	if a := filters.After; a != nil {
+		pr, up, id := addArg(a.Priority), addArg(a.UpdatedAt), addArg(a.ID)
+		clauses = append(clauses, fmt.Sprintf(`(i.priority > %[1]s
+            OR (i.priority = %[1]s AND (i.updated_at < %[2]s
+                OR (i.updated_at = %[2]s AND i.id > %[3]s))))`, pr, up, id))
+	}
+
 	limitArg := addArg(limit)
 	// sk-35: parent_id column is frozen; derive parent from the
 	// canonical parent-child dep edge (first by created_at). The reader is
@@ -1304,7 +1311,7 @@ SELECT i.id, i.project_id,
        i.created_at, i.updated_at
   FROM issues i
  WHERE %s
- ORDER BY i.priority ASC, i.updated_at DESC
+ ORDER BY i.priority ASC, i.updated_at DESC, i.id ASC
  LIMIT %s`, joinAnd(clauses), limitArg)
 
 	rows, err := s.pool.Query(ctx, sql, args...)

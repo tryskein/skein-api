@@ -164,6 +164,61 @@ func TestIssuesRead_ParityWithMCP(t *testing.T) {
 		}
 	})
 
+	// listReadyIssues is a keyset list (R7-09): pages of one issue, followed
+	// by nextCursor, give the whole list in its order, ties included.
+	t.Run("listReadyIssues pages", func(t *testing.T) {
+		tied := []string{}
+		for i := 0; i < 3; i++ {
+			tied = append(tied, testsupport.SeedIssue(t, pool, w.p, w.owner, w.pPrefix+"-"+strconv.Itoa(50+i), "tied "+w.word, "open", 4))
+		}
+		if _, err := pool.Exec(context.Background(), `UPDATE issues SET updated_at = '2026-01-01T00:00:00Z' WHERE id = ANY($1)`, tied); err != nil {
+			t.Fatalf("tie updated_at: %v", err)
+		}
+		ordered := func(items any) []string {
+			out := []string{}
+			list, _ := items.([]any)
+			for _, it := range list {
+				m, _ := it.(map[string]any)
+				id, _ := m["id"].(string)
+				out = append(out, id)
+			}
+			return out
+		}
+		base := "/api/v1/issues/ready?project=" + w.pPrefix
+		full := rg.rest(w.all, http.MethodGet, base+"&limit=100", nil, nil)
+		wantOK(t, "listReadyIssues", full, http.StatusOK)
+		want := ordered(full.json(t)["items"])
+		if full.json(t)["hasMore"] != false || full.json(t)["nextCursor"] != nil {
+			t.Errorf("the whole list: hasMore %v, nextCursor %v", full.json(t)["hasMore"], full.json(t)["nextCursor"])
+		}
+		got := []string{}
+		cursor := ""
+		for page := 0; page <= len(want); page++ {
+			path := base + "&limit=1"
+			if cursor != "" {
+				path += "&cursor=" + url.QueryEscape(cursor)
+			}
+			a := rg.rest(w.all, http.MethodGet, path, nil, nil)
+			wantOK(t, "listReadyIssues page", a, http.StatusOK)
+			body := a.json(t)
+			got = append(got, ordered(body["items"])...)
+			next, _ := body["nextCursor"].(string)
+			if (body["hasMore"] == true) != (next != "") {
+				t.Fatalf("page %d: hasMore %v with nextCursor %q", page, body["hasMore"], next)
+			}
+			if next == "" {
+				break
+			}
+			cursor = next
+		}
+		if !slices.Equal(got, want) || len(want) < 4 {
+			t.Errorf("paged %v, whole %v", got, want)
+		}
+		if a := rg.rest(w.all, http.MethodGet, base+"&cursor=not-a-cursor", nil, nil); a.status != http.StatusBadRequest {
+			t.Errorf("a foreign cursor: %d %s, want 400", a.status, a.body)
+		}
+	})
+
 	t.Run("getIssue", func(t *testing.T) {
 		rest := rg.rest(w.all, http.MethodGet, "/api/v1/issues/"+w.a, nil, nil)
 		mcp := rg.tool(w.all, "skein_show", map[string]any{"id": w.a, "includeComments": false})

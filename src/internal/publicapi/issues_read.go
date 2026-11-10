@@ -471,10 +471,18 @@ func (a *issuesAPI) projectListArgs(q *query, f listIssuesFilters) (issues.ListI
 	return args, !q.bad
 }
 
+// readyCursor is the keyset position of a page of listReadyIssues: the last
+// row's priority, updated_at and id.
+type readyCursor struct {
+	Priority  int       `json:"p"`
+	UpdatedAt time.Time `json:"u"`
+	ID        string    `json:"i"`
+}
+
 // listReadyIssues lists the unblocked open issues of a project.
 //
 // @Summary List ready issues
-// @Description Returns the open issues of a project that nothing blocks — no open blocks or waits-for edge, counting the blockers the caller cannot see (US-3) — by priority, then age: the same list as the MCP tool skein_ready. It is not paged: up to limit issues; hasMore is true when more ready issues exist (raise limit), nextCursor is always null. Read-only.
+// @Description Returns the open issues of a project that nothing blocks — no open blocks or waits-for edge, counting the blockers the caller cannot see (US-3) — by priority, then the most recently updated, then id: the same list as the MCP tool skein_ready. Keyset paging: pass nextCursor back as cursor while hasMore is true (skein_ready has no cursor). Read-only.
 // @Tags Issues
 // @Produce json
 // @Security SkeinApiKey[read]
@@ -483,9 +491,10 @@ func (a *issuesAPI) projectListArgs(q *query, f listIssuesFilters) (issues.ListI
 // @Param priorityMax query int false "Issues with priority <= N (0..4)"
 // @Param type query string false "Exact issue type"
 // @Param limit query int false "How many, 1..100 (default 25)"
+// @Param cursor query string false "The nextCursor of the previous page"
 // @Param fields query string false "Comma-separated fields of each item to return (plus id)"
 // @Success 200 {object} List[dependencies.IssueSummary] "The ready issues"
-// @Failure 400 {object} ProblemDocument "project missing, an unknown parameter, a value out of range (code validation_error)"
+// @Failure 400 {object} ProblemDocument "project missing, an unknown parameter, a value out of range, a cursor this list did not issue (code validation_error)"
 // @Failure 401 {object} ProblemDocument "No key, or the key is invalid, expired or revoked (code unauthenticated)"
 // @Failure 403 {object} ProblemDocument "The key lacks the read right (code insufficient_scope)"
 // @Failure 422 {object} ProblemDocument "The project is not within reach (code project_not_found) or ambiguous (code ambiguous_project)"
@@ -495,7 +504,7 @@ func (a *issuesAPI) projectListArgs(q *query, f listIssuesFilters) (issues.ListI
 // @Router /api/v1/issues/ready [get]
 // @ID listReadyIssues
 func (a *issuesAPI) listReadyIssues(w http.ResponseWriter, r *http.Request) {
-	if !CheckQuery(w, r, "project", "assignee", "priorityMax", "type", "limit") {
+	if !CheckQuery(w, r, "project", "assignee", "priorityMax", "type", "limit", "cursor") {
 		return
 	}
 	q := &query{w: w, r: r}
@@ -532,6 +541,14 @@ func (a *issuesAPI) listReadyIssues(w http.ResponseWriter, r *http.Request) {
 		q.fail(err.Error())
 		return
 	}
+	if c, ok := q.one("cursor"); ok && c != "" {
+		var cur readyCursor
+		if err := DecodeCursor(c, &cur); err != nil {
+			WriteParseError(w, err)
+			return
+		}
+		filters.After = &dependencies.ReadyPosition{Priority: cur.Priority, UpdatedAt: cur.UpdatedAt, ID: cur.ID}
+	}
 	if q.bad {
 		return
 	}
@@ -544,14 +561,21 @@ func (a *issuesAPI) listReadyIssues(w http.ResponseWriter, r *http.Request) {
 		WriteInternalError(w, r, "listing ready issues", err)
 		return
 	}
-	more := len(items) > limit
-	if more {
-		items = items[:limit]
+	out := List[dependencies.IssueSummary]{Items: items}
+	if len(items) > limit {
+		last := items[limit-1]
+		out.Items, out.HasMore = items[:limit], true
+		c, err := EncodeCursor(readyCursor{Priority: last.Priority, UpdatedAt: last.UpdatedAt, ID: last.ID})
+		if err != nil {
+			WriteInternalError(w, r, "encoding a cursor", err)
+			return
+		}
+		out.NextCursor = &c
 	}
-	if items == nil {
-		items = []dependencies.IssueSummary{}
+	if out.Items == nil {
+		out.Items = []dependencies.IssueSummary{}
 	}
-	WriteJSON(w, r, http.StatusOK, List[dependencies.IssueSummary]{Items: items, HasMore: more})
+	WriteJSON(w, r, http.StatusOK, out)
 }
 
 // getIssue reads one issue.

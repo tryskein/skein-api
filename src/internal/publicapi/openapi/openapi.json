@@ -3733,7 +3733,7 @@
         },
         "/api/v1/issues/ready": {
             "get": {
-                "description": "Returns the open issues of a project that nothing blocks — no open blocks or waits-for edge, counting the blockers the caller cannot see (US-3) — by priority, then age: the same list as the MCP tool skein_ready. It is not paged: up to limit issues; hasMore is true when more ready issues exist (raise limit), nextCursor is always null. Read-only.",
+                "description": "Returns the open issues of a project that nothing blocks — no open blocks or waits-for edge, counting the blockers the caller cannot see (US-3) — by priority, then the most recently updated, then id: the same list as the MCP tool skein_ready. Keyset paging: pass nextCursor back as cursor while hasMore is true (skein_ready has no cursor). Read-only.",
                 "operationId": "listReadyIssues",
                 "parameters": [
                     {
@@ -3778,6 +3778,14 @@
                         }
                     },
                     {
+                        "description": "The nextCursor of the previous page",
+                        "in": "query",
+                        "name": "cursor",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
                         "description": "Comma-separated fields of each item to return (plus id)",
                         "in": "query",
                         "name": "fields",
@@ -3805,7 +3813,7 @@
                                 }
                             }
                         },
-                        "description": "project missing, an unknown parameter, a value out of range (code validation_error)"
+                        "description": "project missing, an unknown parameter, a value out of range, a cursor this list did not issue (code validation_error)"
                     },
                     "401": {
                         "content": {

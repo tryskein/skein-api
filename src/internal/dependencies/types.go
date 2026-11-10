@@ -292,6 +292,17 @@ type ReadyFilters struct {
 	// filter. Pushed into SQL as an EXISTS clause so callers don't need
 	// to over-fetch and post-filter.
 	ComponentID *uuid.UUID
+	// After continues the list after this row (a keyset page): the rows
+	// that follow it in the order of the list. Nil = from the start.
+	After *ReadyPosition
+}
+
+// ReadyPosition is the place of a row in the ready list, in its order:
+// priority ascending, then updated_at descending, then id.
+type ReadyPosition struct {
+	Priority  int
+	UpdatedAt time.Time
+	ID        string
 }
 
 // DuplicateCandidate is one row of POST /issues/check-duplicates.
