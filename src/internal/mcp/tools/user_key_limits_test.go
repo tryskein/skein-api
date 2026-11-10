@@ -12,6 +12,7 @@ package tools
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/google/uuid"
@@ -150,6 +151,47 @@ func TestUserKeyLimits(t *testing.T) {
 		row := readUserRow(t, pool, id)
 		if row.role != "user" || row.hash == "" {
 			t.Errorf("created user role %q, password set %v; want user with a password", row.role, row.hash != "")
+		}
+	})
+
+	// Review C4-04: the store reads the key from the request context, so an
+	// entry that builds its actor without ByKey (here: the web UI's human
+	// actor) still meets every limit when the call carries a key.
+	t.Run("a key in the context is a call by key, whatever the actor says", func(t *testing.T) {
+		human := users.HumanActor(adminID, "key-limits-admin")
+		if human.ByKey {
+			t.Fatal("HumanActor sets ByKey; the subtest needs an actor without it")
+		}
+		pwd := "a-new-long-password-2"
+		userRole, adminRole := "user", "admin"
+
+		target, _ := seedUser(t, pool, "user")
+		before := readUserRow(t, pool, target)
+		if _, err := store.UpdateUser(ctx, target, users.UpdateUserInput{Password: &pwd}, human); !errors.Is(err, users.ErrNotByAPIKey) {
+			t.Errorf("password change with a key in the context: %v, want ErrNotByAPIKey", err)
+		}
+		if _, err := store.UpdateUser(ctx, target, users.UpdateUserInput{Role: &adminRole}, human); !errors.Is(err, users.ErrNotByAPIKey) {
+			t.Errorf("admin role with a key in the context: %v, want ErrNotByAPIKey", err)
+		}
+		if after := readUserRow(t, pool, target); after.hash != before.hash || after.role != "user" {
+			t.Errorf("user changed after the refusals: role %q, hash changed %v", after.role, after.hash != before.hash)
+		}
+
+		admin2, _ := seedUser(t, pool, "admin")
+		if _, err := store.UpdateUser(ctx, admin2, users.UpdateUserInput{Role: &userRole}, human); !errors.Is(err, users.ErrNotByAPIKey) {
+			t.Errorf("admin role removal with a key in the context: %v, want ErrNotByAPIKey", err)
+		}
+		if err := store.Deactivate(ctx, admin2, human); !errors.Is(err, users.ErrNotByAPIKey) {
+			t.Errorf("admin deactivation with a key in the context: %v, want ErrNotByAPIKey", err)
+		}
+		if row := readUserRow(t, pool, admin2); row.role != "admin" || row.deactivated {
+			t.Errorf("admin changed after the refusals: role %q, deactivated %v", row.role, row.deactivated)
+		}
+
+		email := "ctxadm" + uuid.NewString()[:8] + "@keylimits.local"
+		t.Cleanup(func() { forgetCreatedUser(pool, email) })
+		if _, err := store.CreateUser(ctx, users.CreateUserInput{Email: email, Name: "Ctx Admin", Password: "passw0rd!long", Role: "admin"}, human); !errors.Is(err, users.ErrNotByAPIKey) {
+			t.Errorf("admin creation with a key in the context: %v, want ErrNotByAPIKey", err)
 		}
 	})
 

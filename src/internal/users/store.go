@@ -306,7 +306,7 @@ func (s *Store) CreateUser(ctx context.Context, in CreateUserInput, actor Actor)
 	if in.Role != "admin" && in.Role != "user" {
 		return nil, ErrInvalidRole
 	}
-	if actor.ByKey && in.Role == "admin" {
+	if byKey(ctx, actor) && in.Role == "admin" {
 		return nil, fmt.Errorf("%w: creating an instance admin", ErrNotByAPIKey)
 	}
 	// sk-163 S3 never-admin: an external account is permanently capped at
@@ -839,7 +839,7 @@ func (s *Store) UpdateUser(ctx context.Context, id uuid.UUID, in UpdateUserInput
 	if in.Role != nil && *in.Role != "admin" && *in.Role != "user" {
 		return nil, ErrInvalidRole
 	}
-	if actor.ByKey && in.Password != nil {
+	if byKey(ctx, actor) && in.Password != nil {
 		return nil, fmt.Errorf("%w: changing a password", ErrNotByAPIKey)
 	}
 	if in.Password != nil {
@@ -868,7 +868,7 @@ func (s *Store) UpdateUser(ctx context.Context, id uuid.UUID, in UpdateUserInput
 		if err != nil {
 			return err
 		}
-		if actor.ByKey && in.Role != nil && (*in.Role == "admin") != (old.Role == "admin") {
+		if byKey(ctx, actor) && in.Role != nil && (*in.Role == "admin") != (old.Role == "admin") {
 			return fmt.Errorf("%w: assigning or removing the instance admin role", ErrNotByAPIKey)
 		}
 
@@ -1054,7 +1054,7 @@ func (s *Store) DeactivateInTx(ctx context.Context, tx pgx.Tx, id uuid.UUID, act
 	if err != nil {
 		return false, err
 	}
-	if actor.ByKey && old.Role == "admin" {
+	if byKey(ctx, actor) && old.Role == "admin" {
 		return false, fmt.Errorf("%w: deactivating an instance admin", ErrNotByAPIKey)
 	}
 	if old.DeactivatedAt != nil {
@@ -1126,7 +1126,7 @@ func (s *Store) Reactivate(ctx context.Context, id uuid.UUID, actor Actor) error
 		if err != nil {
 			return err
 		}
-		if actor.ByKey && old.Role == "admin" {
+		if byKey(ctx, actor) && old.Role == "admin" {
 			return fmt.Errorf("%w: reactivating an instance admin", ErrNotByAPIKey)
 		}
 		if old.DeactivatedAt == nil {
@@ -1467,4 +1467,16 @@ SELECT count(*) FROM users WHERE role = 'admin' AND deactivated_at IS NULL`).Sca
 // (sk-622.21 T017, US-11): the user gets projects, lens, unreviewed and tasks.
 func signalAccessChanged(tx pgx.Tx, userID uuid.UUID) {
 	signals.Add(tx, userID, signals.AreaProjects, signals.AreaLens, signals.AreaUnreviewed, signals.AreaTasks)
+}
+
+// byKey reports whether a call is made with an API key: the actor says so,
+// or the request context carries a key (auth.APIKeyIDFrom). Reading the
+// context means an entry that builds its actor without ByKey still meets
+// the limits of ErrNotByAPIKey; the web UI path carries no key.
+func byKey(ctx context.Context, actor Actor) bool {
+	if actor.ByKey {
+		return true
+	}
+	_, ok := auth.APIKeyIDFrom(ctx)
+	return ok
 }

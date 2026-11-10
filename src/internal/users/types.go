@@ -283,6 +283,8 @@ type Actor struct {
 	Role      string // 'human' | 'agent' | 'system'
 	SessionID string // optional, agent only
 	// ByKey — the call is made with an API key (MCP or the public API).
+	// The store also treats a request context carrying a key
+	// (auth.APIKeyIDFrom) as a call by key, whatever this flag says.
 	// Such a call never changes an existing user's password, never assigns
 	// or removes the instance admin role, never deactivates or reactivates
 	// an instance admin and never creates one (INV-12, "MCP changes" (2)): those stay
