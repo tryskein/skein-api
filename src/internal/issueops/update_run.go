@@ -184,12 +184,12 @@ func RunUpdateChainVersion(
 	return store.GetIssueVersion(rctx, in.ID)
 }
 
-// AfterClosePrecheckHook is a test seam: when non-nil it runs right after
+// afterClosePrecheckHook is a test seam: when non-nil it runs right after
 // the sk-540.1 pre-check of RunUpdateChain passed and before the first
 // write. It lets a test reopen the issue inside the window between the
 // pre-check and the close, which is otherwise a real but non-deterministic
-// race. Always nil in production; only tests assign it.
-var AfterClosePrecheckHook func(ctx context.Context, issueID string)
+// race. Always nil in production; only the tests of this package assign it.
+var afterClosePrecheckHook func(ctx context.Context, issueID string)
 
 // RunUpdateChain performs every mutation of the chain and loads nothing
 // back. Both entry points above add the read they actually need. The
@@ -218,8 +218,8 @@ func RunUpdateChain(
 		if err := store.PrecheckClose(ctx, in.ID, in.CloseOutcome, in.CloseTarget); err != nil {
 			return "", issues.CommittedState{}, err
 		}
-		if AfterClosePrecheckHook != nil {
-			AfterClosePrecheckHook(ctx, in.ID)
+		if afterClosePrecheckHook != nil {
+			afterClosePrecheckHook(ctx, in.ID)
 		}
 	}
 

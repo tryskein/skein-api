@@ -13,7 +13,6 @@ package tools
 
 import (
 	"context"
-	"skein-api/internal/issueops"
 	"strings"
 	"testing"
 )
@@ -240,52 +239,4 @@ func TestUpdateMCP_OutcomeRequiredRefusesBeforeAnyWrite(t *testing.T) {
 			t.Errorf("after re-close: %+v, want closed/superseded", got)
 		}
 	})
-}
-
-// The race the in-transaction check exists for: with force=true the version
-// predicate is bypassed, so an issue that was closed when the pre-check read
-// it and is reopened before the close step must still be refused — never
-// closed with a silent `done`. The refusal rolls back the whole change, the
-// field patch included (US-14, SC-020): the title is not written and the
-// version stays where the reopen left it.
-func TestUpdateMCP_OutcomeRequiredSurvivesReopenRaceUnderForce(t *testing.T) {
-	env := comSetup(t)
-
-	// The forcing admin edits by his own role in env.pid (US-6, T066).
-	comAdminWritesInPid(t, env)
-	id := comSeed(t, env, env.pid, env.prefix, "requ-race")
-	corCloseWith(t, env, id, "wont_do")
-
-	reopenedVersion := 0
-	issueops.AfterClosePrecheckHook = func(ctx context.Context, issueID string) {
-		if issueID != id {
-			return
-		}
-		// Reopen outside the tool, as a concurrent writer would.
-		if err := env.pool.QueryRow(ctx,
-			`UPDATE issues SET status = 'open', closed_at = NULL, closed_reason = NULL,
-			        close_outcome = NULL, version = version + 1
-			  WHERE id = $1 RETURNING version`, issueID).Scan(&reopenedVersion); err != nil {
-			t.Errorf("reopen inside the race window: %v", err)
-		}
-	}
-	t.Cleanup(func() { issueops.AfterClosePrecheckHook = nil })
-
-	body := ucoUpdateAs(t, env, env.adminCtx, map[string]any{
-		"id": id, "expectedVersion": comRead(t, env, id).Version, "force": true,
-		"title": "renamed in race", "status": "closed", "reason": "r",
-	})
-	if comErr(body) != ErrCodeValidationError || corDetailCode(body) != codeCloseOutcomeRequired {
-		t.Fatalf("close after reopen race = %+v, want validation_error/%s", body, codeCloseOutcomeRequired)
-	}
-	got := comRead(t, env, id)
-	if got.Status != "open" || got.Outcome != "" {
-		t.Errorf("after refused close: %+v, want status open and no outcome", got)
-	}
-	if title := corTitle(t, env, id); title == "renamed in race" {
-		t.Errorf("title = %q, want the field patch rolled back with the refused close", title)
-	}
-	if got.Version != reopenedVersion {
-		t.Errorf("version = %d, want %d — the one the reopen left", got.Version, reopenedVersion)
-	}
 }
