@@ -139,9 +139,12 @@ Python runner tests (from the repository root):
 - Checks that are not tests but must stay green: `cd src && go vet ./...`,
   `cd src && gofmt -l .` (empty output), the sqlc check
   `cd src && sqlc generate && git status --porcelain --untracked-files=all -- internal/storage/generated`
-  (empty output), and the public OpenAPI check
+  (empty output), the public OpenAPI check
   `scripts/generate-public-openapi.sh && git status --porcelain --untracked-files=all -- src/internal/publicapi/openapi`
-  (empty output; `ci.yml` job `public-openapi`).
+  (empty output; `ci.yml` job `public-openapi`), and the linter of that
+  document, vacuum (version `VACUUM_VERSION` in `ci.yml`):
+  `vacuum lint --errors --fail-severity error --min-score 0 src/internal/publicapi/openapi/openapi.json`
+  (exit code 0; a finding of severity error is red, warnings are not).
 
 ### Prerequisites
 
@@ -170,7 +173,8 @@ Workflows live in `.github/workflows/`. `ci.yml` also runs on `workflow_call`.
 `pg_trgm` and `vector`, applies `src/migrations` with golang-migrate and runs
 `go test -v -p 1 -count=1 ./...`; a run with zero passed tests is red.
 `public-openapi` runs `scripts/generate-public-openapi.sh` and is red when
-`src/internal/publicapi/openapi` differs from the committed document.
+`src/internal/publicapi/openapi` differs from the committed document or when
+vacuum finds an error in it.
 `release.yml` starts only for a tag matching `X.Y.Z`, checks that the tagged
 commit is on `main`, runs `ci.yml`, builds `linux/amd64` and `linux/arm64`
 natively, publishes the manifest (`X.Y.Z` and `latest`) from jobs bound to the

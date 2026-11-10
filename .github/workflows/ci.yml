@@ -28,6 +28,10 @@ permissions:
 env:
   SQLC_VERSION: "1.31.1"
   MIGRATE_VERSION: "v4.20.1"
+  VACUUM_VERSION: "0.35.4"
+  # sha256 of vacuum_${VACUUM_VERSION}_linux_x86_64.tar.gz (checksums.txt of
+  # the release): bump both in the same commit.
+  VACUUM_SHA256: "d553155a6de95cfe5506294736cb87a6c24c033817ff0c20ff1f3b76189a0874"
 
 jobs:
   lint:
@@ -92,7 +96,8 @@ jobs:
   # src/internal/publicapi/openapi/openapi.json is committed: the instance
   # serves it, while the swag output of the internal API is git-ignored. This
   # job regenerates it with the same script contributors run and fails when
-  # the working tree changes.
+  # the working tree changes, then lints it with vacuum. VACUUM_VERSION and
+  # VACUUM_SHA256 pin the linter.
   public-openapi:
     name: public-openapi
     runs-on: ubuntu-24.04
@@ -118,6 +123,23 @@ jobs:
             exit 1
           fi
           echo "public OpenAPI document matches the annotations"
+      # The linter of the committed document: a finding of severity error
+      # fails the job; warnings and the quality score do not.
+      - name: Install vacuum
+        run: |
+          mkdir -p "$RUNNER_TEMP/vacuum"
+          cd "$RUNNER_TEMP/vacuum"
+          archive="vacuum_${VACUUM_VERSION}_linux_x86_64.tar.gz"
+          curl -fsSL -o "$archive" "https://github.com/daveshanley/vacuum/releases/download/v${VACUUM_VERSION}/$archive"
+          printf '%s  %s\n' "$VACUUM_SHA256" "$archive" | sha256sum --check
+          tar -xzf "$archive" vacuum
+          echo "$RUNNER_TEMP/vacuum" >> "$GITHUB_PATH"
+      - name: Lint the public OpenAPI document
+        run: |
+          vacuum version
+          vacuum lint --no-banner --no-update-check --no-style --errors \
+            --fail-severity error --min-score 0 \
+            src/internal/publicapi/openapi/openapi.json
 
   # Unit: no database (DB-backed tests skip without TEST_DATABASE_URL), plus
   # the stdlib unittest tests of the served monitor runner.

@@ -6,6 +6,7 @@ require (
 	github.com/SherClockHolmes/webpush-go v1.4.0
 	github.com/bmatcuk/doublestar/v4 v4.10.0
 	github.com/caarlos0/env/v11 v11.4.0
+	github.com/getkin/kin-openapi v0.152.0
 	github.com/go-chi/chi/v5 v5.2.5
 	github.com/golang-migrate/migrate/v4 v4.19.1
 	github.com/google/uuid v1.6.0
@@ -34,10 +35,11 @@ require (
 	github.com/cpuguy83/go-md2man/v2 v2.0.5 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/go-ini/ini v1.67.0 // indirect
-	github.com/go-openapi/jsonpointer v0.19.6 // indirect
+	github.com/go-openapi/jsonpointer v0.22.5 // indirect
 	github.com/go-openapi/jsonreference v0.20.2 // indirect
 	github.com/go-openapi/spec v0.20.9 // indirect
 	github.com/go-openapi/swag v0.22.3 // indirect
+	github.com/go-openapi/swag/jsonname v0.25.5 // indirect
 	github.com/golang-jwt/jwt/v5 v5.2.1 // indirect
 	github.com/google/go-tpm v0.9.8 // indirect
 	github.com/google/jsonschema-go v0.4.2 // indirect
@@ -59,12 +61,14 @@ require (
 	github.com/nats-io/jwt/v2 v2.8.1 // indirect
 	github.com/nats-io/nkeys v0.4.15 // indirect
 	github.com/nats-io/nuid v1.0.1 // indirect
+	github.com/oasdiff/yaml v0.1.1 // indirect
+	github.com/oasdiff/yaml3 v0.0.14 // indirect
 	github.com/philhofer/fwd v1.2.0 // indirect
 	github.com/prometheus/common v0.66.1 // indirect
 	github.com/prometheus/procfs v0.16.1 // indirect
 	github.com/rs/xid v1.6.0 // indirect
 	github.com/russross/blackfriday/v2 v2.1.0 // indirect
-	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2 // indirect
+	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3 // indirect
 	github.com/spf13/cast v1.7.1 // indirect
 	github.com/sv-tools/openapi v0.4.0 // indirect
 	github.com/swaggo/swag/v2 v2.0.0-rc6 // indirect
