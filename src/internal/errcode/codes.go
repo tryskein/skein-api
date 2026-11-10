@@ -59,6 +59,9 @@ var (
 
 	// Optimistic concurrency.
 	VersionConflict = define("version_conflict", ClassVersion, Permanent)
+	// PreconditionRequired — the operation checks the version of its
+	// resource and the request carries no If-Match.
+	PreconditionRequired = define("precondition_required", ClassPreconditionRequired, Permanent)
 
 	// Unavailable dependencies.
 	AttachmentsUnavailable = define("attachments_unavailable", ClassUnavailable, Transient)

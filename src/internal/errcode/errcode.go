@@ -47,11 +47,14 @@ const (
 	// ClassRateLimited — a rate limit of the public API refuses the request
 	// until its window ends.
 	ClassRateLimited
+	// ClassPreconditionRequired — the operation requires If-Match and the
+	// request has none.
+	ClassPreconditionRequired
 )
 
 // lastClass is the last class of the closed set; define refuses any class
 // after it.
-const lastClass = ClassRateLimited
+const lastClass = ClassPreconditionRequired
 
 // String names the class.
 func (c Class) String() string {
@@ -80,6 +83,8 @@ func (c Class) String() string {
 		return "media_type"
 	case ClassRateLimited:
 		return "rate_limited"
+	case ClassPreconditionRequired:
+		return "precondition_required"
 	}
 	return fmt.Sprintf("class(%d)", uint8(c))
 }

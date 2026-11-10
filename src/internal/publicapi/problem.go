@@ -93,6 +93,8 @@ func Status(code errcode.Code, origin Origin) int {
 		return http.StatusUnsupportedMediaType
 	case errcode.ClassRateLimited:
 		return http.StatusTooManyRequests
+	case errcode.ClassPreconditionRequired:
+		return http.StatusPreconditionRequired
 	}
 	return http.StatusInternalServerError
 }
@@ -144,4 +146,17 @@ func WriteProblem(w http.ResponseWriter, p Problem) {
 		slog.Error("public API: writing a problem response failed",
 			"code", p.Code.String(), "status", status, "error", err.Error())
 	}
+}
+
+// writeInternal logs a failure inside the service and answers it: 503
+// database_unavailable when the database could not be reached, 500
+// internal_error otherwise.
+func writeInternal(w http.ResponseWriter, r *http.Request, rt Route, what string, err error) {
+	code := errcode.InternalError
+	if isDatabaseUnavailable(err) {
+		code = errcode.DatabaseUnavailable
+	}
+	slog.ErrorContext(r.Context(), "public API: "+what+" failed",
+		"operationId", rt.OperationID, "code", code.String(), "error", err.Error())
+	WriteProblem(w, Problem{Code: code, Origin: OriginDomain})
 }

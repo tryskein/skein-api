@@ -99,6 +99,9 @@ var Codes = map[string]Expect{
 	// Stale If-Match.
 	"version_conflict": every(412, false),
 
+	// No If-Match where the operation requires it.
+	"precondition_required": every(428, false),
+
 	// Transport of the public API.
 	"method_not_allowed":     every(405, false),
 	"payload_too_large":      every(413, false),

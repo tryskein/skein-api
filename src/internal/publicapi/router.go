@@ -44,6 +44,9 @@ type RouterOptions struct {
 	// Chain is put in front of the handler of every route (the request
 	// chain of the public entry, Chain.Wrap); nil leaves the handlers bare.
 	Chain RouteWrapper
+	// Versions reads the current version of the resource of a route that
+	// checks If-Match. Required when the table has such a route.
+	Versions VersionProvider
 }
 
 // RouteWrapper wraps the handler of a route.
@@ -95,6 +98,9 @@ func NewRouter(opts RouterOptions, routes []Route) http.Handler {
 		if defect := validRoute(rt); defect != "" {
 			panic("publicapi: " + defect)
 		}
+		if rt.IfMatch != IfMatchNone && opts.Versions == nil {
+			panic("publicapi: " + rt.OperationID + " checks If-Match but the router has no version provider")
+		}
 		key := rt.Method + " " + rt.Path
 		if other, dup := seen[key]; dup {
 			panic(fmt.Sprintf("publicapi: %s and %s both route %s", other, rt.OperationID, key))
@@ -107,7 +113,8 @@ func NewRouter(opts RouterOptions, routes []Route) http.Handler {
 
 // routeHandler wraps the handler of rt: the operation runs under its
 // deadline with the route in its context; the request chain comes first,
-// then the body is checked (media type, size).
+// then the body is checked (media type, size), then the request rules of
+// the route — fields=, If-Match, Prefer — all before the operation.
 func routeHandler(opts RouterOptions, rt Route) http.Handler {
 	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if hasBody(r) {
@@ -121,7 +128,14 @@ func routeHandler(opts RouterOptions, rt Route) http.Handler {
 			}
 			r.Body = http.MaxBytesReader(w, r.Body, MaxBodyBytes)
 		}
-		rt.Handler.ServeHTTP(w, r)
+		r, ok := checkFields(w, r, rt)
+		if !ok {
+			return
+		}
+		if r, ok = checkIfMatch(w, r, rt, opts.Versions); !ok {
+			return
+		}
+		rt.Handler.ServeHTTP(w, applyPrefer(r, rt))
 	})
 	var chained http.Handler = inner
 	if opts.Chain != nil {

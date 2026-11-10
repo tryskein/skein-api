@@ -170,6 +170,8 @@ func TestErrCodes_ClassAndTransience(t *testing.T) {
 		"review_forbidden": perm,
 		// Stale version (412).
 		"version_conflict": {errcode.ClassVersion, false},
+		// No If-Match where the operation requires it (428).
+		"precondition_required": {errcode.ClassPreconditionRequired, false},
 		// Unavailable dependency (503), transient.
 		"attachments_unavailable": {errcode.ClassUnavailable, true},
 		"preview_unavailable":     {errcode.ClassUnavailable, true},
