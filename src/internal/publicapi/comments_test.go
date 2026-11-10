@@ -288,6 +288,13 @@ func TestComments_OutsideTheScopeIsMissing(t *testing.T) {
 			since := lastEventID(t, pool)
 			in := rg.rest(scoped, c.method, commentPath(theirs), c.body, ifMatch(1))
 			none := rg.rest(scoped, c.method, commentPath(missing), c.body, ifMatch(1))
+			malformed := rg.rest(scoped, c.method, commentPath("not-a-uuid"), c.body, ifMatch(1))
+			// R8-05: one code on the comment of the path, whatever the id.
+			for name, got := range map[string]restCall{"outside the scope": in, "a missing id": none, "a malformed id": malformed} {
+				if got.status != http.StatusNotFound || got.code() != "comment_not_found" {
+					t.Errorf("%s: %d %s, want 404 comment_not_found", name, got.status, got.body)
+				}
+			}
 			if in.status != http.StatusNotFound || in.status != none.status || in.code() != none.code() {
 				t.Errorf("outside the scope %d %s; a missing id %d %s — want one 404", in.status, in.body, none.status, none.body)
 			}

@@ -67,6 +67,19 @@ func pathComment(w http.ResponseWriter, r *http.Request) (string, bool) {
 	return raw, true
 }
 
+// writeCommentRefusal answers a refusal of an edit or a delete of the
+// comment of the path: the comment missing or out of reach, which MCP
+// answers issue_not_found with its commentId, is comment_not_found of the
+// path — one code with a malformed id and with getComment (review R8-05).
+func writeCommentRefusal(w http.ResponseWriter, f *issueops.Failure, id string) {
+	if f.Code == errcode.IssueNotFound.String() && f.Fields["commentId"] != nil {
+		WriteProblem(w, Problem{Code: errcode.CommentNotFound, Origin: OriginPath,
+			Detail: "comment does not exist or is not visible", Extensions: map[string]any{"commentId": id}})
+		return
+	}
+	writeFailure(w, f, id)
+}
+
 // writeComment answers a comment with its version as ETag.
 func writeComment(w http.ResponseWriter, r *http.Request, status int, c *issues.CommentDTO) {
 	SetETag(w, c.Version)
@@ -205,7 +218,7 @@ func (a *issueWrites) getComment(w http.ResponseWriter, r *http.Request) {
 // @Failure 400 {object} ProblemDocument "Malformed body, unknown field or parameter, a kind outside directed|autonomous, If-Match not one version (code validation_error)"
 // @Failure 401 {object} ProblemDocument "No key, or the key is invalid, expired or revoked (code unauthenticated)"
 // @Failure 403 {object} ProblemDocument "The key lacks write (code insufficient_scope); the owner is not the author or may not write in the project (code forbidden)"
-// @Failure 404 {object} ProblemDocument "No such comment within reach (code issue_not_found, as MCP)"
+// @Failure 404 {object} ProblemDocument "No such comment within reach, or the id is not a UUID (code comment_not_found; MCP answers issue_not_found)"
 // @Failure 412 {object} ProblemDocument "If-Match is stale (code version_conflict, currentVersion)"
 // @Failure 413 {object} ProblemDocument "Body over 1 MiB (code payload_too_large)"
 // @Failure 415 {object} ProblemDocument "Body is not application/json (code unsupported_media_type)"
@@ -233,7 +246,7 @@ func (a *issueWrites) updateComment(w http.ResponseWriter, r *http.Request) {
 	expectedVersionArg(r, args)
 	c, f := issueops.UpdateComment(r.Context(), a.ops, callerOf(r), args, issueops.OriginKey)
 	if f != nil {
-		writeFailure(w, f, id)
+		writeCommentRefusal(w, f, id)
 		return
 	}
 	writeComment(w, r, http.StatusOK, c)
@@ -255,7 +268,7 @@ func (a *issueWrites) updateComment(w http.ResponseWriter, r *http.Request) {
 // @Failure 400 {object} ProblemDocument "Malformed body, unknown field or parameter, a kind outside directed|autonomous (code validation_error)"
 // @Failure 401 {object} ProblemDocument "No key, or the key is invalid, expired or revoked (code unauthenticated)"
 // @Failure 403 {object} ProblemDocument "The key lacks write (code insufficient_scope); the owner is not the author and lacks delete_any_comment, or may not write in the project (code forbidden)"
-// @Failure 404 {object} ProblemDocument "No such comment within reach (code issue_not_found, as MCP)"
+// @Failure 404 {object} ProblemDocument "No such comment within reach, or the id is not a UUID (code comment_not_found; MCP answers issue_not_found)"
 // @Failure 413 {object} ProblemDocument "Body over 1 MiB (code payload_too_large)"
 // @Failure 415 {object} ProblemDocument "Body is not application/json (code unsupported_media_type)"
 // @Failure 422 {object} ProblemDocument "A serialization race, nothing written (code serialization_retry, retryable)"
@@ -281,7 +294,7 @@ func (a *issueWrites) deleteComment(w http.ResponseWriter, r *http.Request) {
 	args["commentId"] = id
 	res, f := issueops.DeleteComment(r.Context(), a.ops, callerOf(r), args)
 	if f != nil {
-		writeFailure(w, f, id)
+		writeCommentRefusal(w, f, id)
 		return
 	}
 	WriteJSON(w, r, http.StatusOK, CommentDeleted{ID: res.ID.String(), IssueID: res.IssueID, Deleted: true})

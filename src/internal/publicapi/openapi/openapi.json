@@ -4672,7 +4672,7 @@
                                 }
                             }
                         },
-                        "description": "No such comment within reach (code issue_not_found, as MCP)"
+                        "description": "No such comment within reach, or the id is not a UUID (code comment_not_found; MCP answers issue_not_found)"
                     },
                     "413": {
                         "content": {
@@ -4956,7 +4956,7 @@
                                 }
                             }
                         },
-                        "description": "No such comment within reach (code issue_not_found, as MCP)"
+                        "description": "No such comment within reach, or the id is not a UUID (code comment_not_found; MCP answers issue_not_found)"
                     },
                     "412": {
                         "content": {
