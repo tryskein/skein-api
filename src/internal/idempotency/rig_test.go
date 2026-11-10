@@ -165,11 +165,18 @@ func (rg *rig) closeIssue(w http.ResponseWriter, r *http.Request) {
 	rg.calls.Add(1)
 	ctx := r.Context()
 	userID, _ := auth.UserIDFrom(ctx)
+	issueID := chi.URLParam(r, "issue")
+	var version int
+	if err := rg.pool.QueryRow(ctx, `SELECT version FROM issues WHERE id = $1`, issueID).Scan(&version); err != nil {
+		publicapi.WriteInternalError(w, r, "reading the version of an issue", err)
+		return
+	}
 	res, err := rg.issues.UpdateIssue(ctx, issues.UpdateIssueInput{
-		ID:           chi.URLParam(r, "issue"),
-		Actor:        issues.HumanActor(userID, "rig"),
-		Close:        &issues.CloseInput{Reason: "closed by the rig"},
-		BeforeCommit: idempotency.IssueBeforeCommit(http.StatusOK),
+		ID:              issueID,
+		ExpectedVersion: version,
+		Actor:           issues.HumanActor(userID, "rig"),
+		Close:           &issues.CloseInput{Reason: "closed by the rig"},
+		BeforeCommit:    idempotency.IssueBeforeCommit(http.StatusOK),
 	})
 	if err != nil {
 		publicapi.WriteInternalError(w, r, "closing an issue", err)
