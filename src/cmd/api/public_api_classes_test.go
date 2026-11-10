@@ -51,6 +51,7 @@ import (
 	"skein-api/internal/publicapi"
 	"skein-api/internal/reminders"
 	"skein-api/internal/search"
+	"skein-api/internal/spaces"
 	"skein-api/internal/testsupport"
 	"skein-api/internal/users"
 )
@@ -338,6 +339,7 @@ func classDeps(pool *pgxpool.Pool) publicapi.Deps {
 		Issues:        issues.NewStore(pool),
 		Dependencies:  dependencies.NewStore(pool),
 		Search:        searchSvc,
+		Spaces:        spaces.NewService(pool, spaces.Options{Creation: spaces.CreationAll}),
 		Notifications: notifications.NewStore(pool),
 		Reminders:     reminders.NewStore(pool),
 		Attachments: issueops.AttachmentDeps{Store: attachments.NewStore(pool), S3: routingS3{}, Bucket: "classes",
