@@ -269,8 +269,10 @@ func TestIdempotencyOps_RealOperations(t *testing.T) {
 // TestIdempotencyOps_CreateComment — row 137 (T026; US-7, SC-007, INV-8).
 // createComment with Idempotency-Key: a 201 is kept and its repeat answers
 // it again without a second comment, event or notification; a 422 before
-// the store is kept, answered again, and nothing is written. Red when a
-// repeat of createComment creates a comment or events.
+// the store is kept, answered again, and nothing is written; a repeat after
+// the comment was deleted answers the stored 201. Red when a repeat of
+// createComment creates a comment or events, or a deleted comment makes it
+// 404.
 func TestIdempotencyOps_CreateComment(t *testing.T) {
 	w := newClassWorld(t)
 	key := w.key(w.owner, levelKey(apikeys.LevelWrite))
@@ -306,6 +308,30 @@ func TestIdempotencyOps_CreateComment(t *testing.T) {
 		if comments() != n || events() != e || notifications() != nt {
 			t.Errorf("the repeat wrote: comments %d→%d, events %d→%d, notifications %d→%d",
 				n, comments(), e, events(), nt, notifications())
+		}
+	})
+
+	// R8-03 (US-7: the objects of a stored answer are re-checked for the
+	// owner's visibility; getComment reads a deleted comment as its
+	// tombstone): a repeat after the comment was deleted answers the stored
+	// 201 with the same comment, and creates none.
+	t.Run("a repeat after the comment was deleted", func(t *testing.T) {
+		c, h := opCall{http.MethodPost, path, map[string]any{"body": "to be deleted " + w.fresh("c")}, nil}, idem()
+		first := w.do(key, c, "", h)
+		if first.status != http.StatusCreated {
+			t.Fatalf("createComment: %d %s", first.status, first.body)
+		}
+		id, _ := first.object(t)["id"].(string)
+		if del := w.do(key, opCall{http.MethodDelete, "/api/v1/comments/" + id, nil, nil}, "", nil); !success(del.status) {
+			t.Fatalf("deleteComment: %d %s", del.status, del.body)
+		}
+		n := comments()
+		again := w.do(key, c, "", h)
+		if again.status != http.StatusCreated || again.object(t)["id"] != id {
+			t.Errorf("the repeat after the deletion: %d %s, want 201 with comment %s", again.status, again.body, id)
+		}
+		if comments() != n {
+			t.Errorf("the repeat created a comment: %d → %d", n, comments())
 		}
 	})
 
