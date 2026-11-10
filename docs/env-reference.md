@@ -1087,9 +1087,11 @@ migration, before the HTTP listener opens:
 - **Purpose:** lifetime of a new API key when its creator does not choose one.
   Applies to every key (REST and MCP), whether or not the public API is
   enabled.
-- **Required:** no · **Default:** `2160h` (90 days) · **Format:** duration,
-  `> 0` and not above `SKEIN_API_KEY_MAX_TTL`.
-- **If unset:** `2160h`. A value outside the range aborts startup.
+- **Required:** no · **Default:** `2160h` (90 days), or `SKEIN_API_KEY_MAX_TTL`
+  when that is lower · **Format:** duration, `> 0` and not above
+  `SKEIN_API_KEY_MAX_TTL`.
+- **If unset:** 90 days, capped by `SKEIN_API_KEY_MAX_TTL`, so lowering the
+  maximum alone is enough. A value set outside the range aborts startup.
 
 #### `SKEIN_API_KEY_MAX_TTL`
 
@@ -1098,7 +1100,9 @@ migration, before the HTTP listener opens:
   keys already issued.
 - **Required:** no · **Default:** `8760h` (365 days) · **Format:** duration in
   `(0, 8760h]`.
-- **If unset:** `8760h`. A value outside the range aborts startup.
+- **If unset:** `8760h`. A value outside the range aborts startup. Below 90
+  days it also lowers the default lifetime when `SKEIN_API_KEY_DEFAULT_TTL` is
+  unset.
 
 #### `SKEIN_QUOTA_PERSONAL_PROJECTS`
 

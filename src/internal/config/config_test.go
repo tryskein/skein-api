@@ -1284,7 +1284,7 @@ func TestLoad_PublicAPIRefusals(t *testing.T) {
 		{"valid: operator on, distinct ports", operatorOn, false},
 		{"valid: external address under a path", map[string]string{"SKEIN_PUBLIC_API_URL": "https://api.example.com/skein"}, false},
 		{"valid: trusted proxies with spaces", map[string]string{"SKEIN_PUBLIC_API_TRUSTED_PROXIES": "10.0.0.0/8, 2001:db8::/32"}, false},
-		{"valid: a lower key ceiling", map[string]string{"SKEIN_API_KEY_DEFAULT_TTL": "720h", "SKEIN_API_KEY_MAX_TTL": "720h"}, false},
+		{"valid: a lower key ceiling alone", map[string]string{"SKEIN_API_KEY_MAX_TTL": "720h"}, false},
 
 		{"port equals PORT", map[string]string{"PORT": "5100", "SKEIN_PUBLIC_API_PORT": "5100"}, true},
 		{"port equals the operator port", merge(operatorOn, map[string]string{"SKEIN_PUBLIC_API_PORT": "5101"}), true},
@@ -1295,6 +1295,7 @@ func TestLoad_PublicAPIRefusals(t *testing.T) {
 		{"URL not http(s)", map[string]string{"SKEIN_PUBLIC_API_URL": "ftp://api.example.com"}, true},
 		{"max key TTL above 365 days", map[string]string{"SKEIN_API_KEY_MAX_TTL": "8761h"}, true},
 		{"default key TTL above the max", map[string]string{"SKEIN_API_KEY_DEFAULT_TTL": "2160h", "SKEIN_API_KEY_MAX_TTL": "720h"}, true},
+		{"default key TTL set to zero", map[string]string{"SKEIN_API_KEY_DEFAULT_TTL": "0s"}, true},
 		{"CIDR with a bad prefix length", map[string]string{"SKEIN_PUBLIC_API_TRUSTED_PROXIES": "10.0.0.0/33"}, true},
 		{"CIDR without a prefix length", map[string]string{"SKEIN_PUBLIC_API_TRUSTED_PROXIES": "10.0.0.1"}, true},
 		{"CIDR with host bits set", map[string]string{"SKEIN_PUBLIC_API_TRUSTED_PROXIES": "10.1.2.3/8"}, true},
@@ -1343,5 +1344,36 @@ func TestLoad_PublicAPITrustedProxiesParsed(t *testing.T) {
 		if p.String() != want[i] {
 			t.Errorf("PublicAPITrustedProxies[%d] = %s, want %s", i, p, want[i])
 		}
+	}
+}
+
+// TestLoad_APIKeyDefaultTTL — the requirements let an operator lower the
+// maximum key lifetime with one variable. With SKEIN_API_KEY_DEFAULT_TTL
+// unset, the default is 90 days capped by the maximum; a default set
+// explicitly is taken as set (above the maximum it is a refusal, see
+// TestLoad_PublicAPIRefusals).
+func TestLoad_APIKeyDefaultTTL(t *testing.T) {
+	const day = 24 * time.Hour
+	cases := []struct {
+		name string
+		env  map[string]string
+		want time.Duration
+	}{
+		{"default unset, max lowered below 90 days", map[string]string{"SKEIN_API_KEY_MAX_TTL": "720h"}, 30 * day},
+		{"default unset, max lowered above 90 days", map[string]string{"SKEIN_API_KEY_MAX_TTL": "4800h"}, 90 * day},
+		{"default set below the lowered max", map[string]string{"SKEIN_API_KEY_DEFAULT_TTL": "168h", "SKEIN_API_KEY_MAX_TTL": "720h"}, 7 * day},
+		{"default set equal to the max", map[string]string{"SKEIN_API_KEY_DEFAULT_TTL": "8760h"}, 365 * day},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			withPublicAPIEnv(t, c.env)
+			cfg, err := Load()
+			if err != nil {
+				t.Fatalf("Load() = %v, want success", err)
+			}
+			if cfg.APIKeyDefaultTTL != c.want {
+				t.Errorf("APIKeyDefaultTTL = %s, want %s", cfg.APIKeyDefaultTTL, c.want)
+			}
+		})
 	}
 }

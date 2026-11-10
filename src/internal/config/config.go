@@ -710,11 +710,16 @@ type Config struct {
 	// bounds the execution of one request. Must be > 0.
 	PublicAPIWriteTimeout time.Duration `env:"SKEIN_PUBLIC_API_WRITE_TIMEOUT" envDefault:"30s"`
 
-	// APIKeyDefaultTTL / APIKeyMaxTTL — the lifetime of a new API key when
-	// none is chosen (90 days) and the longest one allowed (365 days, the
-	// ceiling: an operator may only lower it). 0 < default <= max <= 365 days.
-	APIKeyDefaultTTL time.Duration `env:"SKEIN_API_KEY_DEFAULT_TTL" envDefault:"2160h"`
-	APIKeyMaxTTL     time.Duration `env:"SKEIN_API_KEY_MAX_TTL" envDefault:"8760h"`
+	// APIKeyMaxTTL — the longest API key lifetime allowed (365 days, the
+	// ceiling: an operator may only lower it). 0 < max <= 365 days.
+	APIKeyMaxTTL time.Duration `env:"SKEIN_API_KEY_MAX_TTL" envDefault:"8760h"`
+	// APIKeyDefaultTTLSet — SKEIN_API_KEY_DEFAULT_TTL as set; nil = unset.
+	// Load resolves it into APIKeyDefaultTTL.
+	APIKeyDefaultTTLSet *time.Duration `env:"SKEIN_API_KEY_DEFAULT_TTL"`
+	// APIKeyDefaultTTL — the lifetime of a new API key when none is chosen:
+	// the value set, or, when unset, 90 days capped by APIKeyMaxTTL, so that
+	// lowering the maximum alone is enough. 0 < default <= max.
+	APIKeyDefaultTTL time.Duration
 
 	// Quotas (SAAS-PLAN 4.5). nil = no quota; must be >= 0.
 	QuotaPersonalProjects     *int   `env:"SKEIN_QUOTA_PERSONAL_PROJECTS"`
@@ -1127,16 +1132,25 @@ func validateInstanceSettings(cfg *Config) error {
 	if cfg.APIKeyMaxTTL <= 0 || cfg.APIKeyMaxTTL > APIKeyTTLCeiling {
 		return fmt.Errorf("skein_api_key_max_ttl must be in (0, %s]; got %s", APIKeyTTLCeiling, cfg.APIKeyMaxTTL)
 	}
-	if cfg.APIKeyDefaultTTL <= 0 || cfg.APIKeyDefaultTTL > cfg.APIKeyMaxTTL {
-		return fmt.Errorf("skein_api_key_default_ttl must be in (0, skein_api_key_max_ttl=%s]; got %s",
-			cfg.APIKeyMaxTTL, cfg.APIKeyDefaultTTL)
+	if cfg.APIKeyDefaultTTLSet == nil {
+		cfg.APIKeyDefaultTTL = min(APIKeyDefaultTTLFallback, cfg.APIKeyMaxTTL)
+		return nil
 	}
+	if *cfg.APIKeyDefaultTTLSet <= 0 || *cfg.APIKeyDefaultTTLSet > cfg.APIKeyMaxTTL {
+		return fmt.Errorf("skein_api_key_default_ttl must be in (0, skein_api_key_max_ttl=%s]; got %s",
+			cfg.APIKeyMaxTTL, *cfg.APIKeyDefaultTTLSet)
+	}
+	cfg.APIKeyDefaultTTL = *cfg.APIKeyDefaultTTLSet
 	return nil
 }
 
 // APIKeyTTLCeiling is the longest API key lifetime the product allows (365
 // days). SKEIN_API_KEY_MAX_TTL may lower it, never raise it.
 const APIKeyTTLCeiling = 365 * 24 * time.Hour
+
+// APIKeyDefaultTTLFallback is the lifetime of a new API key when
+// SKEIN_API_KEY_DEFAULT_TTL is unset (90 days), unless the maximum is lower.
+const APIKeyDefaultTTLFallback = 90 * 24 * time.Hour
 
 // validatePublicAPI checks the settings of the public API server and parses
 // its trusted proxies. Nothing is checked while the server is disabled: none
