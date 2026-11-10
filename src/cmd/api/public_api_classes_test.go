@@ -162,6 +162,13 @@ var publicOps = []publicOp{
 	{id: "createReminder", method: http.MethodPost, path: "issues/{issue}/reminders", right: "write", body: true},
 	{id: "snoozeReminder", method: http.MethodPost, path: "reminders/{reminder}/snooze", right: "write", body: true},
 	{id: "dismissReminder", method: http.MethodDelete, path: "reminders/{reminder}", right: "write", body: true},
+
+	// T028 (row 128): the key right admin; the classes ask them with a key
+	// of the instance admin (keyFor).
+	{id: "listUsers", method: http.MethodGet, path: "users", right: "admin", read: true, field: "email"},
+	{id: "createUser", method: http.MethodPost, path: "users", right: "admin", body: true, noEvent: true},
+	{id: "updateUser", method: http.MethodPatch, path: "users/{user}", right: "admin", body: true, noEvent: true},
+	{id: "addSpaceMember", method: http.MethodPost, path: "spaces/{space}/members", right: "admin", body: true, noEvent: true},
 }
 
 // TestPublicAPIClasses_LiteralIsRoutesGo — rows 100 and 101, the literal
@@ -301,6 +308,14 @@ VALUES ('issue.created', 'owner', $1, 'human', 'issue', $2, $3)`, w.owner, w.iss
 		_, _ = pool.Exec(ctx, `DELETE FROM comments WHERE issue_id = ANY($1)`, []string{w.issue, w.ready, w.qIssue})
 		_, _ = pool.Exec(ctx, `DELETE FROM dependencies WHERE from_id = ANY($1) OR to_id = ANY($1)`, []string{w.issue, w.ready, w.qIssue})
 		_, _ = pool.Exec(ctx, `DELETE FROM events WHERE entity_id = ANY($1)`, []string{w.issue, w.ready, w.qIssue})
+	})
+	t.Cleanup(func() {
+		// The users createUser made, with their personal spaces.
+		ctx := context.Background()
+		like := "%" + w.sfx + "%@classes.test"
+		_, _ = pool.Exec(ctx, `DELETE FROM space_members WHERE space_id IN (SELECT s.id FROM spaces s JOIN users u ON u.id = s.owner_id WHERE u.email LIKE $1)`, like)
+		_, _ = pool.Exec(ctx, `DELETE FROM spaces WHERE owner_id IN (SELECT id FROM users WHERE email LIKE $1)`, like)
+		_, _ = pool.Exec(ctx, `DELETE FROM users WHERE email LIKE $1`, like)
 	})
 	t.Cleanup(func() {
 		ctx := context.Background()
@@ -445,6 +460,17 @@ func (w *classWorld) key(user uuid.UUID, g apikeys.Grant) string {
 	return plain
 }
 
+// keyFor is the key a class asks op with: an operation of the right admin
+// needs an instance admin as the key's owner, so it goes with a manage key
+// of w.admin that also has admin; any other operation with ownerKey.
+func (w *classWorld) keyFor(op publicOp, ownerKey string) string {
+	w.t.Helper()
+	if op.right != "admin" {
+		return ownerKey
+	}
+	return w.key(w.admin, apikeys.Grant{Level: apikeys.LevelManage, Admin: true, Scope: apikeys.Scope{Mode: apikeys.ScopeAll}})
+}
+
 func levelKey(l apikeys.Level) apikeys.Grant {
 	return apikeys.Grant{Level: l, Scope: apikeys.Scope{Mode: apikeys.ScopeAll}}
 }
@@ -535,6 +561,17 @@ func (w *classWorld) call(op publicOp, p uuid.UUID, key string) opCall {
 		return opCall{http.MethodDelete, base + "me/watch-filters/" + w.seedFilter(), nil, nil}
 	case "listReminders":
 		return opCall{http.MethodGet, base + "reminders", nil, nil}
+	case "listUsers":
+		return opCall{http.MethodGet, base + "users", nil, nil}
+	case "createUser":
+		return opCall{http.MethodPost, base + "users", map[string]any{"email": w.fresh("u") + "@classes.test", "name": "classes",
+			"password": "initial-pass", "role": "user"}, nil}
+	case "updateUser":
+		u, _ := testsupport.SeedUser(w.t, w.pool, "")
+		return opCall{http.MethodPatch, base + "users/" + u.String(), map[string]any{"name": w.fresh("name")}, nil}
+	case "addSpaceMember":
+		u, _ := testsupport.SeedUser(w.t, w.pool, "")
+		return opCall{http.MethodPost, base + "spaces/" + w.spaceShort + "/members", map[string]any{"userId": u.String()}, nil}
 	case "createIssue":
 		return opCall{http.MethodPost, proj + "/issues", map[string]any{"title": w.fresh("iss"), "type": "task", "force": true}, nil}
 	case "createEpic":
@@ -754,6 +791,8 @@ func (w *classWorld) below(right string) (owner uuid.UUID, g apikeys.Grant) {
 		return w.owner, levelKey(apikeys.LevelRead)
 	case "manage":
 		return w.owner, levelKey(apikeys.LevelWrite)
+	case "admin":
+		return w.admin, levelKey(apikeys.LevelManage)
 	}
 	w.t.Fatalf("no level below %s", right)
 	return uuid.Nil, apikeys.Grant{}
@@ -795,9 +834,10 @@ func TestPublicAPIClasses_KeyRight(t *testing.T) {
 // differs from the literal.
 func TestPublicAPIClasses_FieldsAndPrefer(t *testing.T) {
 	w := newClassWorld(t)
-	key := w.key(w.owner, levelKey(apikeys.LevelManage))
+	ownerKey := w.key(w.owner, levelKey(apikeys.LevelManage))
 	for _, op := range publicOps {
 		t.Run(op.id, func(t *testing.T) {
+			key := w.keyFor(op, ownerKey)
 			if op.read {
 				c := w.call(op, w.p, key)
 				full := w.do(key, c, "", nil).object(t)
@@ -911,7 +951,7 @@ func TestPublicAPIClasses_OriginOfAWrite(t *testing.T) {
 		t.Run(op.id, func(t *testing.T) {
 			// A key per operation: the run makes more requests than one key's
 			// rate limit lets through in a minute.
-			key := w.key(w.owner, levelKey(apikeys.LevelManage))
+			key := w.keyFor(op, w.key(w.owner, levelKey(apikeys.LevelManage)))
 			for _, kind := range []string{"", "directed", "autonomous"} {
 				c := w.call(op, w.p, key)
 				if kind != "" {
@@ -1080,8 +1120,28 @@ VALUES ($1, $2, $3, $4, 'backfilled', 'manage', false, 'all', NULL) RETURNING id
 		_, _ = w.pool.Exec(context.Background(), `DELETE FROM agents WHERE api_key_id = $1`, keyID)
 		_, _ = w.pool.Exec(context.Background(), `DELETE FROM api_keys WHERE id = $1`, keyID)
 	})
+	// The backfill gives admin only to the key of an admin owner: the
+	// operations of the right admin go with such a key.
+	adminPlain, adminPrefix, adminHash, err := auth.GenerateAPIKey(auth.MinBcryptCost)
+	if err != nil {
+		t.Fatalf("GenerateAPIKey: %v", err)
+	}
+	var adminKeyID uuid.UUID
+	if err := w.pool.QueryRow(context.Background(), `
+INSERT INTO api_keys (id, user_id, key_hash, prefix, label, level, is_admin, scope_mode, expires_at)
+VALUES ($1, $2, $3, $4, 'backfilled admin', 'manage', true, 'all', NULL) RETURNING id`, uuid.New(), w.admin, adminHash, adminPrefix).Scan(&adminKeyID); err != nil {
+		t.Fatalf("seed a backfilled admin key: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = w.pool.Exec(context.Background(), `DELETE FROM agents WHERE api_key_id = $1`, adminKeyID)
+		_, _ = w.pool.Exec(context.Background(), `DELETE FROM api_keys WHERE id = $1`, adminKeyID)
+	})
 	for _, op := range publicOps {
 		t.Run(op.id, func(t *testing.T) {
+			plain := plain
+			if op.right == "admin" {
+				plain = adminPlain
+			}
 			if a := w.do(plain, w.call(op, w.p, plain), "", nil); !success(a.status) {
 				t.Errorf("%d %s", a.status, a.body)
 			}
@@ -1096,9 +1156,10 @@ VALUES ($1, $2, $3, $4, 'backfilled', 'manage', false, 'all', NULL) RETURNING id
 // silently ignored.
 func TestPublicAPIClasses_StrictParsing(t *testing.T) {
 	w := newClassWorld(t)
-	key := w.key(w.owner, levelKey(apikeys.LevelManage))
+	ownerKey := w.key(w.owner, levelKey(apikeys.LevelManage))
 	for _, op := range publicOps {
 		t.Run(op.id, func(t *testing.T) {
+			key := w.keyFor(op, ownerKey)
 			c := w.call(op, w.p, key)
 			since := w.lastEvent()
 			if a := w.do(key, c, "nosuchparam=1", nil); a.status != http.StatusBadRequest || a.code() != "validation_error" {

@@ -67,6 +67,7 @@ func newResourceRigWithStorage(t *testing.T, pool *pgxpool.Pool, s3 attachments.
 	attStore := attachments.NewStore(pool)
 	notifStore := notifications.NewStore(pool)
 	remindersStore := reminders.NewStore(pool)
+	spacesSvc := spaces.NewService(pool, spaces.Options{Creation: spaces.CreationAll})
 	const attMax, attTTL = int64(10 << 20), 10 * time.Minute
 	projectsStore := projects.NewStore(pool)
 	usersStore := users.NewStore(pool, auth.MinBcryptCost, apikeys.New(pool), "local", "", nil)
@@ -99,6 +100,7 @@ func newResourceRigWithStorage(t *testing.T, pool *pgxpool.Pool, s3 attachments.
 			Outcomes:      idempotency.Hooks{},
 			Notifications: notifStore,
 			Reminders:     remindersStore,
+			Spaces:        spacesSvc,
 			Attachments:   issueops.AttachmentDeps{Store: attStore, S3: s3, Bucket: "rig", MaxSize: attMax, URLTTL: attTTL},
 		}))
 	mcpHandler, _ := mcppkg.Setup(pool, 0, func(s *server.MCPServer) {
@@ -139,6 +141,7 @@ func newResourceRigWithStorage(t *testing.T, pool *pgxpool.Pool, s3 attachments.
 		tools.RegisterNotifications(s, pool, notifStore)
 		tools.RegisterWatchers(s, pool, projectsStore, notifStore, monitorcreds.New(pool, 0))
 		tools.RegisterRemind(s, pool, remindersStore, issuesStore, projectsStore)
+		tools.RegisterUser(s, usersStore, pool, spacesSvc)
 	})
 	return &resourceRig{
 		t: t, pool: pool, restH: rest,

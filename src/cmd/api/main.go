@@ -1087,6 +1087,8 @@ func main() {
 		IssuesEmbedder:   pubIssuesEmbedder,
 		Notifications:    notifStore,
 		Reminders:        remindersStore,
+		// The spaces service as the MCP tools get it (addSpaceMember).
+		Spaces: spaces.NewService(pool, spacesOptions(cfg)),
 		// The attachment store and storage of the MCP tool; S3 nil when
 		// S3_URL is unset — the operations then answer attachments_unavailable.
 		Attachments: issueops.AttachmentDeps{

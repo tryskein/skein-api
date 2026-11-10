@@ -121,7 +121,7 @@ func writeFailure(w http.ResponseWriter, f *issueops.Failure, pathIDs ...string)
 	origin := OriginDomain
 	if code.Class() == errcode.ClassNotFound {
 		origin = OriginBody
-		for _, key := range []string{"id", "issueId", "q", "projectId", "fromId", "commentId", "attachmentId", "reminderId"} {
+		for _, key := range []string{"id", "issueId", "q", "projectId", "fromId", "commentId", "attachmentId", "reminderId", "userId", "space"} {
 			if v, ok := f.Fields[key].(string); ok {
 				for _, p := range pathIDs {
 					if p != "" && v == p {

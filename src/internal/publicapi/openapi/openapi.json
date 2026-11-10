@@ -2146,6 +2146,24 @@
                 },
                 "type": "object"
             },
+            "publicapi.List-users_UserDTO": {
+                "properties": {
+                    "hasMore": {
+                        "type": "boolean"
+                    },
+                    "items": {
+                        "items": {
+                            "$ref": "#/components/schemas/users.UserDTO"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
+                    },
+                    "nextCursor": {
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
             "publicapi.MovePlan": {
                 "properties": {
                     "nextSteps": {
@@ -2430,6 +2448,19 @@
                 },
                 "type": "object"
             },
+            "publicapi.SpaceMemberAdded": {
+                "properties": {
+                    "member": {
+                        "$ref": "#/components/schemas/spaces.SpaceMember",
+                        "description": "Member is the participant added."
+                    },
+                    "spaceId": {
+                        "description": "SpaceID is the space's short id.",
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
             "publicapi.WatchFilterDeleted": {
                 "properties": {
                     "deleted": {
@@ -2476,6 +2507,19 @@
                     },
                     "type": {
                         "description": "Type: blocks, waits-for, related, discovered-from, supersedes,\nduplicates or parent-child. Required.",
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
+            "publicapi.addSpaceMemberBody": {
+                "properties": {
+                    "kind": {
+                        "description": "Kind of the write: directed or autonomous (checked).",
+                        "type": "string"
+                    },
+                    "userId": {
+                        "description": "UserID of the user to add. Required.",
                         "type": "string"
                     }
                 },
@@ -3156,6 +3200,39 @@
                 },
                 "type": "object"
             },
+            "publicapi.createUserBody": {
+                "properties": {
+                    "email": {
+                        "description": "Email, unique. Required.",
+                        "type": "string"
+                    },
+                    "isExternal": {
+                        "description": "IsExternal makes an external collaborator.",
+                        "type": "boolean"
+                    },
+                    "kind": {
+                        "description": "Kind of the write: directed or autonomous (checked).",
+                        "type": "string"
+                    },
+                    "name": {
+                        "description": "Name. Required.",
+                        "type": "string"
+                    },
+                    "password": {
+                        "description": "Password, the initial one, at least 8 characters. Required.",
+                        "type": "string"
+                    },
+                    "role": {
+                        "description": "Role: user (an administrator is created only in the UI). Required.",
+                        "type": "string"
+                    },
+                    "username": {
+                        "description": "Username, unique; omitted — derived from the email.",
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
             "publicapi.deleteCommentBody": {
                 "properties": {
                     "kind": {
@@ -3493,6 +3570,27 @@
                 },
                 "type": "object"
             },
+            "publicapi.updateUserBody": {
+                "properties": {
+                    "deactivated": {
+                        "description": "Deactivated deactivates (true) or reactivates (false) the user;\nwhen present the other fields are not applied. An administrator\nis not deactivated by a key.",
+                        "type": "boolean"
+                    },
+                    "kind": {
+                        "description": "Kind of the write: directed or autonomous (checked).",
+                        "type": "string"
+                    },
+                    "name": {
+                        "description": "Name, the new display name.",
+                        "type": "string"
+                    },
+                    "role": {
+                        "description": "Role: the admin role is neither given nor taken by a key.",
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
             "publicapi.watchFilterBody": {
                 "properties": {
                     "filter": {
@@ -3739,6 +3837,43 @@
                 },
                 "type": "object"
             },
+            "spaces.SpaceMember": {
+                "properties": {
+                    "deactivated": {
+                        "description": "Deactivated marks a deactivated account (membership stays).",
+                        "type": "boolean"
+                    },
+                    "deleted": {
+                        "description": "Deleted — the account was deleted (INV-18).",
+                        "type": "boolean"
+                    },
+                    "departed": {
+                        "description": "Departed — the person has left the space of this context (the\nissue's project); shown greyed. Never set together with Deleted.",
+                        "type": "boolean"
+                    },
+                    "name": {
+                        "description": "Name is the display name.",
+                        "type": "string"
+                    },
+                    "pseudonym": {
+                        "description": "Pseudonym — the stable alias of a deleted account\n(users.pseudonym, `deleted-<8hex>`); absent otherwise.",
+                        "type": "string"
+                    },
+                    "role": {
+                        "description": "Role is RoleOwner | RoleMember.",
+                        "type": "string"
+                    },
+                    "userId": {
+                        "description": "UserID is the user id (UUID).",
+                        "type": "string"
+                    },
+                    "username": {
+                        "description": "Username is the @-mention handle.",
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
             "tools.MoveComponent": {
                 "properties": {
                     "description": {
@@ -3847,6 +3982,55 @@
                         "type": "string"
                     },
                     "name": {
+                        "type": "string"
+                    },
+                    "role": {
+                        "type": "string"
+                    },
+                    "username": {
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
+            "users.UserDTO": {
+                "properties": {
+                    "authMethod": {
+                        "description": "AuthMethod is a derived view of the user's auth-method state. We\nnever leak the raw `password_hash` or `keycloak_sub` columns — the\nUI only needs to know HOW the account can authenticate, not the\nunderlying secret.\n\n  \"password\" — local password set; no SSO link\n  \"keycloak\" — Keycloak SSO subject linked; no local password\n  \"both\"     — both linked (e.g. SSO user who also set a fallback\n               local password, rare but supported)\n\nEmpty string is impossible — the users_auth_method CHECK on the\ntable forbids the all-null state.",
+                        "type": "string"
+                    },
+                    "createdAt": {
+                        "type": "string"
+                    },
+                    "deactivatedAt": {
+                        "type": "string"
+                    },
+                    "deleted": {
+                        "description": "Deleted — the account was deleted (INV-18).",
+                        "type": "boolean"
+                    },
+                    "departed": {
+                        "description": "Departed — the person has left the space of this context (the\nissue's project); shown greyed. Never set together with Deleted.",
+                        "type": "boolean"
+                    },
+                    "email": {
+                        "type": "string"
+                    },
+                    "id": {
+                        "type": "string"
+                    },
+                    "isExternal": {
+                        "description": "IsExternal flags the account as an external collaborator (sk-163).\nSurfaced on the admin user list / create response so the frontend can\nrender the \"external\" badge + filter (S8). External accounts are\npermanently capped at role='user' (spec §5); the flag is set only at\ncreate time — there is no conversion/update path in this iteration.",
+                        "type": "boolean"
+                    },
+                    "lastLoginAt": {
+                        "type": "string"
+                    },
+                    "name": {
+                        "type": "string"
+                    },
+                    "pseudonym": {
+                        "description": "Pseudonym — the stable alias of a deleted account\n(users.pseudonym, `deleted-<8hex>`); absent otherwise.",
                         "type": "string"
                     },
                     "role": {
@@ -13393,6 +13577,513 @@
                 "summary": "Search",
                 "tags": [
                     "Search"
+                ]
+            }
+        },
+        "/api/v1/spaces/{space}/members": {
+            "post": {
+                "description": "Makes the user of the body a participant of the space of the path — the same operation as the MCP tool skein_user, action space_add; the refusals of the spaces service keep their codes (a personal space, an external user, no free seat, already a participant). Needs the key right admin and an internal instance admin as its owner. Side effects: the participation and its event.",
+                "operationId": "addSpaceMember",
+                "parameters": [
+                    {
+                        "description": "The space's short id",
+                        "in": "path",
+                        "name": "space",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/publicapi.addSpaceMemberBody",
+                                "summary": "body",
+                                "description": "The user"
+                            }
+                        }
+                    },
+                    "description": "The user",
+                    "required": true
+                },
+                "responses": {
+                    "201": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.SpaceMemberAdded"
+                                }
+                            }
+                        },
+                        "description": "The participant added"
+                    },
+                    "400": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Malformed body, unknown field or parameter, a kind outside directed|autonomous (code validation_error)"
+                    },
+                    "401": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "No key, or the key is invalid, expired or revoked (code unauthenticated)"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The key lacks admin (code insufficient_scope); the owner is not an instance admin (code not_admin)"
+                    },
+                    "404": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "No such space (code space_not_found)"
+                    },
+                    "422": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "userId is missing or not a UUID (code validation_error); the user is missing (user_not_found); the space is personal (personal_space), the user external (external_user), no seat (no_seats), already a participant (already_member)"
+                    },
+                    "429": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Rate limited (code rate_limited, Retry-After)"
+                    },
+                    "500": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Internal error (code internal_error)"
+                    },
+                    "503": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The database is unavailable (code database_unavailable)"
+                    }
+                },
+                "security": [
+                    {
+                        "SkeinApiKey": [
+                            "admin"
+                        ]
+                    }
+                ],
+                "summary": "Add a user to a space",
+                "tags": [
+                    "Users"
+                ]
+            }
+        },
+        "/api/v1/users": {
+            "get": {
+                "description": "Returns a page of the users of the instance — the same operation as the MCP tool skein_user, action list: archived=true lists the deactivated ones, search matches name, email and username. Keyset paging: pass nextCursor back as cursor while hasMore is true. Needs the key right admin and an internal instance admin as its owner. Read-only.",
+                "operationId": "listUsers",
+                "parameters": [
+                    {
+                        "description": "List the deactivated users",
+                        "in": "query",
+                        "name": "archived",
+                        "schema": {
+                            "type": "boolean"
+                        }
+                    },
+                    {
+                        "description": "Text to match",
+                        "in": "query",
+                        "name": "search",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "Page size, 1..100 (default 50)",
+                        "in": "query",
+                        "name": "limit",
+                        "schema": {
+                            "type": "integer"
+                        }
+                    },
+                    {
+                        "description": "The nextCursor of the previous page",
+                        "in": "query",
+                        "name": "cursor",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "Comma-separated fields of each item to return (plus id)",
+                        "in": "query",
+                        "name": "fields",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.List-users_UserDTO"
+                                }
+                            }
+                        },
+                        "description": "A page of users"
+                    },
+                    "400": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Unknown parameter or field, limit out of range, a foreign cursor (code validation_error)"
+                    },
+                    "401": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "No key, or the key is invalid, expired or revoked (code unauthenticated)"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The key lacks admin (code insufficient_scope); the owner is not an instance admin (code not_admin)"
+                    },
+                    "429": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Rate limited (code rate_limited, Retry-After)"
+                    },
+                    "500": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Internal error (code internal_error)"
+                    },
+                    "503": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The database is unavailable (code database_unavailable)"
+                    }
+                },
+                "security": [
+                    {
+                        "SkeinApiKey": [
+                            "admin"
+                        ]
+                    }
+                ],
+                "summary": "List users",
+                "tags": [
+                    "Users"
+                ]
+            },
+            "post": {
+                "description": "Creates a user with an initial password — the same operation as the MCP tool skein_user, action create. The initial password is the one password a key may set (INV-12): whoever knows it can sign in to the UI as that user. A key never creates an administrator. Needs the key right admin and an internal instance admin as its owner. Side effects: the user and his personal space.",
+                "operationId": "createUser",
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/publicapi.createUserBody",
+                                "summary": "body",
+                                "description": "The user"
+                            }
+                        }
+                    },
+                    "description": "The user",
+                    "required": true
+                },
+                "responses": {
+                    "201": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/users.UserDTO"
+                                }
+                            }
+                        },
+                        "description": "The user created"
+                    },
+                    "400": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Malformed body, unknown field or parameter, a kind outside directed|autonomous (code validation_error)"
+                    },
+                    "401": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "No key, or the key is invalid, expired or revoked (code unauthenticated)"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The key lacks admin (code insufficient_scope); the owner is not an instance admin (code not_admin); an administrator by key (code forbidden)"
+                    },
+                    "422": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "A field is missing or invalid (code validation_error); the email or the username is taken (email_taken, username_taken); the admin role is disabled (admin_role_disabled)"
+                    },
+                    "429": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Rate limited (code rate_limited, Retry-After)"
+                    },
+                    "500": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Internal error (code internal_error)"
+                    },
+                    "503": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The database is unavailable (code database_unavailable)"
+                    }
+                },
+                "security": [
+                    {
+                        "SkeinApiKey": [
+                            "admin"
+                        ]
+                    }
+                ],
+                "summary": "Create a user",
+                "tags": [
+                    "Users"
+                ]
+            }
+        },
+        "/api/v1/users/{user}": {
+            "patch": {
+                "description": "Changes the user of the path — the same operation as the MCP tool skein_user, action update: name and role, or deactivated (when present the other fields are not applied). Deactivating a user revokes his API keys; reactivating does not bring them back. Through a key the password is not changed (there is no such field: 400), the admin role is neither given nor taken and an administrator is not deactivated (403 forbidden) — that is done only in the UI. Needs the key right admin and an internal instance admin as its owner. Side effects: the user's events; on a deactivation the revocation of his keys.",
+                "operationId": "updateUser",
+                "parameters": [
+                    {
+                        "description": "The user's UUID",
+                        "in": "path",
+                        "name": "user",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/publicapi.updateUserBody",
+                                "summary": "body",
+                                "description": "The changes"
+                            }
+                        }
+                    },
+                    "description": "The changes",
+                    "required": true
+                },
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/users.UserDTO"
+                                }
+                            }
+                        },
+                        "description": "The user after the change"
+                    },
+                    "400": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Malformed body, unknown field (password among them) or parameter, a kind outside directed|autonomous (code validation_error)"
+                    },
+                    "401": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "No key, or the key is invalid, expired or revoked (code unauthenticated)"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The key lacks admin (code insufficient_scope); the owner is not an instance admin (code not_admin); the admin role or an administrator's deactivation by key (code forbidden)"
+                    },
+                    "404": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "No such user (code user_not_found)"
+                    },
+                    "422": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "No change named or a value invalid (code validation_error); the last administrator (last_admin_cannot_demote)"
+                    },
+                    "429": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Rate limited (code rate_limited, Retry-After)"
+                    },
+                    "500": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Internal error (code internal_error)"
+                    },
+                    "503": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The database is unavailable (code database_unavailable)"
+                    }
+                },
+                "security": [
+                    {
+                        "SkeinApiKey": [
+                            "admin"
+                        ]
+                    }
+                ],
+                "summary": "Update a user",
+                "tags": [
+                    "Users"
                 ]
             }
         }

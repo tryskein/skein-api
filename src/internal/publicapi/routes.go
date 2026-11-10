@@ -23,6 +23,7 @@ import (
 	"skein-api/internal/projects"
 	"skein-api/internal/reminders"
 	"skein-api/internal/search"
+	"skein-api/internal/spaces"
 	"skein-api/internal/users"
 )
 
@@ -215,6 +216,8 @@ type Deps struct {
 	// Outcomes records the outcome of an operation that accepts
 	// Idempotency-Key (idempotency.Hooks).
 	Outcomes Outcomes
+	// Spaces is the spaces service (addSpaceMember).
+	Spaces *spaces.Service
 	// Notifications and Reminders are the stores of the caller's own state.
 	Notifications *notifications.Store
 	Reminders     *reminders.Store
@@ -243,12 +246,13 @@ func ProductRoutes(d Deps) []Route {
 	wa := &issueWrites{
 		issuesAPI: ia,
 		ops: issueops.Deps{Pool: d.Pool, Issues: d.Issues, Deps: d.Dependencies, Projects: d.Projects,
-			Notifications: d.Notifications, Reminders: d.Reminders},
+			Notifications: d.Notifications, Reminders: d.Reminders, Users: d.Users, Spaces: d.Spaces},
 		outcomes:    d.Outcomes,
 		attachments: att,
 	}
 	read := authz.KeyRequirement{Right: authz.KeyRightRead}
 	manage := authz.KeyRequirement{Right: authz.KeyRightManage}
+	admin := authz.KeyRequirement{Right: authz.KeyRightAdmin}
 	key := func(id, method, path string, req authz.KeyRequirement, obj ActionObject, actions []authz.Action, h http.HandlerFunc) Route {
 		return Route{
 			OperationID: id, Method: method, Path: PathPrefix + path, Auth: AuthKey,
@@ -384,6 +388,13 @@ func ProductRoutes(d Deps) []Route {
 			routeFlags{noActions: true}),
 		writeRoute(OperationDismissReminder, http.MethodDelete, "reminders/{reminder}", ObjectNone, wa.dismissReminder,
 			routeFlags{noActions: true}),
+
+		// Users (T028): the key right admin; the owner's admin role is the
+		// operation's gate.
+		key(OperationListUsers, http.MethodGet, "users", admin, ObjectNone, nil, wa.listUsers),
+		key(OperationCreateUser, http.MethodPost, "users", admin, ObjectNone, nil, wa.createUser),
+		key(OperationUpdateUser, http.MethodPatch, "users/{user}", admin, ObjectNone, nil, wa.updateUser),
+		key(OperationAddSpaceMember, http.MethodPost, "spaces/{space}/members", admin, ObjectNone, nil, wa.addSpaceMember),
 	}
 }
 
