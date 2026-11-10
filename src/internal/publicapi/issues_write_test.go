@@ -785,3 +785,26 @@ func TestIssuesWrite_ExecutorSeenByReaders(t *testing.T) {
 		t.Errorf("skein_show lockedBy %v, want %s", card["lockedBy"], holder)
 	}
 }
+
+// TestIssuesWrite_NullBody — regression (R7-04): an optional body of JSON
+// null reads as an empty one. It used to leave the arguments nil and the
+// handler panicked writing the issue id into them (500). Red when a write
+// with the body null answers other than with the body {}.
+func TestIssuesWrite_NullBody(t *testing.T) {
+	pool := testsupport.NewTestPool(t)
+	rg := newResourceRig(t, pool)
+	w := seedWriteWorld(t, pool)
+	k := w.key(w.owner, apikeys.LevelWrite)
+	for _, op := range []string{"/release-lock", "/claim"} {
+		t.Run(op, func(t *testing.T) {
+			empty := rg.rest(k, http.MethodPost, issuePath(w.issue("empty body"), op), "{}", nil)
+			null := rg.rest(k, http.MethodPost, issuePath(w.issue("null body"), op), "null", nil)
+			if empty.status != http.StatusOK {
+				t.Fatalf("the body {}: %d %s", empty.status, empty.body)
+			}
+			if null.status != empty.status {
+				t.Errorf("the body null: %d %s, the body {} %d", null.status, null.body, empty.status)
+			}
+		})
+	}
+}
