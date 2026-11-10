@@ -38,9 +38,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"skein-api/internal/apikeys"
 	"skein-api/internal/auth"
-	"skein-api/internal/authz/authzsql"
 )
 
 // Scope is whose view of the projects a request reads.
@@ -90,13 +88,6 @@ func FromContext(ctx context.Context) Scope {
 // recipient, a monitor credential's owner.
 func ForUser(id uuid.UUID) Scope {
 	return Scope{callerID: id}
-}
-
-// ForUserWithGrant is ForUser narrowed to the scope of a key grant — the
-// scope of a token minted by a key, outside the key's own request: the
-// token's owner reaches no further than the key that minted it.
-func ForUserWithGrant(id uuid.UUID, g apikeys.Grant) Scope {
-	return Scope{callerID: id, key: authzsql.KeyLimitOf(g)}
 }
 
 // ScopeFor is the scope of the user id as the caller of this request: the
