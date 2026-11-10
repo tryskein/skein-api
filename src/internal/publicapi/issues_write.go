@@ -77,6 +77,10 @@ func decodeArgs(w http.ResponseWriter, r *http.Request, typed any) (issueops.Arg
 		WriteParseError(w, err)
 		return nil, false
 	}
+	if args == nil {
+		// A body of JSON null leaves the map nil; it carries no option.
+		args = issueops.Args{}
+	}
 	return args, true
 }
 
@@ -942,7 +946,7 @@ type reparentBody struct {
 // @Failure 404 {object} ProblemDocument "No such issue within reach (code issue_not_found)"
 // @Failure 412 {object} ProblemDocument "If-Match is stale (code version_conflict)"
 // @Failure 428 {object} ProblemDocument "If-Match is missing (code precondition_required)"
-// @Failure 422 {object} ProblemDocument "The new parent out of reach (code parent_not_found), closed (parent_closed), in another project (reparent_cross_project), the issue itself (reparent_self), a cycle (dependency_cycle); a serialization race (serialization_retry)"
+// @Failure 422 {object} ProblemDocument "The new parent out of reach (code issue_not_found, as skein_reparent answers it), closed (parent_closed), in another project (reparent_cross_project), the issue itself (reparent_self), a cycle (dependency_cycle); a serialization race (serialization_retry)"
 // @Failure 429 {object} ProblemDocument "Rate limited (code rate_limited, Retry-After)"
 // @Failure 500 {object} ProblemDocument "Internal error (code internal_error)"
 // @Failure 503 {object} ProblemDocument "The database is unavailable (code database_unavailable)"

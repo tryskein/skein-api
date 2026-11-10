@@ -52,6 +52,7 @@ func seedWriteWorld(t *testing.T, pool *pgxpool.Pool) *writeWorld {
 	w.other, w.otherNm = testsupport.SeedUser(t, pool, "")
 	w.space, _ = seedOwnSpace(t, pool, w.owner)
 	testsupport.AddSpaceMember(t, pool, w.space, w.member)
+	testsupport.AddSpaceMember(t, pool, w.space, w.other)
 	w.project, w.prefix = seedProject(t, pool, w.owner, w.space, "wrp")
 	addMember(t, pool, w.project, w.member, "member")
 	w.repoURL = "https://git.example.test/" + w.prefix + ".git"
@@ -236,7 +237,8 @@ func TestIssuesWrite_ParityWithMCP(t *testing.T) {
 		{name: "acceptIssue", prep: assignTo(w.ownerNm), write: true,
 			rest: func(id string) restCall { return rg.rest(ko, http.MethodPost, issuePath(id, "/accept"), nil, nil) },
 			mcp:  func(id string) toolAnswer { return rg.tool(ko, "skein_accept", map[string]any{"id": id}) }},
-		{name: "reparentIssue under a missing parent", want: "parent_not_found",
+		// skein_reparent names a missing new parent issue_not_found.
+		{name: "reparentIssue under a missing parent", want: "issue_not_found",
 			rest: func(id string) restCall {
 				return rg.rest(ko, http.MethodPost, issuePath(id, "/reparent"), map[string]any{"newParentId": w.prefix + "-77777"}, ifMatch(w.version(id)))
 			},
@@ -637,7 +639,15 @@ func TestIssuesWrite_ClaimIssues(t *testing.T) {
 	d := w.issue("d")
 	r := rg.rest(k, http.MethodPost, "/api/v1/issues/claim", map[string]any{"ids": []string{d, b, a}}, nil)
 	wantOK(t, "claimIssues", r, http.StatusOK)
-	if got := ids(t, r.json(t)["items"], "id"); !slices.Equal(got, []string{d, b, a}) {
+	// ids sorts; the order of the answer is what is checked here.
+	got := []string{}
+	list, _ := r.json(t)["items"].([]any)
+	for _, it := range list {
+		m, _ := it.(map[string]any)
+		s, _ := m["id"].(string)
+		got = append(got, s)
+	}
+	if !slices.Equal(got, []string{d, b, a}) {
 		t.Errorf("order %v, want %v", got, []string{d, b, a})
 	}
 }
@@ -673,7 +683,7 @@ func TestIssuesWrite_OriginOfAMissingObject(t *testing.T) {
 			check("createEpic parent", rg.rest(key.key, http.MethodPost, "/api/v1/projects/"+w.project.String()+"/epics",
 				map[string]any{"title": "e", "parentId": key.ref}, nil), 422, "parent_not_found")
 			check("reparentIssue new parent", rg.rest(key.key, http.MethodPost, issuePath(id, "/reparent"),
-				map[string]any{"newParentId": key.ref}, ifMatch(w.version(id))), 422, "parent_not_found")
+				map[string]any{"newParentId": key.ref}, ifMatch(w.version(id))), 422, "issue_not_found")
 			check("closeIssue target", rg.rest(key.key, http.MethodPost, issuePath(id, "/close"),
 				map[string]any{"reason": "r", "closeOutcome": "duplicate", "closeTarget": key.ref}, ifMatch(w.version(id))), 422, "issue_not_found")
 			check("claimIssues id", rg.rest(key.key, http.MethodPost, "/api/v1/issues/claim",

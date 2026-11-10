@@ -162,6 +162,8 @@ func TestIdempotencyOps_RealOperations(t *testing.T) {
 		project, prefix := testsupport.SeedProject(t, w.pool, boss, "idemf")
 		manage := w.key(boss, levelKey(apikeys.LevelManage))
 		for _, lower := range []string{"role", "key"} {
+			// Each case starts from the owner with the force right.
+			w.exec(`UPDATE project_members SET role = 'owner' WHERE project_id = $1 AND user_id = $2`, project, boss)
 			id := testsupport.SeedIssue(t, w.pool, project, boss, prefix+"-"+lower, "forced "+lower, "open", 2)
 			w.exec(`UPDATE issues SET locked_by = 'mcp-session-other', locked_at = now(), status = 'in_progress' WHERE id = $1`, id)
 			c := opCall{http.MethodPost, "/api/v1/issues/" + id + "/close", map[string]any{"reason": "forced", "closeOutcome": "done"},
@@ -175,7 +177,6 @@ func TestIdempotencyOps_RealOperations(t *testing.T) {
 				w.exec(`UPDATE project_members SET role = 'member' WHERE project_id = $1 AND user_id = $2`, project, boss)
 				want = "force_unlock_forbidden"
 			} else {
-				w.exec(`UPDATE project_members SET role = 'owner' WHERE project_id = $1 AND user_id = $2`, project, boss)
 				w.exec(`UPDATE api_keys SET level = 'write' WHERE user_id = $1`, boss)
 				want = "insufficient_scope"
 			}

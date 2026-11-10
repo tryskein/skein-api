@@ -77,6 +77,9 @@ func newResourceRig(t *testing.T, pool *pgxpool.Pool) *resourceRig {
 			Doc: doc, Pool: pool, Projects: projectsStore, Users: usersStore,
 			DefaultVisibility: spaces.VisibilityMembers,
 			Issues:            issuesStore, Dependencies: depsStore, Search: searchSvc,
+			// As publicAPIServer wires it: without the hooks an outcome of
+			// an operation with a target is not kept.
+			Outcomes: idempotency.Hooks{},
 		}))
 	mcpHandler, _ := mcppkg.Setup(pool, 0, func(s *server.MCPServer) {
 		tools.RegisterWhoami(s, pool)

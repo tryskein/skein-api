@@ -5881,7 +5881,7 @@
                                 }
                             }
                         },
-                        "description": "The new parent out of reach (code parent_not_found), closed (parent_closed), in another project (reparent_cross_project), the issue itself (reparent_self), a cycle (dependency_cycle); a serialization race (serialization_retry)"
+                        "description": "The new parent out of reach (code issue_not_found, as skein_reparent answers it), closed (parent_closed), in another project (reparent_cross_project), the issue itself (reparent_self), a cycle (dependency_cycle); a serialization race (serialization_retry)"
                     },
                     "428": {
                         "content": {
