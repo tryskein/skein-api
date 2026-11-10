@@ -3,7 +3,7 @@ package main
 // ui_prefix_mount_test.go — the internal API of the frontend moves from
 // /api/v1 to /ui/v1, and for one transitional release skein-api accepts both
 // prefixes on its internal port, so skein-api and skein-web can be rolled out
-// in any order (US-11, Р-2, edge "transitional release"). /mcp and /agent/v1
+// in any order (US-11, R-2, edge "transitional release"). /mcp and /agent/v1
 // keep their paths and are not part of the move (US-11 "Unchanged").
 //
 // The tests go through the PRODUCTION router (buildRouter over config.Load):
