@@ -9,9 +9,11 @@ package tools
 import (
 	"context"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 
@@ -19,6 +21,7 @@ import (
 	"skein-api/internal/issues"
 	"skein-api/internal/projects"
 	"skein-api/internal/search"
+	"skein-api/internal/testsupport"
 )
 
 func callSourceAPITool(t *testing.T, ctx context.Context, h server.ToolHandlerFunc, args map[string]any) map[string]any {
@@ -60,21 +63,59 @@ func TestSourceAPI_MCPFilters(t *testing.T) {
 		}
 	})
 
-	t.Run("skein_search accepts source=api and commentAuthorKinds=[api]", func(t *testing.T) {
+	t.Run("skein_search filters source=api and commentAuthorKinds=[api] exactly", func(t *testing.T) {
+		// Review C2-04: records with a unique token, and the exact result set
+		// is asserted before anything else, so an empty page cannot pass.
 		svc, err := search.NewService(search.NewStore(pool), nil, 60*time.Second)
 		if err != nil {
 			t.Fatalf("search service: %v", err)
 		}
 		h := handleSearch(pool, svc, projects.NewStore(pool))
-		body := callSourceAPITool(t, ctx, h, map[string]any{"query": prefix, "project": pid.String(), "source": "api"})
-		items, _ := body["items"].([]any)
-		for _, raw := range items {
-			row := raw.(map[string]any)
-			if row["kind"] == "issue" && row["id"] != prefix+"-2" {
-				t.Errorf("source=api returned issue %v, want only %s-2", row["id"], prefix)
+		spid, sprefix := seedProject(t, pool, owner, "lsaps")
+		tok := "tok" + strings.ReplaceAll(uuid.NewString()[:12], "-", "")
+		bg := context.Background()
+		for n, src := range map[string]string{"1": issues.SourceHuman, "2": issues.SourceAPI} {
+			id := sprefix + "-" + n
+			testsupport.SeedIssue(t, pool, spid, owner, id, "issue "+tok+" "+src, "open", 2)
+			if _, err := pool.Exec(bg, `UPDATE issues SET source = $2 WHERE id = $1`, id, src); err != nil {
+				t.Fatal(err)
 			}
 		}
-		callSourceAPITool(t, ctx, h, map[string]any{"query": prefix, "commentAuthorKinds": []any{"api"}})
+		host := sprefix + "-9"
+		testsupport.SeedIssue(t, pool, spid, owner, host, "comment host", "open", 2)
+		var apiComment string
+		for _, kind := range []string{issues.CommentAuthorKindHuman, issues.CommentAuthorKindAPI} {
+			id := testsupport.SeedComment(t, pool, host, owner, "note "+tok+" "+kind)
+			if _, err := pool.Exec(bg, `UPDATE comments SET author_kind = $2 WHERE id = $1`, id, kind); err != nil {
+				t.Fatal(err)
+			}
+			if kind == issues.CommentAuthorKindAPI {
+				apiComment = id.String()
+			}
+		}
+		ids := func(body map[string]any) []string {
+			items, ok := body["items"].([]any)
+			if !ok {
+				t.Fatalf("items not an array: %v", body)
+			}
+			out := make([]string, 0, len(items))
+			for _, raw := range items {
+				out = append(out, raw.(map[string]any)["id"].(string))
+			}
+			return out
+		}
+		got := ids(callSourceAPITool(t, ctx, h, map[string]any{
+			"query": tok, "project": spid.String(), "kinds": []any{"issue"}, "source": "api",
+		}))
+		if !slices.Equal(got, []string{sprefix + "-2"}) {
+			t.Errorf("source=api items %v, want exactly %s-2", got, sprefix)
+		}
+		got = ids(callSourceAPITool(t, ctx, h, map[string]any{
+			"query": tok, "project": spid.String(), "kinds": []any{"comment"}, "commentAuthorKinds": []any{"api"},
+		}))
+		if !slices.Equal(got, []string{apiComment}) {
+			t.Errorf("commentAuthorKinds=[api] items %v, want exactly the api comment %s", got, apiComment)
+		}
 	})
 
 	t.Run("skein_create kind keeps its values", func(t *testing.T) {
