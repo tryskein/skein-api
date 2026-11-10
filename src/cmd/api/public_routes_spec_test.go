@@ -18,7 +18,8 @@ package main
 // passes the response validation of kin-openapi (openapi3filter) against the
 // served document — status, documented headers, body schema and its required
 // members — and carries no member the document does not declare; a response
-// the document declares without content has no body.
+// the document declares without content has no body. Batches with a refused
+// item and the null branches are asked too.
 //
 // kin-openapi is a test-only dependency: no product package imports it.
 
@@ -302,7 +303,10 @@ func undeclaredMembers(s *openapi3.SchemaRef, v any, at string, out *[]string) {
 // operation of routes.go, asked with a key of its right by the owner of the
 // seeded project, matches the served document (responseProblems): status,
 // headers, type and nullability of each member, the members the document
-// requires, and no member the document does not declare. A response changed by one undeclared or one missing required member is
+// requires, and no member the document does not declare. The branches one
+// success does not reach are asked as well: a batch with a refused item,
+// resolveProject without a match, releaseIssueLock of an issue nobody holds.
+// A response changed by one undeclared or one missing required member is
 // refused by the same check. Red when a response of an operation does not
 // match the schema the document describes for it.
 func TestPublicResponsesMatchOpenAPI(t *testing.T) {
@@ -345,6 +349,67 @@ func TestPublicResponsesMatchOpenAPI(t *testing.T) {
 			key := keyOf(op)
 			c := w.call(op, w.p, key)
 			check(t, rt, c, w.do(key, c, "", nil))
+		})
+	}
+
+	// The branches one success does not reach. want asserts that the
+	// answer took the branch, so the check is not of the plain success.
+	refusedItem := func(t *testing.T, body map[string]any) {
+		t.Helper()
+		results, _ := body["results"].([]any)
+		for _, r := range results {
+			if row, _ := r.(map[string]any); row["ok"] == false && row["error"] != nil {
+				return
+			}
+		}
+		t.Fatalf("no refused item among the results: %v", body)
+	}
+	base := "/api/v1/"
+	for _, b := range []struct {
+		name, op string
+		call     func(key string) opCall
+		want     func(t *testing.T, body map[string]any)
+	}{
+		{"bulkUpdateIssues with a stale item", "bulkUpdateIssues", func(string) opCall {
+			ok, stale := w.freshIssue(w.p), w.freshIssue(w.p)
+			return opCall{http.MethodPost, base + "issues/bulk-update", map[string]any{"items": []map[string]any{
+				{"id": ok, "expectedVersion": w.issueVersion(ok), "title": w.fresh("bulk")},
+				{"id": stale, "expectedVersion": w.issueVersion(stale) + 5, "title": w.fresh("bulk")}}}, nil}
+		}, refusedItem},
+		{"bulkCloseIssues with a stale item", "bulkCloseIssues", func(string) opCall {
+			ok, stale := w.freshIssue(w.p), w.freshIssue(w.p)
+			return opCall{http.MethodPost, base + "issues/bulk-close", map[string]any{"items": []map[string]any{
+				{"id": ok, "expectedVersion": w.issueVersion(ok), "reason": "done", "closeOutcome": "done"},
+				{"id": stale, "expectedVersion": w.issueVersion(stale) + 5, "reason": "done", "closeOutcome": "done"}}}, nil}
+		}, refusedItem},
+		{"bulkAddDependencies with an item to a missing issue", "bulkAddDependencies", func(string) opCall {
+			from := w.freshIssue(w.p)
+			return opCall{http.MethodPost, base + "issues/dependencies/bulk-add", map[string]any{"items": []map[string]any{
+				{"fromId": from, "toId": w.pPrefix + "-999999", "type": "related"},
+				{"fromId": from, "toId": w.freshIssue(w.p), "type": "related"}}}, nil}
+		}, refusedItem},
+		{"resolveProject without a match", "resolveProject", func(string) opCall {
+			return opCall{http.MethodGet, base + "projects/resolve?q=" + w.fresh("nomatch"), nil, nil}
+		}, func(t *testing.T, body map[string]any) {
+			if m, present := body["match"]; !present || m != nil {
+				t.Fatalf("match %v, want null: %v", m, body)
+			}
+		}},
+		{"releaseIssueLock of an issue nobody holds", "releaseIssueLock", func(string) opCall {
+			return opCall{http.MethodPost, base + "issues/" + w.freshIssue(w.p) + "/release-lock", nil, nil}
+		}, func(t *testing.T, body map[string]any) {
+			if body["lockedBy"] != nil {
+				t.Fatalf("lockedBy %v, want none: %v", body["lockedBy"], body)
+			}
+		}},
+	} {
+		t.Run(b.name, func(t *testing.T) {
+			op := ops[b.op]
+			key := keyOf(op)
+			c := b.call(key)
+			a := w.do(key, c, "", nil)
+			check(t, routes[b.op], c, a)
+			b.want(t, a.object(t))
 		})
 	}
 
