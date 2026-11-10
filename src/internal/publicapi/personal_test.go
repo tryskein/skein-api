@@ -415,11 +415,13 @@ func TestPersonal_ParityWithMCP(t *testing.T) {
 	})
 }
 
-// TestPersonal_ObjectsOfThePath — decision of the lead 01a1c6d3 (spec
+// TestPersonal_ObjectsOfThePath — decisions of the lead 01a1c6d3 and R8-02 (spec
 // «Codes»: an object of the path that does not exist or is outside the
 // key's scope — 404). A notification and a filter of the path that are
 // missing, outside the key's scope or malformed answer one 404 with their
-// own code, and nothing changes; MCP keeps validation_error for them. Red
+// own code, and nothing changes; MCP keeps validation_error for them. The
+// issue of the path of markIssueNotificationsRead and markWatchingCardRead
+// is 404 issue_not_found likewise. Red
 // when one of them answers anything else or the codes differ.
 func TestPersonal_ObjectsOfThePath(t *testing.T) {
 	rg, w := seedPersonalWorld(t)
@@ -437,6 +439,11 @@ func TestPersonal_ObjectsOfThePath(t *testing.T) {
 		{"deleteWatchFilter outside the scope", http.MethodDelete, "/api/v1/me/watch-filters/" + overQ, "watch_filter_not_found"},
 		{"deleteWatchFilter of a missing one", http.MethodDelete, "/api/v1/me/watch-filters/" + uuid.NewString(), "watch_filter_not_found"},
 		{"deleteWatchFilter of a malformed id", http.MethodDelete, "/api/v1/me/watch-filters/abc", "watch_filter_not_found"},
+		// R8-02: the issue of the path of the two reads of one's own state.
+		{"markIssueNotificationsRead outside the scope", http.MethodPost, issuePath(w.qIssue, "/notifications/read"), "issue_not_found"},
+		{"markIssueNotificationsRead of a missing issue", http.MethodPost, issuePath(w.prefix+"-99999", "/notifications/read"), "issue_not_found"},
+		{"markWatchingCardRead outside the scope", http.MethodPost, "/api/v1/me/watching/issues/" + w.qIssue + "/read", "issue_not_found"},
+		{"markWatchingCardRead of a missing issue", http.MethodPost, "/api/v1/me/watching/issues/" + w.prefix + "-99999/read", "issue_not_found"},
 	} {
 		if got := rg.rest(kp, c.method, c.path, nil, nil); got.status != http.StatusNotFound || got.code() != c.code {
 			t.Errorf("%s: %d %s, want 404 %s", c.name, got.status, got.body, c.code)

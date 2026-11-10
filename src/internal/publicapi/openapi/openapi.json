@@ -8501,7 +8501,7 @@
         },
         "/api/v1/issues/{issue}/notifications/read": {
             "post": {
-                "description": "Marks read every notification of the caller tied to the issue of the path, those of its comments included — the same operation as the MCP tool skein_notifications, action mark_read_issue. Answers how many were marked; 0 is an answer. Side effects: the notifications' read time; no event.",
+                "description": "Marks read every notification of the caller tied to the issue of the path, those of its comments included — the same operation as the MCP tool skein_notifications, action mark_read_issue. Answers how many were marked; 0 is an answer. An issue that does not exist or is out of reach is 404 issue_not_found (MCP answers 0). Side effects: the notifications' read time; no event.",
                 "operationId": "markIssueNotificationsRead",
                 "parameters": [
                     {
@@ -8575,7 +8575,7 @@
                                 }
                             }
                         },
-                        "description": "The path names no issue (code issue_not_found)"
+                        "description": "No such issue within reach (code issue_not_found)"
                     },
                     "429": {
                         "content": {
@@ -10120,7 +10120,7 @@
         },
         "/api/v1/me/watching/issues/{issue}/read": {
             "post": {
-                "description": "Marks read every unread notification carded to the issue of the path in the caller's Watching — with a subtree subscription, the descendants' events included — the same operation as the MCP tool skein_notifications, action mark_read_card. A key of a narrower scope marks only the events of issues inside its scope. A card that is not the caller's, missing or with nothing unread answers marked 0. Side effects: the notifications' read time; no event.",
+                "description": "Marks read every unread notification carded to the issue of the path in the caller's Watching — with a subtree subscription, the descendants' events included — the same operation as the MCP tool skein_notifications, action mark_read_card. A key of a narrower scope marks only the events of issues inside its scope. A card that is not the caller's or has nothing unread answers marked 0; an issue that does not exist or is out of reach is 404 issue_not_found (MCP answers 0). Side effects: the notifications' read time; no event.",
                 "operationId": "markWatchingCardRead",
                 "parameters": [
                     {
@@ -10194,7 +10194,7 @@
                                 }
                             }
                         },
-                        "description": "The path names no issue (code issue_not_found)"
+                        "description": "No such issue within reach (code issue_not_found)"
                     },
                     "429": {
                         "content": {

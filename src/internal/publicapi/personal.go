@@ -204,6 +204,22 @@ func kindArgs(w http.ResponseWriter, r *http.Request) bool {
 	return ok && kindOf(w, body.Kind)
 }
 
+// visiblePathIssue is the {issue} of the path of an operation that only
+// reads the caller's own state about it: an issue that does not exist or is
+// out of reach is 404 issue_not_found, the object of the path (R8-02; the
+// operation itself, as MCP, answers 0 for it).
+func (a *issueWrites) visiblePathIssue(w http.ResponseWriter, r *http.Request) (string, bool) {
+	id, ok := pathIssueArg(w, r)
+	if !ok {
+		return "", false
+	}
+	if _, f := issueops.ResolveVisibleIssueProject(r.Context(), a.pool, "public API", id, callerOf(r)); f != nil {
+		writeFailure(w, f, id)
+		return "", false
+	}
+	return id, true
+}
+
 // pathNotification is the {notification} of the path as the operation's
 // notificationId (a JSON number, as MCP takes it); a value that is not a
 // positive integer names no notification (404 notification_not_found).
@@ -402,7 +418,7 @@ func (a *issueWrites) archiveNotification(w http.ResponseWriter, r *http.Request
 // markIssueNotificationsRead marks the notifications of an issue read.
 //
 // @Summary Mark the notifications of an issue read
-// @Description Marks read every notification of the caller tied to the issue of the path, those of its comments included — the same operation as the MCP tool skein_notifications, action mark_read_issue. Answers how many were marked; 0 is an answer. Side effects: the notifications' read time; no event.
+// @Description Marks read every notification of the caller tied to the issue of the path, those of its comments included — the same operation as the MCP tool skein_notifications, action mark_read_issue. Answers how many were marked; 0 is an answer. An issue that does not exist or is out of reach is 404 issue_not_found (MCP answers 0). Side effects: the notifications' read time; no event.
 // @Tags Me
 // @Accept json
 // @Produce json
@@ -413,7 +429,7 @@ func (a *issueWrites) archiveNotification(w http.ResponseWriter, r *http.Request
 // @Failure 400 {object} ProblemDocument "Malformed body, unknown field or parameter, a kind outside directed|autonomous (code validation_error)"
 // @Failure 401 {object} ProblemDocument "No key, or the key is invalid, expired or revoked (code unauthenticated)"
 // @Failure 403 {object} ProblemDocument "The key lacks write (code insufficient_scope)"
-// @Failure 404 {object} ProblemDocument "The path names no issue (code issue_not_found)"
+// @Failure 404 {object} ProblemDocument "No such issue within reach (code issue_not_found)"
 // @Failure 429 {object} ProblemDocument "Rate limited (code rate_limited, Retry-After)"
 // @Failure 500 {object} ProblemDocument "Internal error (code internal_error)"
 // @Failure 503 {object} ProblemDocument "The database is unavailable (code database_unavailable)"
@@ -423,7 +439,7 @@ func (a *issueWrites) markIssueNotificationsRead(w http.ResponseWriter, r *http.
 	if !CheckQuery(w, r) {
 		return
 	}
-	id, ok := pathIssueArg(w, r)
+	id, ok := a.visiblePathIssue(w, r)
 	if !ok || !kindArgs(w, r) {
 		return
 	}
@@ -438,7 +454,7 @@ func (a *issueWrites) markIssueNotificationsRead(w http.ResponseWriter, r *http.
 // markWatchingCardRead reads a Watching card.
 //
 // @Summary Read a Watching card
-// @Description Marks read every unread notification carded to the issue of the path in the caller's Watching — with a subtree subscription, the descendants' events included — the same operation as the MCP tool skein_notifications, action mark_read_card. A key of a narrower scope marks only the events of issues inside its scope. A card that is not the caller's, missing or with nothing unread answers marked 0. Side effects: the notifications' read time; no event.
+// @Description Marks read every unread notification carded to the issue of the path in the caller's Watching — with a subtree subscription, the descendants' events included — the same operation as the MCP tool skein_notifications, action mark_read_card. A key of a narrower scope marks only the events of issues inside its scope. A card that is not the caller's or has nothing unread answers marked 0; an issue that does not exist or is out of reach is 404 issue_not_found (MCP answers 0). Side effects: the notifications' read time; no event.
 // @Tags Me
 // @Accept json
 // @Produce json
@@ -449,7 +465,7 @@ func (a *issueWrites) markIssueNotificationsRead(w http.ResponseWriter, r *http.
 // @Failure 400 {object} ProblemDocument "Malformed body, unknown field or parameter, a kind outside directed|autonomous (code validation_error)"
 // @Failure 401 {object} ProblemDocument "No key, or the key is invalid, expired or revoked (code unauthenticated)"
 // @Failure 403 {object} ProblemDocument "The key lacks write (code insufficient_scope)"
-// @Failure 404 {object} ProblemDocument "The path names no issue (code issue_not_found)"
+// @Failure 404 {object} ProblemDocument "No such issue within reach (code issue_not_found)"
 // @Failure 429 {object} ProblemDocument "Rate limited (code rate_limited, Retry-After)"
 // @Failure 500 {object} ProblemDocument "Internal error (code internal_error)"
 // @Failure 503 {object} ProblemDocument "The database is unavailable (code database_unavailable)"
@@ -459,7 +475,7 @@ func (a *issueWrites) markWatchingCardRead(w http.ResponseWriter, r *http.Reques
 	if !CheckQuery(w, r) {
 		return
 	}
-	id, ok := pathIssueArg(w, r)
+	id, ok := a.visiblePathIssue(w, r)
 	if !ok || !kindArgs(w, r) {
 		return
 	}
