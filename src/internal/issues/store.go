@@ -492,7 +492,7 @@ func (s *Store) CreateIssue(
 		newID = id
 		inheritedComps = inh
 		committed = st
-		return nil
+		return runBeforeCommit(ctx, tx, st[0])
 	})
 	if err != nil {
 		// sk-350.3: same tail gap sk-303.17 closed for AddComment /
@@ -1277,6 +1277,11 @@ func (s *Store) CreateEpicWithChildren(
 			return serr
 		}
 		committed = st
+		for _, c := range st {
+			if c.ID == epicID {
+				return runBeforeCommit(ctx, tx, c)
+			}
+		}
 		return nil
 	})
 	if err != nil {

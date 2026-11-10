@@ -33,19 +33,17 @@ package tools
 // (assigneeNotStringError).
 
 import (
-	"strings"
-
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 
-	skmcp "skein-api/internal/mcp"
+	"skein-api/internal/issueops"
 )
 
 // Error detail codes of the assignee/unassigned refusals — machine-readable, so a caller
 // (and a test) branches on the code, not on the message.
 const (
-	unassignedNotBooleanCode   = "unassigned_not_boolean"
-	unassignedWithAssigneeCode = "unassigned_with_assignee"
-	assigneeNotStringCode      = "assignee_not_string"
+	unassignedNotBooleanCode   = issueops.UnassignedNotBooleanCode
+	unassignedWithAssigneeCode = issueops.UnassignedWithAssigneeCode
+	assigneeNotStringCode      = issueops.AssigneeNotStringCode
 )
 
 // assigneeFromArgs parses `assignee` from one raw argument object (sk-605)
@@ -53,18 +51,8 @@ const (
 // other JSON type is refused. field and details are as for
 // assignCreatorByDefault.
 func assigneeFromArgs(obj map[string]any, field string, details map[string]any) (*string, *mcpgo.CallToolResult) {
-	raw, ok := obj["assignee"]
-	if !ok || raw == nil {
-		return nil, nil
-	}
-	s, isString := raw.(string)
-	if !isString {
-		return nil, assigneeNotStringError(raw, field, details)
-	}
-	if trimmed := strings.TrimSpace(s); trimmed != "" {
-		return &trimmed, nil
-	}
-	return nil, nil
+	a, f := issueops.AssigneeFromArgs(obj, field, details)
+	return a, toolFailure(f)
 }
 
 // assigneeNotStringError is the refusal of a non-string, non-null
@@ -74,11 +62,7 @@ func assigneeFromArgs(obj map[string]any, field string, details map[string]any) 
 // skein_update_many patch parser, whose null and "" keep their own meaning
 // («clear the assignee») and therefore cannot go through assigneeFromArgs.
 func assigneeNotStringError(raw any, field string, details map[string]any) *mcpgo.CallToolResult {
-	d := map[string]any{"code": assigneeNotStringCode, "got": raw}
-	for k, v := range details {
-		d[k] = v
-	}
-	return skmcp.ToolError(ErrCodeValidationError, field+"assignee must be a string", d)
+	return toolFailure(issueops.AssigneeNotStringError(raw, field, details))
 }
 
 // assignCreatorByDefault parses `unassigned` from one raw argument object
@@ -87,28 +71,8 @@ func assigneeNotStringError(raw any, field string, details map[string]any) *mcpg
 // object in the error message ("" for the top level, "childTemplates[3]."
 // for a child); details are merged into the refusal (e.g. childIndex).
 func assignCreatorByDefault(obj map[string]any, assignee *string, field string, details map[string]any) (bool, *mcpgo.CallToolResult) {
-	unassigned := false
-	if raw, ok := obj["unassigned"]; ok && raw != nil {
-		flag, isBool := raw.(bool)
-		if !isBool {
-			d := map[string]any{"code": unassignedNotBooleanCode, "got": raw}
-			for k, v := range details {
-				d[k] = v
-			}
-			return false, skmcp.ToolError(ErrCodeValidationError,
-				field+"unassigned must be a boolean", d)
-		}
-		unassigned = flag
-	}
-	if unassigned && assignee != nil {
-		d := map[string]any{"code": unassignedWithAssigneeCode}
-		for k, v := range details {
-			d[k] = v
-		}
-		return false, skmcp.ToolError(ErrCodeValidationError,
-			field+"unassigned:true cannot be combined with a non-empty "+field+"assignee", d)
-	}
-	return !unassigned, nil
+	b, f := issueops.AssignCreatorByDefault(obj, assignee, field, details)
+	return b, toolFailure(f)
 }
 
 // unassignedParamDescription is the schema text of `unassigned` on

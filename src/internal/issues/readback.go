@@ -193,3 +193,28 @@ func withCommittedState(ctx context.Context, id string, dst *CommittedState, fn 
 		return nil
 	}
 }
+
+// BeforeCommitHook runs inside the transaction of an issue write just before
+// it commits, with the committed state of the issue the write is about.
+type BeforeCommitHook func(ctx context.Context, tx pgx.Tx, state CommittedState) error
+
+type beforeCommitKey struct{}
+
+// WithBeforeCommit returns ctx carrying hook: CreateIssue,
+// CreateEpicWithChildren (with the epic's state) and UpdateIssue run it
+// inside their transaction, after every step, just before it commits — the
+// point where a transport records the outcome of the write in the write's
+// own transaction (sk-878.3.1 D-8 rule 2, the Idempotency-Key of the public
+// API). An error rolls the write back and is returned as is; the hook runs
+// again on every retried attempt.
+func WithBeforeCommit(ctx context.Context, hook BeforeCommitHook) context.Context {
+	return context.WithValue(ctx, beforeCommitKey{}, hook)
+}
+
+// runBeforeCommit runs the hook of ctx, if any, for state.
+func runBeforeCommit(ctx context.Context, tx pgx.Tx, state CommittedState) error {
+	if hook, ok := ctx.Value(beforeCommitKey{}).(BeforeCommitHook); ok && hook != nil {
+		return hook(ctx, tx, state)
+	}
+	return nil
+}

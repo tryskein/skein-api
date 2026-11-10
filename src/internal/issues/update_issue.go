@@ -249,9 +249,11 @@ func (s *Store) runUpdateIssue(ctx context.Context, in UpdateIssueInput, op upda
 		}
 		res.State = st[0]
 		if in.BeforeCommit != nil {
-			return in.BeforeCommit(ctx, tx, res.State)
+			if err := in.BeforeCommit(ctx, tx, res.State); err != nil {
+				return err
+			}
 		}
-		return nil
+		return runBeforeCommit(ctx, tx, res.State)
 	})
 	if err != nil {
 		// A declared version lets a serialization abort be told from a real
