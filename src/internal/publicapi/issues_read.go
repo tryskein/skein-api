@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"reflect"
 	"strconv"
 	"strings"
 	"time"
@@ -988,6 +989,22 @@ func (a *issuesAPI) actionGate(w http.ResponseWriter, r *http.Request, project u
 	return false
 }
 
+// SearchPage is a page of search: the list envelope plus degraded, as the
+// MCP tool skein_search answers it.
+type SearchPage struct {
+	// Items are the hits, by relevance.
+	Items []search.Item `json:"items"`
+	// NextCursor is the cursor of the next page, null on the last one.
+	NextCursor *string `json:"nextCursor"`
+	// HasMore — another page follows.
+	HasMore bool `json:"hasMore"`
+	// Degraded — the meaning reranking was unavailable and the hits are
+	// ordered by full-text relevance only.
+	Degraded bool `json:"degraded"`
+}
+
+func (SearchPage) itemType() reflect.Type { return reflect.TypeFor[search.Item]() }
+
 // search searches issues, comments, projects and components.
 //
 // @Summary Search
@@ -1008,7 +1025,7 @@ func (a *issuesAPI) actionGate(w http.ResponseWriter, r *http.Request, project u
 // @Param limit query int false "Page size (default 20)"
 // @Param cursor query string false "The nextCursor of the previous page"
 // @Param fields query string false "Comma-separated fields of each item to return (plus id)"
-// @Success 200 {object} List[search.Item] "A page of hits"
+// @Success 200 {object} SearchPage "A page of hits; degraded marks a page ordered by full-text relevance only"
 // @Failure 400 {object} ProblemDocument "query missing or too long, an unknown parameter or field, a value outside its set, a foreign cursor (code validation_error)"
 // @Failure 401 {object} ProblemDocument "No key, or the key is invalid, expired or revoked (code unauthenticated)"
 // @Failure 403 {object} ProblemDocument "The key lacks the read right (code insufficient_scope)"
@@ -1106,7 +1123,7 @@ func (a *issuesAPI) searchAll(w http.ResponseWriter, r *http.Request) {
 	if items == nil {
 		items = []search.Item{}
 	}
-	WriteJSON(w, r, http.StatusOK, List[search.Item]{Items: items, NextCursor: res.NextCursor, HasMore: res.HasMore})
+	WriteJSON(w, r, http.StatusOK, SearchPage{Items: items, NextCursor: res.NextCursor, HasMore: res.HasMore, Degraded: res.Degraded})
 }
 
 func appendKind(kinds []search.Kind, k search.Kind) []search.Kind {

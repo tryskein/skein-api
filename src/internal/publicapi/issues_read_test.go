@@ -296,6 +296,10 @@ func TestIssuesRead_ParityWithMCP(t *testing.T) {
 			if !slices.Equal(got, want) || len(got) == 0 {
 				t.Errorf("search %v, MCP %v", got, want)
 			}
+			// The rig's search has no embedder: both answer degraded true.
+			if d, md := rest.json(t)["degraded"], mcp.json(t)["degraded"]; d != true || d != md {
+				t.Errorf("search degraded %v, MCP %v, want true on both", d, md)
+			}
 			if key == w.scopedP && slices.Contains(got, w.h) {
 				t.Errorf("the scoped key finds the issue outside its scope: %v", got)
 			}

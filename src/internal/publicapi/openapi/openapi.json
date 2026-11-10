@@ -1644,24 +1644,6 @@
                 },
                 "type": "object"
             },
-            "publicapi.List-search_Item": {
-                "properties": {
-                    "hasMore": {
-                        "type": "boolean"
-                    },
-                    "items": {
-                        "items": {
-                            "$ref": "#/components/schemas/search.Item"
-                        },
-                        "type": "array",
-                        "uniqueItems": false
-                    },
-                    "nextCursor": {
-                        "type": "string"
-                    }
-                },
-                "type": "object"
-            },
             "publicapi.MovePlan": {
                 "properties": {
                     "nextSteps": {
@@ -1813,6 +1795,31 @@
                     "match": {
                         "$ref": "#/components/schemas/publicapi.ResolveCandidate",
                         "description": "Match is the project the handle names when the resolver is\nconfident; null otherwise."
+                    }
+                },
+                "type": "object"
+            },
+            "publicapi.SearchPage": {
+                "properties": {
+                    "degraded": {
+                        "description": "Degraded — the meaning reranking was unavailable and the hits are\nordered by full-text relevance only.",
+                        "type": "boolean"
+                    },
+                    "hasMore": {
+                        "description": "HasMore — another page follows.",
+                        "type": "boolean"
+                    },
+                    "items": {
+                        "description": "Items are the hits, by relevance.",
+                        "items": {
+                            "$ref": "#/components/schemas/search.Item"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
+                    },
+                    "nextCursor": {
+                        "description": "NextCursor is the cursor of the next page, null on the last one.",
+                        "type": "string"
                     }
                 },
                 "type": "object"
@@ -8407,11 +8414,11 @@
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/publicapi.List-search_Item"
+                                    "$ref": "#/components/schemas/publicapi.SearchPage"
                                 }
                             }
                         },
-                        "description": "A page of hits"
+                        "description": "A page of hits; degraded marks a page ordered by full-text relevance only"
                     },
                     "400": {
                         "content": {
