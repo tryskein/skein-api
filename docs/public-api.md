@@ -87,7 +87,7 @@ OpenAPI document; the table of the routes is
 | Every read | `read` |
 | Writes to issues, comments, dependencies, attachments, and the caller's own state (notifications, watching, reminders) | `write` |
 | Project settings, components, project members | `manage` |
-| Creating a project | `manage`, and a key scope of spaces or all |
+| Creating a project | `manage`, and a key scope of spaces or all; a key limited to spaces creates projects only inside them |
 | User operations (`listUsers`, `createUser`, `updateUser`, `addSpaceMember`) | `admin` |
 | `getMe` | any valid key |
 | `getOpenApi` | no key |
@@ -100,6 +100,8 @@ Owner roles a few operations need on top of the key right
 | `releaseIssueLock` on a lock held by another user | `force_unlock` (`ActionForceUnlock`) |
 | `force=true` on a guarded operation (below) | `force_unlock` |
 | `deleteComment` of another user's comment | `delete_any_comment` (`ActionDeleteAnyComment`) |
+| `updateComment` | the author of the comment only; anyone else, an owner or an administrator included, gets 403 `forbidden` |
+| `getIssueMovePlan` | write roles in both the source and the target project, and both in one space (a target in another space answers as a missing project) |
 | User operations | instance administrator |
 
 ### The `force=true` mode
