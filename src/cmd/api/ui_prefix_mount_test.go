@@ -190,3 +190,44 @@ const (
 	internalAPIPrefixUnderTest  = "/ui/v1"
 	transitionalPrefixUnderTest = "/api/v1"
 )
+
+// TestUIPrefix_SecretGuardsTheWholePrefix — the internal secret is the
+// channel-auth boundary of the internal API: under both prefixes a request
+// without it is refused with 401 whether or not the path is a route and
+// whether or not the method is the route's, so a caller without the secret
+// cannot tell existing routes from missing ones. With the secret, an unknown
+// path is a plain 404. Needs no database: no request reaches a handler.
+func TestUIPrefix_SecretGuardsTheWholePrefix(t *testing.T) {
+	r := newRouterUnderTest(t)
+
+	for _, prefix := range []string{internalAPIPrefixUnderTest, transitionalPrefixUnderTest} {
+		for _, tc := range []struct {
+			name, method, path string
+		}{
+			{"unknown path", http.MethodGet, "/no-such-route"},
+			{"route with a wrong method", http.MethodPut, "/auth/signup"},
+			{"service route", http.MethodGet, "/internal/instance-config"},
+			{"user group route", http.MethodGet, "/me/notification-counts"},
+		} {
+			t.Run(prefix+" "+tc.name, func(t *testing.T) {
+				rec := httptest.NewRecorder()
+				r.ServeHTTP(rec, httptest.NewRequest(tc.method, prefix+tc.path, nil))
+				if rec.Code != http.StatusUnauthorized {
+					t.Fatalf("%s %s%s without the secret = %d, want 401; body %s",
+						tc.method, prefix, tc.path, rec.Code, rec.Body.String())
+				}
+			})
+		}
+
+		t.Run(prefix+" unknown path with the secret", func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, prefix+"/no-such-route", nil)
+			req.Header.Set(auth.HeaderInternalSecret, routerInternalSec)
+			rec := httptest.NewRecorder()
+			r.ServeHTTP(rec, req)
+			if rec.Code != http.StatusNotFound {
+				t.Fatalf("GET %s/no-such-route with the secret = %d, want 404; body %s",
+					prefix, rec.Code, rec.Body.String())
+			}
+		})
+	}
+}

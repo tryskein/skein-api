@@ -1235,17 +1235,23 @@ func buildSearchStack(pool *pgxpool.Pool, cfg *config.Config) (*search.Service, 
 // /metrics) sit at the root with NO auth — they're consumed by Kubernetes
 // and Prometheus, which can't carry the internal-secret header.
 //
-// Everything under /api/v1 goes through:
-//  1. RequireInternalSecret — every request from the BFF must present the
-//     shared secret. Direct ingress from outside the cluster has no way to
-//     hold this secret, so this is the channel-auth boundary.
-//  2. ParseUserHeaders — best-effort decode of X-Skein-User-* headers into
+// The internal API of the frontend is served under /ui/v1 and, for one
+// transitional release, under /api/v1 (mountInternalAPI). Every request under
+// either prefix — matched route or not, any method — goes through
+// RequireInternalSecret first: every request from the BFF must present the
+// shared secret. Direct ingress from outside the cluster has no way to hold
+// this secret, so this is the channel-auth boundary. The user group then adds:
+//  1. ParseUserHeaders — best-effort decode of X-Skein-User-* headers into
 //     the request context. Auth bootstrap routes (/auth/login,
 //     /auth/logout) intentionally do not require a user; user-bound routes
 //     compose RequireUser on top.
-//  3. RequireSessionEpoch — a request that carries a user is refused with
+//  2. RequireSessionEpoch — a request that carries a user is refused with
 //     401 session_revoked when the session's epoch is not the user's
 //     current one or the user is deactivated or deleted (K-16).
+//
+// The service routes outside the user group (OIDC provision, hub access,
+// instance config, the account routes of a visitor) are authorized by the
+// secret alone.
 func buildRouter(
 	pool *pgxpool.Pool,
 	cfg *config.Config,
@@ -1537,9 +1543,9 @@ func buildRouter(
 	accountDeletionH := handler.NewAccountDeletionHandler(usersStore, cfg.SignupEnabled)
 
 	// mountUserAPI is the user group of the internal API: every route below
-	// is reached with the BFF's user headers.
+	// is reached with the BFF's user headers. The channel secret is checked
+	// by mountInternalAPI for the whole prefix.
 	mountUserAPI := func(r chi.Router) {
-		r.Use(handler.RequireInternalSecret(cfg.InternalSecret, ""))
 		r.Use(handler.ParseUserHeaders)
 		// sk-674.18 K-16: a session whose epoch was raised (password reset,
 		// deactivation, account deletion) is refused on its next request.
@@ -2122,55 +2128,50 @@ func buildRouter(
 	}
 
 	// mountInternalAPI registers the whole internal API under one prefix.
+	// RequireInternalSecret guards the prefix itself, so an unknown path or
+	// a wrong method without the secret is refused with 401 like every route,
+	// and tells a caller without the secret nothing about which routes exist.
 	mountInternalAPI := func(r chi.Router) {
+		r.Use(handler.RequireInternalSecret(cfg.InternalSecret, ""))
+
 		// R5.1 — OIDC provision endpoint. Outside the user group because
 		// that group applies ParseUserHeaders to every request, and the
 		// provision call has no user yet (it's the call that establishes
-		// one). Channel auth (RequireInternalSecret) is sufficient: only the
-		// skein-web BFF holds the secret, and the BFF is the only legitimate
-		// caller. The handler itself short-circuits with 410 oidc_disabled
+		// one). The channel secret, checked for the whole prefix, is
+		// sufficient: only the skein-web BFF holds the secret, and the BFF is
+		// the only legitimate caller. The handler itself short-circuits with 410 oidc_disabled
 		// when the provisioner is nil (defensive — wiring always sets it).
-		r.With(handler.RequireInternalSecret(cfg.InternalSecret, "")).
-			Post("/auth/oidc/provision", authH.OIDCProvision)
+		r.Post("/auth/oidc/provision", authH.OIDCProvision)
 
 		// sk-622.21 T006 — service-only batch project access check for
 		// skein-web's SignalR hub (contract: projects/access_contract.go).
 		// Outside the user group for the same reason as the provision route:
 		// this call is made by the BFF for many users at once, not for one
 		// logged-in user — whose access is checked is named in the body.
-		// Channel auth (RequireInternalSecret) is the whole authorization.
-		r.With(handler.RequireInternalSecret(cfg.InternalSecret, "")).
-			Post("/hub/project-access", hubAccessH.ProjectAccess)
+		// The channel secret is the whole authorization.
+		r.Post("/hub/project-access", hubAccessH.ProjectAccess)
 
 		// sk-674.18 T012 — installation settings for skein-web (contract:
 		// accounts/contract.go#InstanceConfig). Service-only, outside the
 		// user group like the two routes above: skein-web calls it at startup
 		// with no user at all, and the channel secret is the whole
 		// authorization.
-		r.With(handler.RequireInternalSecret(cfg.InternalSecret, "")).
-			Get("/internal/instance-config", instanceConfigH.Get)
+		r.Get("/internal/instance-config", instanceConfigH.Get)
 
 		// sk-674.18 T038 — the public account routes of a visitor without a
 		// session (contract: accounts/contract.go). Outside the user group
 		// like the routes above: there is no user, the channel secret is the
 		// whole authorization, the client address comes in X-Skein-Client-Ip.
-		r.With(handler.RequireInternalSecret(cfg.InternalSecret, "")).
-			Post("/auth/signup", accountsH.Signup)
-		r.With(handler.RequireInternalSecret(cfg.InternalSecret, "")).
-			Get("/auth/username-suggestions", accountsH.UsernameSuggestions)
+		r.Post("/auth/signup", accountsH.Signup)
+		r.Get("/auth/username-suggestions", accountsH.UsernameSuggestions)
 		// T039 — password reset and email confirmation by link.
-		r.With(handler.RequireInternalSecret(cfg.InternalSecret, "")).
-			Post("/auth/password-reset", accountsH.PasswordReset)
-		r.With(handler.RequireInternalSecret(cfg.InternalSecret, "")).
-			Post("/auth/password-reset/{token}", accountsH.PasswordResetComplete)
-		r.With(handler.RequireInternalSecret(cfg.InternalSecret, "")).
-			Post("/auth/confirm-email/{token}", accountsH.ConfirmEmail)
+		r.Post("/auth/password-reset", accountsH.PasswordReset)
+		r.Post("/auth/password-reset/{token}", accountsH.PasswordResetComplete)
+		r.Post("/auth/confirm-email/{token}", accountsH.ConfirmEmail)
 		// T040 — the invitation link without a session: its view and signup
 		// by invitation.
-		r.With(handler.RequireInternalSecret(cfg.InternalSecret, "")).
-			Get("/auth/invitations/{token}", accountsH.InvitationPreview)
-		r.With(handler.RequireInternalSecret(cfg.InternalSecret, "")).
-			Post("/auth/invitations/{token}/signup", accountsH.InvitationSignup)
+		r.Get("/auth/invitations/{token}", accountsH.InvitationPreview)
+		r.Post("/auth/invitations/{token}/signup", accountsH.InvitationSignup)
 
 		r.Group(mountUserAPI)
 	}
