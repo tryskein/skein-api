@@ -2,15 +2,12 @@ package tools
 
 import (
 	"context"
-	"errors"
-	"log/slog"
-	"strings"
-	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 
+	"skein-api/internal/issueops"
 	skmcp "skein-api/internal/mcp"
 	"skein-api/internal/reminders"
 )
@@ -24,36 +21,16 @@ import (
 // now lives in remind_group.go. It is the action that makes the whole
 // consolidated tool declare destructiveHint=true.
 func handleRemindDismiss(pool *pgxpool.Pool, store *reminders.Store) server.ToolHandlerFunc {
+	d := issueops.Deps{Pool: pool, Reminders: store}
 	return func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-		start := time.Now()
 		userID, errResp := skmcp.RequireUser(ctx)
 		if errResp != nil {
 			return errResp, nil
 		}
-
-		id, errResp := resolveReminderTarget(ctx, store, userID,
-			req.GetString("reminderId", ""), req.GetString("issueId", ""))
-		if errResp != nil {
-			return errResp, nil
+		id, f := issueops.RemindDismiss(ctx, d, userID, issueops.Args(req.GetArguments()))
+		if f != nil {
+			return toolFailure(f), nil
 		}
-		note := strings.TrimSpace(req.GetString("note", ""))
-
-		actor := RemindersAgentActor(ctx, pool, userID)
-		if err := store.Dismiss(ctx, id, userID, note, actor); err != nil {
-			if errors.Is(err, reminders.ErrNotFound) {
-				return skmcp.ToolError(ErrCodeReminderNotFound,
-					"reminder does not exist or is not yours",
-					map[string]any{"reminderId": id.String()}), nil
-			}
-			slog.ErrorContext(ctx, "mcp tool error", "tool", "skein_remind", "action", "dismiss",
-				"reason", "store dismiss failed", "userId", userID.String(),
-				"reminderId", id.String(), "error", err.Error())
-			return skmcp.ToolError(ErrCodeInternalError, "failed to dismiss reminder", nil), nil
-		}
-
-		slog.InfoContext(ctx, "mcp tool ok", "tool", "skein_remind", "action", "dismiss",
-			"userId", userID.String(), "reminderId", id.String(),
-			"latencyMs", time.Since(start).Milliseconds())
 		return skmcp.ToolJSON(map[string]any{
 			"dismissed":  true,
 			"reminderId": id.String(),

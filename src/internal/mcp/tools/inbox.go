@@ -3,13 +3,11 @@ package tools
 import (
 	"context"
 	"log/slog"
-	"strings"
-	"time"
 
-	"github.com/google/uuid"
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 
+	"skein-api/internal/issueops"
 	skmcp "skein-api/internal/mcp"
 	"skein-api/internal/notifications"
 )
@@ -25,65 +23,17 @@ import (
 // in notifications_group.go, where it is the one read-only action of a
 // tool whose annotations are coarsened to readOnly=false.
 func handleInbox(notifStore *notifications.Store) server.ToolHandlerFunc {
+	d := issueops.Deps{Notifications: notifStore}
 	return func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-		start := time.Now()
 		userID, errResp := skmcp.RequireUser(ctx)
 		if errResp != nil {
 			return errResp, nil
 		}
-
-		args := notifications.ListInboxArgs{UserID: userID}
-		args.Scope = strings.TrimSpace(req.GetString("scope", "unread"))
-		switch args.Scope {
-		case "unread", "all", "archived":
-			// ok
-		default:
-			return skmcp.ToolError(ErrCodeValidationError,
-				"scope must be one of: unread, all, archived",
-				map[string]any{"scope": args.Scope}), nil
+		res, f := issueops.Inbox(ctx, d, userID, issueops.Args(req.GetArguments()))
+		if f != nil {
+			return toolFailure(f), nil
 		}
-
-		if pidRaw := strings.TrimSpace(req.GetString("projectId", "")); pidRaw != "" {
-			pid, err := uuid.Parse(pidRaw)
-			if err != nil {
-				return skmcp.ToolError(ErrCodeValidationError,
-					"projectId must be a UUID",
-					map[string]any{"projectId": pidRaw}), nil
-			}
-			args.ProjectID = &pid
-		}
-
-		if cursor := strings.TrimSpace(req.GetString("cursor", "")); cursor != "" {
-			id, err := notifications.DecodeCursor(cursor)
-			if err != nil {
-				return skmcp.ToolError(ErrCodeValidationError,
-					"invalid cursor: "+err.Error(), nil), nil
-			}
-			args.Cursor = &id
-		}
-
-		if limit := int(req.GetFloat("limit", 25)); limit > 0 {
-			if limit > 100 {
-				limit = 100
-			}
-			args.Limit = limit
-		} else {
-			args.Limit = 25
-		}
-
-		res, err := notifStore.ListInbox(ctx, args)
-		if err != nil {
-			slog.ErrorContext(ctx, "mcp tool error",
-				"tool", "skein_notifications", "action", "inbox", "userId", userID.String(), "error", err.Error())
-			return skmcp.ToolError(ErrCodeInternalError, "failed to list inbox", nil), nil
-		}
-
-		slog.InfoContext(ctx, "mcp tool ok",
-			"tool", "skein_notifications", "action", "inbox", "userId", userID.String(),
-			"scope", args.Scope, "count", len(res.Items),
-			"latencyMs", time.Since(start).Milliseconds())
-
-		rows, perr := projectInboxRows(res.Items)
+		rows, perr := projectInboxRows(res.Page.Items)
 		if perr != nil {
 			slog.ErrorContext(ctx, "mcp tool error",
 				"tool", "skein_notifications", "action", "inbox",
@@ -91,23 +41,9 @@ func handleInbox(notifStore *notifications.Store) server.ToolHandlerFunc {
 				"userId", userID.String(), "error", perr.Error())
 			return skmcp.ToolError(ErrCodeInternalError, "failed to encode result", nil), nil
 		}
-		resp := inboxResponse{
-			Items:      rows,
-			NextCursor: res.NextCursor,
-			HasMore:    res.HasMore,
-		}
-		// sk-674.18 T029 (US-5): the pending invitations to the caller ride
-		// on the first page of the live scopes.
-		if args.Cursor == nil && args.Scope != "archived" {
-			invs, ierr := notifStore.PendingInvitations(ctx, userID)
-			if ierr != nil {
-				slog.ErrorContext(ctx, "mcp tool error",
-					"tool", "skein_notifications", "action", "inbox",
-					"reason", "invitations read failed",
-					"userId", userID.String(), "error", ierr.Error())
-				return skmcp.ToolError(ErrCodeInternalError, "failed to list inbox", nil), nil
-			}
-			resp.Invitations = invs
+		resp := inboxResponse{Items: rows, NextCursor: res.Page.NextCursor, HasMore: res.Page.HasMore}
+		if res.FirstPage {
+			resp.Invitations = res.Invitations
 		}
 		return skmcp.ToolJSON(resp)
 	}

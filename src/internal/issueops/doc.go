@@ -1,5 +1,7 @@
-// Package issueops holds the operations that write issues, independent of
-// the transport that asks for them (sk-878.3.1 T024a, INV-4): the MCP tools
+// Package issueops holds the operations shared by the MCP tools and the
+// public REST API — the writes of issues, their comments, dependencies and
+// attachments, the caller's own state — independent of the transport that
+// asks for them (sk-878.3.1 T024a, INV-4): the MCP tools
 // and the public REST API are thin adapters over the same operation, so
 // one operation gives the same checks, events, notifications and refusal
 // codes on both.
@@ -13,7 +15,9 @@ package issueops
 import (
 	"skein-api/internal/dependencies"
 	"skein-api/internal/issues"
+	"skein-api/internal/notifications"
 	"skein-api/internal/projects"
+	"skein-api/internal/reminders"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -24,6 +28,10 @@ type Deps struct {
 	Issues   *issues.Store
 	Deps     *dependencies.Store
 	Projects *projects.Store
+	// Notifications and Reminders are the stores of the operations of the
+	// caller's own state (T027).
+	Notifications *notifications.Store
+	Reminders     *reminders.Store
 }
 
 // Origin says how an operation reads the origin of a write from its kind
