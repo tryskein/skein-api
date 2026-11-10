@@ -36,6 +36,7 @@ const (
 	opAddNote     = "testAddNote"
 	opManageNote  = "testManageNote"
 	opAnswerCode  = "testAnswerCode"
+	opAnswerGuard = "testAnswerWithActions"
 	opUpdateNote  = "testUpdateNote"
 	opBulkNotes   = "testBulkNotes"
 	opCloseIssue  = "testCloseIssue"
@@ -104,6 +105,12 @@ func newRig(t *testing.T, pool *pgxpool.Pool) *rig {
 		{
 			OperationID: opAnswerCode, Method: http.MethodPost, Path: "/api/v1/answers", Auth: publicapi.AuthKey,
 			Key: authz.KeyRequirement{Right: authz.KeyRightWrite}, Idempotent: true,
+			Handler: http.HandlerFunc(rg.answerCode), Hydrate: rg.hydrate,
+		},
+		{
+			OperationID: opAnswerGuard, Method: http.MethodPost, Path: "/api/v1/issues/{issue}/answers",
+			Auth: publicapi.AuthKey, Key: authz.KeyRequirement{Right: authz.KeyRightWrite}, Idempotent: true,
+			Actions: []authz.Action{authz.ActionWrite}, Object: publicapi.ObjectPathIssueProject,
 			Handler: http.HandlerFunc(rg.answerCode), Hydrate: rg.hydrate,
 		},
 		{

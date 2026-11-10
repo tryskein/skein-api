@@ -294,7 +294,9 @@ func TestIdempotency_RecheckOfAnOutcomeWithoutAWrite(t *testing.T) {
 // code is not literally retryable is kept — the repeat does not execute —
 // and every other answer (a retryable 422, 400, 401, 403, 404, 409, 412,
 // 428, 429, 5xx) is not — the repeat executes again. A 2xx without a write is
-// kept. Every code of errcode has a row in the literal reference.
+// kept. On a route with owner actions an outcome that named no target is
+// not kept (review R6-03). Every code of errcode has a row in the literal
+// reference.
 func TestIdempotency_WhatIsKept(t *testing.T) {
 	pool := testsupport.NewTestPool(t)
 	rg := newRig(t, pool)
@@ -339,6 +341,16 @@ func TestIdempotency_WhatIsKept(t *testing.T) {
 			})
 		}
 	}
+	t.Run("422 of an operation with owner actions that named no target: not kept", func(t *testing.T) {
+		raw, _ := json.Marshal(codeBody{Code: "dependency_cycle", Origin: "domain"})
+		c := call{path: "/api/v1/issues/" + w.issueA + "/answers", key: w.key, idemKey: w.idemKeys + "-notarget", body: string(raw)}
+		before := rg.calls.Load()
+		wantProblem(t, rg.do(t, c), http.StatusUnprocessableEntity, "dependency_cycle")
+		wantProblem(t, rg.do(t, c), http.StatusUnprocessableEntity, "dependency_cycle")
+		if ran := rg.calls.Load() - before; ran != 2 {
+			t.Errorf("the operation ran %d times, want 2 (an outcome the repeat cannot re-check is not kept)", ran)
+		}
+	})
 	for _, status := range []int{http.StatusOK, http.StatusCreated} {
 		t.Run(fmt.Sprintf("%d without a write", status), func(t *testing.T) {
 			if !ask(t, codeBody{Status: status}) {

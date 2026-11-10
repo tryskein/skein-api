@@ -70,7 +70,14 @@ type execution struct {
 	target *publicapi.ObjectRef
 	// objects are the objects of the response, as NoteObjects named them.
 	objects []publicapi.ObjectRef
+	// needsTarget — the route checks the owner's role on a target in the
+	// mode of the request: an outcome that names no target cannot be
+	// re-checked on a repeat, so it is never kept.
+	needsTarget bool
 }
+
+// errNoTarget refuses to record an outcome that a repeat could not re-check.
+var errNoTarget = errors.New("idempotency: the outcome of an operation with owner actions names no target")
 
 type executionKey struct{}
 
@@ -95,6 +102,9 @@ func RecordInTx(ctx context.Context, tx pgx.Tx, o Outcome) error {
 	}
 	if len(o.Refs.Objects) == 0 {
 		o.Refs.Objects = e.objects
+	}
+	if e.needsTarget && o.Refs.Target == nil {
+		return errNoTarget
 	}
 	err := Record(ctx, tx, e.keyID, e.key, e.token, o)
 	if errors.Is(err, ErrMarkerLost) {
@@ -122,8 +132,9 @@ func IssueBeforeCommit(status int) func(ctx context.Context, tx pgx.Tx, st issue
 // NoteTarget names the object the operation acts on — the project of a
 // create, the issue of a close or a comment — once the operation resolved
 // it. An outcome stored without a writing transaction (a 422) keeps it, so a
-// repeat re-checks the owner's role on it. It does nothing for a request
-// without Idempotency-Key.
+// repeat re-checks the owner's role on it; on a route with owner actions an
+// outcome without a target is not kept at all (and RecordInTx refuses it).
+// It does nothing for a request without Idempotency-Key.
 func NoteTarget(ctx context.Context, ref publicapi.ObjectRef) {
 	if e := executionFrom(ctx); e != nil {
 		e.target = &ref
@@ -203,7 +214,8 @@ func (m *Middleware) Wrap(rt publicapi.Route, next http.Handler) http.Handler {
 		case Replay:
 			m.replay(w, r, rt, d.Stored)
 		case Execute:
-			m.execute(w, r, next, &execution{store: m.store, keyID: keyID, key: key, token: d.Token})
+			m.execute(w, r, next, &execution{store: m.store, keyID: keyID, key: key, token: d.Token,
+				needsTarget: len(rt.EffectiveActions(publicapi.ModeFromContext(r.Context()))) > 0})
 		default:
 			publicapi.WriteInternalError(w, r, "deciding on an Idempotency-Key request",
 				fmt.Errorf("unknown verdict %d", d.Verdict))
@@ -275,7 +287,10 @@ func (m *Middleware) execute(w http.ResponseWriter, r *http.Request, next http.H
 	resp.ID, resp.Version = namedResource(rec)
 	ctx, cancel := detached(r.Context())
 	defer cancel()
-	if err := e.store.Finish(ctx, e.keyID, e.key, e.token, resp, Storable(rec.status, resp.Body),
+	// An outcome the repeat could not re-check the owner's role for is not
+	// kept: the repeat runs again (review R6-03).
+	storable := Storable(rec.status, resp.Body) && !(e.needsTarget && e.target == nil)
+	if err := e.store.Finish(ctx, e.keyID, e.key, e.token, resp, storable,
 		Refs{Target: e.target, Objects: e.objects}); err != nil {
 		slog.ErrorContext(r.Context(), "idempotency: ending the execution failed",
 			"operationId", operationID(r), "status", rec.status, "error", err.Error())
@@ -365,21 +380,20 @@ func (m *Middleware) replay(w http.ResponseWriter, r *http.Request, rt publicapi
 	}
 	if actions := rt.EffectiveActions(mode); len(actions) > 0 {
 		if s.Refs.Target == nil {
-			if s.Status >= 200 && s.Status < 300 {
-				publicapi.WriteInternalError(w, r, "re-checking the role for a stored outcome",
-					errors.New("a stored success of an operation with actions has no target"))
-				return
-			}
-		} else {
-			for _, a := range actions {
-				if !authz.Allows(targetLevel, a) {
-					code := errcode.Forbidden
-					if a == authz.ActionForceUnlock {
-						code = errcode.ForceUnlockForbidden
-					}
-					publicapi.WriteProblem(w, publicapi.Problem{Code: code, Origin: publicapi.OriginDomain})
-					return
+			// Never stored since R6-03; a row from before is not given out
+			// unchecked, whatever its status.
+			publicapi.WriteInternalError(w, r, "re-checking the role for a stored outcome",
+				errors.New("a stored outcome of an operation with owner actions has no target"))
+			return
+		}
+		for _, a := range actions {
+			if !authz.Allows(targetLevel, a) {
+				code := errcode.Forbidden
+				if a == authz.ActionForceUnlock {
+					code = errcode.ForceUnlockForbidden
 				}
+				publicapi.WriteProblem(w, publicapi.Problem{Code: code, Origin: publicapi.OriginDomain})
+				return
 			}
 		}
 	}
