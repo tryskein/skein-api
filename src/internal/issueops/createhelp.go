@@ -42,8 +42,8 @@ func MapDuplicateOfEdgeError(ctx context.Context, err error, dupEdgeIndex int, d
 		errors.Is(depFail.Err, dependencies.ErrDependencyTargetNotVisible):
 		return Fail(ErrCodeValidationError, "duplicateOf target issue does not exist", details)
 	}
-	slog.ErrorContext(ctx, "issue operation error",
-		"op", "create",
+	slog.ErrorContext(ctx, logMessage(ctx, "error"),
+		"tool", "skein_create",
 		"reason", "duplicates edge failed; the create was rolled back",
 		"userId", userID.String(), "duplicateOf", duplicateOfID, "error", depFail.Err.Error())
 	return Fail(ErrCodeInternalError,
@@ -124,8 +124,8 @@ func MapCreateError(ctx context.Context, err error, userID, projectID uuid.UUID)
 		return Fail(ErrCodeInternalError,
 			"could not allocate a unique hash id; try again", nil)
 	}
-	slog.ErrorContext(ctx, "issue operation error",
-		"op", "create",
+	slog.ErrorContext(ctx, logMessage(ctx, "error"),
+		"tool", "skein_create",
 		"reason", "create failed",
 		"userId", userID.String(), "projectId", projectID.String(), "error", err.Error())
 	return Fail(ErrCodeInternalError, "failed to create issue", nil)
@@ -206,8 +206,8 @@ func MapInlineDepError(ctx context.Context, depFail *issues.ErrInlineDepFailed, 
 			"dependencies["+strconv.Itoa(depFail.Index)+"]: would create a cycle",
 			base)
 	}
-	slog.ErrorContext(ctx, "issue operation error",
-		"op", "create",
+	slog.ErrorContext(ctx, logMessage(ctx, "error"),
+		"tool", "skein_create",
 		"reason", "inline dep create failed",
 		"userId", userID.String(), "projectId", projectID.String(),
 		"index", depFail.Index, "toId", depFail.ToID, "type", depFail.Type,

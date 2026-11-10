@@ -157,7 +157,7 @@ func ResolveVisibleIssueProject(
 			map[string]any{"id": issueID})
 	}
 	if err != nil {
-		slog.ErrorContext(ctx, "issue operation error",
+		slog.ErrorContext(ctx, logMessage(ctx, "error"),
 			"tool", toolName, "reason", "lookup failed",
 			"userId", userID.String(), "issueId", issueID, "error", err.Error())
 		return uuid.Nil, Fail(errcode.InternalError.String(), "failed to load issue", nil)
@@ -168,7 +168,7 @@ func ResolveVisibleIssueProject(
 				"issue does not exist or is not visible",
 				map[string]any{"id": issueID})
 		}
-		slog.ErrorContext(ctx, "issue operation error",
+		slog.ErrorContext(ctx, logMessage(ctx, "error"),
 			"tool", toolName, "reason", "visibility failed",
 			"userId", userID.String(), "issueId", issueID, "error", vErr.Error())
 		return uuid.Nil, Fail(errcode.InternalError.String(), "visibility check failed", nil)

@@ -58,8 +58,8 @@ func Claim(ctx context.Context, d Deps, userID uuid.UUID, a Args) (ClaimResult, 
 					"issue does not exist or is not visible",
 					map[string]any{"id": id})
 			}
-			slog.ErrorContext(ctx, "issue operation error",
-				"op", "claim",
+			slog.ErrorContext(ctx, logMessage(ctx, "error"),
+				"tool", "skein_claim",
 				"reason", "load issue failed",
 				"userId", userID.String(), "issueId", id, "error", err.Error())
 			return ClaimResult{}, Fail(ErrCodeInternalError, "failed to load issue", nil)
@@ -119,7 +119,7 @@ func Claim(ctx context.Context, d Deps, userID uuid.UUID, a Args) (ClaimResult, 
 			}
 			return ClaimResult{}, MapClaimError(ctx, err, userID.String(), sessionID, failedID)
 		}
-		slog.InfoContext(ctx, "issue operation ok", "op", "claim", "userId", userID.String(), "issueCount", len(ids), "latencyMs", time.Since(start).Milliseconds())
+		slog.InfoContext(ctx, logMessage(ctx, "ok"), "tool", "skein_claim", "userId", userID.String(), "issueCount", len(ids), "latencyMs", time.Since(start).Milliseconds())
 		return ClaimResult{IDs: ids, Batch: true, Issues: dtos}, nil
 	}
 
@@ -133,8 +133,8 @@ func Claim(ctx context.Context, d Deps, userID uuid.UUID, a Args) (ClaimResult, 
 	if err != nil {
 		return ClaimResult{}, MapClaimError(ctx, err, userID.String(), sessionID, id)
 	}
-	slog.InfoContext(ctx, "issue operation ok",
-		"op", "claim",
+	slog.InfoContext(ctx, logMessage(ctx, "ok"),
+		"tool", "skein_claim",
 		"userId", userID.String(), "issueId", id,
 		"version", dto.Version,
 		"latencyMs", time.Since(start).Milliseconds())

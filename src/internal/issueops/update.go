@@ -190,8 +190,8 @@ func Update(ctx context.Context, d Deps, userID uuid.UUID, a Args) (UpdateResult
 				"issue does not exist or is not visible",
 				map[string]any{"id": id})
 		}
-		slog.ErrorContext(ctx, "issue operation error",
-			"op", "update",
+		slog.ErrorContext(ctx, logMessage(ctx, "error"),
+			"tool", "skein_update",
 			"reason", "load issue failed",
 			"userId", userID.String(), "issueId", id, "error", err.Error())
 		return UpdateResult{}, Fail(ErrCodeInternalError, "failed to load issue", nil)
@@ -241,8 +241,8 @@ func Update(ctx context.Context, d Deps, userID uuid.UUID, a Args) (UpdateResult
 		if err != nil {
 			return UpdateResult{}, MapReviewFlagError(ctx, err, userID, id)
 		}
-		slog.InfoContext(ctx, "issue operation ok",
-			"op", "update",
+		slog.InfoContext(ctx, logMessage(ctx, "ok"),
+			"tool", "skein_update",
 			"userId", userID.String(), "issueId", id,
 			"field", "review_required",
 			"version", final.Version,
@@ -280,8 +280,8 @@ func Update(ctx context.Context, d Deps, userID uuid.UUID, a Args) (UpdateResult
 		}
 		return UpdateResult{}, MapUpdateError(ctx, err, userID, id, outcome.Target)
 	}
-	slog.InfoContext(ctx, "issue operation ok",
-		"op", "update",
+	slog.InfoContext(ctx, logMessage(ctx, "ok"),
+		"tool", "skein_update",
 		"userId", userID.String(), "issueId", id,
 		"version", final.Version,
 		"latencyMs", time.Since(start).Milliseconds())

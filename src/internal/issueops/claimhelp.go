@@ -59,7 +59,7 @@ func ParseClaimIDs(args map[string]any) ([]string, bool, *Failure) {
 func LogClaimRejected(ctx context.Context, outcome, userID, sessionID, issueID string, extra ...any) {
 	args := make([]any, 0, 10+len(extra))
 	args = append(args,
-		"op", "claim",
+		"tool", "skein_claim",
 		"outcome", outcome,
 		"userId", userID,
 		"sessionId", sessionID,
@@ -153,8 +153,8 @@ func MapClaimError(ctx context.Context, err error, userID, sessionID, issueID st
 			"cannot claim a closed issue — reopen it first",
 			map[string]any{"id": issueID})
 	}
-	slog.ErrorContext(ctx, "issue operation error",
-		"op", "claim",
+	slog.ErrorContext(ctx, logMessage(ctx, "error"),
+		"tool", "skein_claim",
 		"reason", "store call failed",
 		"userId", userID, "sessionId", sessionID,
 		"issueId", issueID, "error", err.Error())

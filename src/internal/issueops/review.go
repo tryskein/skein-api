@@ -126,8 +126,8 @@ func MapReviewFlagError(ctx context.Context, err error, userID uuid.UUID, id str
 			"expectedVersion does not match the live version",
 			map[string]any{"currentVersion": verr.CurrentVersion})
 	}
-	slog.ErrorContext(ctx, "issue operation error",
-		"op", "update",
+	slog.ErrorContext(ctx, logMessage(ctx, "error"),
+		"tool", "skein_update",
 		"reason", "review flag update failed",
 		"userId", userID.String(), "issueId", id, "error", err.Error())
 	return Fail(ErrCodeInternalError, "failed to update the review flag", nil)

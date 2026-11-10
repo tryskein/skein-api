@@ -24,6 +24,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"skein-api/internal/errcode"
+	"skein-api/internal/issueops"
 	"skein-api/internal/handler"
 )
 
@@ -172,6 +173,8 @@ func routeHandler(opts RouterOptions, rt Route) http.Handler {
 		ctx, cancel := context.WithTimeout(r.Context(), opts.OperationTimeout)
 		defer cancel()
 		ctx = context.WithValue(ctx, routeContextKey{}, rt)
+		// The issue operations log their lines as public API ones.
+		ctx = issueops.WithPublicAPI(ctx)
 		chained.ServeHTTP(w, r.WithContext(ctx))
 	})
 }

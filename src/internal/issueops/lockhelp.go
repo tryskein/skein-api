@@ -96,8 +96,8 @@ func MapAcceptError(ctx context.Context, err error, userID uuid.UUID, id string)
 			"the issue was modified by another writer",
 			map[string]any{"currentVersion": verr.CurrentVersion})
 	}
-	slog.ErrorContext(ctx, "issue operation error",
-		"op", "accept",
+	slog.ErrorContext(ctx, logMessage(ctx, "error"),
+		"tool", "skein_accept",
 		"reason", "store call failed",
 		"userId", userID.String(), "issueId", id, "error", err.Error())
 	return Fail(ErrCodeInternalError, "accept failed", nil)
@@ -164,8 +164,8 @@ func MapReparentError(ctx context.Context, err error, userID uuid.UUID, id, newP
 			"this move would create a cycle (new parent is a descendant of the issue)",
 			map[string]any{"path": cycle.Path})
 	}
-	slog.ErrorContext(ctx, "issue operation error",
-		"op", "reparent",
+	slog.ErrorContext(ctx, logMessage(ctx, "error"),
+		"tool", "skein_reparent",
 		"reason", "store reparent failed",
 		"userId", userID.String(),
 		"issueId", id, "newParentId", newParentID, "error", err.Error())

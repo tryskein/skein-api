@@ -97,8 +97,8 @@ func Close(ctx context.Context, d Deps, userID uuid.UUID, a Args) (CloseResult, 
 				"issue does not exist or is not visible",
 				map[string]any{"id": id})
 		}
-		slog.ErrorContext(ctx, "issue operation error",
-			"op", "close",
+		slog.ErrorContext(ctx, logMessage(ctx, "error"),
+			"tool", "skein_close",
 			"reason", "load issue failed",
 			"userId", userID.String(), "issueId", id, "error", err.Error())
 		return CloseResult{}, Fail(ErrCodeInternalError, "failed to load issue", nil)
@@ -127,8 +127,8 @@ func Close(ctx context.Context, d Deps, userID uuid.UUID, a Args) (CloseResult, 
 	if issue.Type == issues.TypeEpic {
 		oc, ocErr := d.Issues.EpicOpenChildrenFor(ctx, id)
 		if ocErr != nil {
-			slog.WarnContext(ctx, "issue operation warning",
-				"op", "close",
+			slog.WarnContext(ctx, logMessage(ctx, "warning"),
+				"tool", "skein_close",
 				"reason", "epic open-children snapshot failed; closing without warning",
 				"issueId", id, "error", ocErr.Error())
 		} else {
@@ -163,8 +163,8 @@ func Close(ctx context.Context, d Deps, userID uuid.UUID, a Args) (CloseResult, 
 			userID.String(), id, outcome.Target)
 	}
 	res.Issue = dto
-	slog.InfoContext(ctx, "issue operation ok",
-		"op", "close",
+	slog.InfoContext(ctx, logMessage(ctx, "ok"),
+		"tool", "skein_close",
 		"userId", userID.String(), "issueId", id,
 		"version", dto.Version,
 		"latencyMs", time.Since(start).Milliseconds())

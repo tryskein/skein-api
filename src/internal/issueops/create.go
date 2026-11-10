@@ -194,8 +194,8 @@ func Create(ctx context.Context, d Deps, userID uuid.UUID, a Args, o Origin) (Cr
 	// when the resolved mode is "custom".
 	project, err := d.Projects.GetProject(ctx, projectID)
 	if err != nil {
-		slog.ErrorContext(ctx, "issue operation error",
-			"op", "create",
+		slog.ErrorContext(ctx, logMessage(ctx, "error"),
+			"tool", "skein_create",
 			"reason", "load project failed",
 			"userId", userID.String(), "projectId", projectID.String(), "error", err.Error())
 		return CreateResult{}, Fail(ErrCodeInternalError, "failed to load project metadata", nil)
@@ -263,8 +263,8 @@ func Create(ctx context.Context, d Deps, userID uuid.UUID, a Args, o Origin) (Cr
 					"duplicateOf target issue does not exist",
 					map[string]any{"duplicateOf": duplicateOfID})
 			}
-			slog.ErrorContext(ctx, "issue operation error",
-				"op", "create",
+			slog.ErrorContext(ctx, logMessage(ctx, "error"),
+				"tool", "skein_create",
 				"reason", "duplicateOf precheck load failed",
 				"userId", userID.String(), "duplicateOf", duplicateOfID, "error", terr.Error())
 			return CreateResult{}, Fail(ErrCodeInternalError,
@@ -276,8 +276,8 @@ func Create(ctx context.Context, d Deps, userID uuid.UUID, a Args, o Origin) (Cr
 					"duplicateOf target issue does not exist",
 					map[string]any{"duplicateOf": duplicateOfID})
 			}
-			slog.ErrorContext(ctx, "issue operation error",
-				"op", "create",
+			slog.ErrorContext(ctx, logMessage(ctx, "error"),
+				"tool", "skein_create",
 				"reason", "duplicateOf precheck visibility failed",
 				"userId", userID.String(), "duplicateOf", duplicateOfID, "error", vErr.Error())
 			return CreateResult{}, Fail(ErrCodeInternalError,
@@ -297,8 +297,8 @@ func Create(ctx context.Context, d Deps, userID uuid.UUID, a Args, o Origin) (Cr
 	if duplicateOfID == "" && !force {
 		report, err := d.Deps.CheckDuplicates(ctx, projectID, title, description)
 		if err != nil {
-			slog.ErrorContext(ctx, "issue operation error",
-				"op", "create",
+			slog.ErrorContext(ctx, logMessage(ctx, "error"),
+				"tool", "skein_create",
 				"reason", "duplicate check failed",
 				"userId", userID.String(), "projectId", projectID.String(), "error", err.Error())
 			return CreateResult{}, Fail(ErrCodeInternalError, "duplicate check failed", nil)
@@ -319,13 +319,13 @@ func Create(ctx context.Context, d Deps, userID uuid.UUID, a Args, o Origin) (Cr
 			// the flag is documented in skein_get_instructions.
 			duplicateCheckDegraded = true
 			slog.InfoContext(ctx, "duplicate check degraded",
-				"op", "create",
+				"tool", "skein_create",
 				"projectId", projectID.String(),
 				"reason", report.DegradedReason)
 		}
 		if len(cands) > 0 {
-			slog.InfoContext(ctx, "issue operation ok",
-				"op", "create",
+			slog.InfoContext(ctx, logMessage(ctx, "ok"),
+				"tool", "skein_create",
 				"userId", userID.String(), "projectId", projectID.String(),
 				"outcome", "decision_required",
 				"duplicateCount", len(cands),

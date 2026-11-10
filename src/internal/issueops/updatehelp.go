@@ -257,8 +257,8 @@ func MapUpdateError(ctx context.Context, err error, userID uuid.UUID, issueID, c
 			"some components do not belong to this project",
 			map[string]any{"componentIds": cerr.ComponentIDs})
 	}
-	slog.ErrorContext(ctx, "issue operation error",
-		"op", "update",
+	slog.ErrorContext(ctx, logMessage(ctx, "error"),
+		"tool", "skein_update",
 		"reason", "store call failed",
 		"userId", userID.String(), "issueId", issueID, "error", err.Error())
 	return Fail(ErrCodeInternalError, "update failed", nil)

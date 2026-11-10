@@ -93,8 +93,8 @@ func Unclaim(ctx context.Context, d Deps, userID uuid.UUID, a Args) (IssueResult
 				"issue does not exist or is not visible",
 				map[string]any{"id": id})
 		}
-		slog.ErrorContext(ctx, "issue operation error",
-			"op", "unclaim",
+		slog.ErrorContext(ctx, logMessage(ctx, "error"),
+			"tool", "skein_unclaim",
 			"reason", "load issue failed",
 			"userId", userID.String(), "issueId", id, "error", err.Error())
 		return IssueResult{}, Fail(ErrCodeInternalError, "failed to load issue", nil)
@@ -137,15 +137,15 @@ func Unclaim(ctx context.Context, d Deps, userID uuid.UUID, a Args) (IssueResult
 			return IssueResult{}, Fail(ErrCodeValidationError, vErr.Message,
 				map[string]any{"code": vErr.Code})
 		}
-		slog.ErrorContext(ctx, "issue operation error",
-			"op", "unclaim",
+		slog.ErrorContext(ctx, logMessage(ctx, "error"),
+			"tool", "skein_unclaim",
 			"reason", "store call failed",
 			"userId", userID.String(), "issueId", id, "error", err.Error())
 		return IssueResult{}, Fail(ErrCodeInternalError, "unclaim failed", nil)
 	}
 
-	slog.InfoContext(ctx, "issue operation ok",
-		"op", "unclaim",
+	slog.InfoContext(ctx, logMessage(ctx, "ok"),
+		"tool", "skein_unclaim",
 		"userId", userID.String(), "issueId", id,
 		"version", dto.Version,
 		"latencyMs", time.Since(start).Milliseconds())
@@ -167,8 +167,8 @@ func Accept(ctx context.Context, d Deps, userID uuid.UUID, a Args) (IssueResult,
 	if invID, perr := uuid.Parse(id); perr == nil {
 		isInv, ierr := spaces.IsInvitationTo(ctx, d.Pool, invID, userID)
 		if ierr != nil {
-			slog.ErrorContext(ctx, "issue operation error",
-				"op", "accept", "reason", "invitation lookup failed",
+			slog.ErrorContext(ctx, logMessage(ctx, "error"),
+				"tool", "skein_accept", "reason", "invitation lookup failed",
 				"userId", userID.String(), "error", ierr.Error())
 			return IssueResult{}, Fail(ErrCodeInternalError, "failed to read the invitation", nil)
 		}
@@ -205,8 +205,8 @@ func Accept(ctx context.Context, d Deps, userID uuid.UUID, a Args) (IssueResult,
 				"issue does not exist or is not visible",
 				map[string]any{"id": id})
 		}
-		slog.ErrorContext(ctx, "issue operation error",
-			"op", "accept",
+		slog.ErrorContext(ctx, logMessage(ctx, "error"),
+			"tool", "skein_accept",
 			"reason", "load issue failed",
 			"userId", userID.String(), "issueId", id, "error", err.Error())
 		return IssueResult{}, Fail(ErrCodeInternalError, "failed to load issue", nil)
@@ -217,8 +217,8 @@ func Accept(ctx context.Context, d Deps, userID uuid.UUID, a Args) (IssueResult,
 				"issue does not exist or is not visible",
 				map[string]any{"id": id})
 		}
-		slog.ErrorContext(ctx, "issue operation error",
-			"op", "accept",
+		slog.ErrorContext(ctx, logMessage(ctx, "error"),
+			"tool", "skein_accept",
 			"reason", "visibility check failed",
 			"userId", userID.String(), "issueId", id, "error", vErr.Error())
 		return IssueResult{}, Fail(ErrCodeInternalError, "visibility check failed", nil)
@@ -237,8 +237,8 @@ func Accept(ctx context.Context, d Deps, userID uuid.UUID, a Args) (IssueResult,
 		return IssueResult{}, MapAcceptError(ctx, err, userID, id)
 	}
 
-	slog.InfoContext(ctx, "issue operation ok",
-		"op", "accept",
+	slog.InfoContext(ctx, logMessage(ctx, "ok"),
+		"tool", "skein_accept",
 		"userId", userID.String(), "issueId", id,
 		"version", dto.Version,
 		"latencyMs", time.Since(start).Milliseconds())
@@ -294,8 +294,8 @@ func Reparent(ctx context.Context, d Deps, userID uuid.UUID, a Args) (IssueResul
 				"issue does not exist or is not visible",
 				map[string]any{"id": id})
 		}
-		slog.ErrorContext(ctx, "issue operation error",
-			"op", "reparent",
+		slog.ErrorContext(ctx, logMessage(ctx, "error"),
+			"tool", "skein_reparent",
 			"reason", "load issue failed",
 			"userId", userID.String(), "issueId", id, "error", err.Error())
 		return IssueResult{}, Fail(ErrCodeInternalError, "failed to load issue", nil)
@@ -319,16 +319,16 @@ func Reparent(ctx context.Context, d Deps, userID uuid.UUID, a Args) (IssueResul
 	// the new parent.
 	final, err := d.Issues.GetIssue(ctx, id)
 	if err != nil {
-		slog.ErrorContext(ctx, "issue operation error",
-			"op", "reparent",
+		slog.ErrorContext(ctx, logMessage(ctx, "error"),
+			"tool", "skein_reparent",
 			"reason", "re-fetch after reparent failed",
 			"userId", userID.String(), "issueId", id, "error", err.Error())
 		return IssueResult{}, Fail(ErrCodeInternalError,
 			"reparent committed but re-fetch failed; re-read with skein_show", nil)
 	}
 
-	slog.InfoContext(ctx, "issue operation ok",
-		"op", "reparent",
+	slog.InfoContext(ctx, logMessage(ctx, "ok"),
+		"tool", "skein_reparent",
 		"userId", userID.String(), "issueId", id, "newParentId", newParentID,
 		"version", final.Version,
 		"latencyMs", time.Since(start).Milliseconds())
@@ -364,7 +364,7 @@ func Delegation(ctx context.Context, d Deps, userID uuid.UUID, a Args, drop bool
 				"issue does not exist or is not visible",
 				map[string]any{"id": id})
 		}
-		slog.ErrorContext(ctx, "issue operation error",
+		slog.ErrorContext(ctx, logMessage(ctx, "error"),
 			"tool", toolName,
 			"reason", "load issue failed",
 			"userId", userID.String(), "issueId", id, "error", err.Error())
@@ -376,7 +376,7 @@ func Delegation(ctx context.Context, d Deps, userID uuid.UUID, a Args, drop bool
 				"issue does not exist or is not visible",
 				map[string]any{"id": id})
 		}
-		slog.ErrorContext(ctx, "issue operation error",
+		slog.ErrorContext(ctx, logMessage(ctx, "error"),
 			"tool", toolName,
 			"reason", "visibility check failed",
 			"userId", userID.String(), "issueId", id, "error", vErr.Error())
@@ -407,14 +407,14 @@ func Delegation(ctx context.Context, d Deps, userID uuid.UUID, a Args, drop bool
 			return IssueResult{}, Fail(ErrCodeValidationError, vErr.Message,
 				map[string]any{"code": vErr.Code, "id": id})
 		}
-		slog.ErrorContext(ctx, "issue operation error",
+		slog.ErrorContext(ctx, logMessage(ctx, "error"),
 			"tool", toolName,
 			"reason", "store call failed",
 			"userId", userID.String(), "issueId", id, "error", actionErr.Error())
 		return IssueResult{}, Fail(ErrCodeInternalError, toolName+" failed", nil)
 	}
 
-	slog.InfoContext(ctx, "issue operation ok",
+	slog.InfoContext(ctx, logMessage(ctx, "ok"),
 		"tool", toolName,
 		"userId", userID.String(), "issueId", id,
 		"version", dto.Version,
@@ -474,8 +474,8 @@ func AttachCommits(ctx context.Context, d Deps, userID uuid.UUID, a Args) (Issue
 				"issue does not exist or is not visible",
 				map[string]any{"id": id})
 		}
-		slog.ErrorContext(ctx, "issue operation error",
-			"op", "commits_attach",
+		slog.ErrorContext(ctx, logMessage(ctx, "error"),
+			"tool", "skein_commits_attach",
 			"reason", "load issue failed",
 			"userId", userID.String(), "issueId", id, "error", err.Error())
 		return IssueResult{}, Fail(ErrCodeInternalError, "failed to load issue", nil)
@@ -508,8 +508,8 @@ func AttachCommits(ctx context.Context, d Deps, userID uuid.UUID, a Args) (Issue
 		return IssueResult{}, MapCloseError(ctx, d.Pool, issue.ProjectID, err, "skein_commits_attach", userID.String(), id, "")
 	}
 
-	slog.InfoContext(ctx, "issue operation ok",
-		"op", "commits_attach",
+	slog.InfoContext(ctx, logMessage(ctx, "ok"),
+		"tool", "skein_commits_attach",
 		"userId", userID.String(), "issueId", id,
 		"commitCount", len(commits),
 		"latencyMs", time.Since(start).Milliseconds())
@@ -556,8 +556,8 @@ func DetachCommits(ctx context.Context, d Deps, userID uuid.UUID, a Args) (Issue
 				"issue does not exist or is not visible",
 				map[string]any{"id": id})
 		}
-		slog.ErrorContext(ctx, "issue operation error",
-			"op", "commits_detach",
+		slog.ErrorContext(ctx, logMessage(ctx, "error"),
+			"tool", "skein_commits_detach",
 			"reason", "load issue failed",
 			"userId", userID.String(), "issueId", id, "error", err.Error())
 		return IssueResult{}, Fail(ErrCodeInternalError, "failed to load issue", nil)
@@ -589,8 +589,8 @@ func DetachCommits(ctx context.Context, d Deps, userID uuid.UUID, a Args) (Issue
 		return IssueResult{}, MapCloseError(ctx, d.Pool, issue.ProjectID, err, "skein_commits_detach", userID.String(), id, "")
 	}
 
-	slog.InfoContext(ctx, "issue operation ok",
-		"op", "commits_detach",
+	slog.InfoContext(ctx, logMessage(ctx, "ok"),
+		"tool", "skein_commits_detach",
 		"userId", userID.String(), "issueId", id,
 		"requestedCount", len(hashes),
 		"detachedCount", len(res.Detached),
@@ -620,7 +620,7 @@ func ReleaseLock(ctx context.Context, d Deps, userID uuid.UUID, a Args) (IssueRe
 		return IssueResult{}, Fail(ErrCodeIssueNotFound, "issue does not exist or is not visible", map[string]any{"id": id})
 	}
 	if err != nil {
-		slog.ErrorContext(ctx, "issue operation error", "op", "release_lock", "reason", "load issue failed",
+		slog.ErrorContext(ctx, logMessage(ctx, "error"), "operationId", "releaseIssueLock", "reason", "load issue failed",
 			"userId", userID.String(), "issueId", id, "error", err.Error())
 		return IssueResult{}, Fail(ErrCodeInternalError, "failed to load issue", nil)
 	}
@@ -631,7 +631,7 @@ func ReleaseLock(ctx context.Context, d Deps, userID uuid.UUID, a Args) (IssueRe
 	switch {
 	case ferr == nil, errors.Is(ferr, projects.ErrProjectActionForbidden):
 	default:
-		slog.ErrorContext(ctx, "issue operation error", "op", "release_lock", "reason", "force_unlock check failed",
+		slog.ErrorContext(ctx, logMessage(ctx, "error"), "operationId", "releaseIssueLock", "reason", "force_unlock check failed",
 			"userId", userID.String(), "issueId", id, "error", ferr.Error())
 		return IssueResult{}, Fail(ErrCodeInternalError, "permission check failed", nil)
 	}
@@ -649,7 +649,7 @@ func ReleaseLock(ctx context.Context, d Deps, userID uuid.UUID, a Args) (IssueRe
 	case errors.Is(err, issues.ErrNotFound):
 		return IssueResult{}, Fail(ErrCodeIssueNotFound, "issue does not exist or is not visible", map[string]any{"id": id})
 	}
-	slog.ErrorContext(ctx, "issue operation error", "op", "release_lock", "reason", "store call failed",
+	slog.ErrorContext(ctx, logMessage(ctx, "error"), "operationId", "releaseIssueLock", "reason", "store call failed",
 		"userId", userID.String(), "issueId", id, "error", err.Error())
 	return IssueResult{}, Fail(ErrCodeInternalError, "release failed", nil)
 }

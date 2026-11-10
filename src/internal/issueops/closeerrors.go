@@ -47,7 +47,7 @@ func RepoResolutionDetails(ctx context.Context, pool *pgxpool.Pool, projectID uu
 
 	repos, err := projects.LoadProjectRepos(ctx, pool, projectID)
 	if err != nil {
-		slog.WarnContext(ctx, "issue operation error",
+		slog.WarnContext(ctx, logMessage(ctx, "error"),
 			"tool", tool,
 			"reason", "loading project repos for error details failed",
 			"projectId", projectID.String(),
@@ -215,7 +215,7 @@ func ClassifyCloseError(ctx context.Context, pool *pgxpool.Pool, projectID uuid.
 			Details: map[string]any{"id": issueID},
 		}
 	}
-	slog.ErrorContext(ctx, "issue operation error",
+	slog.ErrorContext(ctx, logMessage(ctx, "error"),
 		"tool", tool,
 		"reason", "store call failed",
 		"userId", userID, "issueId", issueID, "error", err.Error())

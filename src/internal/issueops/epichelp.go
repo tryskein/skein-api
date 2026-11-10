@@ -311,8 +311,8 @@ func MapEpicCreateError(ctx context.Context, err error, userID, projectID interf
 			return Fail(ErrCodeIDTaken,
 				"childTemplates["+strconv.Itoa(childFail.Index)+"]: an issue with this id already exists", base)
 		}
-		slog.ErrorContext(ctx, "issue operation error",
-			"op", "epic_create",
+		slog.ErrorContext(ctx, logMessage(ctx, "error"),
+			"tool", "skein_epic_create",
 			"reason", "child create failed",
 			"userId", userID.String(), "projectId", projectID.String(),
 			"childIndex", childFail.Index, "error", inner.Error())
@@ -356,8 +356,8 @@ func MapEpicCreateError(ctx context.Context, err error, userID, projectID interf
 		return Fail(ErrCodeIDTaken,
 			"an issue with this id already exists", nil)
 	}
-	slog.ErrorContext(ctx, "issue operation error",
-		"op", "epic_create",
+	slog.ErrorContext(ctx, logMessage(ctx, "error"),
+		"tool", "skein_epic_create",
 		"reason", "epic create failed",
 		"userId", userID.String(), "projectId", projectID.String(), "error", err.Error())
 	return Fail(ErrCodeInternalError, "failed to create epic", nil)

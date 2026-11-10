@@ -327,7 +327,7 @@ func CloseMany(ctx context.Context, d Deps, userID uuid.UUID, a Args, loop Batch
 				failed++
 			}
 			slog.WarnContext(ctx, "mcp batch stopped early",
-				"op", "close_many", "code", code,
+				"tool", "skein_close_many", "code", code,
 				"appliedRows", succeeded, "unrunRows", len(items)-i,
 				"userId", userID.String())
 			break
@@ -402,8 +402,8 @@ func CloseMany(ctx context.Context, d Deps, userID uuid.UUID, a Args, loop Batch
 				failed++
 				continue
 			}
-			slog.ErrorContext(ctx, "issue operation error",
-				"op", "close_many",
+			slog.ErrorContext(ctx, logMessage(ctx, "error"),
+				"tool", "skein_close_many",
 				"reason", "visibility check failed",
 				"userId", userID.String(),
 				"issueId", parsed.item.ID,
@@ -465,8 +465,8 @@ func CloseMany(ctx context.Context, d Deps, userID uuid.UUID, a Args, loop Batch
 		succeeded++
 	}
 
-	slog.InfoContext(ctx, "issue operation ok",
-		"op", "close_many",
+	slog.InfoContext(ctx, logMessage(ctx, "ok"),
+		"tool", "skein_close_many",
 		"userId", userID.String(),
 		"requested", len(items),
 		"succeeded", succeeded,
@@ -691,7 +691,7 @@ func UpdateMany(ctx context.Context, d Deps, userID uuid.UUID, a Args, loop Batc
 				failed++
 			}
 			slog.WarnContext(ctx, "mcp batch stopped early",
-				"op", "update_many", "code", code,
+				"tool", "skein_update_many", "code", code,
 				"appliedRows", succeeded, "unrunRows", len(rawSlice)-i,
 				"userId", userID.String())
 			break
@@ -778,8 +778,8 @@ func UpdateMany(ctx context.Context, d Deps, userID uuid.UUID, a Args, loop Batc
 			} else if stopErr := UpdateRowContextStop(ctx, loopCtx, err, id); stopErr != nil {
 				results[i] = BatchResultRow{ID: id, OK: false, Error: stopErr}
 			} else {
-				slog.ErrorContext(ctx, "issue operation error",
-					"op", "update_many",
+				slog.ErrorContext(ctx, logMessage(ctx, "error"),
+					"tool", "skein_update_many",
 					"reason", "load issue failed",
 					"userId", userID.String(), "issueId", id, "error", err.Error())
 				results[i] = BatchResultRow{
@@ -853,8 +853,8 @@ func UpdateMany(ctx context.Context, d Deps, userID uuid.UUID, a Args, loop Batc
 			} else if stopErr := UpdateRowContextStop(ctx, loopCtx, visErr, id); stopErr != nil {
 				results[i] = BatchResultRow{ID: id, OK: false, Error: stopErr}
 			} else {
-				slog.ErrorContext(ctx, "issue operation error",
-					"op", "update_many",
+				slog.ErrorContext(ctx, logMessage(ctx, "error"),
+					"tool", "skein_update_many",
 					"reason", "visibility check failed",
 					"userId", userID.String(), "issueId", id, "error", visErr.Error())
 				results[i] = BatchResultRow{
@@ -888,8 +888,8 @@ func UpdateMany(ctx context.Context, d Deps, userID uuid.UUID, a Args, loop Batc
 		succeeded++
 	}
 
-	slog.InfoContext(ctx, "issue operation ok",
-		"op", "update_many",
+	slog.InfoContext(ctx, logMessage(ctx, "ok"),
+		"tool", "skein_update_many",
 		"userId", userID.String(),
 		"requested", len(rawSlice),
 		"succeeded", succeeded,
@@ -1110,7 +1110,7 @@ func DepAddMany(ctx context.Context, d Deps, userID uuid.UUID, a Args, loop Batc
 				failed++
 			}
 			slog.WarnContext(ctx, "mcp batch stopped early",
-				"op", "dep_add_many", "code", code,
+				"tool", "skein_dep_add_many", "code", code,
 				"appliedRows", succeeded, "unrunRows", len(rawSlice)-i,
 				"userId", userID.String())
 			break
@@ -1216,8 +1216,8 @@ func DepAddMany(ctx context.Context, d Deps, userID uuid.UUID, a Args, loop Batc
 					Error:  stopErr,
 				}
 			} else {
-				slog.ErrorContext(ctx, "issue operation error",
-					"op", "dep_add_many",
+				slog.ErrorContext(ctx, logMessage(ctx, "error"),
+					"tool", "skein_dep_add_many",
 					"reason", "load fromId failed",
 					"userId", userID.String(), "fromId", fromID, "error", err.Error())
 				results[i] = DepAddManyResultRow{
@@ -1269,8 +1269,8 @@ func DepAddMany(ctx context.Context, d Deps, userID uuid.UUID, a Args, loop Batc
 					Error:  stopErr,
 				}
 			} else {
-				slog.ErrorContext(ctx, "issue operation error",
-					"op", "dep_add_many",
+				slog.ErrorContext(ctx, logMessage(ctx, "error"),
+					"tool", "skein_dep_add_many",
 					"reason", "fromId visibility check failed",
 					"userId", userID.String(), "fromId", fromID, "error", vErr.Error())
 				results[i] = DepAddManyResultRow{
@@ -1328,8 +1328,8 @@ func DepAddMany(ctx context.Context, d Deps, userID uuid.UUID, a Args, loop Batc
 		succeeded++
 	}
 
-	slog.InfoContext(ctx, "issue operation ok",
-		"op", "dep_add_many",
+	slog.InfoContext(ctx, logMessage(ctx, "ok"),
+		"tool", "skein_dep_add_many",
 		"userId", userID.String(),
 		"requested", len(rawSlice),
 		"succeeded", succeeded,

@@ -189,7 +189,7 @@ func EpicCreate(ctx context.Context, d Deps, userID uuid.UUID, a Args, o Origin)
 		callerMode, ok := CallerOriginMode(ctx)
 		if !ok {
 			slog.ErrorContext(ctx, "callerOriginMode could not classify caller",
-				"op", "epic_create", "userId", userID.String())
+				"tool", "skein_epic_create", "userId", userID.String())
 			return EpicResult{}, Fail(ErrCodeInternalError,
 				"ambiguous caller mode; cannot determine issue source", nil)
 		}
@@ -213,7 +213,7 @@ func EpicCreate(ctx context.Context, d Deps, userID uuid.UUID, a Args, o Origin)
 			}
 		default:
 			slog.ErrorContext(ctx, "callerOriginMode returned unexpected mode",
-				"op", "epic_create", "mode", callerMode, "userId", userID.String())
+				"tool", "skein_epic_create", "mode", callerMode, "userId", userID.String())
 			return EpicResult{}, Fail(ErrCodeInternalError,
 				"unknown caller mode; cannot determine issue source",
 				map[string]any{"mode": callerMode})
@@ -277,8 +277,8 @@ func EpicCreate(ctx context.Context, d Deps, userID uuid.UUID, a Args, o Origin)
 
 	project, err := d.Projects.GetProject(ctx, projectID)
 	if err != nil {
-		slog.ErrorContext(ctx, "issue operation error",
-			"op", "epic_create",
+		slog.ErrorContext(ctx, logMessage(ctx, "error"),
+			"tool", "skein_epic_create",
 			"reason", "load project failed",
 			"userId", userID.String(), "projectId", projectID.String(), "error", err.Error())
 		return EpicResult{}, Fail(ErrCodeInternalError, "failed to load project metadata", nil)

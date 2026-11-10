@@ -43,7 +43,7 @@ func IssueActionGate(
 	case errors.Is(err, projects.ErrProjectActionForbidden):
 		return Fail(ErrCodeForbidden, MsgActionForbidden, map[string]any{idKey: issueID})
 	default:
-		slog.ErrorContext(ctx, "issue operation error",
+		slog.ErrorContext(ctx, logMessage(ctx, "error"),
 			"tool", tool, "reason", "action check failed",
 			"userId", userID.String(), "issueId", issueID, "error", err.Error())
 		return Fail(ErrCodeInternalError, "permission check failed", nil)
@@ -69,7 +69,7 @@ func ProjectActionGate(
 	case errors.Is(err, projects.ErrProjectActionForbidden):
 		return Fail(ErrCodeForbidden, MsgActionForbidden, map[string]any{"project": projectArg})
 	default:
-		slog.ErrorContext(ctx, "issue operation error",
+		slog.ErrorContext(ctx, logMessage(ctx, "error"),
 			"tool", tool, "reason", "action check failed",
 			"userId", userID.String(), "projectId", projectID.String(), "error", err.Error())
 		return Fail(ErrCodeInternalError, "permission check failed", nil)
@@ -103,7 +103,7 @@ func ForceUnlockGate(
 	case errors.Is(err, projects.ErrProjectActionForbidden):
 		return Fail(ErrCodeForceUnlockForbidden, MsgForceUnlockForbidden, map[string]any{idKey: issueID})
 	default:
-		slog.ErrorContext(ctx, "issue operation error",
+		slog.ErrorContext(ctx, logMessage(ctx, "error"),
 			"tool", tool, "reason", "force_unlock check failed",
 			"userId", userID.String(), "issueId", issueID, "error", err.Error())
 		return Fail(ErrCodeInternalError, "permission check failed", nil)
