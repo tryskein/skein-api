@@ -18,6 +18,8 @@ import (
 	"skein-api/internal/notifications"
 	"skein-api/internal/projects"
 	"skein-api/internal/reminders"
+	"skein-api/internal/spaces"
+	"skein-api/internal/users"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -32,6 +34,9 @@ type Deps struct {
 	// caller's own state (T027).
 	Notifications *notifications.Store
 	Reminders     *reminders.Store
+	// Users and Spaces are the stores of the user operations (T028).
+	Users  *users.Store
+	Spaces *spaces.Service
 }
 
 // Origin says how an operation reads the origin of a write from its kind
