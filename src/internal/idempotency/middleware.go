@@ -27,6 +27,7 @@ import (
 	"skein-api/internal/auth"
 	"skein-api/internal/authz"
 	"skein-api/internal/errcode"
+	"skein-api/internal/issues"
 	"skein-api/internal/publicapi"
 )
 
@@ -94,6 +95,22 @@ func RecordInTx(ctx context.Context, tx pgx.Tx, o Outcome) error {
 		e.lost = true
 	}
 	return err
+}
+
+// IssueBeforeCommit is the issues.UpdateIssueInput.BeforeCommit of an
+// operation that answers status with the issue it changed (closeIssue: 200):
+// it records the committed id and version of the issue, the issue as the
+// target and as the object of the response, in the change's own
+// transaction (D-8 rule 2). It does nothing for a request without
+// Idempotency-Key.
+func IssueBeforeCommit(status int) func(ctx context.Context, tx pgx.Tx, st issues.CommittedState) error {
+	return func(ctx context.Context, tx pgx.Tx, st issues.CommittedState) error {
+		issue := publicapi.ObjectRef{Kind: publicapi.ObjectIssue, ID: st.ID}
+		return RecordInTx(ctx, tx, Outcome{
+			Status: status, ID: st.ID, Version: st.Version,
+			Refs: Refs{Target: &issue, Objects: []publicapi.ObjectRef{issue}},
+		})
+	}
 }
 
 // NoteTarget names the object the operation acts on — the project of a

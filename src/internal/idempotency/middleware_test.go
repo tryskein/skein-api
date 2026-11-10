@@ -29,16 +29,17 @@ func notesPath(issue string) string { return fmt.Sprintf(notesPathTmpl, issue) }
 // TestIdempotency_IdentityOfARequest — row 73 (US-7, INV-8). A repeat with
 // the same identity answers the first outcome — the same status, id and
 // version — and executes nothing; the same key, target and Prefer with
-// another body is 422 idempotency_key_reused and executes nothing; the same
+// another body, or with another force mode (the lead's decision in
+// sk-878.3.1), is 422 idempotency_key_reused and executes nothing; the same
 // key with another target or another Prefer is another request: it executes
 // on its own, and the first outcome still answers its own repeat. A repeat
 // while the first request's marker lives is 409 idempotency_in_progress.
 func TestIdempotency_IdentityOfARequest(t *testing.T) {
 	pool := testsupport.NewTestPool(t)
 
-	t.Run("same identity, other body, other target, other Prefer, then the first again", func(t *testing.T) {
+	t.Run("same identity, other body, other mode, other target, other Prefer, then the first again", func(t *testing.T) {
 		rg := newRig(t, pool)
-		w := seedWorld(t, pool, apikeys.LevelWrite)
+		w := seedWorld(t, pool, apikeys.LevelManage)
 		first := call{path: notesPath(w.issueA), key: w.key, idemKey: w.idemKeys}
 
 		orig := decodeNote(t, rg.do(t, first))
@@ -62,6 +63,13 @@ func TestIdempotency_IdentityOfARequest(t *testing.T) {
 		wantProblem(t, rg.do(t, reused), http.StatusUnprocessableEntity, "idempotency_key_reused")
 		if n := rg.calls.Load(); n != 1 {
 			t.Errorf("other body: the operation ran %d times, want 1", n)
+		}
+
+		otherMode := first
+		otherMode.path = notesPath(w.issueA) + "?force=true"
+		wantProblem(t, rg.do(t, otherMode), http.StatusUnprocessableEntity, "idempotency_key_reused")
+		if n := rg.calls.Load(); n != 1 {
+			t.Errorf("other force mode: the operation ran %d times, want 1", n)
 		}
 
 		otherTarget := first
@@ -190,13 +198,12 @@ func TestIdempotency_RecheckBeforeTheStoredAnswer(t *testing.T) {
 	pool := testsupport.NewTestPool(t)
 
 	for _, tc := range []struct {
-		name       string
-		path       func(world) string
-		force      bool
-		change     func(t *testing.T, w world)
-		status     int
-		code       string
-		repeatPath func(world) string
+		name   string
+		path   func(world) string
+		force  bool
+		change func(t *testing.T, w world)
+		status int
+		code   string
 	}{
 		{
 			name: "key revoked",
@@ -224,24 +231,22 @@ func TestIdempotency_RecheckBeforeTheStoredAnswer(t *testing.T) {
 			status: http.StatusForbidden, code: "forbidden",
 		},
 		{
-			name:  "force request, owner without force_unlock, repeat without force",
+			name:  "force request, owner left without force_unlock",
 			path:  func(w world) string { return notesPath(w.issueA) + "?force=true" },
 			force: true,
 			change: func(t *testing.T, w world) {
 				exec(t, pool, "lower the role", `UPDATE project_members SET role = 'member' WHERE project_id = $1 AND user_id = $2`, w.project, w.owner)
 			},
-			repeatPath: func(w world) string { return notesPath(w.issueA) },
-			status:     http.StatusForbidden, code: "force_unlock_forbidden",
+			status: http.StatusForbidden, code: "force_unlock_forbidden",
 		},
 		{
-			name:  "force request, key lowered to write, repeat without force",
+			name:  "force request, key lowered to write",
 			path:  func(w world) string { return notesPath(w.issueA) + "?force=true" },
 			force: true,
 			change: func(t *testing.T, w world) {
 				exec(t, pool, "lower the key", `UPDATE api_keys SET level = 'write' WHERE id = $1`, w.keyID)
 			},
-			repeatPath: func(w world) string { return notesPath(w.issueA) },
-			status:     http.StatusForbidden, code: "insufficient_scope",
+			status: http.StatusForbidden, code: "insufficient_scope",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -250,11 +255,7 @@ func TestIdempotency_RecheckBeforeTheStoredAnswer(t *testing.T) {
 			first := call{path: tc.path(w), key: w.key, idemKey: w.idemKeys}
 			decodeNote(t, rg.do(t, first))
 			tc.change(t, w)
-			repeat := first
-			if tc.repeatPath != nil {
-				repeat.path = tc.repeatPath(w)
-			}
-			rec := rg.do(t, repeat)
+			rec := rg.do(t, first)
 			wantProblem(t, rec, tc.status, tc.code)
 			if n := rg.calls.Load(); n != 1 {
 				t.Errorf("the operation ran %d times, want 1", n)
@@ -343,5 +344,46 @@ func TestIdempotency_KeyNotAccepted(t *testing.T) {
 				t.Errorf("the operation ran %d times, want 0", ran)
 			}
 		})
+	}
+}
+
+// TestIdempotency_CloseRecordedInTheChangeTransaction — the hook of
+// closeIssue (D-8 rule 2 at the T015 attachment point): a close through
+// issues.Store.UpdateIssue with idempotency.IssueBeforeCommit records the
+// committed version of the issue in that transaction; the repeat answers it
+// and closes nothing again — one issue.closed event.
+func TestIdempotency_CloseRecordedInTheChangeTransaction(t *testing.T) {
+	pool := testsupport.NewTestPool(t)
+	rg := newRig(t, pool)
+	w := seedWorld(t, pool, apikeys.LevelWrite)
+	c := call{path: "/api/v1/issues/" + w.issueA + "/close", key: w.key, idemKey: w.idemKeys, body: "{}"}
+
+	first := rg.do(t, c)
+	if first.Code != http.StatusOK {
+		t.Fatalf("close: status %d (body %q)", first.Code, first.Body.String())
+	}
+	var version int64
+	if err := pool.QueryRow(context.Background(), `
+SELECT response_version FROM api_idempotency WHERE api_key_id = $1 AND idempotency_key = $2`,
+		w.keyID, w.idemKeys).Scan(&version); err != nil {
+		t.Fatalf("read the recorded outcome: %v", err)
+	}
+	var current int64
+	if err := pool.QueryRow(context.Background(), `SELECT version FROM issues WHERE id = $1`, w.issueA).Scan(&current); err != nil {
+		t.Fatal(err)
+	}
+	if version != current {
+		t.Errorf("recorded version %d, the committed version of the issue %d", version, current)
+	}
+
+	again := rg.do(t, c)
+	if again.Code != http.StatusOK || again.Header().Get("ETag") != first.Header().Get("ETag") {
+		t.Errorf("repeat: status %d ETag %q, want 200 and %q", again.Code, again.Header().Get("ETag"), first.Header().Get("ETag"))
+	}
+	if n := rg.calls.Load(); n != 1 {
+		t.Errorf("the operation ran %d times, want 1", n)
+	}
+	if n := testsupport.CountEventsForProject(t, pool, w.project, "issue.closed"); n != 1 {
+		t.Errorf("%d issue.closed events, want 1", n)
 	}
 }

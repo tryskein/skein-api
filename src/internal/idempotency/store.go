@@ -53,9 +53,10 @@ const CleanupInterval = 15 * time.Minute
 var ErrMarkerLost = errors.New("idempotency: the in-progress marker was taken over")
 
 // Identity is what makes two requests the same request (US-7): the API key,
-// the Idempotency-Key, the operation, the target of the path, the body and
-// the Prefer header. Force is the mode of the request: stored with the
-// outcome and used when a repeat re-checks the owner's role, not compared.
+// the Idempotency-Key, the operation, the target of the path, the body, the
+// Prefer header and the force mode of a guarded operation (the lead's
+// decision in sk-878.3.1: the key with another mode is reused, 422). The mode
+// is also what a repeat re-checks the owner's role and the key right in.
 type Identity struct {
 	KeyID       uuid.UUID
 	Key         string
@@ -82,8 +83,8 @@ const (
 	// InProgress — the first request still runs (or its body is not yet
 	// written while its marker lives): 409.
 	InProgress
-	// KeyReused — the same operation, target and Prefer with another body:
-	// 422.
+	// KeyReused — the same operation, target and Prefer with another body
+	// or another force mode: 422.
 	KeyReused
 	// Replay — the outcome is stored: answer it (Decision.Stored).
 	Replay
@@ -176,8 +177,8 @@ WHERE api_key_id = $1 AND idempotency_key = $2`
 // the repeat: it runs the operation again, exactly once.
 const takeOverSQL = `
 UPDATE api_idempotency
-SET marker_token = $3, force = $4,
-    in_progress_until = now() + $5::bigint * interval '1 microsecond'
+SET marker_token = $3,
+    in_progress_until = now() + $4::bigint * interval '1 microsecond'
 WHERE api_key_id = $1 AND idempotency_key = $2`
 
 // Begin decides what to do with a request of identity id: write the
@@ -241,12 +242,12 @@ func begin(ctx context.Context, tx pgx.Tx, id Identity, markerTTL time.Duration)
 		return Decision{Verdict: Execute, Token: token}, nil
 	case opID != id.OperationID || target != id.Target || prefer != id.Prefer:
 		return Decision{Verdict: Independent}, nil
-	case string(fingerprint) != string(id.Fingerprint):
+	case string(fingerprint) != string(id.Fingerprint) || row.Force != id.Force:
 		return Decision{Verdict: KeyReused}, nil
 	case state == "in_progress" && markerAlive:
 		return Decision{Verdict: InProgress}, nil
 	case state == "in_progress":
-		if _, err := tx.Exec(ctx, takeOverSQL, id.KeyID, id.Key, token, id.Force, micros(markerTTL)); err != nil {
+		if _, err := tx.Exec(ctx, takeOverSQL, id.KeyID, id.Key, token, micros(markerTTL)); err != nil {
 			return Decision{}, fmt.Errorf("taking the marker over: %w", err)
 		}
 		return Decision{Verdict: Execute, Token: token}, nil

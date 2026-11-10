@@ -27,6 +27,7 @@ import (
 	"skein-api/internal/authz"
 	"skein-api/internal/errcode"
 	"skein-api/internal/idempotency"
+	"skein-api/internal/issues"
 	"skein-api/internal/publicapi"
 	"skein-api/internal/testsupport"
 )
@@ -37,6 +38,7 @@ const (
 	opAnswerCode  = "testAnswerCode"
 	opUpdateNote  = "testUpdateNote"
 	opBulkNotes   = "testBulkNotes"
+	opCloseIssue  = "testCloseIssue"
 	writeTimeout  = 30 * time.Second
 	notesPathTmpl = "/api/v1/issues/%s/notes"
 )
@@ -63,15 +65,16 @@ type codeBody struct {
 }
 
 type rig struct {
-	pool  *pgxpool.Pool
-	h     http.Handler
-	calls atomic.Int64
+	pool   *pgxpool.Pool
+	issues *issues.Store
+	h      http.Handler
+	calls  atomic.Int64
 }
 
 // newRig builds the router over pool.
 func newRig(t *testing.T, pool *pgxpool.Pool) *rig {
 	t.Helper()
-	rg := &rig{pool: pool}
+	rg := &rig{pool: pool, issues: issues.NewStore(pool)}
 	chain := publicapi.NewChain(publicapi.ChainOptions{
 		Authenticator: auth.NewAPIKeyAuthenticator(pool, auth.MinBcryptCost),
 		Executors:     publicapi.PoolExecutors{Pool: pool},
@@ -94,6 +97,7 @@ func newRig(t *testing.T, pool *pgxpool.Pool) *rig {
 		Idempotency:      idempotency.NewMiddleware(pool, writeTimeout),
 	}, []publicapi.Route{
 		issueRoute(opAddNote, "/api/v1/issues/{issue}/notes", true, []authz.Action{authz.ActionWrite}, rg.addNote),
+		issueRoute(opCloseIssue, "/api/v1/issues/{issue}/close", true, []authz.Action{authz.ActionWrite}, rg.closeIssue),
 		issueRoute(opManageNote, "/api/v1/issues/{issue}/managed-notes", false, []authz.Action{authz.ActionManageProject}, rg.addNote),
 		{
 			OperationID: opAnswerCode, Method: http.MethodPost, Path: "/api/v1/answers", Auth: publicapi.AuthKey,
@@ -152,6 +156,29 @@ UPDATE issues SET version = version + 1 WHERE id = $1 RETURNING id, version, tit
 	resp.NoteID = noteID.String()
 	publicapi.SetETag(w, resp.Version)
 	publicapi.WriteJSON(w, r, http.StatusCreated, resp)
+}
+
+// closeIssue closes the issue of its path through issues.Store.UpdateIssue,
+// the outcome recorded by idempotency.IssueBeforeCommit in that change's
+// transaction, and answers 200 with the issue's id, version and status.
+func (rg *rig) closeIssue(w http.ResponseWriter, r *http.Request) {
+	rg.calls.Add(1)
+	ctx := r.Context()
+	userID, _ := auth.UserIDFrom(ctx)
+	res, err := rg.issues.UpdateIssue(ctx, issues.UpdateIssueInput{
+		ID:           chi.URLParam(r, "issue"),
+		Actor:        issues.HumanActor(userID, "rig"),
+		Close:        &issues.CloseInput{Reason: "closed by the rig"},
+		BeforeCommit: idempotency.IssueBeforeCommit(http.StatusOK),
+	})
+	if err != nil {
+		publicapi.WriteInternalError(w, r, "closing an issue", err)
+		return
+	}
+	publicapi.SetETag(w, res.State.Version)
+	publicapi.WriteJSON(w, r, http.StatusOK, map[string]any{
+		"id": res.State.ID, "version": res.State.Version, "status": res.State.Status,
+	})
 }
 
 // answerCode is the answering test operation: it answers the problem of its
