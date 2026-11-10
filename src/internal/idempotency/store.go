@@ -76,15 +76,12 @@ const (
 	// Execute — the marker is this request's: run the operation under
 	// Decision.Token.
 	Execute Verdict = iota + 1
-	// Independent — the key holds the outcome of another operation, target
-	// or Prefer: the request is a different one and runs without being
-	// recorded, leaving the stored outcome alone.
-	Independent
 	// InProgress — the first request still runs (or its body is not yet
 	// written while its marker lives): 409.
 	InProgress
-	// KeyReused — the same operation, target and Prefer with another body
-	// or another force mode: 422.
+	// KeyReused — the key holds the outcome of a request with another
+	// identity (operation, target, Prefer, body or force mode): 422, nothing
+	// executed (INV-8: one key, one request).
 	KeyReused
 	// Replay — the outcome is stored: answer it (Decision.Stored).
 	Replay
@@ -240,9 +237,8 @@ func begin(ctx context.Context, tx pgx.Tx, id Identity, markerTTL time.Duration)
 			return Decision{}, fmt.Errorf("replacing an expired outcome: %w", err)
 		}
 		return Decision{Verdict: Execute, Token: token}, nil
-	case opID != id.OperationID || target != id.Target || prefer != id.Prefer:
-		return Decision{Verdict: Independent}, nil
-	case string(fingerprint) != string(id.Fingerprint) || row.Force != id.Force:
+	case opID != id.OperationID || target != id.Target || prefer != id.Prefer ||
+		string(fingerprint) != string(id.Fingerprint) || row.Force != id.Force:
 		return Decision{Verdict: KeyReused}, nil
 	case state == "in_progress" && markerAlive:
 		return Decision{Verdict: InProgress}, nil

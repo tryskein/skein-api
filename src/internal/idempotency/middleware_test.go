@@ -26,18 +26,18 @@ import (
 
 func notesPath(issue string) string { return fmt.Sprintf(notesPathTmpl, issue) }
 
-// TestIdempotency_IdentityOfARequest — row 73 (US-7, INV-8). A repeat with
-// the same identity answers the first outcome — the same status, id and
-// version — and executes nothing; the same key, target and Prefer with
-// another body, or with another force mode (the lead's decision in
-// sk-878.3.1), is 422 idempotency_key_reused and executes nothing; the same
-// key with another target or another Prefer is another request: it executes
-// on its own, and the first outcome still answers its own repeat. A repeat
-// while the first request's marker lives is 409 idempotency_in_progress.
+// TestIdempotency_IdentityOfARequest — row 73 (US-7, INV-8; identity by the
+// lead's decision in sk-878.3.1, review R6-01). A repeat with the same
+// identity answers the first outcome — the same status, id and version — and
+// executes nothing. The same key with any other identity — another body,
+// force mode, target of the path or Prefer — is 422 idempotency_key_reused
+// and executes nothing; the first outcome still answers its own repeat. A
+// repeat while the first request's marker lives is 409
+// idempotency_in_progress.
 func TestIdempotency_IdentityOfARequest(t *testing.T) {
 	pool := testsupport.NewTestPool(t)
 
-	t.Run("same identity, other body, other mode, other target, other Prefer, then the first again", func(t *testing.T) {
+	t.Run("same identity, then every other identity under the key, then the first again", func(t *testing.T) {
 		rg := newRig(t, pool)
 		w := seedWorld(t, pool, apikeys.LevelManage)
 		first := call{path: notesPath(w.issueA), key: w.key, idemKey: w.idemKeys}
@@ -74,17 +74,12 @@ func TestIdempotency_IdentityOfARequest(t *testing.T) {
 
 		otherTarget := first
 		otherTarget.path = notesPath(w.issueB)
-		if got := decodeNote(t, rg.do(t, otherTarget)); got.ID != w.issueB {
-			t.Errorf("other target: id %s, want %s", got.ID, w.issueB)
-		}
+		wantProblem(t, rg.do(t, otherTarget), http.StatusUnprocessableEntity, "idempotency_key_reused")
 		otherPrefer := first
 		otherPrefer.headers = map[string]string{"Prefer": "return=minimal"}
-		minimal := rg.do(t, otherPrefer)
-		if got := decodeNote(t, minimal); got.ID != w.issueA || got.Version != 3 {
-			t.Errorf("other Prefer: id %s version %d, want %s version 3", got.ID, got.Version, w.issueA)
-		}
-		if n := rg.calls.Load(); n != 3 {
-			t.Errorf("other target and other Prefer: the operation ran %d times in all, want 3", n)
+		wantProblem(t, rg.do(t, otherPrefer), http.StatusUnprocessableEntity, "idempotency_key_reused")
+		if n := rg.calls.Load(); n != 1 {
+			t.Errorf("other target and other Prefer: the operation ran %d times in all, want 1", n)
 		}
 
 		back := rg.do(t, first)
@@ -92,11 +87,11 @@ func TestIdempotency_IdentityOfARequest(t *testing.T) {
 			t.Errorf("first again: id %s version %d note %s, want the first outcome %s version %d note %s",
 				got.ID, got.Version, got.NoteID, orig.ID, orig.Version, orig.NoteID)
 		}
-		if n := rg.calls.Load(); n != 3 {
-			t.Errorf("first again: the operation ran %d times in all, want 3", n)
+		if n := rg.calls.Load(); n != 1 {
+			t.Errorf("first again: the operation ran %d times in all, want 1", n)
 		}
-		if a, b := notes(t, pool, w.issueA), notes(t, pool, w.issueB); a != 2 || b != 1 {
-			t.Errorf("notes: %d on A, %d on B; want 2 (first, other Prefer) and 1", a, b)
+		if a, b := notes(t, pool, w.issueA), notes(t, pool, w.issueB); a != 1 || b != 0 {
+			t.Errorf("notes: %d on A, %d on B; want 1 (the first request) and 0", a, b)
 		}
 	})
 

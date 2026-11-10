@@ -16,6 +16,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -166,7 +167,7 @@ func (m *Middleware) Wrap(rt publicapi.Route, next http.Handler) http.Handler {
 			OperationID: rt.OperationID,
 			Target:      r.URL.Path,
 			Fingerprint: sum[:],
-			Prefer:      strings.Join(r.Header.Values("Prefer"), ", "),
+			Prefer:      canonicalPrefer(r.Header.Values("Prefer")),
 			Force:       publicapi.ModeFromContext(r.Context()).Force,
 		}
 
@@ -176,14 +177,12 @@ func (m *Middleware) Wrap(rt publicapi.Route, next http.Handler) http.Handler {
 			return
 		}
 		switch d.Verdict {
-		case Independent:
-			next.ServeHTTP(w, r)
 		case InProgress:
 			publicapi.WriteProblem(w, publicapi.Problem{Code: errcode.IdempotencyInProgress, Origin: publicapi.OriginDomain,
 				Detail: "the first request with this " + publicapi.IdempotencyKeyHeader + " is still being executed"})
 		case KeyReused:
 			publicapi.WriteProblem(w, publicapi.Problem{Code: errcode.IdempotencyKeyReused, Origin: publicapi.OriginDomain,
-				Detail: "this " + publicapi.IdempotencyKeyHeader + " was used for this operation with another request body"})
+				Detail: "this " + publicapi.IdempotencyKeyHeader + " was used for another request: another operation, target, body, Prefer or force"})
 		case Replay:
 			m.replay(w, r, rt, d.Stored)
 		case Execute:
@@ -193,6 +192,22 @@ func (m *Middleware) Wrap(rt publicapi.Route, next http.Handler) http.Handler {
 				fmt.Errorf("unknown verdict %d", d.Verdict))
 		}
 	})
+}
+
+// canonicalPrefer is the Prefer of a request as the identity compares it:
+// every preference trimmed, lower-cased and sorted, so a repeat that only
+// formats the header differently is the same request.
+func canonicalPrefer(values []string) string {
+	var prefs []string
+	for _, v := range values {
+		for _, p := range strings.Split(v, ",") {
+			if p = strings.ToLower(strings.Join(strings.Fields(p), "")); p != "" {
+				prefs = append(prefs, p)
+			}
+		}
+	}
+	slices.Sort(prefs)
+	return strings.Join(prefs, ", ")
 }
 
 // validKey reads the one Idempotency-Key of a request.
