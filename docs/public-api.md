@@ -304,6 +304,9 @@ is an ordinary error with nothing executed).
   operations without a version — it changes nothing and no
   `Preference-Applied` is sent; `createAttachmentUpload` always returns the
   upload URL.
+- The response schemas of the document list as `required` every member a
+  full response always carries. A response shortened by `fields=` or by
+  `Prefer: return=minimal` leaves some of them out by design.
 - Lists use a keyset cursor: `items`, `nextCursor`, `hasMore`; `limit` out of
   range is 400, never silently clipped.
 
