@@ -240,7 +240,9 @@ SELECT ak.revoked_at IS NULL
 	g.Scope.Mode = apikeys.ScopeMode(mode)
 	args := []any{project}
 	var inScope bool
-	if err := tx.QueryRow(ctx, `SELECT `+authzsql.KeyLimitOf(g).Expr("$1::uuid", authzsql.Placeholders(&args)), args...).
+	// $1 is always referenced: a scope without a limit renders the literal
+	// true and binds nothing of its own.
+	if err := tx.QueryRow(ctx, `SELECT $1::uuid IS NOT NULL AND `+authzsql.KeyLimitOf(g).Expr("$1::uuid", authzsql.Placeholders(&args)), args...).
 		Scan(&inScope); err != nil {
 		return false, fmt.Errorf("checking the monitored issue against the parent key scope: %w", err)
 	}
