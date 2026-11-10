@@ -1175,6 +1175,16 @@ func (s *Store) CreateEpicWithChildren(
 	if err != nil {
 		return nil, nil, err
 	}
+	// A child with its own source passes the same guard: a write by an API
+	// key never gets source human, whichever row of the tree it is (INV-5).
+	for i := range childTemplates {
+		if childTemplates[i].Source == "" {
+			continue
+		}
+		if _, err := sourceForWrite(ctx, childTemplates[i].Source); err != nil {
+			return nil, nil, err
+		}
+	}
 	// Force epic semantics — a non-epic type here would be a programming
 	// error in the caller. We refuse rather than silently coerce so the
 	// tool layer surfaces an internal_error if it regresses.

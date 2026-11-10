@@ -150,6 +150,23 @@ SELECT actor_type FROM events WHERE entity_id = $1 AND type = 'issue.created'`, 
 			CreateIssueInput{Title: "epic", Type: TypeEpic, Priority: 2}, nil, SourceHuman, owner, agent); !errors.As(err, &ve) || ve.Code != "invalid_source" {
 			t.Errorf("epic by key with source human: err %v, want invalid_source", err)
 		}
+		// Review C2-02: a child with its own source human is refused too,
+		// and nothing of the tree is created.
+		epicTitle := "epic with a human child " + uuid.NewString()[:8]
+		if _, _, err := store.CreateEpicWithChildren(keyCtx, pid, prefix, "counter",
+			CreateIssueInput{Title: epicTitle, Type: TypeEpic, Priority: 2},
+			[]CreateIssueInput{{Title: "human child", Type: "task", Priority: 2, Source: SourceHuman}},
+			"", owner, agent); !errors.As(err, &ve) || ve.Code != "invalid_source" {
+			t.Errorf("epic by key with a child of source human: err %v, want invalid_source", err)
+		}
+		var n int
+		if err := pool.QueryRow(context.Background(),
+			`SELECT count(*) FROM issues WHERE project_id = $1 AND title = $2`, pid, epicTitle).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		if n != 0 {
+			t.Errorf("refused epic left %d rows, want 0", n)
+		}
 		if _, err := store.AddComment(keyCtx, top.ID, "claims human", owner, ownerName,
 			CommentAuthorTypeAgent, CommentAuthorKindHuman, agent); !errors.As(err, &ve) || ve.Code != "invalid_author_kind" {
 			t.Errorf("comment by key with author_kind human: err %v, want invalid_author_kind", err)
