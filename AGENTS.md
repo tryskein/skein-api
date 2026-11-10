@@ -1,8 +1,11 @@
 # skein-api
 
-Go backend of Skein: REST `/api/v1`, MCP server `/mcp`, agent task-monitor API
-`/agent/v1`, background workers. It is reached only through skein-web; it has no
-public port of its own.
+Go backend of Skein: the internal REST API of the web UI `/ui/v1`, MCP server
+`/mcp`, agent task-monitor API `/agent/v1`, background workers — reached only
+through skein-web — and the public REST API `/api/v1`, authenticated by an API
+key, on a port of its own (`SKEIN_PUBLIC_API_PORT`, package
+`internal/publicapi`). Read `docs/public-api.md` before changing the public API:
+rights, `force`, Idempotency-Key, limits and compatibility rules live there.
 
 This repository is cloned into `skein/projects/skein-api/` of the umbrella
 workspace ([tryskein/skein](https://github.com/tryskein/skein)). The umbrella
@@ -29,11 +32,13 @@ src/
     mcp/                   MCP server: tools, agent instructions, transport
     storage/               pgxpool, S3 client, queries/ (sqlc input), generated/ (sqlc output, committed)
     operator/              separate operator API (own port, own OpenAPI document)
+    publicapi/             public REST API: own server and port, route table routes.go, committed openapi/openapi.json
     <domain>/              one package per business domain (issues, projects, users, …)
   migrations/              golang-migrate SQL, 000NNN_name.{up,down}.sql
 infra/postgres/            Postgres image used by the umbrella stacks (pgvector + pg_trgm, vector)
 infra/test-runner/         Go + python3 image for the integration harness
 docs/env-reference.md      every environment variable
+docs/public-api.md         reference of the public API: rights, force, Idempotency-Key, limits, compatibility
 scripts/measure-*.sh       size of MCP tools/list and of tool responses
 scripts/generate-public-openapi.sh  regenerates the committed public OpenAPI 3.1 document
 ```
@@ -83,7 +88,8 @@ Those three variables are required; the full list is in `docs/env-reference.md`.
     `src/internal/publicapi/openapi/openapi.json`, which is committed; after
     changing an annotation in `internal/publicapi`, run it and commit the result.
 - **Route list**: `buildRouter` in `src/cmd/api/main.go` is the authoritative
-  list of routes.
+  list of routes of the internal port; `ProductRoutes` in
+  `src/internal/publicapi/routes.go` is the one list of the public API.
 - **Theme mirrors**: `internal/themes/schema.go#TokenSchema` mirrors
   `TOKEN_SECTIONS` in skein-frontend `src/lib/themeTokens.ts`;
   `internal/themes/roles.go#RetiredRoles` mirrors `LEGACY_TO_NEW` in
