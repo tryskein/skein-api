@@ -136,6 +136,53 @@ func (w *writeWorld) issueEvents(id string, since int64) []string {
 	return out
 }
 
+// treeEvents is issueEvents of the issue and its children (an epic's tree).
+func (w *writeWorld) treeEvents(id string, since int64) []string {
+	w.t.Helper()
+	return w.strings(`SELECT type || '/' || actor_type FROM events
+ WHERE entity_id IN (SELECT i.id FROM issues i WHERE i.id = $1 OR i.parent_id = $1) AND id > $2
+ ORDER BY (entity_id = $1) DESC, type, actor_type`, id, since)
+}
+
+// treeNotifications are the notifications of the events of the issue and of
+// its children after since: «event type/recipient», sorted.
+func (w *writeWorld) treeNotifications(id string, since int64) []string {
+	w.t.Helper()
+	return w.strings(`SELECT e.type || '/' || n.user_id::text FROM notifications n JOIN events e ON e.id = n.event_id
+ WHERE e.entity_id IN (SELECT i.id FROM issues i WHERE i.id = $1 OR i.parent_id = $1) AND e.id > $2
+ ORDER BY 1`, id, since)
+}
+
+func (w *writeWorld) strings(sql string, args ...any) []string {
+	w.t.Helper()
+	rows, err := w.pool.Query(context.Background(), sql, args...)
+	if err != nil {
+		w.t.Fatalf("read %q: %v", sql, err)
+	}
+	defer rows.Close()
+	out := []string{}
+	for rows.Next() {
+		var s string
+		if err := rows.Scan(&s); err != nil {
+			w.t.Fatalf("scan: %v", err)
+		}
+		out = append(out, s)
+	}
+	if err := rows.Err(); err != nil {
+		w.t.Fatalf("read %q: %v", sql, err)
+	}
+	return out
+}
+
+// sameNotifications asserts that both channels notified the same people
+// of the same events.
+func sameNotifications(t *testing.T, op string, rest, mcp []string) {
+	t.Helper()
+	if !slices.Equal(rest, mcp) {
+		t.Errorf("%s: REST notified %v, MCP notified %v", op, rest, mcp)
+	}
+}
+
 func ifMatch(v int) map[string]string {
 	return map[string]string{"If-Match": `"` + strconv.Itoa(v) + `"`}
 }
@@ -152,8 +199,13 @@ func TestIssuesWrite_ParityWithMCP(t *testing.T) {
 	w := seedWriteWorld(t, pool)
 	ko := w.key(w.owner, apikeys.LevelManage)
 	km := w.key(w.member, apikeys.LevelManage)
+	// The member watches the project: every write of the owner below
+	// notifies somebody, so the notifications are compared, not two empty
+	// lists.
+	w.exec(`INSERT INTO project_watchers (project_id, user_id) VALUES ($1, $2)`, w.project, w.member)
 
-	// twin runs op on two fresh issues, one per channel, and compares.
+	// twin runs op on two fresh issues, one per channel, and compares the
+	// code and, for a success, the events and the notifications.
 	type twinOp struct {
 		name  string
 		prep  func(id string)
@@ -174,6 +226,7 @@ func TestIssuesWrite_ParityWithMCP(t *testing.T) {
 			parity(t, op.name, rest, mcp, op.want)
 			if op.want == "" && op.write {
 				sameEvents(t, op.name, w.issueEvents(r, since), w.issueEvents(m, since))
+				sameNotifications(t, op.name, w.treeNotifications(r, since), w.treeNotifications(m, since))
 			}
 		})
 	}
@@ -305,12 +358,18 @@ func TestIssuesWrite_ParityWithMCP(t *testing.T) {
 	})
 
 	t.Run("createIssue and createEpic", func(t *testing.T) {
+		since := lastEventID(t, pool)
 		rest := rg.rest(ko, http.MethodPost, "/api/v1/projects/"+w.project.String()+"/issues",
 			map[string]any{"title": "created " + uuid.NewString(), "type": "task", "force": true}, nil)
 		mcp := rg.tool(ko, "skein_create", map[string]any{"project": w.project.String(),
 			"title": "created " + uuid.NewString(), "type": "task", "force": true, "kind": "directed"})
 		parity(t, "createIssue", rest, mcp, "")
 		wantOK(t, "createIssue", rest, http.StatusCreated)
+		restID, _ := rest.json(t)["id"].(string)
+		mcpIssue, _ := mcp.json(t)["issue"].(map[string]any)
+		mcpID, _ := mcpIssue["id"].(string)
+		sameEvents(t, "createIssue", w.treeEvents(restID, since), w.treeEvents(mcpID, since))
+		sameNotifications(t, "createIssue", w.treeNotifications(restID, since), w.treeNotifications(mcpID, since))
 		if loc := rest.header.Get("Location"); loc != "/api/v1/issues/"+rest.json(t)["id"].(string) {
 			t.Errorf("createIssue Location %q", loc)
 		}
@@ -319,11 +378,17 @@ func TestIssuesWrite_ParityWithMCP(t *testing.T) {
 				map[string]any{"title": "orphan", "type": "task", "force": true, "parentId": w.prefix + "-88888"}, nil),
 			rg.tool(ko, "skein_create", map[string]any{"project": w.project.String(), "title": "orphan", "type": "task",
 				"force": true, "parentId": w.prefix + "-88888", "kind": "directed"}), "parent_not_found")
+		since = lastEventID(t, pool)
 		epic := rg.rest(ko, http.MethodPost, "/api/v1/projects/"+w.project.String()+"/epics",
 			map[string]any{"title": "epic", "childTemplates": []map[string]any{{"title": "c1"}, {"title": "c2"}}}, nil)
 		mepic := rg.tool(ko, "skein_epic_create", map[string]any{"project": w.project.String(), "title": "epic",
 			"kind": "directed", "childTemplates": []map[string]any{{"title": "c1"}, {"title": "c2"}}})
 		parity(t, "createEpic", epic, mepic, "")
+		epicID, _ := epic.json(t)["id"].(string)
+		mcpEpic, _ := mepic.json(t)["epic"].(map[string]any)
+		mcpEpicID, _ := mcpEpic["id"].(string)
+		sameEvents(t, "createEpic", w.treeEvents(epicID, since), w.treeEvents(mcpEpicID, since))
+		sameNotifications(t, "createEpic", w.treeNotifications(epicID, since), w.treeNotifications(mcpEpicID, since))
 		if children, _ := epic.json(t)["children"].([]any); len(children) != 2 {
 			t.Errorf("createEpic children %v", epic.json(t)["children"])
 		}
