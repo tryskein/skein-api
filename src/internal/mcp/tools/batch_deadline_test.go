@@ -439,12 +439,12 @@ func TestDepAddMany_StoppedInsideCreate(t *testing.T) {
 }
 
 // TestUpdateMany_StoppedInsideChain: the same defect on skein_update_many —
-// a row whose update chain was cut answered internal_error. The chain
-// commits step by step, and the test pins that: the field patch (an early
-// step) commits, the label add (a late step) is parked on the test's own
-// uncommitted insert of the same (issue, label) key — ON CONFLICT waits for
-// it — and the stop lands there. State afterwards: the title is renamed and
-// the version moved; the label is absent.
+// a row whose update chain was cut answered internal_error. The label add (a
+// late step) is parked on the test's own uncommitted insert of the same
+// (issue, label) key — ON CONFLICT waits for it — and the stop lands there,
+// after the field patch (an early step) ran in the same transaction. A row
+// is one atomic change (US-14, SC-020): afterwards the title, the version
+// and the labels are all as before.
 func TestUpdateMany_StoppedInsideChain(t *testing.T) {
 	for _, stop := range rowStops {
 		t.Run(stop.name, func(t *testing.T) {
@@ -484,9 +484,9 @@ func TestUpdateMany_StoppedInsideChain(t *testing.T) {
 				`SELECT count(*) FROM issue_labels WHERE issue_id = $1`, idA).Scan(&labels); err != nil {
 				t.Fatalf("count labels: %v", err)
 			}
-			if title != "renamed" || version != 2 {
-				t.Fatalf("early step: title %q version %d, want %q at version 2 — the patch commits before the label step",
-					title, version, "renamed")
+			if title == "renamed" || version != 1 {
+				t.Fatalf("early step: title %q version %d, want the patch rolled back at version 1 — "+
+					"the row is one transaction", title, version)
 			}
 			if labels != 0 {
 				t.Fatalf("late step: %d labels committed, want 0", labels)
