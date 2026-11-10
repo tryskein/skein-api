@@ -89,14 +89,14 @@ func RegisterSearch(s *server.MCPServer, pool *pgxpool.Pool, svc *search.Service
 			mcpgo.WithStringItems(),
 		),
 		mcpgo.WithString("source",
-			mcpgo.Description("Issue origin filter: human|agent_directed|agent_autonomous."),
-			mcpgo.Enum("human", "agent_directed", "agent_autonomous"),
+			mcpgo.Description("Issue origin filter: human|agent_directed|agent_autonomous|api."),
+			mcpgo.Enum("human", "agent_directed", "agent_autonomous", "api"),
 		),
 		mcpgo.WithArray("commentAuthorKinds",
 			mcpgo.Description("Comment author-kind filter (only restricts COMMENT results; any-of). "+
 				"Restricts comments by comments.author_kind — independent of `source`, "+
 				"which filters issues. Does not affect issue/project/component results."),
-			mcpgo.WithStringEnumItems([]string{"human", "agent_directed", "agent_autonomous"}),
+			mcpgo.WithStringEnumItems([]string{"human", "agent_directed", "agent_autonomous", "api"}),
 		),
 		mcpgo.WithNumber("limit",
 			// The bounds are the APPLIED constants, not literals: INV-5
@@ -210,12 +210,12 @@ func handleSearch(pool *pgxpool.Pool, svc *search.Service, projectsStore *projec
 		}
 		if src := strings.TrimSpace(req.GetString("source", "")); src != "" {
 			switch src {
-			case issues.SourceHuman, issues.SourceAgentDirected, issues.SourceAgentAutonomous:
+			case issues.SourceHuman, issues.SourceAgentDirected, issues.SourceAgentAutonomous, issues.SourceAPI:
 				v := src
 				filters.Source = &v
 			default:
 				return skmcp.ToolError(ErrCodeValidationError,
-					"source must be one of: human, agent_directed, agent_autonomous",
+					"source must be one of: human, agent_directed, agent_autonomous, api",
 					map[string]any{"source": src}), nil
 			}
 		}
@@ -230,11 +230,12 @@ func handleSearch(pool *pgxpool.Pool, svc *search.Service, projectsStore *projec
 				switch k {
 				case issues.CommentAuthorKindHuman,
 					issues.CommentAuthorKindAgentDirected,
-					issues.CommentAuthorKindAgentAutonomous:
+					issues.CommentAuthorKindAgentAutonomous,
+					issues.CommentAuthorKindAPI:
 					canon = append(canon, k)
 				default:
 					return skmcp.ToolError(ErrCodeValidationError,
-						"commentAuthorKinds[i] must be one of: human, agent_directed, agent_autonomous",
+						"commentAuthorKinds[i] must be one of: human, agent_directed, agent_autonomous, api",
 						map[string]any{"commentAuthorKind": k}), nil
 				}
 			}

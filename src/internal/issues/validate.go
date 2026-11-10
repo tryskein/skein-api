@@ -80,6 +80,7 @@ var validSources = map[string]struct{}{
 	SourceHuman:           {},
 	SourceAgentDirected:   {},
 	SourceAgentAutonomous: {},
+	SourceAPI:             {},
 }
 
 // ValidateStatus enforces the writable status set
@@ -116,7 +117,7 @@ func ValidateType(s string) (string, error) {
 }
 
 // ValidateSource enforces the closed set
-// {human, agent_directed, agent_autonomous}. The REST handler forces
+// {human, agent_directed, agent_autonomous, api}. The REST handler forces
 // source='human' regardless of body contents (Phase 1, ui-redesign);
 // the MCP path infers agent_directed / agent_autonomous from the
 // caller-supplied `kind` parameter. ValidateSource exists for the
@@ -126,7 +127,7 @@ func ValidateSource(s string) (string, error) {
 	s = strings.TrimSpace(s)
 	if _, ok := validSources[s]; !ok {
 		return "", newValidationError("invalid_source",
-			"source must be one of human, agent_directed, agent_autonomous")
+			"source must be one of human, agent_directed, agent_autonomous, api")
 	}
 	return s, nil
 }

@@ -43,12 +43,12 @@ func NewSearchHandler(svc *search.Service) *SearchHandler {
 //	type      CSV  — issue type filter
 //	label     CSV  — issue label filter (any-of)
 //	source    str  — issue origin filter, one of {human, agent_directed,
-//	                 agent_autonomous} (Phase 1 ui-redesign — the
+//	                 agent_autonomous, api} (Phase 1 ui-redesign — the
 //	                 legacy "agent" enum was split into directed
 //	                 (user-asked) and autonomous (side-quest) variants)
 //	commentAuthorKind CSV — comment author-kind filter (only restricts
 //	                 COMMENT results; any-of {human, agent_directed,
-//	                 agent_autonomous}). Independent of `source` — it
+//	                 agent_autonomous, api}). Independent of `source` — it
 //	                 never affects issue results.
 //	assignee  str  — literal me resolves the caller; other handles match
 //	                 case-insensitively (issue results only)
@@ -85,7 +85,7 @@ func NewSearchHandler(svc *search.Service) *SearchHandler {
 //
 // @Summary Search visible issues, comments, projects and components
 // @Description Runs ID/numeric lookup and hybrid full-text/vector retrieval over the caller's visible projects. Scope and issue filters are applied before each candidate limit; ranking is never replaced by client-side filtering.
-// @Description Status, priority, type, label, source, origin, assignee, createdBy, acceptedAt, isBlocked and componentId restrict only issue results; other kinds retain their own selection. human-driven includes human and agent_directed. source and origin intersect when both are present. Blockedness counts only open, in-progress or deferred blockers the caller can see. An unknown component UUID yields no matching issues.
+// @Description Status, priority, type, label, source, origin, assignee, createdBy, acceptedAt, isBlocked and componentId restrict only issue results; other kinds retain their own selection. human-driven includes human, agent_directed and api. source and origin intersect when both are present. Blockedness counts only open, in-progress or deferred blockers the caller can see. An unknown component UUID yields no matching issues.
 // @Description createdBy=me preserves the ordinary list's Delegated selection: the assignee is set and is not delivered to the caller, and the caller either created the issue or is a previous assignee who did not dismiss it. Dismissal narrows only the previous-assignee branch; authors keep their existing branch. As on the ordinary list, a principal without a username uses the strict creator-only fallback. createdBy=not-me strictly excludes the caller as creator; combine it with assignee=me and acceptedAt=not-null for On me.
 // @Description Cursors continue the same caller, visibility, query, filters and ranking. A changed filter refuses the cursor. On an embedding outage a new search degrades to FTS; a hybrid continuation whose pool cannot be rebuilt returns invalid_cursor. This is a pure read with no events or other side effects.
 // @Description When issue results use ownership, assignee, acceptance, blocked, component or origin selectors, a cursorless request reads fresh membership and paged results carry an opaque snapshot generation. New first pages never replace already-issued warm pools. A scoped snapshot that expires, is evicted or is missing on another replica returns 400 invalid_cursor: restart from the first page with the same query and filters. Legacy queries without those issue selectors retain mode-aware cache-miss rebuilding.
@@ -100,14 +100,14 @@ func NewSearchHandler(svc *search.Service) *SearchHandler {
 // @Param priority query string false "Issue priorities 0..4, CSV"
 // @Param type query string false "Issue types, CSV"
 // @Param label query string false "Issue labels, CSV, any-of"
-// @Param source query string false "Exact issue source" Enums(human, agent_directed, agent_autonomous)
+// @Param source query string false "Exact issue source" Enums(human, agent_directed, agent_autonomous, api)
 // @Param origin query string false "Issue origin groups, CSV: human-driven, agent-autonomous, all"
 // @Param assignee query string false "me resolves the caller; any other handle is a case-insensitive text match"
 // @Param createdBy query string false "me: existing Delegated selection; not-me: caller is not the creator" Enums(me, not-me)
 // @Param acceptedAt query string false "Issue acceptance: null or not-null" Enums(null, not-null)
 // @Param isBlocked query bool false "Issue blockedness within the reader's visibility horizon"
 // @Param componentId query string false "Issue component UUID; unknown or nonmatching returns no issues"
-// @Param commentAuthorKind query string false "Comment author kinds, CSV: human, agent_directed, agent_autonomous; does not filter issues"
+// @Param commentAuthorKind query string false "Comment author kinds, CSV: human, agent_directed, agent_autonomous, api; does not filter issues"
 // @Param limit query int false "Page size 1..100, default 50"
 // @Param cursor query string false "Opaque continuation from the previous response"
 // @Success 200 {object} search.Result "Ranked page with cursor and degraded flag"
@@ -196,18 +196,18 @@ func (h *SearchHandler) Search(w http.ResponseWriter, r *http.Request) {
 	if raw := strings.TrimSpace(q.Get("label")); raw != "" {
 		filters.Labels = splitCSV(raw)
 	}
-	// source: closed set {human, agent_directed, agent_autonomous}.
+	// source: closed set {human, agent_directed, agent_autonomous, api}.
 	// Whitelisted here so the store can inline the value without
 	// revalidating. Invalid input → 400 so monitoring doesn't see
 	// "search degraded" alarms for typos.
 	if raw := strings.TrimSpace(q.Get("source")); raw != "" {
 		switch raw {
-		case issues.SourceHuman, issues.SourceAgentDirected, issues.SourceAgentAutonomous:
+		case issues.SourceHuman, issues.SourceAgentDirected, issues.SourceAgentAutonomous, issues.SourceAPI:
 			v := raw
 			filters.Source = &v
 		default:
 			writeProblem(w, http.StatusBadRequest, "invalid_source",
-				"source must be one of: human, agent_directed, agent_autonomous", nil)
+				"source must be one of: human, agent_directed, agent_autonomous, api", nil)
 			return
 		}
 	}
@@ -282,7 +282,7 @@ func (h *SearchHandler) Search(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	// commentAuthorKind: CSV closed set {human, agent_directed,
-	// agent_autonomous}. Comment-only filter — restricts COMMENT results by
+	// agent_autonomous, api}. Comment-only filter — restricts COMMENT results by
 	// comments.author_kind; it does NOT affect issue results (that is the
 	// separate `source` filter). CSV style mirrors status/type/label;
 	// validated here so the store can inline the values without
@@ -294,10 +294,11 @@ func (h *SearchHandler) Search(w http.ResponseWriter, r *http.Request) {
 			switch k {
 			case issues.CommentAuthorKindHuman,
 				issues.CommentAuthorKindAgentDirected,
-				issues.CommentAuthorKindAgentAutonomous:
+				issues.CommentAuthorKindAgentAutonomous,
+				issues.CommentAuthorKindAPI:
 			default:
 				writeProblem(w, http.StatusBadRequest, "invalid_comment_author_kind",
-					"commentAuthorKind must be a CSV of: human, agent_directed, agent_autonomous", nil)
+					"commentAuthorKind must be a CSV of: human, agent_directed, agent_autonomous, api", nil)
 				return
 			}
 		}

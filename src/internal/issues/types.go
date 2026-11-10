@@ -60,10 +60,16 @@ const (
 	// instruction. Lets the Inbox visually distinguish self-spawned work
 	// (skein_create kind="autonomous").
 	SourceAgentAutonomous = "agent_autonomous"
+	// SourceAPI — written with an API key through the public REST API
+	// without an explicit kind. Every rule that depends on the origin treats
+	// it as SourceAgentDirected (RuleSource); the value itself keeps such
+	// records apart in filters and labels.
+	SourceAPI = "api"
 
 	// OriginHumanDriven groups origins where a human is in the loop —
-	// either the human created the issue themselves (source='human') or
-	// they explicitly directed an agent to do so (source='agent_directed').
+	// the human created the issue themselves (source='human'), explicitly
+	// directed an agent to do so (source='agent_directed'), or wrote it
+	// with an API key (source='api').
 	// Used by the list endpoint's `origin=` filter (Phase 2 ui-redesign):
 	// the default Inbox/board mode hides agent_autonomous chatter.
 	OriginHumanDriven = "human-driven"
@@ -76,6 +82,52 @@ const (
 	// construction.
 	OriginAll = "all"
 )
+
+// HumanDrivenSources are the origins of the human-driven group, the
+// "people" lens of every list, filter and dashboard condition.
+var HumanDrivenSources = []string{SourceHuman, SourceAgentDirected, SourceAPI}
+
+// RuleSource is the origin a source-dependent rule (the creator's
+// auto-watch, the suppression of agent actions, the default assignee, the
+// dashboard axes) applies: SourceAPI counts as SourceAgentDirected, every
+// other value as itself.
+func RuleSource(source string) string {
+	if source == SourceAPI {
+		return SourceAgentDirected
+	}
+	return source
+}
+
+// SourceForKeyWrite is the source of an issue written with an API key
+// through the public REST API: kind "directed" and "autonomous" give the
+// same values as the MCP kind, no kind gives SourceAPI. A write by key never
+// gets SourceHuman.
+func SourceForKeyWrite(kind string) (string, error) {
+	switch kind {
+	case "":
+		return SourceAPI, nil
+	case "directed":
+		return SourceAgentDirected, nil
+	case "autonomous":
+		return SourceAgentAutonomous, nil
+	}
+	return "", newValidationError("invalid_kind", "kind must be directed or autonomous")
+}
+
+// CommentAuthorKindForKeyWrite is the author_kind of a comment written with
+// an API key through the public REST API, by the same rule as
+// SourceForKeyWrite.
+func CommentAuthorKindForKeyWrite(kind string) (string, error) {
+	switch kind {
+	case "":
+		return CommentAuthorKindAPI, nil
+	case "directed":
+		return CommentAuthorKindAgentDirected, nil
+	case "autonomous":
+		return CommentAuthorKindAgentAutonomous, nil
+	}
+	return "", newValidationError("invalid_kind", "kind must be directed or autonomous")
+}
 
 // OriginGroupsToSources translates a set of validated origin-group tokens
 // (OriginHumanDriven / OriginAgentAutonomous / OriginAll) into the
@@ -113,8 +165,9 @@ func OriginGroupsToSources(groups []string) (sources []string, noFilter bool) {
 	for _, g := range groups {
 		switch g {
 		case OriginHumanDriven:
-			add(SourceHuman)
-			add(SourceAgentDirected)
+			for _, src := range HumanDrivenSources {
+				add(src)
+			}
 		case OriginAgentAutonomous:
 			add(SourceAgentAutonomous)
 		}

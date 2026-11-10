@@ -9,7 +9,9 @@
 //     (human via cookie-session, agent via MCP api-key, system via
 //     migrations). NOT the intent dimension.
 //   - intent (issues.source, comments.author_kind) is INTENT: did a human
-//     author or instruct, or did an agent act autonomously?
+//     author or instruct, or did an agent act autonomously? A write with an
+//     API key (api) counts on the agent_directed axis and in every
+//     human-driven condition, as issues.RuleSource prescribes.
 //
 // For issue.* and comment.* events we JOIN to the parent issue/comment
 // row to read the intent axis. For dep_add / status_changed / claim /
@@ -910,7 +912,7 @@ func (s *Store) aggregateIssueIntent(
 	sql := fmt.Sprintf(`
 SELECT
     COUNT(*) FILTER (WHERE i.source = 'human')             AS human,
-    COUNT(*) FILTER (WHERE i.source = 'agent_directed')    AS directed,
+    COUNT(*) FILTER (WHERE i.source IN ('agent_directed', 'api'))    AS directed,
     COUNT(*) FILTER (WHERE i.source = 'agent_autonomous')  AS autonomous
   FROM events e
   JOIN issues i ON i.id = e.entity_id
@@ -1009,13 +1011,13 @@ func (s *Store) aggregateClosedByOutcome(
 SELECT
     COUNT(*) FILTER (WHERE i.source = 'human'
                        AND %[1]s = 'done')              AS done_human,
-    COUNT(*) FILTER (WHERE i.source = 'agent_directed'
+    COUNT(*) FILTER (WHERE i.source IN ('agent_directed', 'api')
                        AND %[1]s = 'done')              AS done_directed,
     COUNT(*) FILTER (WHERE i.source = 'agent_autonomous'
                        AND %[1]s = 'done')              AS done_autonomous,
     COUNT(*) FILTER (WHERE i.source = 'human'
                        AND %[1]s <> 'done')             AS nowork_human,
-    COUNT(*) FILTER (WHERE i.source = 'agent_directed'
+    COUNT(*) FILTER (WHERE i.source IN ('agent_directed', 'api')
                        AND %[1]s <> 'done')             AS nowork_directed,
     COUNT(*) FILTER (WHERE i.source = 'agent_autonomous'
                        AND %[1]s <> 'done')             AS nowork_autonomous
@@ -1068,7 +1070,7 @@ func (s *Store) aggregateClosedWithCommits(
 	sql := fmt.Sprintf(`
 SELECT
     COUNT(*) FILTER (WHERE i.source = 'human')             AS human,
-    COUNT(*) FILTER (WHERE i.source = 'agent_directed')    AS directed,
+    COUNT(*) FILTER (WHERE i.source IN ('agent_directed', 'api'))    AS directed,
     COUNT(*) FILTER (WHERE i.source = 'agent_autonomous')  AS autonomous
   FROM events e
   JOIN issues i ON i.id = e.entity_id
@@ -1122,7 +1124,7 @@ func (s *Store) aggregateCommentIntent(
 	sql := fmt.Sprintf(`
 SELECT
     COUNT(*) FILTER (WHERE c.author_kind = 'human')             AS human,
-    COUNT(*) FILTER (WHERE c.author_kind = 'agent_directed')    AS directed,
+    COUNT(*) FILTER (WHERE c.author_kind IN ('agent_directed', 'api'))    AS directed,
     COUNT(*) FILTER (WHERE c.author_kind = 'agent_autonomous')  AS autonomous
   FROM events e
   -- review C1 — wrap the uuid cast in a CASE gated on entity_type so
@@ -1214,7 +1216,7 @@ SELECT e.actor, COUNT(*) AS n
  WHERE e.type = 'issue.closed'
    AND e.occurred_at >= $1
    AND e.entity_type = 'issue'
-   AND i.source IN ('human', 'agent_directed')
+   AND i.source IN ('human', 'agent_directed', 'api')
    %s
  GROUP BY e.actor
  ORDER BY n DESC, e.actor ASC
@@ -1252,7 +1254,7 @@ SELECT e.actor, COUNT(*) AS n
  WHERE e.type = 'issue.closed'
    AND e.occurred_at >= $1
    AND e.entity_type = 'issue'
-   AND i.source IN ('human', 'agent_directed')
+   AND i.source IN ('human', 'agent_directed', 'api')
    %s
    %s
  GROUP BY e.actor
@@ -1404,7 +1406,7 @@ comment_rows AS (
 created AS (
     SELECT actor,
            COUNT(*) FILTER (WHERE intent = 'human')            AS h,
-           COUNT(*) FILTER (WHERE intent = 'agent_directed')   AS d,
+           COUNT(*) FILTER (WHERE intent IN ('agent_directed', 'api'))   AS d,
            COUNT(*) FILTER (WHERE intent = 'agent_autonomous') AS a
       FROM issue_rows
      WHERE type = 'issue.created'
@@ -1413,7 +1415,7 @@ created AS (
 closed AS (
     SELECT actor,
            COUNT(*) FILTER (WHERE intent = 'human')            AS h,
-           COUNT(*) FILTER (WHERE intent = 'agent_directed')   AS d,
+           COUNT(*) FILTER (WHERE intent IN ('agent_directed', 'api'))   AS d,
            COUNT(*) FILTER (WHERE intent = 'agent_autonomous') AS a
       FROM issue_rows
      WHERE type = 'issue.closed'
@@ -1426,7 +1428,7 @@ closed_done AS (
     -- are still the same, so closed_done ⊆ closed by construction.
     SELECT actor,
            COUNT(*) FILTER (WHERE intent = 'human')            AS h,
-           COUNT(*) FILTER (WHERE intent = 'agent_directed')   AS d,
+           COUNT(*) FILTER (WHERE intent IN ('agent_directed', 'api'))   AS d,
            COUNT(*) FILTER (WHERE intent = 'agent_autonomous') AS a
       FROM issue_rows
      WHERE type = 'issue.closed' AND close_outcome = 'done'
@@ -1435,7 +1437,7 @@ closed_done AS (
 closed_commits AS (
     SELECT actor,
            COUNT(*) FILTER (WHERE intent = 'human')            AS h,
-           COUNT(*) FILTER (WHERE intent = 'agent_directed')   AS d,
+           COUNT(*) FILTER (WHERE intent IN ('agent_directed', 'api'))   AS d,
            COUNT(*) FILTER (WHERE intent = 'agent_autonomous') AS a
       FROM issue_closed_commits
      GROUP BY actor
@@ -1443,7 +1445,7 @@ closed_commits AS (
 comments AS (
     SELECT actor,
            COUNT(*) FILTER (WHERE intent = 'human')            AS h,
-           COUNT(*) FILTER (WHERE intent = 'agent_directed')   AS d,
+           COUNT(*) FILTER (WHERE intent IN ('agent_directed', 'api'))   AS d,
            COUNT(*) FILTER (WHERE intent = 'agent_autonomous') AS a
       FROM comment_rows
      GROUP BY actor

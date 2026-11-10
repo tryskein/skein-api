@@ -19,6 +19,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"skein-api/internal/assignee"
+	"skein-api/internal/auth"
 	"skein-api/internal/authz"
 	"skein-api/internal/delegation"
 	"skein-api/internal/dependencies"
@@ -453,9 +454,9 @@ func (s *Store) CreateIssue(
 	if err := validateCreateInputProse(input); err != nil {
 		return nil, err
 	}
-	source := input.Source
-	if source == "" {
-		source = SourceHuman
+	source, err := sourceForWrite(ctx, input.Source)
+	if err != nil {
+		return nil, err
 	}
 
 	var (
@@ -473,7 +474,7 @@ func (s *Store) CreateIssue(
 	//
 	// The closure only assigns to newID / inheritedComps, which a replay
 	// overwrites — no side effects escape the transaction.
-	err := s.withSerializableRetry(ctx, "createIssue", createMaxAttempts, func(tx pgx.Tx) error {
+	err = s.withSerializableRetry(ctx, "createIssue", createMaxAttempts, func(tx pgx.Tx) error {
 		// sk-565 (P3): per-attempt creator projection, built afresh on
 		// every replay so an aborted attempt's reads never leak forward.
 		att := newCreateAttempt(creatorID, &input)
@@ -1170,8 +1171,9 @@ func (s *Store) CreateEpicWithChildren(
 	creatorID uuid.UUID,
 	actor Actor,
 ) (*IssueDetail, []*IssueDetail, error) {
-	if source == "" {
-		source = SourceHuman
+	source, err := sourceForWrite(ctx, source)
+	if err != nil {
+		return nil, nil, err
 	}
 	// Force epic semantics — a non-epic type here would be a programming
 	// error in the caller. We refuse rather than silently coerce so the
@@ -1221,7 +1223,7 @@ func (s *Store) CreateEpicWithChildren(
 			childrenNeedVerdict = true
 		}
 	}
-	err := s.withSerializableRetry(ctx, "createEpicWithChildren", epicCreateMaxAttempts, func(tx pgx.Tx) error {
+	err = s.withSerializableRetry(ctx, "createEpicWithChildren", epicCreateMaxAttempts, func(tx pgx.Tx) error {
 		att := newCreateAttempt(creatorID, callInputs...)
 		// sk-565 (P6): the epic hands its verdict to the children of THIS
 		// attempt — computed from what the epic actually got, never
@@ -4667,7 +4669,38 @@ const (
 	CommentAuthorKindHuman           = "human"
 	CommentAuthorKindAgentDirected   = "agent_directed"
 	CommentAuthorKindAgentAutonomous = "agent_autonomous"
+	// CommentAuthorKindAPI — written with an API key through the public
+	// REST API without an explicit kind; treated as agent_directed by
+	// every origin rule, as issues.source = api is.
+	CommentAuthorKindAPI = "api"
 )
+
+// HumanDrivenCommentAuthorKinds are the author kinds of the human-driven
+// ("people") group of comments.
+var HumanDrivenCommentAuthorKinds = []string{CommentAuthorKindHuman, CommentAuthorKindAgentDirected, CommentAuthorKindAPI}
+
+// writesByAPIKey reports whether the request writes as an API key — the MCP
+// key middleware and the public API put the key id on the context.
+func writesByAPIKey(ctx context.Context) bool {
+	id, ok := auth.APIKeyIDFrom(ctx)
+	return ok && id != uuid.Nil
+}
+
+// sourceForWrite resolves the source of a new issue: the caller's value, or
+// when none is given SourceAPI for a write by an API key and SourceHuman
+// otherwise. A write by an API key never gets SourceHuman (INV-5).
+func sourceForWrite(ctx context.Context, source string) (string, error) {
+	byKey := writesByAPIKey(ctx)
+	switch {
+	case source == "" && byKey:
+		return SourceAPI, nil
+	case source == "":
+		return SourceHuman, nil
+	case source == SourceHuman && byKey:
+		return "", newValidationError("invalid_source", "a write by an API key cannot have source human")
+	}
+	return source, nil
+}
 
 // AddComment inserts a comment row + writes comment.created event. The
 // authorType parameter is the wire value for comments.author_type — pass
@@ -4707,12 +4740,19 @@ func (s *Store) AddComment(
 		}
 	}
 	switch authorKind {
-	case CommentAuthorKindHuman, CommentAuthorKindAgentDirected, CommentAuthorKindAgentAutonomous:
+	case CommentAuthorKindHuman, CommentAuthorKindAgentDirected, CommentAuthorKindAgentAutonomous, CommentAuthorKindAPI:
 		// ok
 	default:
 		return nil, &ValidationError{
 			Code:    "invalid_author_kind",
-			Message: "authorKind must be 'human', 'agent_directed', or 'agent_autonomous'",
+			Message: "authorKind must be 'human', 'agent_directed', 'agent_autonomous' or 'api'",
+		}
+	}
+	// A write by an API key never gets author_kind human (INV-5).
+	if authorKind == CommentAuthorKindHuman && writesByAPIKey(ctx) {
+		return nil, &ValidationError{
+			Code:    "invalid_author_kind",
+			Message: "a comment written by an API key cannot have authorKind human",
 		}
 	}
 
@@ -5296,7 +5336,7 @@ SELECT e.occurred_at, e.type, e.entity_id, COALESCE(i.title, ''), e.actor
 // comments.author_kind column for ListComments. Mirrors the
 // `origin=human-driven|agent-autonomous|all` query token used by
 // skein_list and the project counters: "human-driven" folds together
-// human + agent_directed (intent: a human is behind the comment),
+// human + agent_directed + api (intent: a human is behind the comment),
 // "agent-autonomous" surfaces only the self-spawned agent notes,
 // "all" (the zero value) is no filter.
 type CommentOriginFilter string
@@ -5344,8 +5384,8 @@ func (s *Store) ListComments(ctx context.Context, issueID string, origin Comment
 		// No extra filter. CommentOriginAll == "" so this also matches
 		// the unset / zero-value case.
 	case CommentOriginHumanDriven:
-		// human + agent_directed — the "a human is behind this" lens.
-		whereExtra = " AND author_kind IN ('human', 'agent_directed')"
+		// human + agent_directed + api — the "a human is behind this" lens.
+		whereExtra = " AND author_kind IN ('human', 'agent_directed', 'api')"
 	case CommentOriginAgentAutonomous:
 		whereExtra = " AND author_kind = 'agent_autonomous'"
 	default:

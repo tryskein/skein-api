@@ -158,7 +158,7 @@ func RegisterList(s *server.MCPServer, pool *pgxpool.Pool, issuesStore *issues.S
 		),
 		mcpgo.WithString("origin",
 			mcpgo.Description("Origin group filter (broader than `source`). "+
-				"\"human-driven\" matches source IN (human, agent_directed); "+
+				"\"human-driven\" matches source IN (human, agent_directed, api); "+
 				"\"agent-autonomous\" matches source = agent_autonomous; "+
 				"\"all\" or omitted = no filter. Use this to hide the agent "+
 				"firehose in default board mode."),
@@ -171,10 +171,11 @@ func RegisterList(s *server.MCPServer, pool *pgxpool.Pool, issuesStore *issues.S
 			mcpgo.Description("Filter on the pinned flag."),
 		),
 		mcpgo.WithString("source",
-			mcpgo.Description("Filter by origin: human|agent_directed|agent_autonomous. "+
+			mcpgo.Description("Filter by origin: human|agent_directed|agent_autonomous|api. "+
 				"\"agent_directed\" = agent created on user instruction; "+
-				"\"agent_autonomous\" = agent self-spawned mid-task."),
-			mcpgo.Enum("human", "agent_directed", "agent_autonomous"),
+				"\"agent_autonomous\" = agent self-spawned mid-task; "+
+				"\"api\" = written with an API key over the REST API."),
+			mcpgo.Enum("human", "agent_directed", "agent_autonomous", "api"),
 		),
 		mcpgo.WithString("text",
 			mcpgo.Description("Title ILIKE filter (substring match). For semantic / FTS search use skein_search."),

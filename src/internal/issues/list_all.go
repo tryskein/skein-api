@@ -620,7 +620,7 @@ func buildAllIssuesWhere(h, sh readerHorizon, args ListAllIssuesArgs) ([]string,
 		case OriginHumanDriven:
 			clauses = append(clauses, fmt.Sprintf(
 				"i.source = ANY(%s)",
-				addParam([]string{SourceHuman, SourceAgentDirected})))
+				addParam(HumanDrivenSources)))
 		case OriginAgentAutonomous:
 			clauses = append(clauses, fmt.Sprintf(
 				"i.source = %s",

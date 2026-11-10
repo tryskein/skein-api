@@ -98,7 +98,7 @@ type ListByUserArgs struct {
 	// issues.source values. Validated at the handler boundary to one of
 	// {human-driven, agent-autonomous, all}; the store inlines the
 	// matching IN-list:
-	//   - "human-driven"     → source IN ('human', 'agent_directed')
+	//   - "human-driven"     → source IN ('human', 'agent_directed', 'api')
 	//   - "agent-autonomous" → source IN ('agent_autonomous')
 	//   - "all" / nil        → no filter
 	// Pointer so nil = no filter. Phase 2 ui-redesign — B5.
@@ -252,7 +252,7 @@ func (s *Store) ListByUser(ctx context.Context, args ListByUserArgs) (*ListResul
 		case OriginHumanDriven:
 			clauses = append(clauses, fmt.Sprintf(
 				"i.source = ANY(%s)",
-				addParam([]string{SourceHuman, SourceAgentDirected})))
+				addParam(HumanDrivenSources)))
 		case OriginAgentAutonomous:
 			clauses = append(clauses, fmt.Sprintf(
 				"i.source = %s",

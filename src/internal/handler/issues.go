@@ -2118,7 +2118,7 @@ func (h *IssuesHandler) ListProjectLabels(w http.ResponseWriter, r *http.Request
 //
 // Optional query `origin=human-driven|agent-autonomous|all` (default
 // `all`) filters by comments.author_kind: "human-driven" returns
-// human + agent_directed (the "a human is behind this" lens), and
+// human + agent_directed + api (the "a human is behind this" lens), and
 // "agent-autonomous" returns only agent_autonomous (self-spawned agent
 // notes). Mirrors the same wire token already used by skein_list and
 // the project counters. Invalid values → 400 invalid_origin.
