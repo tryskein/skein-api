@@ -44,6 +44,16 @@
                         "type": "string"
                     }
                 },
+                "required": [
+                    "contentType",
+                    "filename",
+                    "id",
+                    "issueId",
+                    "sizeBytes",
+                    "status",
+                    "uploadedAt",
+                    "uploadedBy"
+                ],
                 "type": "object"
             },
             "attachments.DownloadURLResponse": {
@@ -55,6 +65,10 @@
                         "type": "string"
                     }
                 },
+                "required": [
+                    "expiresAt",
+                    "url"
+                ],
                 "type": "object"
             },
             "attachments.UploadURLResponse": {
@@ -87,6 +101,14 @@
                         "type": "string"
                     }
                 },
+                "required": [
+                    "attachmentId",
+                    "expiresAt",
+                    "fields",
+                    "maxSizeBytes",
+                    "sizeBytes",
+                    "url"
+                ],
                 "type": "object"
             },
             "dependencies.IssueRef": {
@@ -110,6 +132,14 @@
                         "type": "string"
                     }
                 },
+                "required": [
+                    "id",
+                    "priority",
+                    "projectId",
+                    "status",
+                    "title",
+                    "type"
+                ],
                 "type": "object"
             },
             "dependencies.IssueSummary": {
@@ -166,6 +196,20 @@
                         "type": "integer"
                     }
                 },
+                "required": [
+                    "componentIds",
+                    "createdAt",
+                    "id",
+                    "labels",
+                    "pinned",
+                    "priority",
+                    "projectId",
+                    "status",
+                    "title",
+                    "type",
+                    "updatedAt",
+                    "version"
+                ],
                 "type": "object"
             },
             "issueops.BatchErrorDTO": {
@@ -181,6 +225,9 @@
                         "type": "string"
                     }
                 },
+                "required": [
+                    "code"
+                ],
                 "type": "object"
             },
             "issueops.BatchResponse": {
@@ -196,6 +243,10 @@
                         "$ref": "#/components/schemas/issueops.BatchSummary"
                     }
                 },
+                "required": [
+                    "results",
+                    "summary"
+                ],
                 "type": "object"
             },
             "issueops.BatchResultRow": {
@@ -213,6 +264,10 @@
                         "type": "integer"
                     }
                 },
+                "required": [
+                    "id",
+                    "ok"
+                ],
                 "type": "object"
             },
             "issueops.BatchSummary": {
@@ -227,6 +282,11 @@
                         "type": "integer"
                     }
                 },
+                "required": [
+                    "failed",
+                    "requested",
+                    "succeeded"
+                ],
                 "type": "object"
             },
             "issueops.CloseManyResponse": {
@@ -242,6 +302,10 @@
                         "$ref": "#/components/schemas/issueops.BatchSummary"
                     }
                 },
+                "required": [
+                    "results",
+                    "summary"
+                ],
                 "type": "object"
             },
             "issueops.CloseManyResultRow": {
@@ -267,6 +331,10 @@
                         "type": "integer"
                     }
                 },
+                "required": [
+                    "id",
+                    "ok"
+                ],
                 "type": "object"
             },
             "issueops.DepAddManyResponse": {
@@ -282,6 +350,10 @@
                         "$ref": "#/components/schemas/issueops.BatchSummary"
                     }
                 },
+                "required": [
+                    "results",
+                    "summary"
+                ],
                 "type": "object"
             },
             "issueops.DepAddManyResultRow": {
@@ -305,6 +377,11 @@
                         "type": "string"
                     }
                 },
+                "required": [
+                    "fromId",
+                    "ok",
+                    "toId"
+                ],
                 "type": "object"
             },
             "issueops.DepDTO": {
@@ -335,6 +412,15 @@
                         "type": "integer"
                     }
                 },
+                "required": [
+                    "createdAt",
+                    "from",
+                    "gate",
+                    "metadata",
+                    "to",
+                    "type",
+                    "version"
+                ],
                 "type": "object"
             },
             "issueops.ReminderListItem": {
@@ -371,6 +457,15 @@
                         "type": "string"
                     }
                 },
+                "required": [
+                    "issueId",
+                    "issueTitle",
+                    "projectId",
+                    "remindAt",
+                    "reminderId",
+                    "snoozeCount",
+                    "state"
+                ],
                 "type": "object"
             },
             "issues.BlockerRef": {
@@ -388,6 +483,9 @@
                         "type": "string"
                     }
                 },
+                "required": [
+                    "id"
+                ],
                 "type": "object"
             },
             "issues.CloseLinkState": {
@@ -455,6 +553,18 @@
                         "type": "integer"
                     }
                 },
+                "required": [
+                    "author",
+                    "authorKind",
+                    "authorType",
+                    "body",
+                    "createdAt",
+                    "id",
+                    "issueId",
+                    "mentions",
+                    "updatedAt",
+                    "version"
+                ],
                 "type": "object"
             },
             "issues.CommitRef": {
@@ -490,6 +600,12 @@
                         "type": "string"
                     }
                 },
+                "required": [
+                    "hash",
+                    "linkedAt",
+                    "linkedByKind",
+                    "repoId"
+                ],
                 "type": "object"
             },
             "issues.EpicProgress": {
@@ -517,6 +633,14 @@
                         "type": "integer"
                     }
                 },
+                "required": [
+                    "closed",
+                    "counted",
+                    "done",
+                    "noWork",
+                    "total",
+                    "unavailable"
+                ],
                 "type": "object"
             },
             "issues.EpicRollup": {
@@ -561,6 +685,20 @@
                         "type": "integer"
                     }
                 },
+                "required": [
+                    "blockedChildren",
+                    "closedChildren",
+                    "countedChildren",
+                    "deferredChildren",
+                    "doneChildren",
+                    "eligibleForClose",
+                    "inProgressChildren",
+                    "noWorkChildren",
+                    "openChildren",
+                    "standingChildren",
+                    "totalChildren",
+                    "unavailableChildren"
+                ],
                 "type": "object"
             },
             "issues.EventDTO": {
@@ -593,6 +731,14 @@
                         "type": "string"
                     }
                 },
+                "required": [
+                    "actor",
+                    "actorSessionId",
+                    "actorType",
+                    "id",
+                    "occurredAt",
+                    "type"
+                ],
                 "type": "object"
             },
             "issues.IssueDetail": {
@@ -835,6 +981,33 @@
                         "type": "integer"
                     }
                 },
+                "required": [
+                    "acceptanceCriteria",
+                    "blockers",
+                    "commentsCount",
+                    "commitRefs",
+                    "componentIds",
+                    "createdAt",
+                    "createdBy",
+                    "description",
+                    "design",
+                    "id",
+                    "isBlocked",
+                    "labels",
+                    "mentions",
+                    "metadata",
+                    "notes",
+                    "pinned",
+                    "priority",
+                    "projectId",
+                    "source",
+                    "status",
+                    "title",
+                    "type",
+                    "unavailableBlockingLinks",
+                    "updatedAt",
+                    "version"
+                ],
                 "type": "object"
             },
             "issues.IssueSummary": {
@@ -935,6 +1108,22 @@
                         "type": "integer"
                     }
                 },
+                "required": [
+                    "componentIds",
+                    "createdAt",
+                    "createdBy",
+                    "id",
+                    "isBlocked",
+                    "labels",
+                    "pinned",
+                    "priority",
+                    "projectId",
+                    "status",
+                    "title",
+                    "type",
+                    "updatedAt",
+                    "version"
+                ],
                 "type": "object"
             },
             "issues.MentionRef": {
@@ -950,6 +1139,10 @@
                         "type": "string"
                     }
                 },
+                "required": [
+                    "userId",
+                    "username"
+                ],
                 "type": "object"
             },
             "notifications.ActorDTO": {
@@ -977,6 +1170,10 @@
                         "type": "string"
                     }
                 },
+                "required": [
+                    "type",
+                    "username"
+                ],
                 "type": "object"
             },
             "notifications.CustomWatcherDTO": {
@@ -994,6 +1191,12 @@
                         "type": "string"
                     }
                 },
+                "required": [
+                    "createdAt",
+                    "filter",
+                    "id",
+                    "name"
+                ],
                 "type": "object"
             },
             "notifications.CustomWatcherFilter": {
@@ -1057,6 +1260,10 @@
                         "type": "string"
                     }
                 },
+                "required": [
+                    "id",
+                    "type"
+                ],
                 "type": "object"
             },
             "notifications.IssueWatcherForUserDTO": {
@@ -1084,6 +1291,14 @@
                         "type": "string"
                     }
                 },
+                "required": [
+                    "issueId",
+                    "issueTitle",
+                    "projectId",
+                    "projectIdPrefix",
+                    "reasons",
+                    "since"
+                ],
                 "type": "object"
             },
             "notifications.MarkCardReadResult": {
@@ -1093,6 +1308,9 @@
                         "type": "integer"
                     }
                 },
+                "required": [
+                    "marked"
+                ],
                 "type": "object"
             },
             "notifications.NotificationDTO": {
@@ -1162,6 +1380,14 @@
                         "type": "string"
                     }
                 },
+                "required": [
+                    "actor",
+                    "createdAt",
+                    "entity",
+                    "id",
+                    "summary",
+                    "type"
+                ],
                 "type": "object"
             },
             "notifications.ProjectWatcherDTO": {
@@ -1194,6 +1420,14 @@
                         "type": "string"
                     }
                 },
+                "required": [
+                    "eventTypes",
+                    "projectId",
+                    "projectIdPrefix",
+                    "projectName",
+                    "reasons",
+                    "since"
+                ],
                 "type": "object"
             },
             "person.Status": {
@@ -1285,6 +1519,27 @@
                         "type": "string"
                     }
                 },
+                "required": [
+                    "blockedCount",
+                    "createdAt",
+                    "createdBy",
+                    "description",
+                    "id",
+                    "inProgressCount",
+                    "myOutboxBlockedCount",
+                    "myOutboxInProgressCount",
+                    "myOutboxOpenCount",
+                    "myOutboxStandingCount",
+                    "name",
+                    "onMeBlockedCount",
+                    "onMeInProgressCount",
+                    "onMeOpenCount",
+                    "openCount",
+                    "paths",
+                    "projectId",
+                    "standingCount",
+                    "updatedAt"
+                ],
                 "type": "object"
             },
             "projects.ComponentPath": {
@@ -1296,6 +1551,10 @@
                         "type": "string"
                     }
                 },
+                "required": [
+                    "glob",
+                    "repoId"
+                ],
                 "type": "object"
             },
             "projects.MemberDTO": {
@@ -1331,6 +1590,14 @@
                         "type": "string"
                     }
                 },
+                "required": [
+                    "addedAt",
+                    "addedBy",
+                    "name",
+                    "role",
+                    "userId",
+                    "username"
+                ],
                 "type": "object"
             },
             "projects.ProjectDTO": {
@@ -1393,6 +1660,23 @@
                         "type": "string"
                     }
                 },
+                "required": [
+                    "componentsCount",
+                    "createdAt",
+                    "createdBy",
+                    "defaultIdMode",
+                    "description",
+                    "gitRepos",
+                    "id",
+                    "idPrefix",
+                    "membersCount",
+                    "name",
+                    "reposCount",
+                    "spaceId",
+                    "stats",
+                    "updatedAt",
+                    "visibility"
+                ],
                 "type": "object"
             },
             "projects.ProjectListItem": {
@@ -1476,6 +1760,30 @@
                         "type": "string"
                     }
                 },
+                "required": [
+                    "blockedCount",
+                    "componentsCount",
+                    "createdAt",
+                    "defaultIdMode",
+                    "description",
+                    "epicsEligibleCount",
+                    "id",
+                    "idPrefix",
+                    "inProgressCount",
+                    "myOutboxBlockedCount",
+                    "myOutboxInProgressCount",
+                    "myOutboxOpenCount",
+                    "myOutboxStandingCount",
+                    "name",
+                    "onMeBlockedCount",
+                    "onMeInProgressCount",
+                    "onMeOpenCount",
+                    "openCount",
+                    "spaceId",
+                    "standingCount",
+                    "updatedAt",
+                    "visibility"
+                ],
                 "type": "object"
             },
             "projects.ProjectStats": {
@@ -1520,6 +1828,19 @@
                         "type": "integer"
                     }
                 },
+                "required": [
+                    "blocked",
+                    "closed",
+                    "deferred",
+                    "done",
+                    "inProgress",
+                    "myAssigned",
+                    "myCreated",
+                    "noWork",
+                    "open",
+                    "standingCount",
+                    "total"
+                ],
                 "type": "object"
             },
             "projects.Repo": {
@@ -1537,6 +1858,11 @@
                         "type": "string"
                     }
                 },
+                "required": [
+                    "id",
+                    "name",
+                    "url"
+                ],
                 "type": "object"
             },
             "publicapi.ClaimedIssues": {
@@ -1550,6 +1876,9 @@
                         "uniqueItems": false
                     }
                 },
+                "required": [
+                    "items"
+                ],
                 "type": "object"
             },
             "publicapi.DependencyItem": {
@@ -1586,6 +1915,15 @@
                         "type": "integer"
                     }
                 },
+                "required": [
+                    "createdAt",
+                    "direction",
+                    "fromId",
+                    "metadata",
+                    "toId",
+                    "type",
+                    "version"
+                ],
                 "type": "object"
             },
             "publicapi.EpicCreated": {
@@ -1836,6 +2174,34 @@
                         "type": "integer"
                     }
                 },
+                "required": [
+                    "acceptanceCriteria",
+                    "blockers",
+                    "children",
+                    "commentsCount",
+                    "commitRefs",
+                    "componentIds",
+                    "createdAt",
+                    "createdBy",
+                    "description",
+                    "design",
+                    "id",
+                    "isBlocked",
+                    "labels",
+                    "mentions",
+                    "metadata",
+                    "notes",
+                    "pinned",
+                    "priority",
+                    "projectId",
+                    "source",
+                    "status",
+                    "title",
+                    "type",
+                    "unavailableBlockingLinks",
+                    "updatedAt",
+                    "version"
+                ],
                 "type": "object"
             },
             "publicapi.IssueWatch": {
@@ -1849,6 +2215,10 @@
                         "type": "boolean"
                     }
                 },
+                "required": [
+                    "issueId",
+                    "watching"
+                ],
                 "type": "object"
             },
             "publicapi.List-attachments_Attachment": {
@@ -1870,6 +2240,11 @@
                         ]
                     }
                 },
+                "required": [
+                    "hasMore",
+                    "items",
+                    "nextCursor"
+                ],
                 "type": "object"
             },
             "publicapi.List-dependencies_IssueSummary": {
@@ -1891,6 +2266,11 @@
                         ]
                     }
                 },
+                "required": [
+                    "hasMore",
+                    "items",
+                    "nextCursor"
+                ],
                 "type": "object"
             },
             "publicapi.List-issues_CommentDTO": {
@@ -1912,6 +2292,11 @@
                         ]
                     }
                 },
+                "required": [
+                    "hasMore",
+                    "items",
+                    "nextCursor"
+                ],
                 "type": "object"
             },
             "publicapi.List-issues_EventDTO": {
@@ -1933,6 +2318,11 @@
                         ]
                     }
                 },
+                "required": [
+                    "hasMore",
+                    "items",
+                    "nextCursor"
+                ],
                 "type": "object"
             },
             "publicapi.List-issues_IssueSummary": {
@@ -1954,6 +2344,11 @@
                         ]
                     }
                 },
+                "required": [
+                    "hasMore",
+                    "items",
+                    "nextCursor"
+                ],
                 "type": "object"
             },
             "publicapi.List-notifications_CustomWatcherDTO": {
@@ -1975,6 +2370,11 @@
                         ]
                     }
                 },
+                "required": [
+                    "hasMore",
+                    "items",
+                    "nextCursor"
+                ],
                 "type": "object"
             },
             "publicapi.List-notifications_IssueWatcherForUserDTO": {
@@ -1996,6 +2396,11 @@
                         ]
                     }
                 },
+                "required": [
+                    "hasMore",
+                    "items",
+                    "nextCursor"
+                ],
                 "type": "object"
             },
             "publicapi.List-notifications_ProjectWatcherDTO": {
@@ -2017,6 +2422,11 @@
                         ]
                     }
                 },
+                "required": [
+                    "hasMore",
+                    "items",
+                    "nextCursor"
+                ],
                 "type": "object"
             },
             "publicapi.List-projects_ComponentDTO": {
@@ -2038,6 +2448,11 @@
                         ]
                     }
                 },
+                "required": [
+                    "hasMore",
+                    "items",
+                    "nextCursor"
+                ],
                 "type": "object"
             },
             "publicapi.List-projects_MemberDTO": {
@@ -2059,6 +2474,11 @@
                         ]
                     }
                 },
+                "required": [
+                    "hasMore",
+                    "items",
+                    "nextCursor"
+                ],
                 "type": "object"
             },
             "publicapi.List-projects_ProjectListItem": {
@@ -2080,6 +2500,11 @@
                         ]
                     }
                 },
+                "required": [
+                    "hasMore",
+                    "items",
+                    "nextCursor"
+                ],
                 "type": "object"
             },
             "publicapi.List-publicapi_DependencyItem": {
@@ -2101,6 +2526,11 @@
                         ]
                     }
                 },
+                "required": [
+                    "hasMore",
+                    "items",
+                    "nextCursor"
+                ],
                 "type": "object"
             },
             "publicapi.List-users_UserDTO": {
@@ -2122,6 +2552,11 @@
                         ]
                     }
                 },
+                "required": [
+                    "hasMore",
+                    "items",
+                    "nextCursor"
+                ],
                 "type": "object"
             },
             "publicapi.MovePlan": {
@@ -2160,6 +2595,14 @@
                         "description": "TargetProject is the project the copy goes to."
                     }
                 },
+                "required": [
+                    "nextSteps",
+                    "reason",
+                    "source",
+                    "supported",
+                    "targetComponents",
+                    "targetProject"
+                ],
                 "type": "object"
             },
             "publicapi.MoveStep": {
@@ -2192,6 +2635,13 @@
                         "type": "string"
                     }
                 },
+                "required": [
+                    "body",
+                    "comment",
+                    "method",
+                    "operationId",
+                    "path"
+                ],
                 "type": "object"
             },
             "publicapi.MoveTarget": {
@@ -2206,6 +2656,11 @@
                         "type": "string"
                     }
                 },
+                "required": [
+                    "id",
+                    "idPrefix",
+                    "name"
+                ],
                 "type": "object"
             },
             "publicapi.NotificationArchived": {
@@ -2219,6 +2674,10 @@
                         "type": "integer"
                     }
                 },
+                "required": [
+                    "archived",
+                    "id"
+                ],
                 "type": "object"
             },
             "publicapi.NotificationPage": {
@@ -2248,6 +2707,11 @@
                         ]
                     }
                 },
+                "required": [
+                    "hasMore",
+                    "items",
+                    "nextCursor"
+                ],
                 "type": "object"
             },
             "publicapi.NotificationsMarked": {
@@ -2257,6 +2721,9 @@
                         "type": "integer"
                     }
                 },
+                "required": [
+                    "updated"
+                ],
                 "type": "object"
             },
             "publicapi.ProblemDocument": {
@@ -2286,6 +2753,12 @@
                         "type": "string"
                     }
                 },
+                "required": [
+                    "code",
+                    "status",
+                    "title",
+                    "type"
+                ],
                 "type": "object"
             },
             "publicapi.ProjectWatch": {
@@ -2307,6 +2780,10 @@
                         "type": "boolean"
                     }
                 },
+                "required": [
+                    "projectId",
+                    "watching"
+                ],
                 "type": "object"
             },
             "publicapi.ReminderPage": {
@@ -2332,6 +2809,12 @@
                         "type": "integer"
                     }
                 },
+                "required": [
+                    "hasMore",
+                    "items",
+                    "nextCursor",
+                    "ringingTaskCount"
+                ],
                 "type": "object"
             },
             "publicapi.ResolveCandidate": {
@@ -2357,6 +2840,13 @@
                         "type": "number"
                     }
                 },
+                "required": [
+                    "id",
+                    "idPrefix",
+                    "matchedVia",
+                    "name",
+                    "score"
+                ],
                 "type": "object"
             },
             "publicapi.ResolveResult": {
@@ -2381,6 +2871,10 @@
                         ]
                     }
                 },
+                "required": [
+                    "candidates",
+                    "match"
+                ],
                 "type": "object"
             },
             "publicapi.SearchPage": {
@@ -2409,6 +2903,12 @@
                         ]
                     }
                 },
+                "required": [
+                    "degraded",
+                    "hasMore",
+                    "items",
+                    "nextCursor"
+                ],
                 "type": "object"
             },
             "publicapi.SpaceMemberAdded": {
@@ -2422,6 +2922,10 @@
                         "type": "string"
                     }
                 },
+                "required": [
+                    "member",
+                    "spaceId"
+                ],
                 "type": "object"
             },
             "publicapi.WatchingLists": {
@@ -2439,6 +2943,11 @@
                         "description": "Projects, newest subscription first; projectsCursor continues them."
                     }
                 },
+                "required": [
+                    "filters",
+                    "issues",
+                    "projects"
+                ],
                 "type": "object"
             },
             "publicapi.addDependencyBody": {
@@ -3682,6 +4191,22 @@
                         "type": "string"
                     }
                 },
+                "required": [
+                    "createdAt",
+                    "id",
+                    "issueId",
+                    "issuePriority",
+                    "issueStatus",
+                    "issueTitle",
+                    "issueType",
+                    "projectId",
+                    "remindAt",
+                    "snoozeCount",
+                    "spaceId",
+                    "state",
+                    "updatedAt",
+                    "userId"
+                ],
                 "type": "object"
             },
             "reminders.State": {
@@ -3760,6 +4285,15 @@
                         "type": "string"
                     }
                 },
+                "required": [
+                    "exactMatch",
+                    "id",
+                    "kind",
+                    "score",
+                    "snippet",
+                    "title",
+                    "updatedAt"
+                ],
                 "type": "object"
             },
             "search.Kind": {
@@ -3799,6 +4333,13 @@
                         "type": "string"
                     }
                 },
+                "required": [
+                    "canCreateProject",
+                    "id",
+                    "kind",
+                    "name",
+                    "role"
+                ],
                 "type": "object"
             },
             "spaces.PendingInvitation": {
@@ -3824,6 +4365,13 @@
                         "type": "string"
                     }
                 },
+                "required": [
+                    "expiresAt",
+                    "id",
+                    "invitedBy",
+                    "spaceId",
+                    "spaceName"
+                ],
                 "type": "object"
             },
             "spaces.SpaceMember": {
@@ -3861,6 +4409,13 @@
                         "type": "string"
                     }
                 },
+                "required": [
+                    "deactivated",
+                    "name",
+                    "role",
+                    "userId",
+                    "username"
+                ],
                 "type": "object"
             },
             "tools.MoveComponent": {
@@ -3881,6 +4436,12 @@
                         "type": "string"
                     }
                 },
+                "required": [
+                    "description",
+                    "id",
+                    "matchHint",
+                    "name"
+                ],
                 "type": "object"
             },
             "tools.WhoamiAgent": {
@@ -3895,6 +4456,11 @@
                         "type": "string"
                     }
                 },
+                "required": [
+                    "firstSeenAt",
+                    "lastSeenAt",
+                    "sessionId"
+                ],
                 "type": "object"
             },
             "tools.WhoamiProject": {
@@ -3917,6 +4483,13 @@
                         "type": "string"
                     }
                 },
+                "required": [
+                    "id",
+                    "idPrefix",
+                    "name",
+                    "role",
+                    "spaceId"
+                ],
                 "type": "object"
             },
             "tools.WhoamiResponse": {
@@ -3963,6 +4536,14 @@
                         "$ref": "#/components/schemas/tools.WhoamiUser"
                     }
                 },
+                "required": [
+                    "isAdmin",
+                    "projects",
+                    "projectsTotal",
+                    "spaces",
+                    "spacesTotal",
+                    "user"
+                ],
                 "type": "object"
             },
             "tools.WhoamiUser": {
@@ -3983,6 +4564,13 @@
                         "type": "string"
                     }
                 },
+                "required": [
+                    "email",
+                    "id",
+                    "name",
+                    "role",
+                    "username"
+                ],
                 "type": "object"
             },
             "users.UserDTO": {
@@ -4032,6 +4620,16 @@
                         "type": "string"
                     }
                 },
+                "required": [
+                    "authMethod",
+                    "createdAt",
+                    "email",
+                    "id",
+                    "isExternal",
+                    "name",
+                    "role",
+                    "username"
+                ],
                 "type": "object"
             }
         },
@@ -4049,6 +4647,7 @@
         "title": "Skein public API",
         "version": "1"
     },
+    "openapi": "3.1.0",
     "paths": {
         "/api/v1/attachments/{attachment}": {
             "delete": {
@@ -4070,8 +4669,8 @@
                         "application/json": {
                             "schema": {
                                 "$ref": "#/components/schemas/publicapi.kindBody",
-                                "summary": "body",
-                                "description": "Options"
+                                "description": "Options",
+                                "summary": "body"
                             }
                         }
                     },
@@ -4321,8 +4920,8 @@
                         "application/json": {
                             "schema": {
                                 "$ref": "#/components/schemas/publicapi.kindBody",
-                                "summary": "body",
-                                "description": "Options"
+                                "description": "Options",
+                                "summary": "body"
                             }
                         }
                     },
@@ -4601,8 +5200,8 @@
                         "application/json": {
                             "schema": {
                                 "$ref": "#/components/schemas/publicapi.deleteCommentBody",
-                                "summary": "body",
-                                "description": "Options"
+                                "description": "Options",
+                                "summary": "body"
                             }
                         }
                     },
@@ -4877,8 +5476,8 @@
                         "application/json": {
                             "schema": {
                                 "$ref": "#/components/schemas/publicapi.commentBody",
-                                "summary": "body",
-                                "description": "The new body"
+                                "description": "The new body",
+                                "summary": "body"
                             }
                         }
                     },
@@ -5310,8 +5909,8 @@
                         "application/json": {
                             "schema": {
                                 "$ref": "#/components/schemas/publicapi.bulkCloseBody",
-                                "summary": "body",
-                                "description": "The rows"
+                                "description": "The rows",
+                                "summary": "body"
                             }
                         }
                     },
@@ -5442,8 +6041,8 @@
                         "application/json": {
                             "schema": {
                                 "$ref": "#/components/schemas/publicapi.bulkUpdateBody",
-                                "summary": "body",
-                                "description": "The rows"
+                                "description": "The rows",
+                                "summary": "body"
                             }
                         }
                     },
@@ -5574,8 +6173,8 @@
                         "application/json": {
                             "schema": {
                                 "$ref": "#/components/schemas/publicapi.claimIssuesBody",
-                                "summary": "body",
-                                "description": "The issues"
+                                "description": "The issues",
+                                "summary": "body"
                             }
                         }
                     },
@@ -5686,8 +6285,8 @@
                         "application/json": {
                             "schema": {
                                 "$ref": "#/components/schemas/publicapi.bulkDependenciesBody",
-                                "summary": "body",
-                                "description": "The rows"
+                                "description": "The rows",
+                                "summary": "body"
                             }
                         }
                     },
@@ -6126,8 +6725,8 @@
                         "application/json": {
                             "schema": {
                                 "$ref": "#/components/schemas/publicapi.updateIssueBody",
-                                "summary": "body",
-                                "description": "The changes"
+                                "description": "The changes",
+                                "summary": "body"
                             }
                         }
                     },
@@ -6295,8 +6894,8 @@
                         "application/json": {
                             "schema": {
                                 "$ref": "#/components/schemas/publicapi.kindBody",
-                                "summary": "body",
-                                "description": "Options"
+                                "description": "Options",
+                                "summary": "body"
                             }
                         }
                     },
@@ -6553,8 +7152,8 @@
                         "application/json": {
                             "schema": {
                                 "$ref": "#/components/schemas/publicapi.attachmentUploadBody",
-                                "summary": "body",
-                                "description": "The file to upload"
+                                "description": "The file to upload",
+                                "summary": "body"
                             }
                         }
                     },
@@ -6722,8 +7321,8 @@
                         "application/json": {
                             "schema": {
                                 "$ref": "#/components/schemas/publicapi.claimBody",
-                                "summary": "body",
-                                "description": "Options"
+                                "description": "Options",
+                                "summary": "body"
                             }
                         }
                     },
@@ -6887,8 +7486,8 @@
                         "application/json": {
                             "schema": {
                                 "$ref": "#/components/schemas/publicapi.closeBody",
-                                "summary": "body",
-                                "description": "The close"
+                                "description": "The close",
+                                "summary": "body"
                             }
                         }
                     },
@@ -7198,8 +7797,8 @@
                         "application/json": {
                             "schema": {
                                 "$ref": "#/components/schemas/publicapi.commentBody",
-                                "summary": "body",
-                                "description": "The comment"
+                                "description": "The comment",
+                                "summary": "body"
                             }
                         }
                     },
@@ -7369,8 +7968,8 @@
                         "application/json": {
                             "schema": {
                                 "$ref": "#/components/schemas/publicapi.attachBody",
-                                "summary": "body",
-                                "description": "The commits"
+                                "description": "The commits",
+                                "summary": "body"
                             }
                         }
                     },
@@ -7764,8 +8363,8 @@
                         "application/json": {
                             "schema": {
                                 "$ref": "#/components/schemas/publicapi.addDependencyBody",
-                                "summary": "body",
-                                "description": "The edge"
+                                "description": "The edge",
+                                "summary": "body"
                             }
                         }
                     },
@@ -7935,8 +8534,8 @@
                         "application/json": {
                             "schema": {
                                 "$ref": "#/components/schemas/publicapi.kindBody",
-                                "summary": "body",
-                                "description": "Options"
+                                "description": "Options",
+                                "summary": "body"
                             }
                         }
                     },
@@ -8080,8 +8679,8 @@
                         "application/json": {
                             "schema": {
                                 "$ref": "#/components/schemas/publicapi.kindBody",
-                                "summary": "body",
-                                "description": "Options"
+                                "description": "Options",
+                                "summary": "body"
                             }
                         }
                     },
@@ -8483,8 +9082,8 @@
                         "application/json": {
                             "schema": {
                                 "$ref": "#/components/schemas/publicapi.kindBody",
-                                "summary": "body",
-                                "description": "Options"
+                                "description": "Options",
+                                "summary": "body"
                             }
                         }
                     },
@@ -8613,8 +9212,8 @@
                         "application/json": {
                             "schema": {
                                 "$ref": "#/components/schemas/publicapi.kindBody",
-                                "summary": "body",
-                                "description": "Options"
+                                "description": "Options",
+                                "summary": "body"
                             }
                         }
                     },
@@ -8745,8 +9344,8 @@
                         "application/json": {
                             "schema": {
                                 "$ref": "#/components/schemas/publicapi.createReminderBody",
-                                "summary": "body",
-                                "description": "The reminder"
+                                "description": "The reminder",
+                                "summary": "body"
                             }
                         }
                     },
@@ -8895,8 +9494,8 @@
                         "application/json": {
                             "schema": {
                                 "$ref": "#/components/schemas/publicapi.reparentBody",
-                                "summary": "body",
-                                "description": "The new parent"
+                                "description": "The new parent",
+                                "summary": "body"
                             }
                         }
                     },
@@ -9048,8 +9647,8 @@
                         "application/json": {
                             "schema": {
                                 "$ref": "#/components/schemas/publicapi.kindBody",
-                                "summary": "body",
-                                "description": "Options"
+                                "description": "Options",
+                                "summary": "body"
                             }
                         }
                     },
@@ -9196,8 +9795,8 @@
                         "application/json": {
                             "schema": {
                                 "$ref": "#/components/schemas/publicapi.unclaimBody",
-                                "summary": "body",
-                                "description": "Next status and reason"
+                                "description": "Next status and reason",
+                                "summary": "body"
                             }
                         }
                     },
@@ -9329,8 +9928,8 @@
                         "application/json": {
                             "schema": {
                                 "$ref": "#/components/schemas/publicapi.kindBody",
-                                "summary": "body",
-                                "description": "Options"
+                                "description": "Options",
+                                "summary": "body"
                             }
                         }
                     },
@@ -9442,8 +10041,8 @@
                         "application/json": {
                             "schema": {
                                 "$ref": "#/components/schemas/publicapi.watchIssueBody",
-                                "summary": "body",
-                                "description": "Options"
+                                "description": "Options",
+                                "summary": "body"
                             }
                         }
                     },
@@ -9727,8 +10326,8 @@
                         "application/json": {
                             "schema": {
                                 "$ref": "#/components/schemas/publicapi.watchFilterBody",
-                                "summary": "body",
-                                "description": "The filter"
+                                "description": "The filter",
+                                "summary": "body"
                             }
                         }
                     },
@@ -9850,8 +10449,8 @@
                         "application/json": {
                             "schema": {
                                 "$ref": "#/components/schemas/publicapi.kindBody",
-                                "summary": "body",
-                                "description": "Options"
+                                "description": "Options",
+                                "summary": "body"
                             }
                         }
                     },
@@ -10088,8 +10687,8 @@
                         "application/json": {
                             "schema": {
                                 "$ref": "#/components/schemas/publicapi.kindBody",
-                                "summary": "body",
-                                "description": "Options"
+                                "description": "Options",
+                                "summary": "body"
                             }
                         }
                     },
@@ -10340,8 +10939,8 @@
                         "application/json": {
                             "schema": {
                                 "$ref": "#/components/schemas/publicapi.markAllBody",
-                                "summary": "body",
-                                "description": "Options"
+                                "description": "Options",
+                                "summary": "body"
                             }
                         }
                     },
@@ -10462,8 +11061,8 @@
                         "application/json": {
                             "schema": {
                                 "$ref": "#/components/schemas/publicapi.kindBody",
-                                "summary": "body",
-                                "description": "Options"
+                                "description": "Options",
+                                "summary": "body"
                             }
                         }
                     },
@@ -10584,8 +11183,8 @@
                         "application/json": {
                             "schema": {
                                 "$ref": "#/components/schemas/publicapi.kindBody",
-                                "summary": "body",
-                                "description": "Options"
+                                "description": "Options",
+                                "summary": "body"
                             }
                         }
                     },
@@ -10851,8 +11450,8 @@
                         "application/json": {
                             "schema": {
                                 "$ref": "#/components/schemas/publicapi.createProjectBody",
-                                "summary": "body",
-                                "description": "The project"
+                                "description": "The project",
+                                "summary": "body"
                             }
                         }
                     },
@@ -11228,8 +11827,8 @@
                         "application/json": {
                             "schema": {
                                 "$ref": "#/components/schemas/publicapi.updateProjectBody",
-                                "summary": "body",
-                                "description": "The changes"
+                                "description": "The changes",
+                                "summary": "body"
                             }
                         }
                     },
@@ -11510,8 +12109,8 @@
                         "application/json": {
                             "schema": {
                                 "$ref": "#/components/schemas/publicapi.componentBody",
-                                "summary": "body",
-                                "description": "The component"
+                                "description": "The component",
+                                "summary": "body"
                             }
                         }
                     },
@@ -11672,8 +12271,8 @@
                         "application/json": {
                             "schema": {
                                 "$ref": "#/components/schemas/publicapi.updateComponentBody",
-                                "summary": "body",
-                                "description": "The changes"
+                                "description": "The changes",
+                                "summary": "body"
                             }
                         }
                     },
@@ -11960,8 +12559,8 @@
                         "application/json": {
                             "schema": {
                                 "$ref": "#/components/schemas/publicapi.createEpicBody",
-                                "summary": "body",
-                                "description": "The epic and its children"
+                                "description": "The epic and its children",
+                                "summary": "body"
                             }
                         }
                     },
@@ -12139,8 +12738,8 @@
                         "application/json": {
                             "schema": {
                                 "$ref": "#/components/schemas/publicapi.createIssueBody",
-                                "summary": "body",
-                                "description": "The issue"
+                                "description": "The issue",
+                                "summary": "body"
                             }
                         }
                     },
@@ -12549,8 +13148,8 @@
                         "application/json": {
                             "schema": {
                                 "$ref": "#/components/schemas/publicapi.putMemberBody",
-                                "summary": "body",
-                                "description": "The role"
+                                "description": "The role",
+                                "summary": "body"
                             }
                         }
                     },
@@ -12702,8 +13301,8 @@
                         "application/json": {
                             "schema": {
                                 "$ref": "#/components/schemas/publicapi.kindBody",
-                                "summary": "body",
-                                "description": "Options"
+                                "description": "Options",
+                                "summary": "body"
                             }
                         }
                     },
@@ -12815,8 +13414,8 @@
                         "application/json": {
                             "schema": {
                                 "$ref": "#/components/schemas/publicapi.watchProjectBody",
-                                "summary": "body",
-                                "description": "Options"
+                                "description": "Options",
+                                "summary": "body"
                             }
                         }
                     },
@@ -13088,8 +13687,8 @@
                         "application/json": {
                             "schema": {
                                 "$ref": "#/components/schemas/publicapi.dismissBody",
-                                "summary": "body",
-                                "description": "Options"
+                                "description": "Options",
+                                "summary": "body"
                             }
                         }
                     },
@@ -13213,8 +13812,8 @@
                         "application/json": {
                             "schema": {
                                 "$ref": "#/components/schemas/publicapi.snoozeBody",
-                                "summary": "body",
-                                "description": "When"
+                                "description": "When",
+                                "summary": "body"
                             }
                         }
                     },
@@ -13552,8 +14151,8 @@
                         "application/json": {
                             "schema": {
                                 "$ref": "#/components/schemas/publicapi.addSpaceMemberBody",
-                                "summary": "body",
-                                "description": "The user"
+                                "description": "The user",
+                                "summary": "body"
                             }
                         }
                     },
@@ -13803,8 +14402,8 @@
                         "application/json": {
                             "schema": {
                                 "$ref": "#/components/schemas/publicapi.createUserBody",
-                                "summary": "body",
-                                "description": "The user"
+                                "description": "The user",
+                                "summary": "body"
                             }
                         }
                     },
@@ -13926,8 +14525,8 @@
                         "application/json": {
                             "schema": {
                                 "$ref": "#/components/schemas/publicapi.updateUserBody",
-                                "summary": "body",
-                                "description": "The changes"
+                                "description": "The changes",
+                                "summary": "body"
                             }
                         }
                     },
@@ -14039,6 +14638,5 @@
                 ]
             }
         }
-    },
-    "openapi": "3.1.0"
+    }
 }

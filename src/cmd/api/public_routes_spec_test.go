@@ -16,18 +16,22 @@ package main
 // Row 105 is the contract of the responses: the success of every operation
 // of routes.go, asked of the product public server over a seeded database,
 // passes the response validation of kin-openapi (openapi3filter) against the
-// served document — status, documented headers and body schema; a response
+// served document — status, documented headers, body schema and its required
+// members — and carries no member the document does not declare; a response
 // the document declares without content has no body.
 //
 // kin-openapi is a test-only dependency: no product package imports it.
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -200,11 +204,102 @@ func wantSecurity(t *testing.T, rt publicapi.Route, op *openapi3.Operation) {
 	}
 }
 
+// responseProblems are the ways answer a, the response of rt to c, differs
+// from the document: openapi3filter.ValidateResponse with the status
+// included (type, nullable, required members, documented headers, content
+// type), a body on a status declared without content, and every member of a
+// response object the schema of that object does not declare (kin-openapi
+// has no option to refuse them: the schemas leave additionalProperties
+// open). None — the response matches.
+func responseProblems(doc *openapi3.T, rt publicapi.Route, c opCall, a answer) []string {
+	operation := documentOperation(doc, rt.Method, rt.Path)
+	if operation == nil {
+		return []string{"no operation " + rt.Method + " " + rt.Path + " in the document"}
+	}
+	var problems []string
+	in := &openapi3filter.ResponseValidationInput{
+		RequestValidationInput: &openapi3filter.RequestValidationInput{
+			Request: httptest.NewRequest(c.method, c.path, http.NoBody),
+			Route: &routers.Route{Spec: doc, Path: rt.Path, PathItem: doc.Paths.Value(rt.Path),
+				Method: rt.Method, Operation: operation},
+		},
+		Status:  a.status,
+		Header:  a.header,
+		Body:    io.NopCloser(bytes.NewReader(a.body)),
+		Options: &openapi3filter.Options{IncludeResponseStatus: true, MultiError: true},
+	}
+	if err := openapi3filter.ValidateResponse(context.Background(), in); err != nil {
+		problems = append(problems, err.Error())
+	}
+	resp := operation.Responses.Status(a.status)
+	if resp == nil || resp.Value == nil {
+		return problems
+	}
+	if len(resp.Value.Content) == 0 {
+		if len(a.body) != 0 {
+			problems = append(problems, "the status is declared without content, the response has a body")
+		}
+		return problems
+	}
+	media := resp.Value.Content.Get(a.header.Get("Content-Type"))
+	if media == nil || media.Schema == nil {
+		return problems
+	}
+	var body any
+	if err := json.Unmarshal(a.body, &body); err != nil {
+		return append(problems, "the body is not JSON: "+err.Error())
+	}
+	undeclaredMembers(media.Schema, body, "", &problems)
+	return problems
+}
+
+// undeclaredMembers appends to out each member of the objects of v that s
+// does not declare, recursively through properties, items, additional
+// properties and the non-null variant of anyOf / oneOf. An object schema
+// without properties (free-form) declares any member.
+func undeclaredMembers(s *openapi3.SchemaRef, v any, at string, out *[]string) {
+	if s == nil || s.Value == nil || v == nil {
+		return
+	}
+	sch := s.Value
+	for _, variants := range [][]*openapi3.SchemaRef{sch.AnyOf, sch.OneOf} {
+		for _, variant := range variants {
+			if variant.Value != nil && !variant.Value.Type.Is(openapi3.TypeNull) {
+				undeclaredMembers(variant, v, at, out)
+			}
+		}
+	}
+	switch val := v.(type) {
+	case map[string]any:
+		if len(sch.Properties) == 0 {
+			if extra := sch.AdditionalProperties.Schema; extra != nil {
+				for k, m := range val {
+					undeclaredMembers(extra, m, at+"/"+k, out)
+				}
+			}
+			return
+		}
+		for k, m := range val {
+			prop, ok := sch.Properties[k]
+			if !ok {
+				*out = append(*out, "member "+at+"/"+k+" is not declared in the schema")
+				continue
+			}
+			undeclaredMembers(prop, m, at+"/"+k, out)
+		}
+	case []any:
+		for i, m := range val {
+			undeclaredMembers(sch.Items, m, at+"/"+strconv.Itoa(i), out)
+		}
+	}
+}
+
 // TestPublicResponsesMatchOpenAPI — row 105 (US-9). The success of every
 // operation of routes.go, asked with a key of its right by the owner of the
-// seeded project, passes openapi3filter.ValidateResponse against the served
-// document with the status included; a status the document declares without
-// content answers no body. Red when a response of an operation does not
+// seeded project, matches the served document (responseProblems): status,
+// headers, type and nullability of each member, the members the document
+// requires, and no member the document does not declare. A response changed by one undeclared or one missing required member is
+// refused by the same check. Red when a response of an operation does not
 // match the schema the document describes for it.
 func TestPublicResponsesMatchOpenAPI(t *testing.T) {
 	w := newClassWorld(t)
@@ -213,48 +308,61 @@ func TestPublicResponsesMatchOpenAPI(t *testing.T) {
 	for _, op := range publicOps {
 		ops[op.id] = op
 	}
+	routes := map[string]publicapi.Route{}
 	for _, rt := range publicapi.ProductRoutes(publicapi.Deps{}) {
-		t.Run(rt.OperationID, func(t *testing.T) {
-			operation := documentOperation(doc, rt.Method, rt.Path)
-			if operation == nil {
-				t.Fatalf("no operation %s %s in the document", rt.Method, rt.Path)
+		routes[rt.OperationID] = rt
+	}
+	// keyOf is a fresh key for op: the run makes more requests than one
+	// key's rate limit lets through in a minute.
+	keyOf := func(op publicOp) string { return w.keyFor(op, w.key(w.owner, levelKey(apikeys.LevelManage))) }
+	check := func(t *testing.T, rt publicapi.Route, c opCall, a answer) {
+		t.Helper()
+		if !success(a.status) {
+			t.Fatalf("%s %s: %d %s, want a success", c.method, c.path, a.status, a.body)
+		}
+		for _, p := range responseProblems(doc, rt, c, a) {
+			t.Errorf("%d response does not match the document: %s\nbody: %s", a.status, p, a.body)
+		}
+	}
+	for id, rt := range routes {
+		t.Run(id, func(t *testing.T) {
+			if id == publicapi.OperationGetOpenAPI {
+				c := opCall{method: http.MethodGet, path: publicapi.OpenAPIPath}
+				check(t, rt, c, w.do("", c, "", nil))
+				return
 			}
-			var c opCall
-			key := ""
-			if rt.OperationID == publicapi.OperationGetOpenAPI {
-				c = opCall{method: http.MethodGet, path: publicapi.OpenAPIPath}
-			} else {
-				op, ok := ops[rt.OperationID]
-				if !ok {
-					t.Fatalf("no request for %s in publicOps", rt.OperationID)
-				}
-				// A key per operation: the run makes more requests than one
-				// key's rate limit lets through in a minute.
-				key = w.keyFor(op, w.key(w.owner, levelKey(apikeys.LevelManage)))
-				c = w.call(op, w.p, key)
+			op, ok := ops[id]
+			if !ok {
+				t.Fatalf("no request for %s in publicOps", id)
 			}
-			a := w.do(key, c, "", nil)
-			if !success(a.status) {
-				t.Fatalf("%s %s: %d %s, want a success", c.method, c.path, a.status, a.body)
-			}
-			req := httptest.NewRequest(c.method, c.path, http.NoBody)
-			in := &openapi3filter.ResponseValidationInput{
-				RequestValidationInput: &openapi3filter.RequestValidationInput{
-					Request: req,
-					Route: &routers.Route{Spec: doc, Path: rt.Path, PathItem: doc.Paths.Value(rt.Path),
-						Method: rt.Method, Operation: operation},
-				},
-				Status:  a.status,
-				Header:  a.header,
-				Body:    io.NopCloser(strings.NewReader(string(a.body))),
-				Options: &openapi3filter.Options{IncludeResponseStatus: true, MultiError: true},
-			}
-			if err := openapi3filter.ValidateResponse(context.Background(), in); err != nil {
-				t.Errorf("%d response does not match the document: %v\nbody: %s", a.status, err, a.body)
-			}
-			if resp := operation.Responses.Status(a.status); resp != nil && resp.Value != nil && len(resp.Value.Content) == 0 && len(a.body) != 0 {
-				t.Errorf("%d is declared without content, the response has a body: %s", a.status, a.body)
-			}
+			key := keyOf(op)
+			c := w.call(op, w.p, key)
+			check(t, rt, c, w.do(key, c, "", nil))
 		})
 	}
+
+	// The check itself: a real response with one undeclared member, and
+	// with one required member removed, is refused.
+	t.Run("a changed response is refused", func(t *testing.T) {
+		op := ops[publicapi.OperationGetIssue]
+		key := keyOf(op)
+		c := w.call(op, w.p, key)
+		a := w.do(key, c, "", nil)
+		check(t, routes[publicapi.OperationGetIssue], c, a)
+		for name, change := range map[string]func(m map[string]any){
+			"an undeclared member":   func(m map[string]any) { m["undeclaredMember"] = 1 },
+			"a required member gone": func(m map[string]any) { delete(m, "title") },
+		} {
+			m := a.object(t)
+			change(m)
+			raw, err := json.Marshal(m)
+			if err != nil {
+				t.Fatalf("marshal: %v", err)
+			}
+			changed := answer{status: a.status, header: a.header, body: raw}
+			if len(responseProblems(doc, routes[publicapi.OperationGetIssue], c, changed)) == 0 {
+				t.Errorf("%s: the changed response passes the check", name)
+			}
+		}
+	})
 }

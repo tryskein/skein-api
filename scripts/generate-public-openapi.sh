@@ -30,6 +30,11 @@ go tool github.com/swaggo/swag/v2/cmd/swag init --v3.1 --quiet \
   --parseInternal --parseDependencyLevel 1 \
   --instanceName public --outputTypes json -o "$tmp_dir"
 
+# swag v2 cannot tell which members a response always carries; requiredgen
+# declares as required every member its Go struct writes without omitempty
+# (see its doc comment). The step below rewrites the file in its final form.
+go run ./internal/publicapi/openapi/requiredgen "$tmp_dir/public_swagger.json"
+
 # swag v2 always writes "externalDocs": {"description": "", "url": ""} when no
 # @externalDocs is declared. OpenAPI 3.1 requires externalDocs.url to be a
 # URI, so that empty object makes the document invalid; it is dropped here.
