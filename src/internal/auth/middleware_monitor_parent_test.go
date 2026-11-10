@@ -26,6 +26,7 @@ import (
 	"skein-api/internal/mcp/tools"
 	"skein-api/internal/monitorcreds"
 	"skein-api/internal/notifications"
+	"skein-api/internal/projects"
 	"skein-api/internal/testsupport"
 )
 
@@ -212,5 +213,62 @@ func TestGetMonitorScript_OutsideTheKeyScopeIsNonexistent(t *testing.T) {
 	}
 	if okErr, _ := code(f.issue); okErr {
 		t.Errorf("mint for the issue inside the scope refused — the comparison above proves nothing")
+	}
+}
+
+// TestMonitorStop_OutsideTheKeyScopeIsNonexistent — review finding C3-03
+// (US-3 "write acceptance"): a key with scope "project P" cannot stop the
+// monitor of an issue outside P; the answer is that of a monitor that does
+// not exist, and the monitor stays live.
+func TestMonitorStop_OutsideTheKeyScopeIsNonexistent(t *testing.T) {
+	f := newParentFixture(t)
+	outside := testsupport.SeedIssue(t, f.pool, f.other, f.user, f.oPrefix+"-1", "outside the scope", "open", 2)
+	_, cred, err := f.store.Mint(context.Background(), monitorcreds.MintParams{
+		UserID: f.user, MintedByAPIKeyID: f.key, Audience: parentTestAudience, Capability: "read",
+		ProjectID: f.other, ScopeIssueID: outside, ScopeSubtree: true, EventTypes: []string{"comment.created"},
+	})
+	if err != nil {
+		t.Fatalf("Mint: %v", err)
+	}
+	s := server.NewMCPServer("monitor-stop-scope", "1", server.WithToolCapabilities(true))
+	tools.RegisterWatchers(s, f.pool, projects.NewStore(f.pool), notifications.NewStore(f.pool), f.store)
+	ctx := auth.WithUserID(context.Background(), f.user)
+	ctx = auth.WithUserRole(ctx, "user")
+	ctx = auth.WithSessionID(ctx, "monitor-stop-scope")
+	ctx = auth.WithAPIKeyID(ctx, uuid.New())
+	ctx = auth.WithKeyGrant(ctx, apikeys.Grant{Level: apikeys.LevelManage,
+		Scope: apikeys.Scope{Mode: apikeys.ScopeProjects, Projects: []uuid.UUID{f.project}}})
+	stop := func(id string) (bool, string) {
+		t.Helper()
+		msg, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+			"params": map[string]any{"name": "skein_watchers", "arguments": map[string]any{"action": "monitor_stop", "monitorId": id}}})
+		raw, _ := json.Marshal(s.HandleMessage(ctx, msg))
+		var r struct {
+			Result struct {
+				Content []struct {
+					Text string `json:"text"`
+				} `json:"content"`
+				IsError bool `json:"isError"`
+			} `json:"result"`
+		}
+		if err := json.Unmarshal(raw, &r); err != nil || len(r.Result.Content) == 0 {
+			t.Fatalf("decode %s: %v", raw, err)
+		}
+		var body map[string]any
+		_ = json.Unmarshal([]byte(r.Result.Content[0].Text), &body)
+		c, _ := body["error"].(string)
+		return r.Result.IsError, c
+	}
+	isErr, got := stop(cred.ID.String())
+	_, want := stop(uuid.NewString())
+	if !isErr || got != want || got != "monitor_not_found" {
+		t.Errorf("monitor_stop of a monitor outside the scope = isError %v %q, want monitor_not_found like a nonexistent one (%q)", isErr, got, want)
+	}
+	var revoked bool
+	if err := f.pool.QueryRow(context.Background(), `SELECT revoked_at IS NOT NULL FROM monitor_credentials WHERE id = $1`, cred.ID).Scan(&revoked); err != nil {
+		t.Fatal(err)
+	}
+	if revoked {
+		t.Errorf("a key with scope P revoked the monitor of an issue outside it")
 	}
 }

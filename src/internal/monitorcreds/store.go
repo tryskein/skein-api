@@ -265,13 +265,26 @@ SELECT ak.revoked_at IS NULL
 // transaction on the pool; do not call it inside an outer pgx.Tx that may
 // already have revoked the same row — a repeat there would read as fresh.
 func (s *Store) RevokeOwned(ctx context.Context, id, userID uuid.UUID) (bool, error) {
+	return s.RevokeOwnedWithin(ctx, id, userID, authzsql.KeyLimit{})
+}
+
+// RevokeOwnedWithin is RevokeOwned for a caller limited to a key's scope
+// (sk-878.3.1 US-3, INV-2): a monitor whose issue — its current project, or
+// the credential's project when the issue is gone — lies outside the scope
+// is not the caller's to stop and answers ErrNotFound, exactly as a monitor
+// that does not exist; it stays unrevoked. The zero KeyLimit narrows nothing.
+func (s *Store) RevokeOwnedWithin(ctx context.Context, id, userID uuid.UUID, key authzsql.KeyLimit) (bool, error) {
+	args := []any{id, userID}
+	inScope := key.Expr("COALESCE((SELECT i.project_id FROM issues i WHERE i.id = mc.scope_issue_id), mc.project_id)",
+		authzsql.Placeholders(&args))
 	var revokedNow bool
 	err := s.pool.QueryRow(ctx, `
-UPDATE monitor_credentials
-   SET revoked_at = COALESCE(revoked_at, now())
- WHERE id = $1
-   AND user_id = $2
-RETURNING revoked_at = now()`, id, userID).Scan(&revokedNow)
+UPDATE monitor_credentials mc
+   SET revoked_at = COALESCE(mc.revoked_at, now())
+ WHERE mc.id = $1
+   AND mc.user_id = $2
+   AND `+inScope+`
+RETURNING mc.revoked_at = now()`, args...).Scan(&revokedNow)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return false, ErrNotFound

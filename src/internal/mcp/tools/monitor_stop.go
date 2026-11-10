@@ -13,6 +13,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 
+	"skein-api/internal/authz"
 	skmcp "skein-api/internal/mcp"
 	"skein-api/internal/monitorcreds"
 )
@@ -62,7 +63,7 @@ func handleMonitorStop(monitorStore *monitorcreds.Store) server.ToolHandlerFunc 
 			return skmcp.ToolError(ErrCodeValidationError, "monitorId must be a UUID",
 				map[string]any{"monitorId": rawID}), nil
 		}
-		revoked, err := monitorStore.RevokeOwned(ctx, monitorID, userID)
+		revoked, err := monitorStore.RevokeOwnedWithin(ctx, monitorID, userID, authz.ScopeFor(ctx, userID).KeyLimit())
 		if err != nil {
 			if errors.Is(err, monitorcreds.ErrNotFound) {
 				// No id in the envelope: it must be identical for a foreign
