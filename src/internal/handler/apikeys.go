@@ -387,7 +387,7 @@ func (h *APIKeysHandler) List(w http.ResponseWriter, r *http.Request) {
 // @Summary Narrow an API key of the caller
 // @Description Replaces the grant of one of the caller's keys with a narrower one, in place: the level no higher, admin not added, the scope a subset of the current one, the expiry no later (and in the future). Widening is possible only with a new key.
 // @Description
-// @Description Algorithm: decode the body (permissions and scope required; expiresAt omitted keeps the current expiry), check the grant rules as on create, then narrow under a row lock. While the key has admin its scope stays all. A refused change leaves the key unchanged.
+// @Description Algorithm: decode the body (permissions and scope required; expiresAt omitted keeps the current expiry), check that the caller reaches every project and space of the new scope (a hidden member answers the same as a missing one: 422 invalid_grant scope_unavailable), check the grant rules as on create, then narrow under a row lock. While the key has admin its scope stays all. A refused change leaves the key unchanged.
 // @Description
 // @Description Side effects: the key's grant and scope rows change; requests with the key see the new grant from the next request on.
 // @Tags Me
@@ -445,6 +445,12 @@ func (h *APIKeysHandler) Narrow(w http.ResponseWriter, r *http.Request) {
 	next.ExpiresAt = req.ExpiresAt
 	if next.ExpiresAt == nil {
 		next.ExpiresAt = cur.Grant.ExpiresAt
+	}
+	// The new scope must be one the owner reaches now, as on create: a
+	// narrowing never tells a hidden project from a missing one.
+	role, _ := auth.UserRoleFrom(ctx)
+	if !h.checkScopeForOwner(w, r, userID, role == "admin" && !auth.IsExternalFrom(ctx), next.Scope) {
+		return
 	}
 
 	err = h.store.Narrow(ctx, userID, id, next)
@@ -677,7 +683,15 @@ func (h *APIKeysHandler) checkGrantForOwner(w http.ResponseWriter, r *http.Reque
 		writeInvalidGrant(w, grantRuleAdminUnavailable, "only an instance admin can give a key the admin permission")
 		return false
 	}
-	reachable, err := h.scopeReachable(ctx, userID, ownerAdmin, g.Scope)
+	return h.checkScopeForOwner(w, r, userID, ownerAdmin, g.Scope)
+}
+
+// checkScopeForOwner answers 422 invalid_grant / scope_unavailable unless the
+// owner reaches every member of sc — on create and on narrowing alike, so a
+// member out of reach answers the same as a missing one.
+func (h *APIKeysHandler) checkScopeForOwner(w http.ResponseWriter, r *http.Request, userID uuid.UUID, ownerAdmin bool, sc apikeys.Scope) bool {
+	ctx := r.Context()
+	reachable, err := h.scopeReachable(ctx, userID, ownerAdmin, sc)
 	if err != nil {
 		slog.ErrorContext(ctx, "failed to check api key scope", "userId", userID.String(), "error", err.Error())
 		writeProblem(w, http.StatusInternalServerError, "internal_error", "failed to check scope", nil)

@@ -21,6 +21,9 @@ package handler
 //     revoked); a repeat, another user's key and an unknown id are 404, and
 //     no other key changes.
 //
+// A narrowing to a project the owner does not see answers the same as one to
+// a missing project, and leaves the key unchanged (review C2-01).
+//
 // The handler is mounted on the same paths as in buildRouter, behind a stand-in
 // for the BFF identity middleware; that the routes exist only behind the BFF
 // identity is row 16 (cmd/api/apikeys_routes_test.go).
@@ -262,6 +265,26 @@ func TestAPIKeysCabinet_NarrowReissueAndOwnerDemotion(t *testing.T) {
 		}
 		if after := c.row(k.ID); *after.Permissions.Level != *before.Permissions.Level || !after.ExpiresAt.Equal(*before.ExpiresAt) || after.Scope.Mode != before.Scope.Mode {
 			t.Errorf("after a refused widening %+v, want unchanged %+v", after, before)
+		}
+	})
+
+	t.Run("PATCH to a hidden or missing project is one refusal and changes nothing", func(t *testing.T) {
+		stranger, _ := testsupport.SeedUser(t, pool, "user")
+		hidden, _ := testsupport.SeedProject(t, pool, stranger, "akh")
+		k := c.create(keyBody("narrow hidden", "write", false, scopeAll, expires))
+		before := c.row(k.ID)
+		for name, project := range map[string]string{"hidden project": hidden.String(), "missing project": uuid.NewString()} {
+			code, raw := c.do(http.MethodPatch, "/"+k.ID, map[string]any{
+				"permissions": map[string]any{"level": "write", "admin": false},
+				"scope":       map[string]any{"mode": "projects", "projects": []string{project}},
+			})
+			errCode, details := problemCode(t, raw)
+			if code != http.StatusUnprocessableEntity || errCode != "invalid_grant" || details["rule"] != "scope_unavailable" {
+				t.Errorf("%s: %d %s, want 422 invalid_grant scope_unavailable", name, code, raw)
+			}
+		}
+		if after := c.row(k.ID); after.Scope.Mode != before.Scope.Mode || len(after.Scope.Projects) != 0 {
+			t.Errorf("after refused narrowing scope %+v, want unchanged %+v", after.Scope, before.Scope)
 		}
 	})
 
