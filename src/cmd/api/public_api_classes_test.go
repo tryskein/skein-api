@@ -14,6 +14,8 @@ package main
 // routes.go both ways (a wrong flag must not become a wrong reference), and
 // every class is asked of every operation in it. The literal grows with the
 // tasks that add operations (T022 creates it, T023–T028 add their slices).
+// Object storage is the no-op routingS3: the classes are about the
+// operations, not about S3.
 //
 // The server is the product one: publicAPIServer over config.Load, the real
 // request chain in front of the product route table.
@@ -32,14 +34,17 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"skein-api/internal/apikeys"
+	"skein-api/internal/attachments"
 	"skein-api/internal/auth"
 	"skein-api/internal/config"
 	"skein-api/internal/dependencies"
+	"skein-api/internal/issueops"
 	"skein-api/internal/issues"
 	"skein-api/internal/projects"
 	"skein-api/internal/publicapi"
@@ -119,6 +124,21 @@ var publicOps = []publicOp{
 	{id: "bulkUpdateIssues", method: http.MethodPost, path: "issues/bulk-update", right: "write", body: true},
 	{id: "bulkCloseIssues", method: http.MethodPost, path: "issues/bulk-close", right: "write", body: true},
 	{id: "bulkAddDependencies", method: http.MethodPost, path: "issues/dependencies/bulk-add", right: "write", body: true},
+
+	// T026 (row 126).
+	{id: "createComment", method: http.MethodPost, path: "issues/{issue}/comments", right: "write", prefer: true, idempotent: true, body: true},
+	{id: "getComment", method: http.MethodGet, path: "comments/{comment}", right: "read", read: true, field: "body"},
+	{id: "updateComment", method: http.MethodPatch, path: "comments/{comment}", right: "write", prefer: true, ifMatch: "required", body: true},
+	{id: "deleteComment", method: http.MethodDelete, path: "comments/{comment}", right: "write", body: true},
+	{id: "addDependency", method: http.MethodPost, path: "issues/{issue}/dependencies", right: "write", body: true},
+	{id: "removeDependency", method: http.MethodDelete, path: "issues/{issue}/dependencies/{toIssue}/{type}", right: "write", body: true},
+	{id: "listAttachments", method: http.MethodGet, path: "issues/{issue}/attachments", right: "read", read: true, field: "filename"},
+	// An upload records no event until it is confirmed.
+	{id: "createAttachmentUpload", method: http.MethodPost, path: "issues/{issue}/attachments", right: "write", body: true, noEvent: true},
+	{id: "confirmAttachment", method: http.MethodPost, path: "attachments/{attachment}/confirm", right: "write", body: true},
+	{id: "getAttachment", method: http.MethodGet, path: "attachments/{attachment}", right: "read", read: true, field: "filename"},
+	{id: "getAttachmentDownloadUrl", method: http.MethodGet, path: "attachments/{attachment}/download-url", right: "read", read: true, field: "url"},
+	{id: "deleteAttachment", method: http.MethodDelete, path: "attachments/{attachment}", right: "write", body: true},
 }
 
 // TestPublicAPIClasses_LiteralIsRoutesGo — rows 100 and 101, the literal
@@ -192,6 +212,8 @@ type classWorld struct {
 	word                 string
 	// repoURL is the repository of p, for the commit writes.
 	repoURL string
+	// attachment is a ready attachment of issue.
+	attachment string
 }
 
 // newClassWorld seeds the world and builds the product public server from
@@ -246,6 +268,7 @@ VALUES ($1, $2, 'blocks', '{}'::jsonb, 1, $3, now())`, w.issue, w.ready, w.owner
 VALUES ($1, $2, 'owner', $3, 'human', 'human', 'a note', now(), now())`, uuid.New(), w.issue, w.owner)
 	w.exec(`INSERT INTO events (type, actor, actor_user_id, actor_type, entity_type, entity_id, project_id)
 VALUES ('issue.created', 'owner', $1, 'human', 'issue', $2, $3)`, w.owner, w.issue, w.p)
+	w.attachment = w.seedAttachment(w.issue, "ready")
 	t.Cleanup(func() {
 		ctx := context.Background()
 		_, _ = pool.Exec(ctx, `DELETE FROM comments WHERE issue_id = ANY($1)`, []string{w.issue, w.ready, w.qIssue})
@@ -273,7 +296,28 @@ func classDeps(pool *pgxpool.Pool) publicapi.Deps {
 		Issues:       issues.NewStore(pool),
 		Dependencies: dependencies.NewStore(pool),
 		Search:       searchSvc,
+		Attachments: issueops.AttachmentDeps{Store: attachments.NewStore(pool), S3: routingS3{}, Bucket: "classes",
+			MaxSize: 10 << 20, URLTTL: 10 * time.Minute},
 	}
+}
+
+// seedAttachment inserts an attachment of issue uploaded by the owner, in
+// status pending or ready, and returns its id.
+func (w *classWorld) seedAttachment(issue, status string) string {
+	w.t.Helper()
+	id := uuid.New()
+	w.exec(`INSERT INTO attachments (id, issue_id, filename, content_type, size_bytes, s3_bucket, s3_key, status, uploaded_by)
+VALUES ($1, $2, 'note.txt', 'text/plain', 12, 'classes', $3, $4, $5)`, id, issue, "classes/"+id.String(), status, w.owner)
+	return id.String()
+}
+
+// seedComment inserts a comment of the owner on issue and returns its id.
+func (w *classWorld) seedComment(issue string) string {
+	w.t.Helper()
+	id := uuid.New()
+	w.exec(`INSERT INTO comments (id, issue_id, author, author_user_id, author_type, author_kind, body, created_at, updated_at)
+VALUES ($1, $2, 'owner', $3, 'human', 'human', 'a seeded note', now(), now())`, id, issue, w.owner)
+	return id.String()
 }
 
 func (w *classWorld) exec(sql string, args ...any) {
@@ -457,6 +501,34 @@ func (w *classWorld) call(op publicOp, p uuid.UUID, key string) opCall {
 	case "bulkAddDependencies":
 		return opCall{http.MethodPost, base + "issues/dependencies/bulk-add", map[string]any{"items": []map[string]any{
 			{"fromId": id, "toId": w.freshIssue(p), "type": "related"}}}, nil}
+	case "createComment":
+		return opCall{http.MethodPost, issue + "/comments", map[string]any{"body": w.fresh("comment")}, nil}
+	case "getComment":
+		return opCall{http.MethodGet, base + "comments/" + w.seedComment(id), nil, nil}
+	case "updateComment":
+		return opCall{http.MethodPatch, base + "comments/" + w.seedComment(id), map[string]any{"body": w.fresh("edit")},
+			map[string]string{"If-Match": `"1"`}}
+	case "deleteComment":
+		return opCall{http.MethodDelete, base + "comments/" + w.seedComment(id), nil, nil}
+	case "addDependency":
+		return opCall{http.MethodPost, issue + "/dependencies", map[string]any{"toId": w.freshIssue(p), "type": "related"}, nil}
+	case "removeDependency":
+		to := w.freshIssue(p)
+		w.exec(`INSERT INTO dependencies (from_id, to_id, type, metadata, version, created_by, created_at)
+VALUES ($1, $2, 'related', '{}'::jsonb, 1, $3, now())`, id, to, w.owner)
+		return opCall{http.MethodDelete, issue + "/dependencies/" + to + "/related", nil, nil}
+	case "listAttachments":
+		return opCall{http.MethodGet, base + "issues/" + w.issue + "/attachments", nil, nil}
+	case "createAttachmentUpload":
+		return opCall{http.MethodPost, issue + "/attachments", map[string]any{"filename": "note.txt", "contentType": "text/plain", "sizeBytes": 12}, nil}
+	case "confirmAttachment":
+		return opCall{http.MethodPost, base + "attachments/" + w.seedAttachment(id, "pending") + "/confirm", nil, nil}
+	case "getAttachment":
+		return opCall{http.MethodGet, base + "attachments/" + w.attachment, nil, nil}
+	case "getAttachmentDownloadUrl":
+		return opCall{http.MethodGet, base + "attachments/" + w.attachment + "/download-url", nil, nil}
+	case "deleteAttachment":
+		return opCall{http.MethodDelete, base + "attachments/" + w.seedAttachment(id, "ready"), nil, nil}
 	case "detachCommit":
 		hash := w.freshHash()
 		w.do(key, opCall{http.MethodPost, issue + "/commits", map[string]any{"commits": []map[string]any{{"hash": hash, "repoUrl": w.repoURL}}}, nil}, "", nil)

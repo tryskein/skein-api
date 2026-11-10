@@ -1,6 +1,94 @@
 {
     "components": {
         "schemas": {
+            "attachments.Attachment": {
+                "properties": {
+                    "commentId": {
+                        "description": "CommentID is set only when the attachment is scoped to a comment.\nJSON omits the field when nil so issue-level callers don't see it.",
+                        "type": "string"
+                    },
+                    "contentType": {
+                        "description": "ContentType is the MIME type the browser declared at upload time.\nRe-validated against the deny-list before issuing the presigned URL.",
+                        "type": "string"
+                    },
+                    "filename": {
+                        "description": "Filename is the user-supplied original name (kept verbatim — used\nin the Content-Disposition header on download).",
+                        "type": "string"
+                    },
+                    "id": {
+                        "description": "ID is the attachment's own UUID (uuid.NewV7). Not the S3 key.",
+                        "type": "string"
+                    },
+                    "issueId": {
+                        "description": "IssueID is the parent issue (always present).",
+                        "type": "string"
+                    },
+                    "sizeBytes": {
+                        "description": "SizeBytes is the file size in bytes (capped by config — see\nConfig.MaxSizeBytes).",
+                        "type": "integer"
+                    },
+                    "status": {
+                        "description": "Status is one of: pending | ready (closed set).",
+                        "type": "string"
+                    },
+                    "uploadedAt": {
+                        "description": "UploadedAt is the row creation timestamp (UTC).",
+                        "type": "string"
+                    },
+                    "uploadedBy": {
+                        "description": "UploadedBy is the user UUID (FK users.id, RESTRICT).",
+                        "type": "string"
+                    },
+                    "uploadedByUsername": {
+                        "description": "UploadedByUsername is the joined display name (best-effort —\nnil if the user row was deleted or absent).",
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
+            "attachments.DownloadURLResponse": {
+                "properties": {
+                    "expiresAt": {
+                        "type": "string"
+                    },
+                    "url": {
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
+            "attachments.UploadURLResponse": {
+                "properties": {
+                    "attachmentId": {
+                        "description": "AttachmentID is the row's UUID — pass it back to the confirm\nendpoint after a successful upload.",
+                        "type": "string"
+                    },
+                    "expiresAt": {
+                        "description": "ExpiresAt is the absolute time the presigned URL stops working.\nThe browser should restart from upload-url if it fires later.",
+                        "type": "string"
+                    },
+                    "fields": {
+                        "additionalProperties": {
+                            "type": "string"
+                        },
+                        "description": "Fields is the form-data fields (key, policy, signature, etc.) the\nbrowser must include in its multipart POST. Order does not matter.",
+                        "type": "object"
+                    },
+                    "maxSizeBytes": {
+                        "description": "MaxSizeBytes is the API-configured cap (informational — already\nbaked into the policy). UIs use it to decide whether to even\nattempt the upload.",
+                        "type": "integer"
+                    },
+                    "sizeBytes": {
+                        "description": "SizeBytes echoes the request value so the client doesn't have to\nremember it for the confirm step.",
+                        "type": "integer"
+                    },
+                    "url": {
+                        "description": "URL is the absolute S3 endpoint the browser should POST to\n(rendered with S3_PUBLIC_URL when set).",
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
             "dependencies.IssueRef": {
                 "properties": {
                     "id": {
@@ -1176,6 +1264,19 @@
                 },
                 "type": "object"
             },
+            "publicapi.AttachmentDeleted": {
+                "properties": {
+                    "deleted": {
+                        "description": "Deleted is always true.",
+                        "type": "boolean"
+                    },
+                    "id": {
+                        "description": "ID of the attachment.",
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
             "publicapi.ClaimedIssues": {
                 "properties": {
                     "items": {
@@ -1185,6 +1286,23 @@
                         },
                         "type": "array",
                         "uniqueItems": false
+                    }
+                },
+                "type": "object"
+            },
+            "publicapi.CommentDeleted": {
+                "properties": {
+                    "deleted": {
+                        "description": "Deleted is always true: the comment is a tombstone now.",
+                        "type": "boolean"
+                    },
+                    "id": {
+                        "description": "ID of the comment.",
+                        "type": "string"
+                    },
+                    "issueId": {
+                        "description": "IssueID is the issue the comment belongs to.",
+                        "type": "string"
                     }
                 },
                 "type": "object"
@@ -1221,6 +1339,25 @@
                     },
                     "version": {
                         "type": "integer"
+                    }
+                },
+                "type": "object"
+            },
+            "publicapi.DependencyRemoved": {
+                "properties": {
+                    "fromId": {
+                        "description": "FromID, ToID and Type name the edge that was removed.",
+                        "type": "string"
+                    },
+                    "removed": {
+                        "description": "Removed is always true.",
+                        "type": "boolean"
+                    },
+                    "toId": {
+                        "type": "string"
+                    },
+                    "type": {
+                        "type": "string"
                     }
                 },
                 "type": "object"
@@ -1496,6 +1633,24 @@
                     },
                     "version": {
                         "type": "integer"
+                    }
+                },
+                "type": "object"
+            },
+            "publicapi.List-attachments_Attachment": {
+                "properties": {
+                    "hasMore": {
+                        "type": "boolean"
+                    },
+                    "items": {
+                        "items": {
+                            "$ref": "#/components/schemas/attachments.Attachment"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
+                    },
+                    "nextCursor": {
+                        "type": "string"
                     }
                 },
                 "type": "object"
@@ -1824,6 +1979,27 @@
                 },
                 "type": "object"
             },
+            "publicapi.addDependencyBody": {
+                "properties": {
+                    "gate": {
+                        "description": "Gate qualifies a waits-for edge.",
+                        "type": "string"
+                    },
+                    "kind": {
+                        "description": "Kind of the write: directed or autonomous; omitted — the origin is\napi.",
+                        "type": "string"
+                    },
+                    "toId": {
+                        "description": "ToID is the hierarchical id of the issue the issue of the path\ndepends on. Required.",
+                        "type": "string"
+                    },
+                    "type": {
+                        "description": "Type: blocks, waits-for, related, discovered-from, supersedes,\nduplicates or parent-child. Required.",
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
             "publicapi.attachBody": {
                 "properties": {
                     "commits": {
@@ -1837,6 +2013,31 @@
                     "kind": {
                         "description": "Kind of the write: directed or autonomous (checked).",
                         "type": "string"
+                    }
+                },
+                "type": "object"
+            },
+            "publicapi.attachmentUploadBody": {
+                "properties": {
+                    "commentId": {
+                        "description": "CommentID scopes the attachment to a comment of the issue.",
+                        "type": "string"
+                    },
+                    "contentType": {
+                        "description": "ContentType, the MIME type of the file; re-checked when the upload is\nconfirmed. Required.",
+                        "type": "string"
+                    },
+                    "filename": {
+                        "description": "Filename, kept as Content-Disposition on download. Required.",
+                        "type": "string"
+                    },
+                    "kind": {
+                        "description": "Kind of the write: directed or autonomous (checked).",
+                        "type": "string"
+                    },
+                    "sizeBytes": {
+                        "description": "SizeBytes, the exact size of the file: the upload policy binds it.\nRequired, 1..the instance limit.",
+                        "type": "integer"
                     }
                 },
                 "type": "object"
@@ -2167,6 +2368,19 @@
                 },
                 "type": "object"
             },
+            "publicapi.commentBody": {
+                "properties": {
+                    "body": {
+                        "description": "Body, markdown, 1..100000 characters after trimming. Required.",
+                        "type": "string"
+                    },
+                    "kind": {
+                        "description": "Kind of the write: directed or autonomous; omitted — the author kind\nof a new comment is api. An edit keeps the comment's author kind.",
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
             "publicapi.commitInput": {
                 "properties": {
                     "author": {
@@ -2439,6 +2653,19 @@
                     },
                     "visibility": {
                         "description": "Visibility: space (every member of the space sees the project) or\nmembers (only its members and the space owner). Omitted: the\ninstallation's default; always members in a personal space.",
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
+            "publicapi.deleteCommentBody": {
+                "properties": {
+                    "kind": {
+                        "description": "Kind of the write: directed or autonomous.",
+                        "type": "string"
+                    },
+                    "reason": {
+                        "description": "Reason, free text recorded on the comment.deleted event.",
                         "type": "string"
                     }
                 },
@@ -2962,6 +3189,1000 @@
         "version": "1"
     },
     "paths": {
+        "/api/v1/attachments/{attachment}": {
+            "delete": {
+                "description": "Hard-deletes the attachment of the path — the same operation as the MCP tool skein_attachments, action delete — and removes its file from storage on a best-effort basis (a file left behind is removed by the cleanup worker). The owner of the key must be able to write in the issue's project; an attachment of a project out of reach answers as a missing one. It works with storage unavailable.\n\nSide effects: attachment.removed; notifications of the watchers; the space's storage is released.",
+                "operationId": "deleteAttachment",
+                "parameters": [
+                    {
+                        "description": "The attachment's UUID",
+                        "in": "path",
+                        "name": "attachment",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/publicapi.kindBody",
+                                "summary": "body",
+                                "description": "Options"
+                            }
+                        }
+                    },
+                    "description": "Options"
+                },
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.AttachmentDeleted"
+                                }
+                            }
+                        },
+                        "description": "The attachment deleted"
+                    },
+                    "400": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Malformed body, unknown field or parameter, a kind outside directed|autonomous (code validation_error)"
+                    },
+                    "401": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "No key, or the key is invalid, expired or revoked (code unauthenticated)"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The key lacks write (code insufficient_scope); the owner may not write in the project (code forbidden)"
+                    },
+                    "404": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "No such attachment within reach (code attachment_not_found)"
+                    },
+                    "413": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Body over 1 MiB (code payload_too_large)"
+                    },
+                    "415": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Body is not application/json (code unsupported_media_type)"
+                    },
+                    "429": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Rate limited (code rate_limited, Retry-After)"
+                    },
+                    "500": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Internal error (code internal_error)"
+                    },
+                    "503": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The database is unavailable (code database_unavailable)"
+                    }
+                },
+                "security": [
+                    {
+                        "SkeinApiKey": [
+                            "write"
+                        ]
+                    }
+                ],
+                "summary": "Delete an attachment",
+                "tags": [
+                    "Attachments"
+                ]
+            },
+            "get": {
+                "description": "Returns the metadata of the attachment of the path — the same operation as the MCP tool skein_attachments, action metadata: filename, content type, size, status, the uploader. An attachment of a project out of reach answers as a missing one. Read-only.",
+                "operationId": "getAttachment",
+                "parameters": [
+                    {
+                        "description": "The attachment's UUID",
+                        "in": "path",
+                        "name": "attachment",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "Comma-separated fields to return (plus id)",
+                        "in": "query",
+                        "name": "fields",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/attachments.Attachment"
+                                }
+                            }
+                        },
+                        "description": "The attachment"
+                    },
+                    "400": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Unknown parameter or field (code validation_error)"
+                    },
+                    "401": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "No key, or the key is invalid, expired or revoked (code unauthenticated)"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The key lacks the read right (code insufficient_scope)"
+                    },
+                    "404": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "No such attachment within reach (code attachment_not_found)"
+                    },
+                    "429": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Rate limited (code rate_limited, Retry-After)"
+                    },
+                    "500": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Internal error (code internal_error)"
+                    },
+                    "503": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The database is unavailable (code database_unavailable)"
+                    }
+                },
+                "security": [
+                    {
+                        "SkeinApiKey": [
+                            "read"
+                        ]
+                    }
+                ],
+                "summary": "Get an attachment",
+                "tags": [
+                    "Attachments"
+                ]
+            }
+        },
+        "/api/v1/attachments/{attachment}/confirm": {
+            "post": {
+                "description": "Marks the attachment of the path ready once its file is in storage — the same operation as the MCP tool skein_attachments, action confirm: only the uploader confirms (anyone else gets 404, as for a missing attachment); the file must have landed (422 attachment_object_missing otherwise); its size is charged to the space's storage (422 storage_quota over the quota). Confirming a ready attachment succeeds again without a new event.\n\nSide effects: attachment.added; notifications of the watchers.",
+                "operationId": "confirmAttachment",
+                "parameters": [
+                    {
+                        "description": "The attachment's UUID",
+                        "in": "path",
+                        "name": "attachment",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/publicapi.kindBody",
+                                "summary": "body",
+                                "description": "Options"
+                            }
+                        }
+                    },
+                    "description": "Options"
+                },
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/attachments.Attachment"
+                                }
+                            }
+                        },
+                        "description": "The attachment, ready"
+                    },
+                    "400": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Malformed body, unknown field or parameter, a kind outside directed|autonomous (code validation_error)"
+                    },
+                    "401": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "No key, or the key is invalid, expired or revoked (code unauthenticated)"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The key lacks write (code insufficient_scope); the owner may not write in the project (code forbidden)"
+                    },
+                    "404": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "No such attachment within reach (code attachment_not_found)"
+                    },
+                    "413": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Body over 1 MiB (code payload_too_large)"
+                    },
+                    "415": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Body is not application/json (code unsupported_media_type)"
+                    },
+                    "422": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The file is not in storage (code attachment_object_missing); the space's storage is used up (storage_quota)"
+                    },
+                    "429": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Rate limited (code rate_limited, Retry-After)"
+                    },
+                    "500": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Internal error (code internal_error)"
+                    },
+                    "503": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Storage is not configured or unavailable (code attachments_unavailable, retryable); the database is unavailable (code database_unavailable)"
+                    }
+                },
+                "security": [
+                    {
+                        "SkeinApiKey": [
+                            "write"
+                        ]
+                    }
+                ],
+                "summary": "Confirm an attachment upload",
+                "tags": [
+                    "Attachments"
+                ]
+            }
+        },
+        "/api/v1/attachments/{attachment}/download-url": {
+            "get": {
+                "description": "Mints a presigned download URL of the ready attachment of the path — the same operation as the MCP tool skein_attachments, action get_url. The URL works until expiresAt, also after the key is revoked or narrowed. A pending attachment is 422 attachment_not_ready. Read-only: nothing is written.",
+                "operationId": "getAttachmentDownloadUrl",
+                "parameters": [
+                    {
+                        "description": "The attachment's UUID",
+                        "in": "path",
+                        "name": "attachment",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "Comma-separated fields to return",
+                        "in": "query",
+                        "name": "fields",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/attachments.DownloadURLResponse"
+                                }
+                            }
+                        },
+                        "description": "The download URL"
+                    },
+                    "400": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Unknown parameter or field (code validation_error)"
+                    },
+                    "401": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "No key, or the key is invalid, expired or revoked (code unauthenticated)"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The key lacks the read right (code insufficient_scope)"
+                    },
+                    "404": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "No such attachment within reach (code attachment_not_found)"
+                    },
+                    "422": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The upload is not confirmed yet (code attachment_not_ready)"
+                    },
+                    "429": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Rate limited (code rate_limited, Retry-After)"
+                    },
+                    "500": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Internal error (code internal_error)"
+                    },
+                    "503": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Storage is not configured or unavailable (code attachments_unavailable, retryable); the database is unavailable (code database_unavailable)"
+                    }
+                },
+                "security": [
+                    {
+                        "SkeinApiKey": [
+                            "read"
+                        ]
+                    }
+                ],
+                "summary": "Get the download URL of an attachment",
+                "tags": [
+                    "Attachments"
+                ]
+            }
+        },
+        "/api/v1/comments/{comment}": {
+            "delete": {
+                "description": "Soft-deletes the comment of the path — the same operation as the MCP tool skein_comment_delete: the row stays in the thread as a tombstone with its body blanked on read. The author deletes his own comment with write; another's needs the owner's role delete_any_comment on the project (the project owner, the space owner, the instance admin), else 403 forbidden. Deleting a deleted comment succeeds again without a change. A comment of a project out of reach answers as a missing one, before authorship is looked at.\n\nSide effects: comment.deleted with the reason.",
+                "operationId": "deleteComment",
+                "parameters": [
+                    {
+                        "description": "The comment's UUID",
+                        "in": "path",
+                        "name": "comment",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/publicapi.deleteCommentBody",
+                                "summary": "body",
+                                "description": "Options"
+                            }
+                        }
+                    },
+                    "description": "Options"
+                },
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.CommentDeleted"
+                                }
+                            }
+                        },
+                        "description": "The comment is a tombstone"
+                    },
+                    "400": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Malformed body, unknown field or parameter, a kind outside directed|autonomous (code validation_error)"
+                    },
+                    "401": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "No key, or the key is invalid, expired or revoked (code unauthenticated)"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The key lacks write (code insufficient_scope); the owner is not the author and lacks delete_any_comment, or may not write in the project (code forbidden)"
+                    },
+                    "404": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "No such comment within reach (code issue_not_found, as MCP)"
+                    },
+                    "413": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Body over 1 MiB (code payload_too_large)"
+                    },
+                    "415": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Body is not application/json (code unsupported_media_type)"
+                    },
+                    "422": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "A serialization race, nothing written (code serialization_retry, retryable)"
+                    },
+                    "429": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Rate limited (code rate_limited, Retry-After)"
+                    },
+                    "500": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Internal error (code internal_error)"
+                    },
+                    "503": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The database is unavailable (code database_unavailable)"
+                    }
+                },
+                "security": [
+                    {
+                        "SkeinApiKey": [
+                            "write"
+                        ]
+                    }
+                ],
+                "summary": "Delete a comment",
+                "tags": [
+                    "Comments"
+                ]
+            },
+            "get": {
+                "description": "Returns one comment — the same operation as the MCP tool skein_comment_get: its body, author, author kind, version, mentions and edit and delete times. A deleted comment answers as its tombstone: deletedAt set, the body empty. A comment of a project out of reach answers as a missing one. ETag is the comment's version, the value updateComment takes in If-Match. Read-only.",
+                "operationId": "getComment",
+                "parameters": [
+                    {
+                        "description": "The comment's UUID",
+                        "in": "path",
+                        "name": "comment",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "Comma-separated fields to return (plus id)",
+                        "in": "query",
+                        "name": "fields",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/issues.CommentDTO"
+                                }
+                            }
+                        },
+                        "description": "The comment"
+                    },
+                    "400": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Unknown parameter or field (code validation_error)"
+                    },
+                    "401": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "No key, or the key is invalid, expired or revoked (code unauthenticated)"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The key lacks the read right (code insufficient_scope)"
+                    },
+                    "404": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "No such comment within reach (code comment_not_found)"
+                    },
+                    "429": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Rate limited (code rate_limited, Retry-After)"
+                    },
+                    "500": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Internal error (code internal_error)"
+                    },
+                    "503": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The database is unavailable (code database_unavailable)"
+                    }
+                },
+                "security": [
+                    {
+                        "SkeinApiKey": [
+                            "read"
+                        ]
+                    }
+                ],
+                "summary": "Get a comment",
+                "tags": [
+                    "Comments"
+                ]
+            },
+            "patch": {
+                "description": "Replaces the body of the comment of the path — the same operation as the MCP tool skein_comment_update. Only the author edits a comment; another user, an owner or an admin included, gets 403 forbidden. If-Match is required: the version of the comment (its ETag); a stale one answers 412 version_conflict with the current version and nothing is written. A deleted comment is not edited (422 validation_error, comment_deleted). The comment keeps its author kind; kind is optional and checked. A comment of a project out of reach answers as a missing one, before authorship is looked at.\n\nSide effects: comment.edited; mentions added by the edit are resolved and notified.",
+                "operationId": "updateComment",
+                "parameters": [
+                    {
+                        "description": "The comment's UUID",
+                        "in": "path",
+                        "name": "comment",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "The version of the comment, as its ETag gives it",
+                        "in": "header",
+                        "name": "If-Match",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "return=minimal answers only id and version",
+                        "in": "header",
+                        "name": "Prefer",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/publicapi.commentBody",
+                                "summary": "body",
+                                "description": "The new body"
+                            }
+                        }
+                    },
+                    "description": "The new body",
+                    "required": true
+                },
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/issues.CommentDTO"
+                                }
+                            }
+                        },
+                        "description": "The comment after the edit"
+                    },
+                    "400": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Malformed body, unknown field or parameter, a kind outside directed|autonomous, If-Match not one version (code validation_error)"
+                    },
+                    "401": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "No key, or the key is invalid, expired or revoked (code unauthenticated)"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The key lacks write (code insufficient_scope); the owner is not the author or may not write in the project (code forbidden)"
+                    },
+                    "404": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "No such comment within reach (code issue_not_found, as MCP)"
+                    },
+                    "412": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "If-Match is stale (code version_conflict, currentVersion)"
+                    },
+                    "413": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Body over 1 MiB (code payload_too_large)"
+                    },
+                    "415": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Body is not application/json (code unsupported_media_type)"
+                    },
+                    "422": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The body is empty or invalid, or the comment is deleted (code validation_error); a serialization race, nothing written (code serialization_retry, retryable)"
+                    },
+                    "428": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "If-Match is missing (code precondition_required)"
+                    },
+                    "429": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Rate limited (code rate_limited, Retry-After)"
+                    },
+                    "500": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Internal error (code internal_error)"
+                    },
+                    "503": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The database is unavailable (code database_unavailable)"
+                    }
+                },
+                "security": [
+                    {
+                        "SkeinApiKey": [
+                            "write"
+                        ]
+                    }
+                ],
+                "summary": "Edit a comment",
+                "tags": [
+                    "Comments"
+                ]
+            }
+        },
         "/api/v1/issues": {
             "get": {
                 "description": "Returns a page of issues — the same list as the MCP tool skein_list, in its two modes:\n- with project (a UUID, prefix, alias or name of a project within reach): the issues of that project, newest change first, with the filters statuses, priority, assignee, createdBy, acceptedAt, origin, parentId, pinned, source, text, labels, isBlocked;\n- without project: the issues of every project the key's owner sees within the key's scope, with q (full-text search over the title, the description, the acceptance criteria, the design and the notes, ordered by relevance), space, one status, type, assignee, createdBy, acceptedAt, origin, isBlocked.\nA filter of the other mode is refused, never ignored. Each item is the issue's summary: its fields, labels, components, assignee, its lock holder and whether it is blocked — counted over the blockers the caller sees and the hidden ones of his spaces, as everywhere (US-3). Keyset paging: pass nextCursor back as cursor while hasMore is true. Read-only.",
@@ -4349,6 +5570,275 @@
                 ]
             }
         },
+        "/api/v1/issues/{issue}/attachments": {
+            "get": {
+                "description": "Returns every confirmed attachment of the issue of the path — the same operation as the MCP tool skein_attachments, action list: filename, content type, size, status, the uploader and the comment it belongs to, if any. Unconfirmed uploads are not listed. The set of an issue is bounded by the per-issue limit, so the list is one page (hasMore false). It reads metadata only and answers with storage unavailable. Read-only.",
+                "operationId": "listAttachments",
+                "parameters": [
+                    {
+                        "description": "The issue's hierarchical id",
+                        "in": "path",
+                        "name": "issue",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "Comma-separated fields of each item to return (plus id)",
+                        "in": "query",
+                        "name": "fields",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.List-attachments_Attachment"
+                                }
+                            }
+                        },
+                        "description": "The attachments"
+                    },
+                    "400": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Unknown parameter or field (code validation_error)"
+                    },
+                    "401": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "No key, or the key is invalid, expired or revoked (code unauthenticated)"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The key lacks the read right (code insufficient_scope)"
+                    },
+                    "404": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "No such issue within reach (code issue_not_found)"
+                    },
+                    "429": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Rate limited (code rate_limited, Retry-After)"
+                    },
+                    "500": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Internal error (code internal_error)"
+                    },
+                    "503": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The database is unavailable (code database_unavailable)"
+                    }
+                },
+                "security": [
+                    {
+                        "SkeinApiKey": [
+                            "read"
+                        ]
+                    }
+                ],
+                "summary": "List the attachments of an issue",
+                "tags": [
+                    "Attachments"
+                ]
+            },
+            "post": {
+                "description": "Creates a pending attachment of the issue of the path (or of one of its comments) and answers the presigned upload policy for it — the same operation as the MCP tool skein_attachments, action upload_url. Upload the file to url as a multipart POST with every form field of fields plus the file, before expiresAt; then confirmAttachment makes it visible. The policy binds the size and the content type; over the instance limit (maxSizeBytes) is 422 attachment_too_large, an executable file 422 attachment_mime_blocked. The answer always carries the upload URL: Prefer does not shorten it.\n\nThe owner of the key must be able to write in the issue's project; an attachment is not guarded by the lock. Side effects: a pending attachment row, no event until it is confirmed.",
+                "operationId": "createAttachmentUpload",
+                "parameters": [
+                    {
+                        "description": "The issue's hierarchical id",
+                        "in": "path",
+                        "name": "issue",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/publicapi.attachmentUploadBody",
+                                "summary": "body",
+                                "description": "The file to upload"
+                            }
+                        }
+                    },
+                    "description": "The file to upload",
+                    "required": true
+                },
+                "responses": {
+                    "201": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/attachments.UploadURLResponse"
+                                }
+                            }
+                        },
+                        "description": "The pending attachment and its upload policy"
+                    },
+                    "400": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Malformed body, unknown field or parameter, a kind outside directed|autonomous (code validation_error)"
+                    },
+                    "401": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "No key, or the key is invalid, expired or revoked (code unauthenticated)"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The key lacks write (code insufficient_scope); the owner may not write in the project (code forbidden)"
+                    },
+                    "404": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "No such issue within reach (code issue_not_found)"
+                    },
+                    "413": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Body over 1 MiB (code payload_too_large)"
+                    },
+                    "415": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Body is not application/json (code unsupported_media_type)"
+                    },
+                    "422": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "A value is missing or invalid, or the comment is not of this issue (code validation_error); too large (attachment_too_large); an executable type (attachment_mime_blocked); the issue holds the maximum number of attachments (attachment_limit_exceeded)"
+                    },
+                    "429": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Rate limited (code rate_limited, Retry-After)"
+                    },
+                    "500": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Internal error (code internal_error)"
+                    },
+                    "503": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Storage is not configured or unavailable (code attachments_unavailable, retryable); the database is unavailable (code database_unavailable)"
+                    }
+                },
+                "security": [
+                    {
+                        "SkeinApiKey": [
+                            "write"
+                        ]
+                    }
+                ],
+                "summary": "Start an attachment upload",
+                "tags": [
+                    "Attachments"
+                ]
+            }
+        },
         "/api/v1/issues/{issue}/claim": {
             "post": {
                 "description": "Takes the lock of the issue of the path and starts it — the same operation as the MCP tool skein_claim: status in_progress, the holder is the executor of this request (X-Skein-Worker-Id of the key, or the key itself), the owner becomes the assignee. The check of the lock is in the claiming transaction: of two concurrent claims exactly one succeeds, the other answers already_claimed. Another holder's lock is never taken over here. Side effects: issue.claimed (and the status change); notifications of the watchers.",
@@ -4825,6 +6315,183 @@
                 "tags": [
                     "Issues"
                 ]
+            },
+            "post": {
+                "description": "Adds a comment to the issue of the path — the same operation as the MCP tool skein_comment: the owner of the key must be able to write in the issue's project; the comment's author is the owner. @username mentions of members of the project are resolved, the mentioned users are notified and start watching the issue.\n\nWithout kind the comment's author kind is api; kind directed and autonomous give the agent's kinds, as in MCP. A comment is not guarded by the issue's lock. Accepts Idempotency-Key: a repeat within 24 h answers the first outcome and writes no second comment, event or notification. Side effects: comment.created; notifications of the issue's and the project's watchers and of the mentioned users. The Location header names the comment, ETag is its version.",
+                "operationId": "createComment",
+                "parameters": [
+                    {
+                        "description": "The issue's hierarchical id",
+                        "in": "path",
+                        "name": "issue",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "A key that makes a repeat of this request answer its first outcome (1..255 visible ASCII)",
+                        "in": "header",
+                        "name": "Idempotency-Key",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "return=minimal answers only id and version",
+                        "in": "header",
+                        "name": "Prefer",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/publicapi.commentBody",
+                                "summary": "body",
+                                "description": "The comment"
+                            }
+                        }
+                    },
+                    "description": "The comment",
+                    "required": true
+                },
+                "responses": {
+                    "201": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/issues.CommentDTO"
+                                }
+                            }
+                        },
+                        "description": "The comment added"
+                    },
+                    "400": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Malformed body, unknown field or parameter, a kind outside directed|autonomous, a malformed Idempotency-Key (code validation_error)"
+                    },
+                    "401": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "No key, or the key is invalid, expired or revoked (code unauthenticated)"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The key lacks write (code insufficient_scope); the owner may not write in the project (code forbidden)"
+                    },
+                    "404": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "No such issue within reach (code issue_not_found)"
+                    },
+                    "409": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The first request with this Idempotency-Key is still running (code idempotency_in_progress)"
+                    },
+                    "413": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Body over 1 MiB (code payload_too_large)"
+                    },
+                    "415": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Body is not application/json (code unsupported_media_type)"
+                    },
+                    "422": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The body is empty or invalid (code validation_error); a serialization race, nothing written (code serialization_retry, retryable); the Idempotency-Key reused with another request (code idempotency_key_reused)"
+                    },
+                    "429": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Rate limited (code rate_limited, Retry-After)"
+                    },
+                    "500": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Internal error (code internal_error)"
+                    },
+                    "503": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The database is unavailable (code database_unavailable)"
+                    }
+                },
+                "security": [
+                    {
+                        "SkeinApiKey": [
+                            "write"
+                        ]
+                    }
+                ],
+                "summary": "Add a comment to an issue",
+                "tags": [
+                    "Comments"
+                ]
             }
         },
         "/api/v1/issues/{issue}/commits": {
@@ -5236,6 +6903,327 @@
                 "summary": "List the dependencies of an issue",
                 "tags": [
                     "Issues"
+                ]
+            },
+            "post": {
+                "description": "Adds one edge from the issue of the path to toId — the same operation as the MCP tool skein_dep_add: the owner of the key must be able to write in the project of the issue of the path; the edge is not guarded by the lock. A waits-for edge may carry a gate. The graph stays acyclic (blocks, waits-for, parent-child), a standing task is neither a nested standing child nor a blocker target, and an existing edge is refused.\n\nThe issue of the path that does not exist or is out of reach is 404 issue_not_found; toId that does not exist or is out of reach is the same code with 422 (a reference of the body). kind is optional and checked; a write by key is an agent's write. Side effects: dependency.created; notifications of the watchers.",
+                "operationId": "addDependency",
+                "parameters": [
+                    {
+                        "description": "The FROM issue's hierarchical id",
+                        "in": "path",
+                        "name": "issue",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/publicapi.addDependencyBody",
+                                "summary": "body",
+                                "description": "The edge"
+                            }
+                        }
+                    },
+                    "description": "The edge",
+                    "required": true
+                },
+                "responses": {
+                    "201": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/issueops.DepDTO"
+                                }
+                            }
+                        },
+                        "description": "The edge added"
+                    },
+                    "400": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Malformed body, unknown field or parameter, a kind outside directed|autonomous (code validation_error)"
+                    },
+                    "401": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "No key, or the key is invalid, expired or revoked (code unauthenticated)"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The key lacks write (code insufficient_scope); the owner may not write in the project (code forbidden)"
+                    },
+                    "404": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "No such issue of the path within reach (code issue_not_found)"
+                    },
+                    "413": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Body over 1 MiB (code payload_too_large)"
+                    },
+                    "415": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Body is not application/json (code unsupported_media_type)"
+                    },
+                    "422": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "toId does not exist or is out of reach (code issue_not_found, as MCP); an invalid type or gate (code validation_error); a cycle (dependency_cycle); the edge exists (dependency_already_exists); a second parent (parent_already_set); a nested standing task (nested_standing_forbidden) or a standing blocker target (blocker_target_standing); the target is not visible yet (dependency_target_not_visible_yet, retryable); a serialization race (serialization_retry, retryable)"
+                    },
+                    "429": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Rate limited (code rate_limited, Retry-After)"
+                    },
+                    "500": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Internal error (code internal_error)"
+                    },
+                    "503": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The database is unavailable (code database_unavailable)"
+                    }
+                },
+                "security": [
+                    {
+                        "SkeinApiKey": [
+                            "write"
+                        ]
+                    }
+                ],
+                "summary": "Add a dependency",
+                "tags": [
+                    "Dependencies"
+                ]
+            }
+        },
+        "/api/v1/issues/{issue}/dependencies/{toIssue}/{type}": {
+            "delete": {
+                "description": "Removes the edge of the given type from the issue of the path to toIssue — the same operation as the MCP tool skein_dep_remove: the owner of the key must be able to write in the project of the issue of the path; the edge is not guarded by the lock. No such edge is 404 dependency_not_found: the edge is the object of the path. An edge the close outcome of a closed issue needs is not removed (close_outcome_link_required).\n\nSide effects: dependency.deleted; notifications of the watchers.",
+                "operationId": "removeDependency",
+                "parameters": [
+                    {
+                        "description": "The FROM issue's hierarchical id",
+                        "in": "path",
+                        "name": "issue",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "The TO issue's hierarchical id",
+                        "in": "path",
+                        "name": "toIssue",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "The edge type",
+                        "in": "path",
+                        "name": "type",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/publicapi.kindBody",
+                                "summary": "body",
+                                "description": "Options"
+                            }
+                        }
+                    },
+                    "description": "Options"
+                },
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.DependencyRemoved"
+                                }
+                            }
+                        },
+                        "description": "The edge removed"
+                    },
+                    "400": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Malformed body, unknown field or parameter, a kind outside directed|autonomous (code validation_error)"
+                    },
+                    "401": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "No key, or the key is invalid, expired or revoked (code unauthenticated)"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The key lacks write (code insufficient_scope); the owner may not write in the project (code forbidden)"
+                    },
+                    "404": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "No such issue of the path within reach (code issue_not_found); no such edge (code dependency_not_found)"
+                    },
+                    "413": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Body over 1 MiB (code payload_too_large)"
+                    },
+                    "415": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Body is not application/json (code unsupported_media_type)"
+                    },
+                    "422": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "An invalid type or TO id (code validation_error); the close outcome needs the edge (close_outcome_link_required); a serialization race (serialization_retry, retryable)"
+                    },
+                    "429": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Rate limited (code rate_limited, Retry-After)"
+                    },
+                    "500": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "Internal error (code internal_error)"
+                    },
+                    "503": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/publicapi.ProblemDocument"
+                                }
+                            }
+                        },
+                        "description": "The database is unavailable (code database_unavailable)"
+                    }
+                },
+                "security": [
+                    {
+                        "SkeinApiKey": [
+                            "write"
+                        ]
+                    }
+                ],
+                "summary": "Remove a dependency",
+                "tags": [
+                    "Dependencies"
                 ]
             }
         },

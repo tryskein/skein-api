@@ -24,9 +24,11 @@ import (
 	"github.com/mark3labs/mcp-go/server"
 
 	"skein-api/internal/apikeys"
+	"skein-api/internal/attachments"
 	"skein-api/internal/auth"
 	"skein-api/internal/dependencies"
 	"skein-api/internal/idempotency"
+	"skein-api/internal/issueops"
 	"skein-api/internal/issues"
 	mcppkg "skein-api/internal/mcp"
 	"skein-api/internal/mcp/tools"
@@ -48,9 +50,19 @@ type resourceRig struct {
 }
 
 // newResourceRig builds both channels over pool, with the stores the
-// product builds and the configuration of the test stack.
+// product builds and the configuration of the test stack; object storage is
+// rigStorage on both.
 func newResourceRig(t *testing.T, pool *pgxpool.Pool) *resourceRig {
 	t.Helper()
+	return newResourceRigWithStorage(t, pool, rigStorage{})
+}
+
+// newResourceRigWithStorage is newResourceRig with the object storage of the
+// attachments; nil — storage not configured, on both channels.
+func newResourceRigWithStorage(t *testing.T, pool *pgxpool.Pool, s3 attachments.S3Access) *resourceRig {
+	t.Helper()
+	attStore := attachments.NewStore(pool)
+	const attMax, attTTL = int64(10 << 20), 10 * time.Minute
 	projectsStore := projects.NewStore(pool)
 	usersStore := users.NewStore(pool, auth.MinBcryptCost, apikeys.New(pool), "local", "", nil)
 	issuesStore := issues.NewStore(pool)
@@ -79,7 +91,8 @@ func newResourceRig(t *testing.T, pool *pgxpool.Pool) *resourceRig {
 			Issues:            issuesStore, Dependencies: depsStore, Search: searchSvc,
 			// As publicAPIServer wires it: without the hooks an outcome of
 			// an operation with a target is not kept.
-			Outcomes: idempotency.Hooks{},
+			Outcomes:    idempotency.Hooks{},
+			Attachments: issueops.AttachmentDeps{Store: attStore, S3: s3, Bucket: "rig", MaxSize: attMax, URLTTL: attTTL},
 		}))
 	mcpHandler, _ := mcppkg.Setup(pool, 0, func(s *server.MCPServer) {
 		tools.RegisterWhoami(s, pool)
@@ -109,6 +122,13 @@ func newResourceRig(t *testing.T, pool *pgxpool.Pool) *resourceRig {
 		tools.RegisterUpdateMany(s, pool, issuesStore)
 		tools.RegisterCloseMany(s, pool, issuesStore)
 		tools.RegisterDepAddMany(s, pool, depsStore, issuesStore)
+		tools.RegisterComment(s, pool, issuesStore)
+		tools.RegisterCommentGet(s, pool, issuesStore)
+		tools.RegisterCommentUpdate(s, pool, issuesStore)
+		tools.RegisterCommentDelete(s, pool, issuesStore)
+		tools.RegisterDepAdd(s, pool, depsStore, issuesStore)
+		tools.RegisterDepRemove(s, pool, depsStore, issuesStore)
+		tools.RegisterAttachments(s, tools.AttachmentDepsFor(pool, attStore, s3, "rig", attMax, attTTL))
 	})
 	return &resourceRig{
 		t: t, pool: pool, restH: rest,
@@ -323,3 +343,22 @@ func projectCleanup(t *testing.T, pool *pgxpool.Pool, id uuid.UUID) {
 		_, _ = pool.Exec(ctx, `DELETE FROM projects WHERE id = $1`, id)
 	})
 }
+
+// rigStorage is an object storage that holds every object it is asked
+// about: the attachment tests are about the operations, not about S3. The
+// URLs it mints name the key, so an answer can be checked to carry one.
+type rigStorage struct{}
+
+func (rigStorage) PresignedPostPolicy(_ context.Context, key, _ string, _ int64, _ time.Duration) (attachments.PostPolicy, error) {
+	return attachments.PostPolicy{URL: "http://storage.rig.invalid/upload", Fields: map[string]string{"key": key}}, nil
+}
+
+func (rigStorage) PresignedGetURL(_ context.Context, key, _ string, _ time.Duration) (string, error) {
+	return "http://storage.rig.invalid/get/" + key, nil
+}
+
+func (rigStorage) RemoveObject(context.Context, string) error { return nil }
+
+func (rigStorage) StatObject(context.Context, string) error { return nil }
+
+func (rigStorage) ListKeys(context.Context, string, func(string) error) error { return nil }

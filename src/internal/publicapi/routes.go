@@ -213,6 +213,10 @@ type Deps struct {
 	// Outcomes records the outcome of an operation that accepts
 	// Idempotency-Key (idempotency.Hooks).
 	Outcomes Outcomes
+	// Attachments are the attachment store and object storage, as the MCP
+	// tool skein_attachments gets them; S3 nil — storage not configured.
+	// Its Pool defaults to Pool.
+	Attachments issueops.AttachmentDeps
 }
 
 // ProductRoutes is the route table of the public API. Every operation of
@@ -227,10 +231,15 @@ func ProductRoutes(d Deps) []Route {
 		pool: d.Pool, issues: d.Issues, deps: d.Dependencies, projects: d.Projects,
 		search: d.Search, embedder: d.IssuesEmbedder,
 	}
+	att := d.Attachments
+	if att.Pool == nil {
+		att.Pool = d.Pool
+	}
 	wa := &issueWrites{
-		issuesAPI: ia,
-		ops:       issueops.Deps{Pool: d.Pool, Issues: d.Issues, Deps: d.Dependencies, Projects: d.Projects},
-		outcomes:  d.Outcomes,
+		issuesAPI:   ia,
+		ops:         issueops.Deps{Pool: d.Pool, Issues: d.Issues, Deps: d.Dependencies, Projects: d.Projects},
+		outcomes:    d.Outcomes,
+		attachments: att,
 	}
 	read := authz.KeyRequirement{Right: authz.KeyRightRead}
 	manage := authz.KeyRequirement{Right: authz.KeyRightManage}
@@ -314,6 +323,29 @@ func ProductRoutes(d Deps) []Route {
 			routeFlags{guarded: true, noActions: true}),
 		writeRoute(OperationBulkAddDependencies, http.MethodPost, "issues/dependencies/bulk-add", ObjectNone, wa.bulkAddDependencies,
 			routeFlags{noActions: true}),
+
+		// Comments, dependencies, attachments (T026). A comment or an
+		// attachment of the path is checked by its operation, as in MCP: the
+		// route names no project of its own.
+		writeRoute(OperationCreateComment, http.MethodPost, "issues/{issue}/comments", ObjectPathIssueProject, wa.createComment,
+			routeFlags{prefer: true, idempotent: true, hydrate: wa.hydrateComment}),
+		key(OperationGetComment, http.MethodGet, "comments/{comment}", read, ObjectNone, nil, wa.getComment),
+		writeRoute(OperationUpdateComment, http.MethodPatch, "comments/{comment}", ObjectNone, wa.updateComment,
+			routeFlags{prefer: true, ifMatch: IfMatchRequired, noActions: true}),
+		writeRoute(OperationDeleteComment, http.MethodDelete, "comments/{comment}", ObjectNone, wa.deleteComment, routeFlags{noActions: true}),
+		writeRoute(OperationAddDependency, http.MethodPost, "issues/{issue}/dependencies", ObjectPathIssueProject, wa.addDependency, routeFlags{}),
+		writeRoute(OperationRemoveDependency, http.MethodDelete, "issues/{issue}/dependencies/{toIssue}/{type}", ObjectPathIssueProject,
+			wa.removeDependency, routeFlags{}),
+		key(OperationListAttachments, http.MethodGet, "issues/{issue}/attachments", read, ObjectPathIssueProject, view, wa.listAttachments),
+		writeRoute(OperationCreateAttachmentUpload, http.MethodPost, "issues/{issue}/attachments", ObjectPathIssueProject,
+			wa.createAttachmentUpload, routeFlags{}),
+		writeRoute(OperationConfirmAttachment, http.MethodPost, "attachments/{attachment}/confirm", ObjectNone, wa.confirmAttachment,
+			routeFlags{noActions: true}),
+		key(OperationGetAttachment, http.MethodGet, "attachments/{attachment}", read, ObjectNone, nil, wa.getAttachment),
+		key(OperationGetAttachmentDownloadURL, http.MethodGet, "attachments/{attachment}/download-url", read, ObjectNone, nil,
+			wa.getAttachmentDownloadURL),
+		writeRoute(OperationDeleteAttachment, http.MethodDelete, "attachments/{attachment}", ObjectNone, wa.deleteAttachment,
+			routeFlags{noActions: true}),
 	}
 }
 
@@ -327,6 +359,10 @@ type Outcomes interface {
 	// answers status with the issue it wrote: it records the committed id
 	// and version in the write's own transaction (D-8 rule 2).
 	IssueBeforeCommit(status int) func(ctx context.Context, tx pgx.Tx, st issues.CommittedState) error
+	// CommentBeforeCommit is the before-commit hook of createComment, which
+	// answers status with the comment it wrote: it records the comment's id
+	// and version in the comment's own transaction.
+	CommentBeforeCommit(status int) func(ctx context.Context, tx pgx.Tx, c *issues.CommentDTO) error
 	// NoteTarget names the object the operation acts on.
 	NoteTarget(ctx context.Context, ref ObjectRef)
 	// NoteObjects names the objects of a response produced without a

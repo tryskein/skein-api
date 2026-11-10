@@ -35,6 +35,7 @@ import (
 	"skein-api/internal/handler"
 	"skein-api/internal/idempotency"
 	"skein-api/internal/invitations"
+	"skein-api/internal/issueops"
 	"skein-api/internal/issues"
 	"skein-api/internal/issues/lockreap"
 	"skein-api/internal/logging"
@@ -1084,6 +1085,12 @@ func main() {
 		Dependencies:     depsStore,
 		Search:           searchSvc,
 		IssuesEmbedder:   pubIssuesEmbedder,
+		// The attachment store and storage of the MCP tool; S3 nil when
+		// S3_URL is unset — the operations then answer attachments_unavailable.
+		Attachments: issueops.AttachmentDeps{
+			Store: attachmentsStoreWithQuotas(pool, cfg), S3: s3Access, Bucket: cfg.S3Bucket,
+			MaxSize: cfg.AttachmentMaxSizeBytes, URLTTL: time.Duration(cfg.AttachmentURLTTLSeconds) * time.Second,
+		},
 	}, slog.Default())
 	if err != nil {
 		slog.Error("public API setup failed", "error", err.Error())

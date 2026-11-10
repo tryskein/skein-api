@@ -49,6 +49,8 @@ type issueWrites struct {
 	*issuesAPI
 	ops      issueops.Deps
 	outcomes Outcomes
+	// attachments are the stores of the attachment operations.
+	attachments issueops.AttachmentDeps
 }
 
 // decodeArgs reads the JSON body strictly into typed (an unknown field, a
@@ -119,7 +121,7 @@ func writeFailure(w http.ResponseWriter, f *issueops.Failure, pathIDs ...string)
 	origin := OriginDomain
 	if code.Class() == errcode.ClassNotFound {
 		origin = OriginBody
-		for _, key := range []string{"id", "issueId", "q", "projectId"} {
+		for _, key := range []string{"id", "issueId", "q", "projectId", "fromId", "commentId", "attachmentId"} {
 			if v, ok := f.Fields[key].(string); ok {
 				for _, p := range pathIDs {
 					if p != "" && v == p {

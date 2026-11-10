@@ -129,6 +129,21 @@ func IssueBeforeCommit(status int) func(ctx context.Context, tx pgx.Tx, st issue
 	}
 }
 
+// CommentBeforeCommit is the issues.CommentBeforeCommitHook of createComment,
+// which answers status with the comment it wrote: it records the comment's
+// id and version, the comment as the object of the response, in the
+// comment's own transaction (D-8 rule 2); the target is the issue the
+// operation named. It does nothing for a request without Idempotency-Key.
+func CommentBeforeCommit(status int) func(ctx context.Context, tx pgx.Tx, c *issues.CommentDTO) error {
+	return func(ctx context.Context, tx pgx.Tx, c *issues.CommentDTO) error {
+		comment := publicapi.ObjectRef{Kind: publicapi.ObjectComment, ID: c.ID.String()}
+		return RecordInTx(ctx, tx, Outcome{
+			Status: status, ID: c.ID.String(), Version: c.Version,
+			Refs: Refs{Objects: []publicapi.ObjectRef{comment}},
+		})
+	}
+}
+
 // NoteTarget names the object the operation acts on — the project of a
 // create, the issue of a close or a comment — once the operation resolved
 // it. An outcome stored without a writing transaction (a 422) keeps it, so a
@@ -557,6 +572,11 @@ type Hooks struct{}
 // IssueBeforeCommit implements publicapi.Outcomes.
 func (Hooks) IssueBeforeCommit(status int) func(ctx context.Context, tx pgx.Tx, st issues.CommittedState) error {
 	return IssueBeforeCommit(status)
+}
+
+// CommentBeforeCommit implements publicapi.Outcomes.
+func (Hooks) CommentBeforeCommit(status int) func(ctx context.Context, tx pgx.Tx, c *issues.CommentDTO) error {
+	return CommentBeforeCommit(status)
 }
 
 // NoteTarget implements publicapi.Outcomes.

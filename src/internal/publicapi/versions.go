@@ -1,8 +1,8 @@
 package publicapi
 
 // versions.go — the VersionProvider of the product routes that check
-// If-Match (US-6): the version of the issue of the path, read within the
-// caller's reach. A route without {issue} has no version here; a missing
+// If-Match (US-6): the version of the issue — or of the comment — of the
+// path, read within the caller's reach. A route without {issue} has no version here; a missing
 // issue or one out of reach is "not found", and the operation answers it as
 // it answers a missing object.
 
@@ -19,7 +19,8 @@ import (
 	"skein-api/internal/projects"
 )
 
-// IssueVersions reads the version of the issue of a request's path.
+// IssueVersions reads the version of the issue or the comment of a
+// request's path.
 type IssueVersions struct {
 	Pool   *pgxpool.Pool
 	Issues *issues.Store
@@ -27,6 +28,9 @@ type IssueVersions struct {
 
 // ResourceVersion implements VersionProvider.
 func (v IssueVersions) ResourceVersion(ctx context.Context, _ Route, r *http.Request) (int, bool, error) {
+	if c := chi.URLParam(r, "comment"); c != "" {
+		return v.commentVersion(ctx, r, c)
+	}
 	id := strings.TrimSpace(chi.URLParam(r, "issue"))
 	if id == "" {
 		return 0, false, nil

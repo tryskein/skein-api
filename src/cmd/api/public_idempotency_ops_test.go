@@ -12,8 +12,11 @@ package main
 // a closed issue with the same commit writes (version, event) and attaches
 // the commit once. The mode regression on the real closeIssue:
 // a stored force close is not given out once the owner lost force_unlock,
-// nor once the key was narrowed to write. createComment is added by T026
-// (row 137).
+// nor once the key was narrowed to write. createComment (row 137, T026):
+// a 2xx with a write recorded in the comment's transaction and a 422 before
+// the store; it has no 422 after a rollback a request can reach — its one
+// transactional refusal, the issue gone between the check and the insert,
+// is a race — and no duplicate gate.
 
 import (
 	"context"
@@ -259,6 +262,66 @@ func TestIdempotencyOps_RealOperations(t *testing.T) {
 			if again := w.do(manage, c, "force=true", h); again.status != http.StatusForbidden || again.code() != want {
 				t.Errorf("%s lowered: the repeat %d %s, want 403 %s", lower, again.status, again.body, want)
 			}
+		}
+	})
+}
+
+// TestIdempotencyOps_CreateComment — row 137 (T026; US-7, SC-007, INV-8).
+// createComment with Idempotency-Key: a 201 is kept and its repeat answers
+// it again without a second comment, event or notification; a 422 before
+// the store is kept, answered again, and nothing is written. Red when a
+// repeat of createComment creates a comment or events.
+func TestIdempotencyOps_CreateComment(t *testing.T) {
+	w := newClassWorld(t)
+	key := w.key(w.owner, levelKey(apikeys.LevelWrite))
+	// The member watches the project: a comment of the owner notifies him,
+	// so "no new notification" is asked of a count that a write moves.
+	w.exec(`INSERT INTO project_watchers (project_id, user_id) VALUES ($1, $2)`, w.p, w.member)
+	idem := func() map[string]string { return map[string]string{"Idempotency-Key": "k-" + uuid.NewString()} }
+	issue := w.freshIssue(w.p)
+	comments := func() int { return w.idemCount(`SELECT count(*) FROM comments WHERE issue_id = $1`, issue) }
+	events := func() int { return w.idemCount(`SELECT count(*) FROM events WHERE project_id = $1`, w.p) }
+	notifications := func() int {
+		return w.idemCount(`SELECT count(*) FROM notifications n JOIN events e ON e.id = n.event_id WHERE e.project_id = $1`, w.p)
+	}
+	path := "/api/v1/issues/" + issue + "/comments"
+
+	t.Run("2xx with a write", func(t *testing.T) {
+		c, h := opCall{http.MethodPost, path, map[string]any{"body": "once " + w.fresh("c")}, nil}, idem()
+		n0, nt0 := comments(), notifications()
+		first := w.do(key, c, "", h)
+		if first.status != http.StatusCreated {
+			t.Fatalf("createComment: %d %s", first.status, first.body)
+		}
+		if comments() != n0+1 || notifications() == nt0 {
+			t.Fatalf("the first request: comments %d→%d, notifications %d→%d — want one comment and its notification",
+				n0, comments(), nt0, notifications())
+		}
+		if w.stored(h["Idempotency-Key"]) != http.StatusCreated {
+			t.Errorf("the outcome is not kept")
+		}
+		n, e, nt := comments(), events(), notifications()
+		sameAnswer(t, "createComment", first, w.do(key, c, "", h))
+		if comments() != n || events() != e || notifications() != nt {
+			t.Errorf("the repeat wrote: comments %d→%d, events %d→%d, notifications %d→%d",
+				n, comments(), e, events(), nt, notifications())
+		}
+	})
+
+	t.Run("422 before the store", func(t *testing.T) {
+		c, h := opCall{http.MethodPost, path, map[string]any{"body": "   "}, nil}, idem()
+		n, e, nt := comments(), events(), notifications()
+		first := w.do(key, c, "", h)
+		if first.status != http.StatusUnprocessableEntity || first.code() != "validation_error" {
+			t.Fatalf("an empty body: %d %s, want 422 validation_error", first.status, first.body)
+		}
+		if w.stored(h["Idempotency-Key"]) != http.StatusUnprocessableEntity {
+			t.Errorf("the 422 is not kept")
+		}
+		sameAnswer(t, "an empty body", first, w.do(key, c, "", h))
+		if comments() != n || events() != e || notifications() != nt {
+			t.Errorf("written: comments %d→%d, events %d→%d, notifications %d→%d",
+				n, comments(), e, events(), nt, notifications())
 		}
 	})
 }
