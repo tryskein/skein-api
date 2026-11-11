@@ -307,6 +307,9 @@ is an ordinary error with nothing executed).
 - The response schemas of the document list as `required` every member a
   full response always carries. A response shortened by `fields=` or by
   `Prefer: return=minimal` leaves some of them out by design.
+- If a write committed but the issue could not be read back afterwards, the
+  success response carries `id`, `version`, `status` and the holder; every
+  other member is empty (`""`, `[]`, `{}`). Read the issue again to see it.
 - Lists use a keyset cursor: `items`, `nextCursor`, `hasMore`; `limit` out of
   range is 400, never silently clipped.
 
