@@ -1393,11 +1393,14 @@
             "notifications.ProjectWatcherDTO": {
                 "properties": {
                     "eventTypes": {
-                        "description": "EventTypes mirrors project_watchers.event_types. nil means \"all\nnotifiable types\"; an explicit list is a strict whitelist.",
+                        "description": "EventTypes mirrors project_watchers.event_types. nil (null on the\nwire) means \"all notifiable types\"; an explicit list is a strict\nwhitelist.",
                         "items": {
                             "type": "string"
                         },
-                        "type": "array",
+                        "type": [
+                            "array",
+                            "null"
+                        ],
                         "uniqueItems": false
                     },
                     "projectId": {
