@@ -145,7 +145,8 @@ var searchHints = map[string]string{
 }
 
 // addTool is the single registration funnel for this package: it stamps
-// the tool's anthropic/searchHint from searchHints, wraps the handler in
+// the tool's anthropic/searchHint from searchHints and its
+// annotations.title from toolTitles (tool_titles.go), wraps the handler in
 // the usage counters (see metrics.go), and then hands the tool to the
 // server. Register* functions call this instead of s.AddTool so neither
 // the hint nor the instrumentation can be forgotten in one file and
@@ -164,6 +165,7 @@ var searchHints = map[string]string{
 // empty `action` metric label meaning "not a folded tool".
 func addTool(s *server.MCPServer, tool mcpgo.Tool, handler server.ToolHandlerFunc) {
 	stampSearchHint(&tool)
+	stampTitle(&tool)
 	s.AddTool(tool, instrumentTool(tool.Name, handler))
 }
 

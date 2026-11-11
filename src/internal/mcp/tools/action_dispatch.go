@@ -144,5 +144,6 @@ func (a actionSet) dispatch(tool string) server.ToolHandlerFunc {
 // could fall back to by forgetting an argument.
 func addActionTool(s *server.MCPServer, tool mcpgo.Tool, actions actionSet) {
 	stampSearchHint(&tool)
+	stampTitle(&tool)
 	s.AddTool(tool, instrumentActionTool(tool.Name, actions, actions.dispatch(tool.Name)))
 }

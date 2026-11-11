@@ -57,6 +57,38 @@ func TestSearchHints_EveryTool(t *testing.T) {
 	}
 }
 
+// TestToolTitles_EveryTool keeps the directory requirement that every
+// tool carries annotations.title (Claude connector pre-submission
+// checklist, "Provide tool annotations": "Every tool must include a
+// `title`"). Like the hint guard above, it reads the tools/list answer
+// of the production registration closure, so a new Register* call
+// without a tools.toolTitles entry fails here instead of in review.
+//
+// Titles must also be distinct: a permission prompt or a client's tool
+// list shows the title in place of the name, and two equal titles are
+// two rows a person cannot tell apart.
+func TestToolTitles_EveryTool(t *testing.T) {
+	tools := listRegisteredTools(t)
+	if len(tools) == 0 {
+		t.Fatalf("no tools registered — registration wiring broke")
+	}
+
+	seen := make(map[string]string, len(tools))
+	for i := range tools {
+		tool := tools[i]
+		title := tool.Annotations.Title
+		if title == "" {
+			t.Errorf("%s: annotations.title missing — add an entry to tools.toolTitles", tool.Name)
+			continue
+		}
+		if prev, dup := seen[title]; dup {
+			t.Errorf("%s: annotations.title %q duplicates %s", tool.Name, title, prev)
+			continue
+		}
+		seen[title] = tool.Name
+	}
+}
+
 // TestAlwaysLoad_BootstrapTools pins the set of tools that bypass
 // deferred loading. The server `instructions` order a three-step
 // bootstrap (whoami → echo sessionId → get_instructions) and prime is
