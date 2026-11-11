@@ -146,11 +146,19 @@ func writeIssue(w http.ResponseWriter, r *http.Request, status int, issue *issue
 // detailFromCommitted is the issue as a committing transaction left it, for
 // an answer whose read-back after the commit failed: the write happened,
 // so it is acknowledged with what is known (id, version, status, holder).
+// Every other member is empty — the lists and the metadata too, [] and {}
+// rather than null, as the document declares them.
 func detailFromCommitted(c issues.CommittedState) *issues.IssueDetail {
 	return &issues.IssueDetail{
 		ID: c.ID, Version: c.Version, Status: c.Status, Assignee: c.Assignee,
 		LockedBy: c.LockedBy, LockedAt: c.LockedAt, StartedAt: c.StartedAt,
 		ClosedAt: c.ClosedAt, CloseOutcome: c.CloseOutcome,
+		Metadata:     map[string]any{},
+		ComponentIDs: []uuid.UUID{},
+		Labels:       []string{},
+		CommitRefs:   []issues.CommitRef{},
+		Blockers:     []issues.BlockerRef{},
+		Mentions:     []issues.MentionRef{},
 	}
 }
 
