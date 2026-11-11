@@ -29,6 +29,7 @@ import (
 	"encoding/json"
 	"io"
 	"log/slog"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -305,7 +306,8 @@ func undeclaredMembers(s *openapi3.SchemaRef, v any, at string, out *[]string) {
 // headers, type and nullability of each member, the members the document
 // requires, and no member the document does not declare. The branches one
 // success does not reach are asked as well: a batch with a refused item,
-// resolveProject without a match, releaseIssueLock of an issue nobody holds.
+// resolveProject without a match, listWatching of a project watched for all
+// types (eventTypes null), releaseIssueLock of an issue nobody holds.
 // A response changed by one undeclared or one missing required member is
 // refused by the same check. Red when a response of an operation does not
 // match the schema the document describes for it.
@@ -335,7 +337,11 @@ func TestPublicResponsesMatchOpenAPI(t *testing.T) {
 			t.Errorf("%d response does not match the document: %s\nbody: %s", a.status, p, a.body)
 		}
 	}
-	for id, rt := range routes {
+	// In the order of the ids: an operation's response may depend on what an
+	// earlier one wrote (watchProject before listWatching), and a run is
+	// reproduced only by the same order.
+	for _, id := range slices.Sorted(maps.Keys(routes)) {
+		rt := routes[id]
 		t.Run(id, func(t *testing.T) {
 			if id == publicapi.OperationGetOpenAPI {
 				c := opCall{method: http.MethodGet, path: publicapi.OpenAPIPath}
@@ -367,35 +373,57 @@ func TestPublicResponsesMatchOpenAPI(t *testing.T) {
 	base := "/api/v1/"
 	for _, b := range []struct {
 		name, op string
-		call     func(key string) opCall
+		call     func(t *testing.T, key string) opCall
 		want     func(t *testing.T, body map[string]any)
 	}{
-		{"bulkUpdateIssues with a stale item", "bulkUpdateIssues", func(string) opCall {
+		{"bulkUpdateIssues with a stale item", "bulkUpdateIssues", func(*testing.T, string) opCall {
 			ok, stale := w.freshIssue(w.p), w.freshIssue(w.p)
 			return opCall{http.MethodPost, base + "issues/bulk-update", map[string]any{"items": []map[string]any{
 				{"id": ok, "expectedVersion": w.issueVersion(ok), "title": w.fresh("bulk")},
 				{"id": stale, "expectedVersion": w.issueVersion(stale) + 5, "title": w.fresh("bulk")}}}, nil}
 		}, refusedItem},
-		{"bulkCloseIssues with a stale item", "bulkCloseIssues", func(string) opCall {
+		{"bulkCloseIssues with a stale item", "bulkCloseIssues", func(*testing.T, string) opCall {
 			ok, stale := w.freshIssue(w.p), w.freshIssue(w.p)
 			return opCall{http.MethodPost, base + "issues/bulk-close", map[string]any{"items": []map[string]any{
 				{"id": ok, "expectedVersion": w.issueVersion(ok), "reason": "done", "closeOutcome": "done"},
 				{"id": stale, "expectedVersion": w.issueVersion(stale) + 5, "reason": "done", "closeOutcome": "done"}}}, nil}
 		}, refusedItem},
-		{"bulkAddDependencies with an item to a missing issue", "bulkAddDependencies", func(string) opCall {
+		{"bulkAddDependencies with an item to a missing issue", "bulkAddDependencies", func(*testing.T, string) opCall {
 			from := w.freshIssue(w.p)
 			return opCall{http.MethodPost, base + "issues/dependencies/bulk-add", map[string]any{"items": []map[string]any{
 				{"fromId": from, "toId": w.pPrefix + "-999999", "type": "related"},
 				{"fromId": from, "toId": w.freshIssue(w.p), "type": "related"}}}, nil}
 		}, refusedItem},
-		{"resolveProject without a match", "resolveProject", func(string) opCall {
+		{"resolveProject without a match", "resolveProject", func(*testing.T, string) opCall {
 			return opCall{http.MethodGet, base + "projects/resolve?q=" + w.fresh("nomatch"), nil, nil}
 		}, func(t *testing.T, body map[string]any) {
 			if m, present := body["match"]; !present || m != nil {
 				t.Fatalf("match %v, want null: %v", m, body)
 			}
 		}},
-		{"releaseIssueLock of an issue nobody holds", "releaseIssueLock", func(string) opCall {
+		{"listWatching with a project watched for all types", "listWatching", func(t *testing.T, _ string) opCall {
+			watchKey := keyOf(ops[publicapi.OperationWatchProject])
+			watch := w.call(ops[publicapi.OperationWatchProject], w.p, watchKey)
+			if a := w.do(watchKey, watch, "", nil); !success(a.status) {
+				t.Fatalf("watchProject: %d %s", a.status, a.body)
+			}
+			return opCall{http.MethodGet, base + "me/watching", nil, nil}
+		}, func(t *testing.T, body map[string]any) {
+			projectsList, _ := body["projects"].(map[string]any)
+			items, _ := projectsList["items"].([]any)
+			for _, it := range items {
+				row, _ := it.(map[string]any)
+				if row["projectId"] != w.p.String() {
+					continue
+				}
+				if types, present := row["eventTypes"]; !present || types != nil {
+					t.Fatalf("eventTypes %v, want null: %v", types, row)
+				}
+				return
+			}
+			t.Fatalf("no watch of project %s: %v", w.p, body)
+		}},
+		{"releaseIssueLock of an issue nobody holds", "releaseIssueLock", func(*testing.T, string) opCall {
 			return opCall{http.MethodPost, base + "issues/" + w.freshIssue(w.p) + "/release-lock", nil, nil}
 		}, func(t *testing.T, body map[string]any) {
 			if body["lockedBy"] != nil {
@@ -406,7 +434,7 @@ func TestPublicResponsesMatchOpenAPI(t *testing.T) {
 		t.Run(b.name, func(t *testing.T) {
 			op := ops[b.op]
 			key := keyOf(op)
-			c := b.call(key)
+			c := b.call(t, key)
 			a := w.do(key, c, "", nil)
 			check(t, routes[b.op], c, a)
 			b.want(t, a.object(t))
