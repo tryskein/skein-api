@@ -44,6 +44,7 @@ import (
 
 	"skein-api/internal/apikeys"
 	"skein-api/internal/auth"
+	"skein-api/internal/issues"
 	"skein-api/internal/publicapi"
 )
 
@@ -307,7 +308,8 @@ func undeclaredMembers(s *openapi3.SchemaRef, v any, at string, out *[]string) {
 // requires, and no member the document does not declare. The branches one
 // success does not reach are asked as well: a batch with a refused item,
 // resolveProject without a match, listWatching of a project watched for all
-// types (eventTypes null), releaseIssueLock of an issue nobody holds.
+// types (eventTypes null), closeIssue whose read-back after the commit
+// fails, releaseIssueLock of an issue nobody holds.
 // A response changed by one undeclared or one missing required member is
 // refused by the same check. Red when a response of an operation does not
 // match the schema the document describes for it.
@@ -422,6 +424,33 @@ func TestPublicResponsesMatchOpenAPI(t *testing.T) {
 				return
 			}
 			t.Fatalf("no watch of project %s: %v", w.p, body)
+		}},
+		{"closeIssue whose read-back fails", "closeIssue", func(t *testing.T, key string) opCall {
+			c := w.call(ops[publicapi.OperationCloseIssue], w.p, key)
+			id := strings.TrimSuffix(strings.TrimPrefix(c.path, base+"issues/"), "/close")
+			// The close commits, then the issue is gone before it is read
+			// back: the answer is built from the committed state alone.
+			issues.AfterCommitHook = func(ctx context.Context, op, issueID string) {
+				if op == "close" && issueID == id {
+					if _, err := w.pool.Exec(context.WithoutCancel(ctx), `DELETE FROM issues WHERE id = $1`, id); err != nil {
+						t.Errorf("delete %s: %v", id, err)
+					}
+				}
+			}
+			t.Cleanup(func() { issues.AfterCommitHook = nil })
+			return c
+		}, func(t *testing.T, body map[string]any) {
+			if body["status"] != "closed" || body["title"] != "" {
+				t.Fatalf("status %v, title %q: want the committed state alone: %v", body["status"], body["title"], body)
+			}
+			for _, member := range []string{"labels", "componentIds", "commitRefs", "blockers", "mentions"} {
+				if list, ok := body[member].([]any); !ok || len(list) != 0 {
+					t.Errorf("%s %v, want []", member, body[member])
+				}
+			}
+			if m, ok := body["metadata"].(map[string]any); !ok || len(m) != 0 {
+				t.Errorf("metadata %v, want {}", body["metadata"])
+			}
 		}},
 		{"releaseIssueLock of an issue nobody holds", "releaseIssueLock", func(*testing.T, string) opCall {
 			return opCall{http.MethodPost, base + "issues/" + w.freshIssue(w.p) + "/release-lock", nil, nil}
