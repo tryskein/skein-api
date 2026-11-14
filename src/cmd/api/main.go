@@ -2260,6 +2260,9 @@ func buildRouter(
 		// U+0000 anywhere in the request is refused before any route runs:
 		// the database cannot store it.
 		r.Use(handler.RefuseNUL)
+		// A 5xx of a request its client cancelled is answered 408
+		// request_cancelled: the failure is the cancellation's, not ours.
+		r.Use(handler.AnswerCancelledInternal)
 
 		// R5.1 — OIDC provision endpoint. Outside the user group because
 		// that group applies ParseUserHeaders to every request, and the

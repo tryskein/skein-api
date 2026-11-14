@@ -119,8 +119,10 @@ const (
 // clientCanceled reports whether r reports a failure that is only the
 // cancellation of the request by its client: the context of the record was
 // cancelled — not timed out — and the record's "error" attribute is that
-// cancellation (an error wrapping context.Canceled, or its text inside the
-// usual err.Error() string). Such a failure is not a fault of the service:
+// cancellation: an error wrapping context.Canceled, or the err.Error() text
+// of one, which ends with the text of context.Canceled (a wrap prefixes its
+// context; a text that only mentions the phrase elsewhere does not match).
+// Such a failure is not a fault of the service:
 // the client went away (left the page, changed the filter, re-sent), and an
 // ERROR line for it drowns the real ones and fires alerts. A timeout on our
 // side (context.DeadlineExceeded) and any other error stay ERROR.
@@ -140,7 +142,7 @@ func clientCanceled(ctx context.Context, r slog.Record) bool {
 		v := a.Value.Resolve()
 		switch v.Kind() {
 		case slog.KindString:
-			canceled = strings.Contains(v.String(), context.Canceled.Error())
+			canceled = strings.HasSuffix(v.String(), context.Canceled.Error())
 		case slog.KindAny:
 			if err, ok := v.Any().(error); ok {
 				canceled = errors.Is(err, context.Canceled)

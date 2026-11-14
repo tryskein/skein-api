@@ -305,6 +305,6 @@ func writeInternal(w http.ResponseWriter, r *http.Request, rt Route, what string
 		code = errcode.DatabaseUnavailable
 	}
 	slog.ErrorContext(r.Context(), "public API: "+what+" failed",
-		"operationId", rt.OperationID, "code", code.String(), "error", err.Error())
+		"operationId", rt.OperationID, "code", code.String(), "error", err)
 	WriteProblem(w, Problem{Code: code, Origin: OriginDomain})
 }

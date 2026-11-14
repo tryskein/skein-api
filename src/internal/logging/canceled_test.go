@@ -33,6 +33,7 @@ func TestClientCanceled_ErrorRecordsAreNotErrors(t *testing.T) {
 		{"timeout of our own", timedOut, "counting all issues: context deadline exceeded", false},
 		{"live request, cancellation text", context.Background(), "counting all issues: context canceled", false},
 		{"cancelled request, another failure", canceled, "counting all issues: boom", false},
+		{"cancelled request, the phrase inside another failure", canceled, "parsing \"context canceled\" from the body: bad input", false},
 		{"cancelled request, no error attribute", canceled, nil, false},
 	}
 	for _, c := range cases {

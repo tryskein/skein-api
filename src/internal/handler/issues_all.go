@@ -266,7 +266,7 @@ func (h *IssuesAllHandler) List(w http.ResponseWriter, r *http.Request) {
 	res, err := h.issuesStore.ListAllIssues(ctx, args)
 	if err != nil {
 		slog.ErrorContext(ctx, "list all issues failed",
-			"userId", c.UserID.String(), "error", err.Error())
+			"userId", c.UserID.String(), "error", err)
 		writeProblem(w, http.StatusInternalServerError, "internal_error", "", nil)
 		return
 	}

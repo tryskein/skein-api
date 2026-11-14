@@ -177,13 +177,20 @@ func routeHandler(opts RouterOptions, rt Route) http.Handler {
 	if opts.Chain != nil {
 		chained = opts.Chain.Wrap(rt, inner)
 	}
+	// A 5xx of a request its client cancelled is answered request_cancelled
+	// (retryable): the failure is the cancellation's, not the service's. The
+	// operation's own deadline is a DeadlineExceeded and stays a 5xx.
+	cancelAware := handler.AnswerCancelled(func(w http.ResponseWriter) {
+		WriteProblem(w, Problem{Code: errcode.RequestCancelled, Origin: OriginDomain,
+			Detail: "the request was cancelled by the client while it was being served"})
+	})(chained)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(r.Context(), opts.OperationTimeout)
 		defer cancel()
 		ctx = context.WithValue(ctx, routeContextKey{}, rt)
 		// The issue operations log their lines as public API ones.
 		ctx = issueops.WithPublicAPI(ctx)
-		chained.ServeHTTP(w, r.WithContext(ctx))
+		cancelAware.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
 

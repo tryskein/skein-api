@@ -1,8 +1,9 @@
 package handler
 
 // list_canceled_log_test.go — a list request its client cancelled is not
-// logged as an ERROR: the production log handler writes the failure of the
-// store at INFO with cancel=client_canceled. The reference is the defect
+// logged as an ERROR and not answered as a server error: the production log
+// handler writes the failure of the store at INFO with
+// cancel=client_canceled, and the answer is 408 request_cancelled. The reference is the defect
 // report: GET /ui/v1/issues cancelled by the browser logged
 // "list all issues failed … context canceled" at ERROR.
 
@@ -34,7 +35,11 @@ func TestListAllIssues_ClientCancelIsNotAnError(t *testing.T) {
 	ctx, cancel := context.WithCancel(auth.WithUserRole(auth.WithUserID(context.Background(), owner), "user"))
 	cancel()
 	req := httptest.NewRequest(http.MethodGet, "/ui/v1/issues", nil).WithContext(ctx)
-	h.List(httptest.NewRecorder(), req)
+	rec := httptest.NewRecorder()
+	AnswerCancelledInternal(http.HandlerFunc(h.List)).ServeHTTP(rec, req)
+	if rec.Code != http.StatusRequestTimeout || !strings.Contains(rec.Body.String(), `"request_cancelled"`) {
+		t.Errorf("answered %d %s, want 408 request_cancelled", rec.Code, rec.Body.String())
+	}
 
 	out := buf.String()
 	if strings.Contains(out, `"level":"ERROR"`) {
