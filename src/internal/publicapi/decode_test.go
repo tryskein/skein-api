@@ -185,12 +185,13 @@ type createEmbedded struct {
 	Items []struct {
 		N int `json:"n"`
 	} `json:"items"`
+	Labels []string `json:"labels"`
 }
 
 // TestDecode_TypeErrorNamesTheMember — a member of the wrong type is named
-// in field by its path in the request, never by the Go name of an embedded
-// struct; a body that is not an object names no member. Red on
-// "embeddedFields.priority" or on a missing field.
+// in field by its path in the request, array indexes included, never by the
+// Go name of an embedded struct; a body that is not an object names no
+// member. Red on "embeddedFields.priority", a lost index or a missing field.
 func TestDecode_TypeErrorNamesTheMember(t *testing.T) {
 	h := publicapi.NewRouter(publicapi.RouterOptions{OperationTimeout: 30 * time.Second}, []publicapi.Route{{
 		OperationID: "testCreateEmbedded", Method: http.MethodPost, Path: "/api/v1/embedded",
@@ -208,7 +209,9 @@ func TestDecode_TypeErrorNamesTheMember(t *testing.T) {
 	}{
 		{`{"priority":"high"}`, "priority"},
 		{`{"nested":{"size":"big"}}`, "nested.size"},
-		{`{"items":[{"n":1},{"n":"x"}]}`, "items.n"},
+		{`{"items":[{"n":1},{"n":"x"}]}`, "items[1].n"},
+		{`{"labels":["a",5]}`, "labels[1]"},
+		{`{"labels":{}}`, "labels"},
 		{`[{"priority":1}]`, ""},
 		{`"text"`, ""},
 	} {

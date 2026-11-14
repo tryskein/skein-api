@@ -14,9 +14,9 @@ import (
 	"net/http"
 	"reflect"
 	"slices"
-	"strings"
 
 	"skein-api/internal/errcode"
+	"skein-api/internal/jsonpath"
 )
 
 // DecodeBody decodes the JSON body of r into v strictly: an unknown field,
@@ -44,6 +44,11 @@ func DecodeBody(w http.ResponseWriter, r *http.Request, v any) bool {
 }
 
 // decodeStrict decodes exactly one JSON value without unknown fields.
+//
+// A member of the wrong type is named by its path in the request, array
+// indexes included ("labels[1]", "dependencies[0].reason"): the path of the
+// value that ends where json.UnmarshalTypeError.Offset says, whose Field
+// carries neither the indexes nor the JSON names of embedded structs.
 func decodeStrict(raw []byte, v any) error {
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
@@ -54,10 +59,10 @@ func decodeStrict(raw []byte, v any) error {
 		case errors.As(err, &syntax):
 			return fmt.Errorf("the request body is not valid JSON (offset %d)", syntax.Offset)
 		case errors.As(err, &typeErr):
-			if typeErr.Field == "" {
+			field, ok := jsonpath.AtOffset(raw, typeErr.Offset)
+			if !ok || field == "" {
 				return errors.New(rootTypeMessage(v))
 			}
-			field := jsonFieldPath(reflect.TypeOf(v), typeErr.Field)
 			return &fieldError{field: field, msg: fmt.Sprintf("field %q has the wrong type", field)}
 		}
 		return fmt.Errorf("invalid request body: %v", err)
@@ -121,72 +126,4 @@ func rootTypeMessage(target any) string {
 		return "the request body must be a JSON object"
 	}
 	return "the request body has the wrong type"
-}
-
-// jsonFieldPath turns the Field of a json.UnmarshalTypeError into the path
-// of the member as the request wrote it. encoding/json joins the Go names
-// of embedded structs into Field ("issueFields.priority" for priority of a
-// body that embeds issueFields); those segments are dropped by walking
-// target: a segment naming an anonymous struct field without a JSON name of
-// its own is the embedding, not a member.
-func jsonFieldPath(target reflect.Type, field string) string {
-	segs := strings.Split(field, ".")
-	out := make([]string, 0, len(segs))
-	t := target
-	for _, seg := range segs {
-		t = elemType(t)
-		if t == nil || t.Kind() != reflect.Struct {
-			out = append(out, seg)
-			t = nil
-			continue
-		}
-		if f, ok := t.FieldByName(seg); ok && f.Anonymous && jsonName(f) == "" {
-			t = f.Type
-			continue
-		}
-		out = append(out, seg)
-		t = memberType(t, seg)
-	}
-	return strings.Join(out, ".")
-}
-
-// elemType follows pointers, slices, arrays and maps to the type of their
-// elements; nil stays nil.
-func elemType(t reflect.Type) reflect.Type {
-	for t != nil {
-		switch t.Kind() {
-		case reflect.Pointer, reflect.Slice, reflect.Array, reflect.Map:
-			t = t.Elem()
-		default:
-			return t
-		}
-	}
-	return nil
-}
-
-// memberType is the type of the member of struct t that JSON names name
-// (promoted members of embedded structs included), nil when there is none.
-func memberType(t reflect.Type, name string) reflect.Type {
-	for _, f := range reflect.VisibleFields(t) {
-		if f.Anonymous || !f.IsExported() {
-			continue
-		}
-		n := jsonName(f)
-		if n == "-" {
-			continue
-		}
-		if n == "" {
-			n = f.Name
-		}
-		if n == name {
-			return f.Type
-		}
-	}
-	return nil
-}
-
-// jsonName is the name the json tag of f gives, "" when it gives none.
-func jsonName(f reflect.StructField) string {
-	name, _, _ := strings.Cut(f.Tag.Get("json"), ",")
-	return name
 }

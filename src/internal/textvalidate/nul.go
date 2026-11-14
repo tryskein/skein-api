@@ -16,14 +16,12 @@ package textvalidate
 // value it sent is not the value that would be stored.
 
 import (
-	"bytes"
-	"encoding/json"
-	"errors"
-	"io"
 	"net/url"
 	"sort"
 	"strconv"
 	"strings"
+
+	"skein-api/internal/jsonpath"
 )
 
 // NULCode is the wire-stable code of a refused U+0000 — the validation
@@ -66,98 +64,18 @@ func ContainsNUL(s string) bool {
 // guard's to judge: it returns the decoding error and the caller lets the
 // request reach the decoder that answers malformed input.
 func ScanJSONForNUL(raw []byte) error {
-	dec := json.NewDecoder(bytes.NewReader(raw))
-	dec.UseNumber()
-	var stack []jsonFrame
-	for {
-		tok, err := dec.Token()
-		if errors.Is(err, io.EOF) {
-			if len(stack) > 0 {
-				// The document ended inside a container.
-				return io.ErrUnexpectedEOF
-			}
-			return nil
+	var found *NULError
+	err := jsonpath.Walk(raw, func(t jsonpath.Token) bool {
+		if s, ok := t.Value.(string); ok && ContainsNUL(s) {
+			found = &NULError{Field: t.Path, InName: t.Name}
+			return false
 		}
-		if err != nil {
-			return err
-		}
-		switch v := tok.(type) {
-		case json.Delim:
-			switch v {
-			case '{', '[':
-				beginValue(stack)
-				stack = append(stack, jsonFrame{object: v == '{', expectKey: v == '{', index: -1})
-			case '}', ']':
-				stack = stack[:len(stack)-1]
-				endValue(stack)
-			}
-		case string:
-			if n := len(stack); n > 0 && stack[n-1].object && stack[n-1].expectKey {
-				if ContainsNUL(v) {
-					return &NULError{Field: framePath(stack), InName: true}
-				}
-				stack[n-1].key = v
-				stack[n-1].expectKey = false
-				continue
-			}
-			beginValue(stack)
-			if ContainsNUL(v) {
-				return &NULError{Field: framePath(stack)}
-			}
-			endValue(stack)
-		default:
-			beginValue(stack)
-			endValue(stack)
-		}
+		return true
+	})
+	if found != nil {
+		return found
 	}
-}
-
-// jsonFrame is one open container of the walk.
-type jsonFrame struct {
-	object bool
-	// expectKey: the next string of an object is a member name.
-	expectKey bool
-	// key is the member being read; index the element of an array.
-	key   string
-	index int
-}
-
-// beginValue moves an array to its next element.
-func beginValue(stack []jsonFrame) {
-	if n := len(stack); n > 0 && !stack[n-1].object {
-		stack[n-1].index++
-	}
-}
-
-// endValue makes an object expect its next member name.
-func endValue(stack []jsonFrame) {
-	if n := len(stack); n > 0 && stack[n-1].object {
-		stack[n-1].expectKey = true
-	}
-}
-
-// framePath is the path of the current position. While a member name is
-// being read the innermost object is named by its parent's path.
-func framePath(stack []jsonFrame) string {
-	var b strings.Builder
-	for _, f := range stack {
-		if f.object {
-			if f.expectKey {
-				// Reading a member name: the path stops at this object.
-				break
-			}
-			if b.Len() > 0 {
-				b.WriteByte('.')
-			}
-			b.WriteString(f.key)
-			continue
-		}
-		if f.index < 0 {
-			break
-		}
-		b.WriteString("[" + strconv.Itoa(f.index) + "]")
-	}
-	return b.String()
+	return err
 }
 
 // FindNULInValue walks a decoded JSON value (maps, slices, strings — what
