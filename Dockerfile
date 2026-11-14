@@ -3,10 +3,10 @@
 # skein-api — Go HTTP service.
 #
 # Multi-stage build:
-#   1. builder  — golang:1.26-alpine, downloads modules and produces a static
+#   1. builder  — golang:1.27-alpine, downloads modules and produces a static
 #                 binary (CGO disabled, ldflags="-w" strips DWARF for ~20% size
 #                 reduction while keeping the symbol table for stack traces).
-#   2. runtime  — alpine:3.21 with the binary plus the diagnostic utilities
+#   2. runtime  — alpine:3.24 with the binary plus the diagnostic utilities
 #                 mandated by the project guidelines (curl, ping, psql, dig, nc).
 #                 Runs as non-root user appuser (uid 1000).
 #
@@ -16,7 +16,7 @@
 # the migrate library API (see cmd/api/main.go).
 
 # ============ Stage 1: builder ============
-FROM golang:1.26-alpine AS builder
+FROM golang:1.27-alpine AS builder
 
 WORKDIR /build
 
@@ -35,7 +35,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build \
     ./cmd/api/
 
 # ============ Stage 2: runtime ============
-FROM alpine:3.21
+FROM alpine:3.24
 
 # Diagnostic utilities required by the project guidelines so operators can
 # debug a live container: HTTP probes, network reach, DB connectivity, DNS
@@ -43,7 +43,7 @@ FROM alpine:3.21
 RUN apk add --no-cache \
     curl \
     iputils-ping \
-    postgresql17-client \
+    postgresql18-client \
     bind-tools \
     netcat-openbsd \
     ca-certificates \
