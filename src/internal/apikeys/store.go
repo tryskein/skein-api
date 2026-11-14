@@ -61,6 +61,8 @@ type APIKey struct {
 	// ProjectNames and SpaceNames name the scope members.
 	ProjectNames map[uuid.UUID]string
 	SpaceNames   map[uuid.UUID]string
+	// ProjectPrefixes gives each scope project its id prefix.
+	ProjectPrefixes map[uuid.UUID]string
 	// SpaceShortIDs gives each scope space its short id, the form every
 	// surface identifies a space by.
 	SpaceShortIDs map[uuid.UUID]string
@@ -350,6 +352,8 @@ SELECT k.id, k.label, k.prefix, k.created_at, k.last_used_at, k.revoked_at,
               WHERE sp.api_key_id = k.id ORDER BY p.id),
        ARRAY(SELECT p.name FROM api_key_scope_projects sp JOIN projects p ON p.id = sp.project_id
               WHERE sp.api_key_id = k.id ORDER BY p.id),
+       ARRAY(SELECT p.id_prefix FROM api_key_scope_projects sp JOIN projects p ON p.id = sp.project_id
+              WHERE sp.api_key_id = k.id ORDER BY p.id),
        ARRAY(SELECT sx.id FROM api_key_scope_spaces ss JOIN spaces sx ON sx.id = ss.space_id
               WHERE ss.api_key_id = k.id ORDER BY sx.id),
        ARRAY(SELECT sx.name FROM api_key_scope_spaces ss JOIN spaces sx ON sx.id = ss.space_id
@@ -373,10 +377,10 @@ SELECT k.id, k.label, k.prefix, k.created_at, k.last_used_at, k.revoked_at,
 		var level *string
 		var mode string
 		var ownerAdmin bool
-		var projectNames, spaceNames, spaceShortIDs []string
+		var projectNames, projectPrefixes, spaceNames, spaceShortIDs []string
 		if err := rows.Scan(&k.ID, &k.Label, &k.Prefix, &k.CreatedAt, &k.LastUsedAt, &k.RevokedAt,
 			&level, &k.Grant.Admin, &mode, &k.Grant.ExpiresAt, &k.ReissuedFromID, &ownerAdmin,
-			&k.Grant.Scope.Projects, &projectNames, &k.Grant.Scope.Spaces, &spaceNames, &spaceShortIDs); err != nil {
+			&k.Grant.Scope.Projects, &projectNames, &projectPrefixes, &k.Grant.Scope.Spaces, &spaceNames, &spaceShortIDs); err != nil {
 			return nil, fmt.Errorf("scanning api key: %w", err)
 		}
 		if level != nil {
@@ -384,8 +388,10 @@ SELECT k.id, k.label, k.prefix, k.created_at, k.last_used_at, k.revoked_at,
 		}
 		k.Grant.Scope.Mode = ScopeMode(mode)
 		k.ProjectNames = make(map[uuid.UUID]string, len(projectNames))
+		k.ProjectPrefixes = make(map[uuid.UUID]string, len(projectPrefixes))
 		for i, id := range k.Grant.Scope.Projects {
 			k.ProjectNames[id] = projectNames[i]
+			k.ProjectPrefixes[id] = projectPrefixes[i]
 		}
 		k.SpaceNames = make(map[uuid.UUID]string, len(spaceNames))
 		k.SpaceShortIDs = make(map[uuid.UUID]string, len(spaceShortIDs))

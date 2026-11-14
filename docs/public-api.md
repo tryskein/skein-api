@@ -76,6 +76,14 @@ object exists. A missing role of the owner is 403 with the code of the role
 key's scope behaves as an object of a project the owner cannot see: 404 when
 the path names it, absent from every list, search and count.
 
+`getMe` describes the key of the request in `key`
+(`internal/publicapi/projects.go#MeKey`): its id, label and prefix, the rights
+it holds now under the names `requiredRight` uses (`unavailableRights` lists
+an `admin` its owner no longer has), the scope (the projects with id and
+prefix, or the spaces by short id) and `createdAt`, `expiresAt`, `lastUsedAt`.
+Never the secret or its hash. MCP `skein_whoami` answers the same identity
+without `key`.
+
 The scope holds for writes as well: a write by key changes only objects
 inside it. `markAllNotificationsRead` and `markWatchingCardRead` mark only the
 notifications of issues inside the scope, the others stay unread; a

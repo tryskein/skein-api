@@ -19,6 +19,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -26,6 +27,7 @@ import (
 
 	"skein-api/internal/apikeys"
 	"skein-api/internal/auth"
+	"skein-api/internal/authz"
 	"skein-api/internal/errcode"
 	"skein-api/internal/mcp/tools"
 	"skein-api/internal/projects"
@@ -206,16 +208,116 @@ func checkKind(w http.ResponseWriter, kind *string) bool {
 	return true
 }
 
+// MeResponse is the answer of getMe: the identity skein_whoami answers, and
+// the API key the request authenticated with.
+type MeResponse struct {
+	tools.WhoamiResponse
+	// Key is the API key of this request: what it may do, where, until when.
+	Key MeKey `json:"key"`
+}
+
+// MeKey is the API key of a getMe request. It never contains the secret or
+// its hash.
+type MeKey struct {
+	// ID of the key; the lock holder of its executor is api:<id>[:<workerId>].
+	ID string `json:"id"`
+	// Label chosen by the owner.
+	Label string `json:"label"`
+	// Prefix is the non-secret start of the key, as the API keys page shows it.
+	Prefix string `json:"prefix"`
+	// Rights are the key rights this key holds now, by the names an
+	// insufficient_scope refusal requires (requiredRight): read, write,
+	// manage — read ⊂ write ⊂ manage — and admin.
+	Rights []string `json:"rights"`
+	// UnavailableRights are rights granted to the key that do not apply now
+	// because its owner lacks them (admin of an owner who is no longer an
+	// internal instance admin).
+	UnavailableRights []string `json:"unavailableRights"`
+	// Scope is the set of projects the key reaches.
+	Scope MeKeyScope `json:"scope"`
+	// CreatedAt — when the key was created.
+	CreatedAt time.Time `json:"createdAt"`
+	// ExpiresAt — the end of the key's lifetime; null only on a key created
+	// before lifetimes existed.
+	ExpiresAt *time.Time `json:"expiresAt" extensions:"x-nullable"`
+	// LastUsedAt — the last authenticated use (granularity one minute);
+	// null if never recorded.
+	LastUsedAt *time.Time `json:"lastUsedAt" extensions:"x-nullable"`
+}
+
+// MeKeyScope is the scope of a key.
+type MeKeyScope struct {
+	// Mode: projects (the listed projects), spaces (the projects of the
+	// listed spaces) or all (everything the owner reaches).
+	Mode string `json:"mode" enums:"projects,spaces,all"`
+	// Projects of a projects scope; empty otherwise.
+	Projects []MeKeyProject `json:"projects"`
+	// Spaces of a spaces scope; empty otherwise.
+	Spaces []MeKeySpace `json:"spaces"`
+}
+
+// MeKeyProject is one project of a key's scope.
+type MeKeyProject struct {
+	// ID of the project (UUID).
+	ID string `json:"id"`
+	// Prefix of the project's issue ids.
+	Prefix string `json:"prefix"`
+	// Name of the project.
+	Name string `json:"name"`
+}
+
+// MeKeySpace is one space of a key's scope.
+type MeKeySpace struct {
+	// ID is the short id of the space.
+	ID string `json:"id"`
+	// Name of the space.
+	Name string `json:"name"`
+}
+
+// keyRights are the rights a key may hold, in the order getMe lists them.
+var keyRights = []authz.KeyRight{authz.KeyRightRead, authz.KeyRightWrite, authz.KeyRightManage, authz.KeyRightAdmin}
+
+// meKey describes k as getMe answers it. The rights are judged by the same
+// predicate as every call of the key (authz.KeyMeets), over the grant with
+// the effective admin flag.
+func meKey(k apikeys.APIKey) MeKey {
+	g := k.Grant
+	g.Admin = k.EffectiveAdmin
+	out := MeKey{
+		ID: k.ID.String(), Label: k.Label, Prefix: k.Prefix,
+		Rights: []string{}, UnavailableRights: []string{},
+		Scope:     MeKeyScope{Mode: string(k.Grant.Scope.Mode), Projects: []MeKeyProject{}, Spaces: []MeKeySpace{}},
+		CreatedAt: k.CreatedAt, ExpiresAt: k.Grant.ExpiresAt, LastUsedAt: k.LastUsedAt,
+	}
+	for _, r := range keyRights {
+		if authz.KeyMeets(g, authz.KeyRequirement{Right: r}) {
+			out.Rights = append(out.Rights, r.String())
+		}
+	}
+	if k.Grant.Admin && !k.EffectiveAdmin {
+		out.UnavailableRights = append(out.UnavailableRights, authz.KeyRightAdmin.String())
+	}
+	for _, id := range k.Grant.Scope.Projects {
+		out.Scope.Projects = append(out.Scope.Projects, MeKeyProject{ID: id.String(), Prefix: k.ProjectPrefixes[id], Name: k.ProjectNames[id]})
+	}
+	for _, id := range k.Grant.Scope.Spaces {
+		out.Scope.Spaces = append(out.Scope.Spaces, MeKeySpace{ID: k.SpaceShortIDs[id], Name: k.SpaceNames[id]})
+	}
+	return out
+}
+
 // getMe answers who the key belongs to.
 //
 // @Summary Get the caller
 // @Description Returns the identity the API key acts as: the user (id, email, username, name, role), the executor of this request (agent: sessionId is the lock holder api:<keyId>[:<workerId>] of X-Skein-Worker-Id, with when it was first and last seen), the projects the user sees within the key's scope (at most 100, by name, with the user's role and the space; projectsTotal counts all of them and projectsTruncated marks the cut), the spaces the user is in within the key's scope (canCreateProject only where the key may create a project: the right manage and a scope of spaces or all) and whether the user is an instance admin.
 // @Description
-// @Description The same answer as the MCP tool skein_whoami. Any key may call it, whatever its rights. Read-only; the request still counts as activity of its executor.
+// @Description key describes the API key of this request, never its secret or hash: id, label, prefix, the rights it holds now (read, write, manage, admin — the names requiredRight of insufficient_scope uses; unavailableRights lists a granted admin its owner no longer has), the scope (mode projects with the projects' id, prefix and name; mode spaces with the spaces' short id and name; mode all), createdAt, expiresAt and lastUsedAt.
+// @Description
+// @Description Everything but key is the same answer as the MCP tool skein_whoami. Any key may call it, whatever its rights. Read-only; the request still counts as activity of its executor.
 // @Tags Me
 // @Produce json
 // @Security SkeinApiKey
-// @Success 200 {object} tools.WhoamiResponse "The caller"
+// @Success 200 {object} MeResponse "The caller and the key"
 // @Failure 401 {object} ProblemDocument "No key, or the key is invalid, expired or revoked, or its owner is deactivated (code unauthenticated)"
 // @Failure 404 {object} ProblemDocument "The key's owner no longer exists (code user_not_found)"
 // @Failure 429 {object} ProblemDocument "Request limit of the key or failed-authentication limit of the address exceeded (code rate_limited, Retry-After)"
@@ -236,7 +338,17 @@ func (a *projectsAPI) getMe(w http.ResponseWriter, r *http.Request) {
 		WriteInternalError(w, r, "loading the caller", err)
 		return
 	}
-	WriteJSON(w, r, http.StatusOK, resp)
+	keyID, ok := auth.APIKeyIDFrom(r.Context())
+	if !ok {
+		WriteInternalError(w, r, "reading the API key of the request", errors.New("the request carries no API key id"))
+		return
+	}
+	key, err := apikeys.New(a.pool).GetByUser(r.Context(), callerOf(r), keyID)
+	if err != nil {
+		WriteInternalError(w, r, "reading the API key of the request", err)
+		return
+	}
+	WriteJSON(w, r, http.StatusOK, MeResponse{WhoamiResponse: resp, Key: meKey(key)})
 }
 
 // listProjects lists the projects the caller sees.

@@ -2601,6 +2601,205 @@
                 ],
                 "type": "object"
             },
+            "publicapi.MeKey": {
+                "properties": {
+                    "createdAt": {
+                        "description": "CreatedAt — when the key was created.",
+                        "type": "string"
+                    },
+                    "expiresAt": {
+                        "description": "ExpiresAt — the end of the key's lifetime; null only on a key created\nbefore lifetimes existed.",
+                        "type": [
+                            "string",
+                            "null"
+                        ]
+                    },
+                    "id": {
+                        "description": "ID of the key; the lock holder of its executor is api:<id>[:<workerId>].",
+                        "type": "string"
+                    },
+                    "label": {
+                        "description": "Label chosen by the owner.",
+                        "type": "string"
+                    },
+                    "lastUsedAt": {
+                        "description": "LastUsedAt — the last authenticated use (granularity one minute);\nnull if never recorded.",
+                        "type": [
+                            "string",
+                            "null"
+                        ]
+                    },
+                    "prefix": {
+                        "description": "Prefix is the non-secret start of the key, as the API keys page shows it.",
+                        "type": "string"
+                    },
+                    "rights": {
+                        "description": "Rights are the key rights this key holds now, by the names an\ninsufficient_scope refusal requires (requiredRight): read, write,\nmanage — read ⊂ write ⊂ manage — and admin.",
+                        "items": {
+                            "type": "string"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
+                    },
+                    "scope": {
+                        "$ref": "#/components/schemas/publicapi.MeKeyScope",
+                        "description": "Scope is the set of projects the key reaches."
+                    },
+                    "unavailableRights": {
+                        "description": "UnavailableRights are rights granted to the key that do not apply now\nbecause its owner lacks them (admin of an owner who is no longer an\ninternal instance admin).",
+                        "items": {
+                            "type": "string"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
+                    }
+                },
+                "required": [
+                    "createdAt",
+                    "expiresAt",
+                    "id",
+                    "label",
+                    "lastUsedAt",
+                    "prefix",
+                    "rights",
+                    "scope",
+                    "unavailableRights"
+                ],
+                "type": "object"
+            },
+            "publicapi.MeKeyProject": {
+                "properties": {
+                    "id": {
+                        "description": "ID of the project (UUID).",
+                        "type": "string"
+                    },
+                    "name": {
+                        "description": "Name of the project.",
+                        "type": "string"
+                    },
+                    "prefix": {
+                        "description": "Prefix of the project's issue ids.",
+                        "type": "string"
+                    }
+                },
+                "required": [
+                    "id",
+                    "name",
+                    "prefix"
+                ],
+                "type": "object"
+            },
+            "publicapi.MeKeyScope": {
+                "properties": {
+                    "mode": {
+                        "description": "Mode: projects (the listed projects), spaces (the projects of the\nlisted spaces) or all (everything the owner reaches).",
+                        "enum": [
+                            "projects",
+                            "spaces",
+                            "all"
+                        ],
+                        "type": "string"
+                    },
+                    "projects": {
+                        "description": "Projects of a projects scope; empty otherwise.",
+                        "items": {
+                            "$ref": "#/components/schemas/publicapi.MeKeyProject"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
+                    },
+                    "spaces": {
+                        "description": "Spaces of a spaces scope; empty otherwise.",
+                        "items": {
+                            "$ref": "#/components/schemas/publicapi.MeKeySpace"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
+                    }
+                },
+                "required": [
+                    "mode",
+                    "projects",
+                    "spaces"
+                ],
+                "type": "object"
+            },
+            "publicapi.MeKeySpace": {
+                "properties": {
+                    "id": {
+                        "description": "ID is the short id of the space.",
+                        "type": "string"
+                    },
+                    "name": {
+                        "description": "Name of the space.",
+                        "type": "string"
+                    }
+                },
+                "required": [
+                    "id",
+                    "name"
+                ],
+                "type": "object"
+            },
+            "publicapi.MeResponse": {
+                "properties": {
+                    "agent": {
+                        "$ref": "#/components/schemas/tools.WhoamiAgent"
+                    },
+                    "isAdmin": {
+                        "type": "boolean"
+                    },
+                    "key": {
+                        "$ref": "#/components/schemas/publicapi.MeKey",
+                        "description": "Key is the API key of this request: what it may do, where, until when."
+                    },
+                    "projects": {
+                        "items": {
+                            "$ref": "#/components/schemas/tools.WhoamiProject"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
+                    },
+                    "projectsHint": {
+                        "type": "string"
+                    },
+                    "projectsTotal": {
+                        "description": "ProjectsTotal is the count of projects visible to the caller.\n>= len(Projects); greater when the projects[] slice was capped.\nAlways populated so callers can tell whether they got the full list.",
+                        "type": "integer"
+                    },
+                    "projectsTruncated": {
+                        "description": "ProjectsTruncated is true when projects[] was capped\n(whoamiProjectsCap).",
+                        "type": "boolean"
+                    },
+                    "spaces": {
+                        "description": "Spaces are the spaces the caller sees (sk-674.18 T024, US-12)\nwithin the API key's scope (sk-878.3.1 US-3), in the order of the\nprojects column, capped like projects[].",
+                        "items": {
+                            "$ref": "#/components/schemas/spaces.AgentSpace"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
+                    },
+                    "spacesTotal": {
+                        "type": "integer"
+                    },
+                    "spacesTruncated": {
+                        "type": "boolean"
+                    },
+                    "user": {
+                        "$ref": "#/components/schemas/tools.WhoamiUser"
+                    }
+                },
+                "required": [
+                    "isAdmin",
+                    "key",
+                    "projects",
+                    "projectsTotal",
+                    "spaces",
+                    "spacesTotal",
+                    "user"
+                ],
+                "type": "object"
+            },
             "publicapi.MovePlan": {
                 "properties": {
                     "nextSteps": {
@@ -4660,60 +4859,6 @@
                     "name",
                     "role",
                     "spaceId"
-                ],
-                "type": "object"
-            },
-            "tools.WhoamiResponse": {
-                "properties": {
-                    "agent": {
-                        "$ref": "#/components/schemas/tools.WhoamiAgent"
-                    },
-                    "isAdmin": {
-                        "type": "boolean"
-                    },
-                    "projects": {
-                        "items": {
-                            "$ref": "#/components/schemas/tools.WhoamiProject"
-                        },
-                        "type": "array",
-                        "uniqueItems": false
-                    },
-                    "projectsHint": {
-                        "type": "string"
-                    },
-                    "projectsTotal": {
-                        "description": "ProjectsTotal is the count of projects visible to the caller.\n>= len(Projects); greater when the projects[] slice was capped.\nAlways populated so callers can tell whether they got the full list.",
-                        "type": "integer"
-                    },
-                    "projectsTruncated": {
-                        "description": "ProjectsTruncated is true when projects[] was capped\n(whoamiProjectsCap).",
-                        "type": "boolean"
-                    },
-                    "spaces": {
-                        "description": "Spaces are the spaces the caller sees (sk-674.18 T024, US-12)\nwithin the API key's scope (sk-878.3.1 US-3), in the order of the\nprojects column, capped like projects[].",
-                        "items": {
-                            "$ref": "#/components/schemas/spaces.AgentSpace"
-                        },
-                        "type": "array",
-                        "uniqueItems": false
-                    },
-                    "spacesTotal": {
-                        "type": "integer"
-                    },
-                    "spacesTruncated": {
-                        "type": "boolean"
-                    },
-                    "user": {
-                        "$ref": "#/components/schemas/tools.WhoamiUser"
-                    }
-                },
-                "required": [
-                    "isAdmin",
-                    "projects",
-                    "projectsTotal",
-                    "spaces",
-                    "spacesTotal",
-                    "user"
                 ],
                 "type": "object"
             },
@@ -10384,18 +10529,18 @@
         },
         "/api/v1/me": {
             "get": {
-                "description": "Returns the identity the API key acts as: the user (id, email, username, name, role), the executor of this request (agent: sessionId is the lock holder api:<keyId>[:<workerId>] of X-Skein-Worker-Id, with when it was first and last seen), the projects the user sees within the key's scope (at most 100, by name, with the user's role and the space; projectsTotal counts all of them and projectsTruncated marks the cut), the spaces the user is in within the key's scope (canCreateProject only where the key may create a project: the right manage and a scope of spaces or all) and whether the user is an instance admin.\n\nThe same answer as the MCP tool skein_whoami. Any key may call it, whatever its rights. Read-only; the request still counts as activity of its executor.",
+                "description": "Returns the identity the API key acts as: the user (id, email, username, name, role), the executor of this request (agent: sessionId is the lock holder api:<keyId>[:<workerId>] of X-Skein-Worker-Id, with when it was first and last seen), the projects the user sees within the key's scope (at most 100, by name, with the user's role and the space; projectsTotal counts all of them and projectsTruncated marks the cut), the spaces the user is in within the key's scope (canCreateProject only where the key may create a project: the right manage and a scope of spaces or all) and whether the user is an instance admin.\n\nkey describes the API key of this request, never its secret or hash: id, label, prefix, the rights it holds now (read, write, manage, admin — the names requiredRight of insufficient_scope uses; unavailableRights lists a granted admin its owner no longer has), the scope (mode projects with the projects' id, prefix and name; mode spaces with the spaces' short id and name; mode all), createdAt, expiresAt and lastUsedAt.\n\nEverything but key is the same answer as the MCP tool skein_whoami. Any key may call it, whatever its rights. Read-only; the request still counts as activity of its executor.",
                 "operationId": "getMe",
                 "responses": {
                     "200": {
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/tools.WhoamiResponse"
+                                    "$ref": "#/components/schemas/publicapi.MeResponse"
                                 }
                             }
                         },
-                        "description": "The caller"
+                        "description": "The caller and the key"
                     },
                     "401": {
                         "content": {
