@@ -14332,6 +14332,8 @@
                         "name": "query",
                         "required": true,
                         "schema": {
+                            "maxLength": 500,
+                            "minLength": 1,
                             "type": "string"
                         }
                     },

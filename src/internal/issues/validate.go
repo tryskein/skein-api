@@ -290,17 +290,22 @@ func validatePatchInputProse(input PatchIssueInput) error {
 	return nil
 }
 
+// LabelMaxLength is the most characters (Unicode code points) a label may
+// have after trimming.
+const LabelMaxLength = 100
+
 // ValidateLabel trims surrounding whitespace and enforces non-empty +
-// length cap. We deliberately do NOT lowercase — labels are case-preserved
-// per db-schema.md §2.15.
+// a length cap of LabelMaxLength characters, counted as code points like the
+// title. We deliberately do NOT lowercase — labels are case-preserved per
+// db-schema.md §2.15.
 func ValidateLabel(s string) (string, error) {
 	t := strings.TrimSpace(s)
 	if t == "" {
 		return "", newValidationError("invalid_label", "label is required")
 	}
-	if len(t) > 100 {
+	if utf8.RuneCountInString(t) > LabelMaxLength {
 		return "", newValidationError("invalid_label",
-			"label must be at most 100 characters")
+			fmt.Sprintf("label must be at most %d characters", LabelMaxLength))
 	}
 	return t, nil
 }

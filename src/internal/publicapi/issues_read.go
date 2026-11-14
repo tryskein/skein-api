@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -54,6 +55,9 @@ var (
 	eventListLimit = Limit{Min: 1, Max: 100, Default: 20}
 	commentLimit   = Limit{Min: 1, Max: 100, Default: 50}
 	searchLimit    = Limit{Min: 1, Max: search.MaxPageLimit, Default: tools.SearchLimitDefault}
+	// searchQueryMaxLength is the most characters (code points) of a
+	// search query.
+	searchQueryMaxLength = 500
 )
 
 // issuesAPI serves the issue resources.
@@ -1036,7 +1040,7 @@ func (SearchPage) itemType() reflect.Type { return reflect.TypeFor[search.Item](
 // @Tags Search
 // @Produce json
 // @Security SkeinApiKey[read]
-// @Param query query string true "The query, 1..500 characters"
+// @Param query query string true "The query, 1..500 characters" minlength(1) maxlength(500)
 // @Param project query string false "Narrow to one project: UUID, prefix, alias or name"
 // @Param space query string false "Narrow to one space by its short id"
 // @Param kinds query string false "Comma-separated kinds: issue, comment, project, component (default all)"
@@ -1073,8 +1077,8 @@ func (a *issuesAPI) searchAll(w http.ResponseWriter, r *http.Request) {
 		q.fail("query is required")
 		return
 	}
-	if len(text) > 500 {
-		q.fail("query must be at most 500 characters")
+	if utf8.RuneCountInString(text) > searchQueryMaxLength {
+		q.fail(fmt.Sprintf("query must be at most %d characters", searchQueryMaxLength))
 		return
 	}
 	params := search.Params{Query: text, CallerID: callerOf(r)}

@@ -88,3 +88,31 @@ func TestValidateTitle_LengthInCharacters(t *testing.T) {
 		})
 	}
 }
+
+// TestValidateLabel_LengthInCharacters — a label is at most 100
+// characters, counted as characters like the title, not as UTF-8 bytes.
+func TestValidateLabel_LengthInCharacters(t *testing.T) {
+	cases := []struct {
+		name  string
+		label string
+		ok    bool
+	}{
+		{"100 ASCII characters", strings.Repeat("a", 100), true},
+		{"101 ASCII characters", strings.Repeat("a", 101), false},
+		{"100 Cyrillic characters", strings.Repeat("ж", 100), true},
+		{"101 Cyrillic characters", strings.Repeat("ж", 101), false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			_, err := ValidateLabel(c.label)
+			if (err == nil) != c.ok {
+				t.Fatalf("ValidateLabel(%d runes) = %v, want ok=%v", len([]rune(c.label)), err, c.ok)
+			}
+			if err != nil {
+				if ve, ok := IsValidationError(err); !ok || ve.Code != "invalid_label" {
+					t.Errorf("ValidateLabel error = %v, want code invalid_label", err)
+				}
+			}
+		})
+	}
+}

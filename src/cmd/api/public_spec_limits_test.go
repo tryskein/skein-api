@@ -4,14 +4,15 @@ package main
 // document declares are the limits the operations apply. The reference is
 // the served document itself: a client sizes its pages and titles by it, so
 // for every list operation the bounds of its limit parameter must be
-// accepted and the values just outside them refused, and the declared title
-// length of a create and an update must be accepted at the bound and
-// refused one character past it. Red when the document and the behaviour
+// accepted and the values just outside them refused, and the declared length
+// of the search query and of the title of a create and an update must be
+// accepted at the bound and refused one character past it. Red when the document and the behaviour
 // disagree in either direction (the defect: the document said 1..100 and
 // 1..500 where the code applied 1..500 and 1..1000).
 
 import (
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"testing"
@@ -88,6 +89,27 @@ func TestPublicSpecLimitsMatchBehaviour(t *testing.T) {
 	}
 	// A non-ASCII title: the limit counts characters, as maxLength does.
 	titleOf := func(n int) string { return strings.Repeat("ж", n) }
+
+	t.Run("query of search", func(t *testing.T) {
+		op := documentOperation(doc, http.MethodGet, "/api/v1/search")
+		if op == nil {
+			t.Fatal("search is not in the document")
+		}
+		p := op.Parameters.GetByInAndName(openapi3.ParameterInQuery, "query")
+		if p == nil || p.Schema.Value.MaxLength == nil {
+			t.Fatal("search query declares no maxLength")
+		}
+		max := int(*p.Schema.Value.MaxLength)
+		search := func(n int) answer {
+			return w.do(ownerKey, opCall{http.MethodGet, "/api/v1/search?kinds=issue&query=" + url.QueryEscape(titleOf(n)), nil, nil}, "", nil)
+		}
+		if a := search(max); a.status != http.StatusOK {
+			t.Errorf("a query of %d characters: %d %s, want 200", max, a.status, a.body)
+		}
+		if a := search(max + 1); a.status != http.StatusBadRequest || a.code() != "validation_error" {
+			t.Errorf("a query of %d characters: %d %s, want 400 validation_error", max+1, a.status, a.body)
+		}
+	})
 
 	t.Run("title of createIssue", func(t *testing.T) {
 		max := titleMax(t, http.MethodPost, "/api/v1/projects/{project}/issues")
