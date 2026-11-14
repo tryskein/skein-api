@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5/middleware"
+	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -90,7 +91,7 @@ func CorrelationIDFrom(ctx context.Context) string {
 // sk-274 shipped the keepalive that stops most connections from dying, but
 // left one of its own acceptance criteria open: WHEN a connection dies
 // anyway (network blip, session GC, a pod cycling mid-session — see below),
-// what does the client see? Read against v0.50.0's transport
+// what does the client see? Read against v1.5.0's transport
 // (server/streamable_http.go):
 //
 //   - POST (a tool call) against a dead/unknown Mcp-Session-Id already got a
@@ -200,6 +201,12 @@ func Setup(pool *pgxpool.Pool, heartbeatInterval time.Duration, registerTools fu
 	}
 
 	opts := []server.StreamableHTTPOption{
+		// Advertise only the session-oriented protocol revisions (the ones
+		// with the initialize handshake). The stateless 2026-07-28 revision
+		// has no Mcp-Session-Id, and the agent identity, the agent registry
+		// and the monitor all key on that header. A client that asks for the
+		// stateless revision gets the supported list and negotiates down.
+		server.WithStreamableHTTPProtocolVersions(mcp.LegacyProtocolVersions()...),
 		// Copy auth values from the http.Request context onto the per-RPC
 		// context that mcp-go threads through to tool handlers. Without
 		// this, the handlers see a fresh ctx with no user identity.

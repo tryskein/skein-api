@@ -16,17 +16,18 @@ import (
 // session" — unknown, malformed, or explicitly terminated. It sits in the
 // JSON-RPC 2.0 spec's "server error" reserved range (-32000..-32099, §5.1)
 // and is not one of mcp-go's own assigned codes — checked against
-// github.com/mark3labs/mcp-go/mcp@v0.50.0 mcp/types.go: PARSE_ERROR -32700,
+// github.com/mark3labs/mcp-go/mcp@v1.5.0 mcp/types.go: PARSE_ERROR -32700,
 // INVALID_REQUEST -32600, METHOD_NOT_FOUND -32601, INVALID_PARAMS -32602,
-// INTERNAL_ERROR -32603, RESOURCE_NOT_FOUND -32002,
-// URL_ELICITATION_REQUIRED -32042, REQUEST_INTERRUPTED -32800 — so a client
+// INTERNAL_ERROR -32603, RESOURCE_NOT_FOUND -32002, HEADER_MISMATCH -32020,
+// MISSING_REQUIRED_CLIENT_CAPABILITY -32021, UNSUPPORTED_PROTOCOL_VERSION
+// -32022, URL_ELICITATION_REQUIRED -32042, REQUEST_INTERRUPTED -32800 — so a client
 // that wants to special-case a dead session can match on this without
 // colliding with the library's own set.
 const mcpSessionErrorCode = -32001
 
 // jsonRPCSessionErrors rewrites the dead-session 404s mcp-go's POST handler
 // produces — server/streamable_http.go handlePost, "Invalid session ID" /
-// "Session terminated" (verified against v0.50.0), plus the same two
+// "Session terminated" (verified against v1.5.0), plus the same two
 // messages and "No active session found for the given session ID" from
 // handleSamplingResponse (handlePost dispatches into it for a POST body
 // shaped like a sampling response) — from a bare text/plain http.Error body
@@ -73,13 +74,14 @@ func jsonRPCSessionErrors(next http.Handler) http.Handler {
 }
 
 // knownDeadSessionMessages is the exact, closed set of text/plain
-// http.Error bodies mcp-go v0.50.0's POST path (server/streamable_http.go)
-// uses for "this Mcp-Session-Id does not identify a usable session":
-// handlePost's own session-ID validation (lines 395 "Invalid session ID",
-// 399 "Session terminated") and handleSamplingResponse's, which handlePost
-// also dispatches into for a POST body shaped like a sampling response
-// (lines 791/795, identical two messages, plus 848 "No active session
-// found for the given session ID"). flush() only rewrites a buffered 404
+// error bodies mcp-go v1.5.0's POST path (server/streamable_http.go,
+// written by writeHTTPError, which sets the same text/plain content type and
+// trailing newline as http.Error) uses for "this Mcp-Session-Id does not
+// identify a usable session": handlePost's own session-ID validation
+// ("Invalid session ID", "Session terminated") and handleSamplingResponse's,
+// which handlePost also dispatches into for a POST body shaped like a
+// sampling response (identical two messages, plus "No active session found
+// for the given session ID"). flush() only rewrites a buffered 404
 // body that is verbatim one of these three — anything else that happens to
 // 404 on POST (a future mcp-go 404, a route we haven't imagined yet) is
 // forwarded untouched rather than mislabelled as a dead-session error.
@@ -163,9 +165,9 @@ func (w *sessionErrorRewriter) Write(p []byte) (int, error) {
 
 // Flush implements http.Flusher by delegating to the underlying
 // ResponseWriter — see the type doc comment for why this has to be spelled
-// out explicitly. mcp-go's handlePost (server/streamable_http.go v0.50.0,
-// the notification-drain goroutine around line 457/465 and the
-// post-HandleMessage drain loop around line 507/516/536) flushes after
+// out explicitly. mcp-go's handlePost (server/streamable_http.go v1.5.0,
+// the notification-drain goroutine and the post-HandleMessage drain loop)
+// flushes after
 // every notification it writes onto a POST response upgraded to SSE; a
 // no-op Flush doesn't error, it just silently defeats timely delivery.
 //

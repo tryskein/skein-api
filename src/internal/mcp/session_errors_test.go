@@ -25,8 +25,8 @@ func TestJSONRPCSessionErrors_RewritesDeadSession404(t *testing.T) {
 	}{
 		{name: "invalid session id", upstreamMsg: "Invalid session ID"},
 		{name: "terminated session", upstreamMsg: "Session terminated"},
-		// handleSamplingResponse's own dead-session 404 (v0.50.0
-		// streamable_http.go:848) — a different call site than handlePost's
+		// handleSamplingResponse's own dead-session 404 (v1.5.0
+		// streamable_http.go) — a different call site than handlePost's
 		// but reached via the same POST /mcp path when the body looks like
 		// a sampling response, so it must be recognized too.
 		{name: "no active session (sampling response path)", upstreamMsg: "No active session found for the given session ID"},
@@ -185,7 +185,7 @@ func TestSetup_POSTDeadSession_EndToEnd(t *testing.T) {
 }
 
 // TestSetup_GETUnknownSession_SilentlyOpensEmptySession is a characterization
-// test, not an approval: it pins mcp-go v0.50.0's actual, documented-and-
+// test, not an approval: it pins mcp-go v1.5.0's actual, documented-and-
 // accepted behaviour (see Setup's "Dead-session behaviour: POST vs GET" doc
 // comment for why we do NOT validate GET ourselves) so a future mcp-go
 // bump that silently changes it — e.g. starts 404ing unknown GET session
@@ -221,7 +221,7 @@ func TestSetup_GETUnknownSession_SilentlyOpensEmptySession(t *testing.T) {
 // sessionErrorRewriter embeds the bare http.ResponseWriter INTERFACE, which
 // only promotes the three methods that interface itself declares
 // (Header/Write/WriteHeader) — not Flush. mcp-go's handlePost
-// (server/streamable_http.go v0.50.0, the notification-drain goroutine and
+// (server/streamable_http.go v1.5.0, the notification-drain goroutine and
 // the post-HandleMessage drain loop) type-asserts w.(http.Flusher) after
 // every notification it pushes onto a POST response upgraded to SSE and
 // flushes it immediately so the client sees it as it happens. With the
