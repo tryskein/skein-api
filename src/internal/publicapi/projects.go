@@ -83,16 +83,16 @@ func (a *projectsAPI) pathProject(w http.ResponseWriter, r *http.Request) (uuid.
 	raw := chi.URLParam(r, "project")
 	handle, err := url.PathUnescape(raw)
 	if err != nil || strings.TrimSpace(handle) == "" {
-		writeCode(w, errcode.ProjectNotFound, OriginPath, "project does not exist or is not visible", nil)
+		writeCode(w, errcode.ProjectNotFound, OriginPath, "project does not exist or is not visible", map[string]any{"project": raw})
 		return uuid.Nil, false
 	}
 	if _, perr := uuid.Parse(handle); perr != nil && projects.IsReservedHandle(handle) {
-		writeCode(w, errcode.ProjectNotFound, OriginPath, "project does not exist or is not visible", nil)
+		writeCode(w, errcode.ProjectNotFound, OriginPath, "project does not exist or is not visible", map[string]any{"project": handle})
 		return uuid.Nil, false
 	}
 	id, err := a.projects.ResolvePathHandle(r.Context(), handle, callerOf(r))
 	if errors.Is(err, projects.ErrNotFound) {
-		writeCode(w, errcode.ProjectNotFound, OriginPath, "project does not exist or is not visible", nil)
+		writeCode(w, errcode.ProjectNotFound, OriginPath, "project does not exist or is not visible", map[string]any{"project": handle})
 		return uuid.Nil, false
 	}
 	if err != nil {
@@ -111,7 +111,7 @@ func (a *projectsAPI) requireOwner(w http.ResponseWriter, r *http.Request, proje
 	case err == nil:
 		return true
 	case errors.Is(err, projects.ErrProjectNotVisible):
-		writeCode(w, errcode.ProjectNotFound, OriginPath, "project does not exist or is not visible", nil)
+		writeCode(w, errcode.ProjectNotFound, OriginPath, "project does not exist or is not visible", map[string]any{"project": projectID.String()})
 	case errors.Is(err, projects.ErrProjectNotOwner):
 		writeCode(w, errcode.Forbidden, OriginDomain,
 			"only the project owner, the space owner or the instance admin can "+what, nil)
@@ -128,7 +128,7 @@ func (a *projectsAPI) requireVisible(w http.ResponseWriter, r *http.Request, pro
 	case err == nil:
 		return true
 	case errors.Is(err, projects.ErrProjectNotVisible):
-		writeCode(w, errcode.ProjectNotFound, OriginPath, "project does not exist or is not visible", nil)
+		writeCode(w, errcode.ProjectNotFound, OriginPath, "project does not exist or is not visible", map[string]any{"project": projectID.String()})
 	default:
 		WriteInternalError(w, r, "checking the project's visibility", err)
 	}
@@ -647,7 +647,7 @@ func (a *projectsAPI) getProject(w http.ResponseWriter, r *http.Request) {
 	}
 	dto, err := a.projects.GetProjectWithStats(r.Context(), projectID, callerOf(r))
 	if errors.Is(err, projects.ErrNotFound) {
-		writeCode(w, errcode.ProjectNotFound, OriginPath, "project does not exist or is not visible", nil)
+		writeCode(w, errcode.ProjectNotFound, OriginPath, "project does not exist or is not visible", map[string]any{"project": projectID.String()})
 		return
 	}
 	if err != nil {
@@ -905,7 +905,7 @@ func (a *projectsAPI) pathUser(w http.ResponseWriter, r *http.Request) (uuid.UUI
 	raw, err := url.PathUnescape(chi.URLParam(r, "user"))
 	raw = strings.TrimSpace(raw)
 	if err != nil || raw == "" {
-		writeCode(w, errcode.UserNotFound, OriginPath, "user not found", nil)
+		writeCode(w, errcode.UserNotFound, OriginPath, "user not found", map[string]any{"user": raw})
 		return uuid.Nil, false
 	}
 	if id, perr := uuid.Parse(raw); perr == nil {

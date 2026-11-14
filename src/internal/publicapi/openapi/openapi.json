@@ -2770,6 +2770,10 @@
             },
             "publicapi.ProblemDocument": {
                 "properties": {
+                    "attachmentId": {
+                        "description": "AttachmentID is the attachment of attachment_not_found.",
+                        "type": "string"
+                    },
                     "candidates": {
                         "description": "Candidates are the projects an ambiguous_project handle matched.",
                         "items": {
@@ -2780,6 +2784,14 @@
                     },
                     "code": {
                         "description": "Code is the machine code of the refusal — the same one MCP answers.",
+                        "type": "string"
+                    },
+                    "commentId": {
+                        "description": "CommentID is the comment of comment_not_found.",
+                        "type": "string"
+                    },
+                    "componentId": {
+                        "description": "ComponentID is the component of component_not_found.",
                         "type": "string"
                     },
                     "currentVersion": {
@@ -2806,12 +2818,36 @@
                         "description": "Field names the refused value: the path of a body member\n(labels[1], dependencies[0].reason), a query parameter, or path.",
                         "type": "string"
                     },
+                    "filterId": {
+                        "description": "FilterID is the watch filter of watch_filter_not_found.",
+                        "type": "string"
+                    },
+                    "issueId": {
+                        "description": "The members below name the object a \"not found\" refusal is about,\none member per code whichever operation refused (objectMembers).\nIssueID is the issue of issue_not_found.",
+                        "type": "string"
+                    },
                     "lockedBy": {
                         "description": "LockedBy is the holder of the lock of locked_by_other and\nalready_claimed.",
                         "type": "string"
                     },
+                    "notificationId": {
+                        "description": "NotificationID is the notification of notification_not_found.",
+                        "type": "string"
+                    },
                     "operationId": {
                         "description": "OperationID is the operation insufficient_scope refused.",
+                        "type": "string"
+                    },
+                    "parentId": {
+                        "description": "ParentID is the parent of parent_not_found.",
+                        "type": "string"
+                    },
+                    "project": {
+                        "description": "Project is the project of project_not_found and ambiguous_project,\nas the request named it (UUID, prefix, alias or name).",
+                        "type": "string"
+                    },
+                    "reminderId": {
+                        "description": "ReminderID is the reminder of reminder_not_found.",
                         "type": "string"
                     },
                     "requiredRight": {
@@ -2826,6 +2862,10 @@
                         "description": "Retryable is true for a transient code: the same request may succeed\nlater without any change.",
                         "type": "boolean"
                     },
+                    "space": {
+                        "description": "Space is the short id of the space of space_not_found.",
+                        "type": "string"
+                    },
                     "status": {
                         "description": "Status is the HTTP status.",
                         "type": "integer"
@@ -2836,6 +2876,10 @@
                     },
                     "type": {
                         "description": "Type is always \"about:blank\": the code says what happened.",
+                        "type": "string"
+                    },
+                    "user": {
+                        "description": "User is the user of user_not_found and member_not_found, as the\nrequest named it (UUID or username).",
                         "type": "string"
                     },
                     "validation": {

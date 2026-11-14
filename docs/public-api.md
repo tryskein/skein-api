@@ -262,7 +262,13 @@ Every error is RFC 9457 `application/problem+json`
 (`internal/publicapi/problem.go#ProblemDocument`): `type` (`about:blank`),
 `title`, `status`, `code` — the same code MCP answers — and `detail`. Some
 codes add members (`requiredRight` and `operationId` of `insufficient_scope`,
-`currentVersion` of `version_conflict`, …).
+`currentVersion` of `version_conflict`, `validation` and `field` of
+`validation_error`, …). A "not found" refusal names its object under one
+member per code in every operation — `issueId` of `issue_not_found`, `project`
+of `project_not_found` and `ambiguous_project` (the handle as the request
+named it), `user` of `user_not_found`, … (`internal/publicapi/problem.go#objectMembers`);
+MCP keeps its own member names. A body member of the wrong type is named in
+`field` by its path in the request.
 
 `retryable: true` is present only on a transient code: the same request may
 succeed later without any change by the client

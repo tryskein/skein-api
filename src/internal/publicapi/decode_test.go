@@ -169,3 +169,63 @@ func TestDecode_StrictRequest(t *testing.T) {
 		})
 	}
 }
+
+// embeddedFields are members a test body embeds, as the issue bodies embed
+// their shared fields.
+type embeddedFields struct {
+	Priority *int `json:"priority"`
+	Nested   *struct {
+		Size int `json:"size"`
+	} `json:"nested"`
+}
+
+// createEmbedded is a body with embedded members and an array of objects.
+type createEmbedded struct {
+	embeddedFields
+	Items []struct {
+		N int `json:"n"`
+	} `json:"items"`
+}
+
+// TestDecode_TypeErrorNamesTheMember — a member of the wrong type is named
+// in field by its path in the request, never by the Go name of an embedded
+// struct; a body that is not an object names no member. Red on
+// "embeddedFields.priority" or on a missing field.
+func TestDecode_TypeErrorNamesTheMember(t *testing.T) {
+	h := publicapi.NewRouter(publicapi.RouterOptions{OperationTimeout: 30 * time.Second}, []publicapi.Route{{
+		OperationID: "testCreateEmbedded", Method: http.MethodPost, Path: "/api/v1/embedded",
+		Auth: publicapi.AuthKey, Key: authz.KeyRequirement{Right: authz.KeyRightWrite},
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			var body createEmbedded
+			if !publicapi.DecodeBody(w, r, &body) {
+				return
+			}
+			w.WriteHeader(http.StatusNoContent)
+		}),
+	}})
+	for _, tc := range []struct {
+		body, field string
+	}{
+		{`{"priority":"high"}`, "priority"},
+		{`{"nested":{"size":"big"}}`, "nested.size"},
+		{`{"items":[{"n":1},{"n":"x"}]}`, "items.n"},
+		{`[{"priority":1}]`, ""},
+		{`"text"`, ""},
+	} {
+		t.Run(tc.body, func(t *testing.T) {
+			rec := send(h, http.MethodPost, "/api/v1/embedded", tc.body)
+			wantValidation400(t, rec)
+			var got map[string]any
+			if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+				t.Fatal(err)
+			}
+			field, present := got["field"]
+			switch {
+			case tc.field == "" && present:
+				t.Errorf("body %s: field %v, want none", tc.body, field)
+			case tc.field != "" && field != tc.field:
+				t.Errorf("body %s: field %v, want %q", tc.body, field, tc.field)
+			}
+		})
+	}
+}

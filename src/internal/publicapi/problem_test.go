@@ -83,3 +83,61 @@ func TestWriteProblem_EveryCodeByOrigin(t *testing.T) {
 		}
 	}
 }
+
+// TestWriteProblem_NamesTheObjectByOneMember — a refusal names its object
+// under one member per code in every operation of the public API: the shared
+// operations name the same issue id (or project handle) differently, and the
+// client reads it from issueId, project, … whichever operation refused.
+// Red when an alias reaches the body or the member is lost.
+func TestWriteProblem_NamesTheObjectByOneMember(t *testing.T) {
+	cases := []struct {
+		code   errcode.Code
+		ext    map[string]any
+		member string
+		want   any
+	}{
+		{errcode.IssueNotFound, map[string]any{"id": "demo-1"}, "issueId", "demo-1"},
+		{errcode.IssueNotFound, map[string]any{"issueId": "demo-2"}, "issueId", "demo-2"},
+		{errcode.ProjectNotFound, map[string]any{"q": "nope"}, "project", "nope"},
+		{errcode.ProjectNotFound, map[string]any{"projectId": "p-uuid"}, "project", "p-uuid"},
+		{errcode.AmbiguousProject, map[string]any{"q": "two", "candidates": []any{}}, "project", "two"},
+		{errcode.CommentNotFound, map[string]any{"id": "c1"}, "commentId", "c1"},
+		{errcode.UserNotFound, map[string]any{"username": "bob"}, "user", "bob"},
+		{errcode.UserNotFound, map[string]any{"userId": "u1"}, "user", "u1"},
+		{errcode.MemberNotFound, map[string]any{"userId": "u2"}, "user", "u2"},
+	}
+	aliases := []string{"id", "q", "projectId", "userId", "username"}
+	for _, c := range cases {
+		t.Run(c.code.String(), func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			publicapi.WriteProblem(rec, publicapi.Problem{Code: c.code, Origin: publicapi.OriginPath, Extensions: c.ext})
+			var body map[string]any
+			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+				t.Fatalf("decode %s: %v", rec.Body.String(), err)
+			}
+			if body[c.member] != c.want {
+				t.Errorf("%s with %v: %s = %v, want %v (body %s)", c.code, c.ext, c.member, body[c.member], c.want, rec.Body.String())
+			}
+			for _, a := range aliases {
+				if _, present := body[a]; present && a != c.member {
+					t.Errorf("%s with %v: alias %s is in the body %s", c.code, c.ext, a, rec.Body.String())
+				}
+			}
+		})
+	}
+}
+
+// TestWriteProblem_LeavesOtherCodesAlone — the members of a code without an
+// object member are written as given.
+func TestWriteProblem_LeavesOtherCodesAlone(t *testing.T) {
+	rec := httptest.NewRecorder()
+	publicapi.WriteProblem(rec, publicapi.Problem{Code: errcode.LockedByOther, Origin: publicapi.OriginDomain,
+		Extensions: map[string]any{"id": "demo-1", "lockedBy": "s"}})
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body["id"] != "demo-1" || body["lockedBy"] != "s" {
+		t.Errorf("body %s, want id and lockedBy as given", rec.Body.String())
+	}
+}

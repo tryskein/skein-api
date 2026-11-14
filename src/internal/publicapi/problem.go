@@ -166,6 +166,32 @@ type ProblemDocument struct {
 	RequiredScope string `json:"requiredScope,omitempty"`
 	// OperationID is the operation insufficient_scope refused.
 	OperationID string `json:"operationId,omitempty"`
+	// The members below name the object a "not found" refusal is about,
+	// one member per code whichever operation refused (objectMembers).
+	// IssueID is the issue of issue_not_found.
+	IssueID string `json:"issueId,omitempty"`
+	// Project is the project of project_not_found and ambiguous_project,
+	// as the request named it (UUID, prefix, alias or name).
+	Project string `json:"project,omitempty"`
+	// User is the user of user_not_found and member_not_found, as the
+	// request named it (UUID or username).
+	User string `json:"user,omitempty"`
+	// CommentID is the comment of comment_not_found.
+	CommentID string `json:"commentId,omitempty"`
+	// ComponentID is the component of component_not_found.
+	ComponentID string `json:"componentId,omitempty"`
+	// AttachmentID is the attachment of attachment_not_found.
+	AttachmentID string `json:"attachmentId,omitempty"`
+	// NotificationID is the notification of notification_not_found.
+	NotificationID string `json:"notificationId,omitempty"`
+	// FilterID is the watch filter of watch_filter_not_found.
+	FilterID string `json:"filterId,omitempty"`
+	// ReminderID is the reminder of reminder_not_found.
+	ReminderID string `json:"reminderId,omitempty"`
+	// Space is the short id of the space of space_not_found.
+	Space string `json:"space,omitempty"`
+	// ParentID is the parent of parent_not_found.
+	ParentID string `json:"parentId,omitempty"`
 }
 
 // problemType is the RFC 9457 type of every problem: the code, not a URI,
@@ -181,6 +207,7 @@ func WriteProblem(w http.ResponseWriter, p Problem) {
 	for k, v := range p.Extensions {
 		body[k] = v
 	}
+	nameObject(p.Code, body)
 	body["type"] = problemType
 	body["title"] = http.StatusText(status)
 	body["status"] = status
@@ -200,6 +227,51 @@ func WriteProblem(w http.ResponseWriter, p Problem) {
 	if err := json.NewEncoder(w).Encode(body); err != nil {
 		slog.Error("public API: writing a problem response failed",
 			"code", p.Code.String(), "status", status, "error", err.Error())
+	}
+}
+
+// objectMembers is the one member that names the object of a refusal of
+// code, and the members the shared operations (issueops, the MCP tools)
+// name it by, which the public API answers under that one member. A client
+// reads the object of issue_not_found from issueId whichever operation
+// refused it; MCP keeps its own members.
+var objectMembers = map[errcode.Code]struct {
+	member  string
+	aliases []string
+}{
+	errcode.IssueNotFound:        {"issueId", []string{"id"}},
+	errcode.ProjectNotFound:      {"project", []string{"q", "projectId", "id"}},
+	errcode.AmbiguousProject:     {"project", []string{"q"}},
+	errcode.CommentNotFound:      {"commentId", []string{"id"}},
+	errcode.ComponentNotFound:    {"componentId", []string{"id"}},
+	errcode.AttachmentNotFound:   {"attachmentId", []string{"id"}},
+	errcode.NotificationNotFound: {"notificationId", []string{"id"}},
+	errcode.WatchFilterNotFound:  {"filterId", []string{"id"}},
+	errcode.ReminderNotFound:     {"reminderId", []string{"id"}},
+	errcode.UserNotFound:         {"user", []string{"userId", "username", "id"}},
+	errcode.MemberNotFound:       {"user", []string{"userId", "id"}},
+	errcode.SpaceNotFound:        {"space", []string{"spaceId", "id"}},
+	errcode.ParentNotFound:       {"parentId", []string{"id"}},
+}
+
+// nameObject moves the object of a refusal of code from an alias member of
+// body to the member objectMembers names for code. The first alias present
+// wins when the member itself is absent; every alias is dropped, so no
+// refusal carries the object twice under two names.
+func nameObject(code errcode.Code, body map[string]any) {
+	m, ok := objectMembers[code]
+	if !ok {
+		return
+	}
+	for _, alias := range m.aliases {
+		v, present := body[alias]
+		if !present {
+			continue
+		}
+		if _, set := body[m.member]; !set {
+			body[m.member] = v
+		}
+		delete(body, alias)
 	}
 }
 
