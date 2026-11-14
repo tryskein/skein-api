@@ -105,7 +105,7 @@ func inPath(f *issueops.Failure, code errcode.Code, key, id string) *issueops.Fa
 // @Security SkeinApiKey[admin]
 // @Param archived query bool false "List the deactivated users"
 // @Param search query string false "Text to match"
-// @Param limit query int false "Page size, 1..100 (default 50)"
+// @Param limit query int false "Page size, 1..100 (default 50); a value outside the range is refused, never clamped" minimum(1) maximum(100) default(50)
 // @Param cursor query string false "The nextCursor of the previous page"
 // @Param fields query string false "Comma-separated fields of each item to return (plus id)"
 // @Success 200 {object} List[users.UserDTO] "A page of users"

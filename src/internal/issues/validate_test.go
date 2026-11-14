@@ -1,6 +1,9 @@
 package issues
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // TestValidateStatus_AcceptsStanding pins sk-118 (F2a): 'standing' is now
 // a valid stored status. ValidateStatus must return it canonicalised and
@@ -52,5 +55,36 @@ func TestValidateStatus_ExistingCasesStillGreen(t *testing.T) {
 		t.Errorf("ValidateStatus(bogus) should error")
 	} else if ve, ok := IsValidationError(err); !ok || ve.Code != "invalid_status" {
 		t.Errorf("ValidateStatus(bogus) code = %v, want invalid_status", err)
+	}
+}
+
+// TestValidateTitle_LengthInCharacters — every surface documents the title
+// as 1..1000 characters; a title is counted in characters, not in the bytes
+// of its UTF-8 form, so a non-ASCII title is held to the same limit.
+func TestValidateTitle_LengthInCharacters(t *testing.T) {
+	cases := []struct {
+		name  string
+		title string
+		ok    bool
+	}{
+		{"1000 ASCII characters", strings.Repeat("a", 1000), true},
+		{"1001 ASCII characters", strings.Repeat("a", 1001), false},
+		{"1000 Cyrillic characters", strings.Repeat("ж", 1000), true},
+		{"1001 Cyrillic characters", strings.Repeat("ж", 1001), false},
+		{"surrounding spaces are not counted", "  " + strings.Repeat("ж", 1000) + "  ", true},
+		{"blank", "   ", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			_, err := ValidateTitle(c.title)
+			if (err == nil) != c.ok {
+				t.Fatalf("ValidateTitle(%d runes) = %v, want ok=%v", len([]rune(c.title)), err, c.ok)
+			}
+			if err != nil {
+				if ve, ok := IsValidationError(err); !ok || ve.Code != "invalid_title" {
+					t.Errorf("ValidateTitle error = %v, want code invalid_title", err)
+				}
+			}
+		})
 	}
 }

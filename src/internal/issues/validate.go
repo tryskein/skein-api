@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"unicode/utf8"
 
 	"skein-api/internal/textvalidate"
 )
@@ -141,17 +142,23 @@ func ValidatePriority(p int) error {
 	return nil
 }
 
-// ValidateTitle trims whitespace and enforces 1..1000 chars. The DB does
-// not bound title length; we cap at 1000 in the app layer to keep the
-// trigram index reasonable and prevent absurd titles.
+// TitleMaxLength is the most characters (Unicode code points) a title may
+// have after trimming — the limit every surface documents.
+const TitleMaxLength = 1000
+
+// ValidateTitle trims whitespace and enforces 1..TitleMaxLength characters,
+// counted as Unicode code points as the documents of every surface (and
+// JSON Schema maxLength) count them, not as bytes. The DB does not bound
+// title length; the app layer caps it to keep the trigram index reasonable
+// and prevent absurd titles.
 func ValidateTitle(s string) (string, error) {
 	t := strings.TrimSpace(s)
 	if t == "" {
 		return "", newValidationError("invalid_title", "title is required")
 	}
-	if len(t) > 1000 {
+	if utf8.RuneCountInString(t) > TitleMaxLength {
 		return "", newValidationError("invalid_title",
-			"title must be at most 1000 characters")
+			fmt.Sprintf("title must be at most %d characters", TitleMaxLength))
 	}
 	if err := ValidateProse("title", t); err != nil {
 		return "", err

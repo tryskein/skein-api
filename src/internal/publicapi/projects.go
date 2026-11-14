@@ -252,7 +252,7 @@ func (a *projectsAPI) getMe(w http.ResponseWriter, r *http.Request) {
 // @Security SkeinApiKey[read]
 // @Param archived query string false "Which projects: false (active, the default), true (archived only) or all" Enums(false, true, all)
 // @Param q query string false "Free-form search query; orders the items by relevance"
-// @Param limit query int false "Page size, 1..100 (default 50); a value outside the range is refused, never clamped"
+// @Param limit query int false "Page size, 1..100 (default 50); a value outside the range is refused, never clamped" minimum(1) maximum(100) default(50)
 // @Param cursor query string false "The nextCursor of the previous page"
 // @Param fields query string false "Comma-separated fields of each item to return (plus id)"
 // @Success 200 {object} List[projects.ProjectListItem] "A page of projects"

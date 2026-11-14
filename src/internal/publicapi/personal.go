@@ -242,7 +242,7 @@ func pathRefusal(w http.ResponseWriter, f *issueops.Failure, notFoundMsg string,
 // @Security SkeinApiKey[read]
 // @Param scope query string false "unread (default), all or archived"
 // @Param projectId query string false "A project UUID"
-// @Param limit query int false "Page size, 1..100 (default 25)"
+// @Param limit query int false "Page size, 1..100 (default 25); a value outside the range is refused, never clamped" minimum(1) maximum(100) default(25)
 // @Param cursor query string false "The nextCursor of the previous page"
 // @Param fields query string false "Comma-separated fields of each item to return (plus id)"
 // @Success 200 {object} NotificationPage "A page of notifications"
@@ -485,7 +485,7 @@ type watchingCursor struct {
 // @Tags Me
 // @Produce json
 // @Security SkeinApiKey[read]
-// @Param limit query int false "Page size of each collection, 1..100 (default 50)"
+// @Param limit query int false "Page size of each collection, 1..100 (default 50); a value outside the range is refused, never clamped" minimum(1) maximum(100) default(50)
 // @Param issuesCursor query string false "The nextCursor of the previous page of issues"
 // @Param projectsCursor query string false "The nextCursor of the previous page of projects"
 // @Param fields query string false "Comma-separated members to return"
@@ -836,7 +836,7 @@ func (a *issueWrites) deleteWatchFilter(w http.ResponseWriter, r *http.Request) 
 // @Security SkeinApiKey[read]
 // @Param state query string false "ringing, armed or all (default)"
 // @Param project query string false "A project handle"
-// @Param limit query int false "Page size, 1..100 (default 50)"
+// @Param limit query int false "Page size, 1..100 (default 50); a value outside the range is refused, never clamped" minimum(1) maximum(100) default(50)
 // @Param cursor query string false "The nextCursor of the previous page"
 // @Param fields query string false "Comma-separated fields of each item to return"
 // @Success 200 {object} ReminderPage "The reminders"

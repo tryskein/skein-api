@@ -219,8 +219,8 @@ type dependencyInput struct {
 
 // issueFields are the fields of an issue a create sets.
 type issueFields struct {
-	// Title, 1..500 characters. Required.
-	Title *string `json:"title,omitempty"`
+	// Title, 1..1000 characters after trimming. Required.
+	Title *string `json:"title,omitempty" minLength:"1" maxLength:"1000"`
 	// Description, markdown.
 	Description *string `json:"description,omitempty"`
 	// Design notes, markdown.
@@ -358,8 +358,8 @@ func (a *issueWrites) hydrateIssue(ctx context.Context, _ *http.Request, objects
 
 // childTemplate is one child of an epic.
 type childTemplate struct {
-	// Title, required.
-	Title *string `json:"title,omitempty"`
+	// Title, 1..1000 characters after trimming. Required.
+	Title *string `json:"title,omitempty" minLength:"1" maxLength:"1000"`
 	// Type of the child (default task).
 	Type *string `json:"type,omitempty"`
 	// Priority 0..4.
@@ -497,8 +497,8 @@ func (a *issueWrites) hydrateEpic(ctx context.Context, _ *http.Request, objects 
 // updateIssueBody is the body of updateIssue: every member present is
 // changed, null or "" clears a text field.
 type updateIssueBody struct {
-	// Title, 1..500 characters.
-	Title *string `json:"title,omitempty"`
+	// Title, 1..1000 characters after trimming.
+	Title *string `json:"title,omitempty" minLength:"1" maxLength:"1000"`
 	// Description; null or "" clears it.
 	Description *string `json:"description,omitempty" extensions:"x-nullable"`
 	// Type of the issue.
@@ -561,8 +561,9 @@ type updateIssueBody struct {
 // @Param force query bool false "The privileged mode: manage and force_unlock"
 // @Param Prefer header string false "return=minimal answers only id and version"
 // @Param body body updateIssueBody true "The changes"
+// @Param X-Skein-Worker-Id header string false "The executor of the key that holds the lock (1..64 of A-Z a-z 0-9 . _ -): send the same worker id the issue was claimed with; a lock taken with a worker id is held by that executor only, so another one or no header is refused locked_by_other"
 // @Success 200 {object} issues.IssueDetail "The issue after the change"
-// @Failure 400 {object} ProblemDocument "Malformed body, unknown field or parameter, force not true|false, If-Match not one version (code validation_error)"
+// @Failure 400 {object} ProblemDocument "Malformed body, unknown field or parameter, force not true|false, If-Match not one version, a malformed X-Skein-Worker-Id (code validation_error)"
 // @Failure 401 {object} ProblemDocument "No key, or the key is invalid, expired or revoked (code unauthenticated)"
 // @Failure 403 {object} ProblemDocument "The key lacks write, or manage for force (code insufficient_scope); the owner may not write or assign (forbidden) or force (force_unlock_forbidden)"
 // @Failure 404 {object} ProblemDocument "No such issue within reach (code issue_not_found)"
@@ -737,8 +738,9 @@ type unclaimBody struct {
 // @Param force query bool false "The privileged mode: manage and force_unlock"
 // @Param Prefer header string false "return=minimal answers only id and version"
 // @Param body body unclaimBody true "Next status and reason"
+// @Param X-Skein-Worker-Id header string false "The executor of the key that holds the lock (1..64 of A-Z a-z 0-9 . _ -): send the same worker id the issue was claimed with; a lock taken with a worker id is held by that executor only, so another one or no header is refused not_lock_holder"
 // @Success 200 {object} issues.IssueDetail "The issue, released"
-// @Failure 400 {object} ProblemDocument "Malformed body, unknown field or parameter, force not true|false (code validation_error)"
+// @Failure 400 {object} ProblemDocument "Malformed body, unknown field or parameter, force not true|false, a malformed X-Skein-Worker-Id (code validation_error)"
 // @Failure 401 {object} ProblemDocument "No key, or the key is invalid, expired or revoked (code unauthenticated)"
 // @Failure 403 {object} ProblemDocument "The key lacks write, or manage for force (code insufficient_scope); the owner may not write (forbidden) or force (force_unlock_forbidden)"
 // @Failure 404 {object} ProblemDocument "No such issue within reach (code issue_not_found)"
@@ -854,15 +856,16 @@ type commitInput struct {
 // @Param Idempotency-Key header string false "A key that makes a repeat of this request answer its first outcome"
 // @Param Prefer header string false "return=minimal answers only id and version"
 // @Param body body closeBody true "The close"
+// @Param X-Skein-Worker-Id header string false "The executor of the key that holds the lock (1..64 of A-Z a-z 0-9 . _ -): send the same worker id the issue was claimed with; a lock taken with a worker id is held by that executor only, so another one or no header is refused locked_by_other"
 // @Success 200 {object} issues.IssueDetail "The issue, closed"
-// @Failure 400 {object} ProblemDocument "Malformed body, unknown field or parameter, force not true|false (code validation_error)"
+// @Failure 400 {object} ProblemDocument "Malformed body, unknown field or parameter, force not true|false, a malformed X-Skein-Worker-Id (code validation_error)"
 // @Failure 401 {object} ProblemDocument "No key, or the key is invalid, expired or revoked (code unauthenticated)"
 // @Failure 403 {object} ProblemDocument "The key lacks write, or manage for force (code insufficient_scope); the owner may not write (forbidden) or force (force_unlock_forbidden)"
 // @Failure 404 {object} ProblemDocument "No such issue within reach (code issue_not_found)"
 // @Failure 409 {object} ProblemDocument "The first request with this Idempotency-Key is still running (code idempotency_in_progress)"
 // @Failure 412 {object} ProblemDocument "If-Match is stale (code version_conflict, currentVersion)"
 // @Failure 428 {object} ProblemDocument "If-Match is missing (code precondition_required)"
-// @Failure 422 {object} ProblemDocument "Locked by another holder (code locked_by_other); reason, outcome or a commit invalid (validation_error, close_outcome_link_required); the close target out of reach (issue_not_found); a repo unknown or ambiguous (repo_not_found, repo_ambiguous); pinned (pinned_no_force); a standing task with open children (standing_has_open_children); a serialization race (serialization_retry); the Idempotency-Key reused (idempotency_key_reused)"
+// @Failure 422 {object} ProblemDocument "Locked by another holder (code locked_by_other); reason, outcome or a commit invalid (code validation_error, the case in validation: close_outcome_required — no closeOutcome on an issue that is not closed yet; invalid_close_outcome; close_target_required — duplicate or superseded without closeTarget and without the matching edge; close_target_requires_outcome — closeTarget without duplicate or superseded; close_target_not_allowed; close_target_self); the close target out of reach (issue_not_found, with closeTarget); a repo unknown or ambiguous (repo_not_found, repo_ambiguous); pinned (pinned_no_force); a standing task with open children (standing_has_open_children); a serialization race (serialization_retry); the Idempotency-Key reused (idempotency_key_reused)"
 // @Failure 429 {object} ProblemDocument "Rate limited (code rate_limited, Retry-After)"
 // @Failure 500 {object} ProblemDocument "Internal error (code internal_error)"
 // @Failure 503 {object} ProblemDocument "The database is unavailable (code database_unavailable)"
@@ -1040,8 +1043,9 @@ type attachBody struct {
 // @Param issue path string true "The issue's hierarchical id"
 // @Param force query bool false "The privileged mode: manage and force_unlock"
 // @Param body body attachBody true "The commits"
+// @Param X-Skein-Worker-Id header string false "The executor of the key that holds the lock (1..64 of A-Z a-z 0-9 . _ -): send the same worker id the issue was claimed with; a lock taken with a worker id is held by that executor only, so another one or no header is refused locked_by_other"
 // @Success 200 {object} issues.IssueDetail "The issue with its commits"
-// @Failure 400 {object} ProblemDocument "Malformed body, unknown field or parameter, force not true|false (code validation_error)"
+// @Failure 400 {object} ProblemDocument "Malformed body, unknown field or parameter, force not true|false, a malformed X-Skein-Worker-Id (code validation_error)"
 // @Failure 401 {object} ProblemDocument "No key, or the key is invalid, expired or revoked (code unauthenticated)"
 // @Failure 403 {object} ProblemDocument "The key lacks write, or manage for force (code insufficient_scope); the owner may not write (forbidden) or force (force_unlock_forbidden)"
 // @Failure 404 {object} ProblemDocument "No such issue within reach (code issue_not_found)"
@@ -1066,8 +1070,9 @@ func (a *issueWrites) attachCommits(w http.ResponseWriter, r *http.Request) {
 // @Param issue path string true "The issue's hierarchical id"
 // @Param hash path string true "The commit hash, lowercase hex 7..64"
 // @Param force query bool false "The privileged mode: manage and force_unlock"
+// @Param X-Skein-Worker-Id header string false "The executor of the key that holds the lock (1..64 of A-Z a-z 0-9 . _ -): send the same worker id the issue was claimed with; a lock taken with a worker id is held by that executor only, so another one or no header is refused locked_by_other"
 // @Success 204 "Detached"
-// @Failure 400 {object} ProblemDocument "Unknown parameter, force not true|false (code validation_error)"
+// @Failure 400 {object} ProblemDocument "Unknown parameter, force not true|false, a malformed X-Skein-Worker-Id (code validation_error)"
 // @Failure 401 {object} ProblemDocument "No key, or the key is invalid, expired or revoked (code unauthenticated)"
 // @Failure 403 {object} ProblemDocument "The key lacks write, or manage for force (code insufficient_scope); the owner may not write (forbidden) or force (force_unlock_forbidden)"
 // @Failure 404 {object} ProblemDocument "No such issue within reach (code issue_not_found)"

@@ -32,8 +32,8 @@ type bulkUpdateItem struct {
 	ID string `json:"id"`
 	// ExpectedVersion of the issue. Required.
 	ExpectedVersion int `json:"expectedVersion"`
-	// Title, 1..500 characters.
-	Title *string `json:"title,omitempty"`
+	// Title, 1..1000 characters after trimming.
+	Title *string `json:"title,omitempty" minLength:"1" maxLength:"1000"`
 	// Description; null or "" clears it.
 	Description *string `json:"description,omitempty" extensions:"x-nullable"`
 	// Type of the issue.
@@ -154,8 +154,9 @@ func bulk(w http.ResponseWriter, r *http.Request, typed any, kind **string, item
 // @Security SkeinApiKey[write]
 // @Param force query bool false "The privileged mode: manage and force_unlock"
 // @Param body body bulkUpdateBody true "The rows"
+// @Param X-Skein-Worker-Id header string false "The executor of the key that holds the lock (1..64 of A-Z a-z 0-9 . _ -): send the same worker id the issue was claimed with; a lock taken with a worker id is held by that executor only, so another one or no header is refused locked_by_other in its row"
 // @Success 207 {object} issueops.BatchResponse "The result of each row"
-// @Failure 400 {object} ProblemDocument "Malformed body, unknown field or parameter, 0 or more than 100 rows, force not true|false (code validation_error)"
+// @Failure 400 {object} ProblemDocument "Malformed body, unknown field or parameter, 0 or more than 100 rows, force not true|false, a malformed X-Skein-Worker-Id (code validation_error)"
 // @Failure 401 {object} ProblemDocument "No key, or the key is invalid, expired or revoked (code unauthenticated)"
 // @Failure 403 {object} ProblemDocument "The key lacks write, or manage for force (code insufficient_scope)"
 // @Failure 413 {object} ProblemDocument "Body over 1 MiB (code payload_too_large)"
@@ -186,14 +187,17 @@ func (a *issueWrites) bulkUpdateIssues(w http.ResponseWriter, r *http.Request) {
 // @Description Closes each row — an issue, its expected version, the reason and optionally the outcome, the target and the commits — in a transaction of its own, the same batch as the MCP tool skein_close_many: a row's refusal does not stop the others; the answer is 207 with each row's result (id, ok, version, closeOutcome, closeLink) or error and a summary. A refusal of the whole request — the key right, the format, 0 or more than 100 rows — is answered with its own status and no row runs.
 // @Description
 // @Description force=true (the key needs manage) bypasses another holder's claim, the version and the pin in every row; a row of a project where the owner lacks force_unlock is refused force_unlock_forbidden. A repeat of a batch with force=true applies again: read the issues before repeating. No Idempotency-Key.
+// @Description
+// @Description A refused row carries error {code, message, details}: the code of the single closeIssue (locked_by_other, version_conflict with details.currentVersion, issue_not_found, …); for validation_error the case is in details.code — close_outcome_required, invalid_close_outcome, close_target_required, close_target_requires_outcome, close_target_not_allowed, close_target_self.
 // @Tags Issues
 // @Accept json
 // @Produce json
 // @Security SkeinApiKey[write]
 // @Param force query bool false "The privileged mode: manage and force_unlock"
 // @Param body body bulkCloseBody true "The rows"
+// @Param X-Skein-Worker-Id header string false "The executor of the key that holds the lock (1..64 of A-Z a-z 0-9 . _ -): send the same worker id the issue was claimed with; a lock taken with a worker id is held by that executor only, so another one or no header is refused locked_by_other in its row"
 // @Success 207 {object} issueops.CloseManyResponse "The result of each row"
-// @Failure 400 {object} ProblemDocument "Malformed body, unknown field or parameter, 0 or more than 100 rows, force not true|false (code validation_error)"
+// @Failure 400 {object} ProblemDocument "Malformed body, unknown field or parameter, 0 or more than 100 rows, force not true|false, a malformed X-Skein-Worker-Id (code validation_error)"
 // @Failure 401 {object} ProblemDocument "No key, or the key is invalid, expired or revoked (code unauthenticated)"
 // @Failure 403 {object} ProblemDocument "The key lacks write, or manage for force (code insufficient_scope)"
 // @Failure 413 {object} ProblemDocument "Body over 1 MiB (code payload_too_large)"

@@ -171,7 +171,10 @@ executor named by `X-Skein-Worker-Id` within the key
 repeated header is 400 `validation_error`. Several processes sharing one key
 send different worker ids, so they never hold each other's locks. A second
 claim of a held issue is 422 `already_claimed`; a change or a close by a
-non-holder is 422 `locked_by_other`. A REST executor and an MCP session are
+non-holder is 422 `locked_by_other`. So an issue claimed with a worker id is
+changed, closed, unclaimed and given commits with the same header — a request
+without it is the key itself, another executor; the OpenAPI document lists the
+header on every operation that checks the holder. A REST executor and an MCP session are
 never the same holder.
 
 The worker id is not a secret and grants nothing: it is shown to everyone
@@ -319,7 +322,11 @@ is an ordinary error with nothing executed).
   success response carries `id`, `version`, `status` and the holder; every
   other member is empty (`""`, `[]`, `{}`). Read the issue again to see it.
 - Lists use a keyset cursor: `items`, `nextCursor`, `hasMore`; `limit` out of
-  range is 400, never silently clipped.
+  range is 400, never silently clipped. The range and the default of each
+  list's `limit` are the `minimum`, `maximum` and `default` of the parameter
+  in the OpenAPI document; an issue title is 1..1000 characters (`maxLength`).
+  Both are checked against the behaviour by
+  `src/cmd/api/public_spec_limits_test.go#TestPublicSpecLimitsMatchBehaviour`.
 
 ## Limits
 

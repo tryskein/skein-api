@@ -111,6 +111,45 @@
                 ],
                 "type": "object"
             },
+            "dependencies.DuplicateCandidate": {
+                "properties": {
+                    "id": {
+                        "type": "string"
+                    },
+                    "matchedBy": {
+                        "type": "string"
+                    },
+                    "semanticSimilarity": {
+                        "type": "number"
+                    },
+                    "similarity": {
+                        "type": "number"
+                    },
+                    "status": {
+                        "type": "string"
+                    },
+                    "title": {
+                        "type": "string"
+                    },
+                    "trigramSimilarity": {
+                        "type": "number"
+                    },
+                    "type": {
+                        "type": "string"
+                    }
+                },
+                "required": [
+                    "id",
+                    "matchedBy",
+                    "semanticSimilarity",
+                    "similarity",
+                    "status",
+                    "title",
+                    "trigramSimilarity",
+                    "type"
+                ],
+                "type": "object"
+            },
             "dependencies.IssueRef": {
                 "properties": {
                     "id": {
@@ -2731,12 +2770,56 @@
             },
             "publicapi.ProblemDocument": {
                 "properties": {
+                    "candidates": {
+                        "description": "Candidates are the projects an ambiguous_project handle matched.",
+                        "items": {
+                            "$ref": "#/components/schemas/spaces.AmbiguousProjectCandidate"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
+                    },
                     "code": {
                         "description": "Code is the machine code of the refusal — the same one MCP answers.",
                         "type": "string"
                     },
+                    "currentVersion": {
+                        "description": "CurrentVersion is the current version of the object of a\nversion_conflict.",
+                        "type": "integer"
+                    },
+                    "degraded": {
+                        "description": "Degraded is true on duplicate_suspected when only the lexical check\nran.",
+                        "type": "boolean"
+                    },
                     "detail": {
                         "description": "Detail explains the refusal to a human.",
+                        "type": "string"
+                    },
+                    "duplicates": {
+                        "description": "Duplicates are the similar issues of duplicate_suspected.",
+                        "items": {
+                            "$ref": "#/components/schemas/dependencies.DuplicateCandidate"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
+                    },
+                    "field": {
+                        "description": "Field names the refused value: the path of a body member\n(labels[1], dependencies[0].reason), a query parameter, or path.",
+                        "type": "string"
+                    },
+                    "lockedBy": {
+                        "description": "LockedBy is the holder of the lock of locked_by_other and\nalready_claimed.",
+                        "type": "string"
+                    },
+                    "operationId": {
+                        "description": "OperationID is the operation insufficient_scope refused.",
+                        "type": "string"
+                    },
+                    "requiredRight": {
+                        "description": "RequiredRight is the key right insufficient_scope requires: read,\nwrite, manage or admin.",
+                        "type": "string"
+                    },
+                    "requiredScope": {
+                        "description": "RequiredScope is \"spaces or all\" when insufficient_scope also\nrequires a wide key scope.",
                         "type": "string"
                     },
                     "retryable": {
@@ -2753,6 +2836,10 @@
                     },
                     "type": {
                         "description": "Type is always \"about:blank\": the code says what happened.",
+                        "type": "string"
+                    },
+                    "validation": {
+                        "description": "Validation names the case of a validation_error refused by the\ndomain: the validator's own code (invalid_title,\nclose_target_required, nul_character, …).",
                         "type": "string"
                     }
                 },
@@ -3243,7 +3330,9 @@
                         "type": "string"
                     },
                     "title": {
-                        "description": "Title, 1..500 characters.",
+                        "description": "Title, 1..1000 characters after trimming.",
+                        "maxLength": 1000,
+                        "minLength": 1,
                         "type": "string"
                     },
                     "type": {
@@ -3296,7 +3385,9 @@
                         "type": "integer"
                     },
                     "title": {
-                        "description": "Title, required.",
+                        "description": "Title, 1..1000 characters after trimming. Required.",
+                        "maxLength": 1000,
+                        "minLength": 1,
                         "type": "string"
                     },
                     "type": {
@@ -3503,7 +3594,9 @@
                         "type": "string"
                     },
                     "title": {
-                        "description": "Title, 1..500 characters. Required.",
+                        "description": "Title, 1..1000 characters after trimming. Required.",
+                        "maxLength": 1000,
+                        "minLength": 1,
                         "type": "string"
                     },
                     "unassigned": {
@@ -3600,7 +3693,9 @@
                         "type": "boolean"
                     },
                     "title": {
-                        "description": "Title, 1..500 characters. Required.",
+                        "description": "Title, 1..1000 characters after trimming. Required.",
+                        "maxLength": 1000,
+                        "minLength": 1,
                         "type": "string"
                     },
                     "type": {
@@ -3993,7 +4088,9 @@
                         "type": "string"
                     },
                     "title": {
-                        "description": "Title, 1..500 characters.",
+                        "description": "Title, 1..1000 characters after trimming.",
+                        "maxLength": 1000,
+                        "minLength": 1,
                         "type": "string"
                     },
                     "type": {
@@ -4342,6 +4439,33 @@
                     "kind",
                     "name",
                     "role"
+                ],
+                "type": "object"
+            },
+            "spaces.AmbiguousProjectCandidate": {
+                "properties": {
+                    "idPrefix": {
+                        "description": "IDPrefix is the project prefix — an exact handle to re-call with.",
+                        "type": "string"
+                    },
+                    "name": {
+                        "description": "Name is the project name.",
+                        "type": "string"
+                    },
+                    "spaceId": {
+                        "description": "SpaceID is the short id of the project's space.",
+                        "type": "string"
+                    },
+                    "spaceName": {
+                        "description": "SpaceName is the name of the project's space.",
+                        "type": "string"
+                    }
+                },
+                "required": [
+                    "idPrefix",
+                    "name",
+                    "spaceId",
+                    "spaceName"
                 ],
                 "type": "object"
             },
@@ -5774,10 +5898,13 @@
                         }
                     },
                     {
-                        "description": "Page size, 1..100 (default 25)",
+                        "description": "Page size, 1..500 (default 25); a value outside the range is refused, never clamped",
                         "in": "query",
                         "name": "limit",
                         "schema": {
+                            "default": 25,
+                            "maximum": 500,
+                            "minimum": 1,
                             "type": "integer"
                         }
                     },
@@ -5895,7 +6022,7 @@
         },
         "/api/v1/issues/bulk-close": {
             "post": {
-                "description": "Closes each row — an issue, its expected version, the reason and optionally the outcome, the target and the commits — in a transaction of its own, the same batch as the MCP tool skein_close_many: a row's refusal does not stop the others; the answer is 207 with each row's result (id, ok, version, closeOutcome, closeLink) or error and a summary. A refusal of the whole request — the key right, the format, 0 or more than 100 rows — is answered with its own status and no row runs.\n\nforce=true (the key needs manage) bypasses another holder's claim, the version and the pin in every row; a row of a project where the owner lacks force_unlock is refused force_unlock_forbidden. A repeat of a batch with force=true applies again: read the issues before repeating. No Idempotency-Key.",
+                "description": "Closes each row — an issue, its expected version, the reason and optionally the outcome, the target and the commits — in a transaction of its own, the same batch as the MCP tool skein_close_many: a row's refusal does not stop the others; the answer is 207 with each row's result (id, ok, version, closeOutcome, closeLink) or error and a summary. A refusal of the whole request — the key right, the format, 0 or more than 100 rows — is answered with its own status and no row runs.\n\nforce=true (the key needs manage) bypasses another holder's claim, the version and the pin in every row; a row of a project where the owner lacks force_unlock is refused force_unlock_forbidden. A repeat of a batch with force=true applies again: read the issues before repeating. No Idempotency-Key.\n\nA refused row carries error {code, message, details}: the code of the single closeIssue (locked_by_other, version_conflict with details.currentVersion, issue_not_found, …); for validation_error the case is in details.code — close_outcome_required, invalid_close_outcome, close_target_required, close_target_requires_outcome, close_target_not_allowed, close_target_self.",
                 "operationId": "bulkCloseIssues",
                 "parameters": [
                     {
@@ -5904,6 +6031,14 @@
                         "name": "force",
                         "schema": {
                             "type": "boolean"
+                        }
+                    },
+                    {
+                        "description": "The executor of the key that holds the lock (1..64 of A-Z a-z 0-9 . _ -): send the same worker id the issue was claimed with; a lock taken with a worker id is held by that executor only, so another one or no header is refused locked_by_other in its row",
+                        "in": "header",
+                        "name": "X-Skein-Worker-Id",
+                        "schema": {
+                            "type": "string"
                         }
                     }
                 ],
@@ -5939,7 +6074,7 @@
                                 }
                             }
                         },
-                        "description": "Malformed body, unknown field or parameter, 0 or more than 100 rows, force not true|false (code validation_error)"
+                        "description": "Malformed body, unknown field or parameter, 0 or more than 100 rows, force not true|false, a malformed X-Skein-Worker-Id (code validation_error)"
                     },
                     "401": {
                         "content": {
@@ -6037,6 +6172,14 @@
                         "schema": {
                             "type": "boolean"
                         }
+                    },
+                    {
+                        "description": "The executor of the key that holds the lock (1..64 of A-Z a-z 0-9 . _ -): send the same worker id the issue was claimed with; a lock taken with a worker id is held by that executor only, so another one or no header is refused locked_by_other in its row",
+                        "in": "header",
+                        "name": "X-Skein-Worker-Id",
+                        "schema": {
+                            "type": "string"
+                        }
                     }
                 ],
                 "requestBody": {
@@ -6071,7 +6214,7 @@
                                 }
                             }
                         },
-                        "description": "Malformed body, unknown field or parameter, 0 or more than 100 rows, force not true|false (code validation_error)"
+                        "description": "Malformed body, unknown field or parameter, 0 or more than 100 rows, force not true|false, a malformed X-Skein-Worker-Id (code validation_error)"
                     },
                     "401": {
                         "content": {
@@ -6440,10 +6583,13 @@
                         }
                     },
                     {
-                        "description": "How many, 1..100 (default 25)",
+                        "description": "How many, 1..100 (default 25); a value outside the range is refused, never clamped",
                         "in": "query",
                         "name": "limit",
                         "schema": {
+                            "default": 25,
+                            "maximum": 100,
+                            "minimum": 1,
                             "type": "integer"
                         }
                     },
@@ -6721,6 +6867,14 @@
                         "schema": {
                             "type": "string"
                         }
+                    },
+                    {
+                        "description": "The executor of the key that holds the lock (1..64 of A-Z a-z 0-9 . _ -): send the same worker id the issue was claimed with; a lock taken with a worker id is held by that executor only, so another one or no header is refused locked_by_other",
+                        "in": "header",
+                        "name": "X-Skein-Worker-Id",
+                        "schema": {
+                            "type": "string"
+                        }
                     }
                 ],
                 "requestBody": {
@@ -6755,7 +6909,7 @@
                                 }
                             }
                         },
-                        "description": "Malformed body, unknown field or parameter, force not true|false, If-Match not one version (code validation_error)"
+                        "description": "Malformed body, unknown field or parameter, force not true|false, If-Match not one version, a malformed X-Skein-Worker-Id (code validation_error)"
                     },
                     "401": {
                         "content": {
@@ -7482,6 +7636,14 @@
                         "schema": {
                             "type": "string"
                         }
+                    },
+                    {
+                        "description": "The executor of the key that holds the lock (1..64 of A-Z a-z 0-9 . _ -): send the same worker id the issue was claimed with; a lock taken with a worker id is held by that executor only, so another one or no header is refused locked_by_other",
+                        "in": "header",
+                        "name": "X-Skein-Worker-Id",
+                        "schema": {
+                            "type": "string"
+                        }
                     }
                 ],
                 "requestBody": {
@@ -7516,7 +7678,7 @@
                                 }
                             }
                         },
-                        "description": "Malformed body, unknown field or parameter, force not true|false (code validation_error)"
+                        "description": "Malformed body, unknown field or parameter, force not true|false, a malformed X-Skein-Worker-Id (code validation_error)"
                     },
                     "401": {
                         "content": {
@@ -7576,7 +7738,7 @@
                                 }
                             }
                         },
-                        "description": "Locked by another holder (code locked_by_other); reason, outcome or a commit invalid (validation_error, close_outcome_link_required); the close target out of reach (issue_not_found); a repo unknown or ambiguous (repo_not_found, repo_ambiguous); pinned (pinned_no_force); a standing task with open children (standing_has_open_children); a serialization race (serialization_retry); the Idempotency-Key reused (idempotency_key_reused)"
+                        "description": "Locked by another holder (code locked_by_other); reason, outcome or a commit invalid (code validation_error, the case in validation: close_outcome_required — no closeOutcome on an issue that is not closed yet; invalid_close_outcome; close_target_required — duplicate or superseded without closeTarget and without the matching edge; close_target_requires_outcome — closeTarget without duplicate or superseded; close_target_not_allowed; close_target_self); the close target out of reach (issue_not_found, with closeTarget); a repo unknown or ambiguous (repo_not_found, repo_ambiguous); pinned (pinned_no_force); a standing task with open children (standing_has_open_children); a serialization race (serialization_retry); the Idempotency-Key reused (idempotency_key_reused)"
                     },
                     "428": {
                         "content": {
@@ -7647,10 +7809,13 @@
                         }
                     },
                     {
-                        "description": "Page size, 1..100 (default 50)",
+                        "description": "Page size, 1..100 (default 50); a value outside the range is refused, never clamped",
                         "in": "query",
                         "name": "limit",
                         "schema": {
+                            "default": 50,
+                            "maximum": 100,
+                            "minimum": 1,
                             "type": "integer"
                         }
                     },
@@ -7964,6 +8129,14 @@
                         "schema": {
                             "type": "boolean"
                         }
+                    },
+                    {
+                        "description": "The executor of the key that holds the lock (1..64 of A-Z a-z 0-9 . _ -): send the same worker id the issue was claimed with; a lock taken with a worker id is held by that executor only, so another one or no header is refused locked_by_other",
+                        "in": "header",
+                        "name": "X-Skein-Worker-Id",
+                        "schema": {
+                            "type": "string"
+                        }
                     }
                 ],
                 "requestBody": {
@@ -7998,7 +8171,7 @@
                                 }
                             }
                         },
-                        "description": "Malformed body, unknown field or parameter, force not true|false (code validation_error)"
+                        "description": "Malformed body, unknown field or parameter, force not true|false, a malformed X-Skein-Worker-Id (code validation_error)"
                     },
                     "401": {
                         "content": {
@@ -8114,6 +8287,14 @@
                         "schema": {
                             "type": "boolean"
                         }
+                    },
+                    {
+                        "description": "The executor of the key that holds the lock (1..64 of A-Z a-z 0-9 . _ -): send the same worker id the issue was claimed with; a lock taken with a worker id is held by that executor only, so another one or no header is refused locked_by_other",
+                        "in": "header",
+                        "name": "X-Skein-Worker-Id",
+                        "schema": {
+                            "type": "string"
+                        }
                     }
                 ],
                 "responses": {
@@ -8128,7 +8309,7 @@
                                 }
                             }
                         },
-                        "description": "Unknown parameter, force not true|false (code validation_error)"
+                        "description": "Unknown parameter, force not true|false, a malformed X-Skein-Worker-Id (code validation_error)"
                     },
                     "401": {
                         "content": {
@@ -8809,10 +8990,13 @@
                         }
                     },
                     {
-                        "description": "Page size, 1..100 (default 20)",
+                        "description": "Page size, 1..100 (default 20); a value outside the range is refused, never clamped",
                         "in": "query",
                         "name": "limit",
                         "schema": {
+                            "default": 20,
+                            "maximum": 100,
+                            "minimum": 1,
                             "type": "integer"
                         }
                     },
@@ -9791,6 +9975,14 @@
                         "schema": {
                             "type": "string"
                         }
+                    },
+                    {
+                        "description": "The executor of the key that holds the lock (1..64 of A-Z a-z 0-9 . _ -): send the same worker id the issue was claimed with; a lock taken with a worker id is held by that executor only, so another one or no header is refused not_lock_holder",
+                        "in": "header",
+                        "name": "X-Skein-Worker-Id",
+                        "schema": {
+                            "type": "string"
+                        }
                     }
                 ],
                 "requestBody": {
@@ -9825,7 +10017,7 @@
                                 }
                             }
                         },
-                        "description": "Malformed body, unknown field or parameter, force not true|false (code validation_error)"
+                        "description": "Malformed body, unknown field or parameter, force not true|false, a malformed X-Skein-Worker-Id (code validation_error)"
                     },
                     "401": {
                         "content": {
@@ -10553,10 +10745,13 @@
                 "operationId": "listWatching",
                 "parameters": [
                     {
-                        "description": "Page size of each collection, 1..100 (default 50)",
+                        "description": "Page size of each collection, 1..100 (default 50); a value outside the range is refused, never clamped",
                         "in": "query",
                         "name": "limit",
                         "schema": {
+                            "default": 50,
+                            "maximum": 100,
+                            "minimum": 1,
                             "type": "integer"
                         }
                     },
@@ -10814,10 +11009,13 @@
                         }
                     },
                     {
-                        "description": "Page size, 1..100 (default 25)",
+                        "description": "Page size, 1..100 (default 25); a value outside the range is refused, never clamped",
                         "in": "query",
                         "name": "limit",
                         "schema": {
+                            "default": 25,
+                            "maximum": 100,
+                            "minimum": 1,
                             "type": "integer"
                         }
                     },
@@ -11341,6 +11539,9 @@
                         "in": "query",
                         "name": "limit",
                         "schema": {
+                            "default": 50,
+                            "maximum": 100,
+                            "minimum": 1,
                             "type": "integer"
                         }
                     },
@@ -13551,10 +13752,13 @@
                         }
                     },
                     {
-                        "description": "Page size, 1..100 (default 50)",
+                        "description": "Page size, 1..100 (default 50); a value outside the range is refused, never clamped",
                         "in": "query",
                         "name": "limit",
                         "schema": {
+                            "default": 50,
+                            "maximum": 100,
+                            "minimum": 1,
                             "type": "integer"
                         }
                     },
@@ -14015,10 +14219,13 @@
                         }
                     },
                     {
-                        "description": "Page size (default 20)",
+                        "description": "Page size, 1..100 (default 25); a value outside the range is refused, never clamped",
                         "in": "query",
                         "name": "limit",
                         "schema": {
+                            "default": 25,
+                            "maximum": 100,
+                            "minimum": 1,
                             "type": "integer"
                         }
                     },
@@ -14289,10 +14496,13 @@
                         }
                     },
                     {
-                        "description": "Page size, 1..100 (default 50)",
+                        "description": "Page size, 1..100 (default 50); a value outside the range is refused, never clamped",
                         "in": "query",
                         "name": "limit",
                         "schema": {
+                            "default": 50,
+                            "maximum": 100,
+                            "minimum": 1,
                             "type": "integer"
                         }
                     },

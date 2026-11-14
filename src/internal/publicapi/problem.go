@@ -9,7 +9,9 @@ import (
 	"net/http"
 
 	"skein-api/internal/authz"
+	"skein-api/internal/dependencies"
 	"skein-api/internal/errcode"
+	"skein-api/internal/spaces"
 )
 
 // ProblemContentType is the media type of every error response of the public
@@ -117,8 +119,11 @@ type Problem struct {
 }
 
 // ProblemDocument is the body of every error response, as the OpenAPI
-// document describes it (WriteProblem writes it; a refusal may carry more
-// members, named in the operation's description).
+// document describes it (WriteProblem writes it). Beyond the RFC 9457
+// members and code it declares the members refusals of several operations
+// share; a refusal may carry more members, named in the operation's
+// description. Every extension member is optional: a refusal carries only
+// the ones of its code.
 type ProblemDocument struct {
 	// Type is always "about:blank": the code says what happened.
 	Type string `json:"type"`
@@ -133,6 +138,34 @@ type ProblemDocument struct {
 	// Retryable is true for a transient code: the same request may succeed
 	// later without any change.
 	Retryable bool `json:"retryable,omitempty"`
+	// Validation names the case of a validation_error refused by the
+	// domain: the validator's own code (invalid_title,
+	// close_target_required, nul_character, …).
+	Validation string `json:"validation,omitempty"`
+	// Field names the refused value: the path of a body member
+	// (labels[1], dependencies[0].reason), a query parameter, or path.
+	Field string `json:"field,omitempty"`
+	// CurrentVersion is the current version of the object of a
+	// version_conflict.
+	CurrentVersion int `json:"currentVersion,omitempty"`
+	// LockedBy is the holder of the lock of locked_by_other and
+	// already_claimed.
+	LockedBy string `json:"lockedBy,omitempty"`
+	// Duplicates are the similar issues of duplicate_suspected.
+	Duplicates []dependencies.DuplicateCandidate `json:"duplicates,omitempty"`
+	// Degraded is true on duplicate_suspected when only the lexical check
+	// ran.
+	Degraded bool `json:"degraded,omitempty"`
+	// Candidates are the projects an ambiguous_project handle matched.
+	Candidates []spaces.AmbiguousProjectCandidate `json:"candidates,omitempty"`
+	// RequiredRight is the key right insufficient_scope requires: read,
+	// write, manage or admin.
+	RequiredRight string `json:"requiredRight,omitempty"`
+	// RequiredScope is "spaces or all" when insufficient_scope also
+	// requires a wide key scope.
+	RequiredScope string `json:"requiredScope,omitempty"`
+	// OperationID is the operation insufficient_scope refused.
+	OperationID string `json:"operationId,omitempty"`
 }
 
 // problemType is the RFC 9457 type of every problem: the code, not a URI,

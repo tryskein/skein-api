@@ -239,7 +239,7 @@ type listIssuesFilters struct {
 // @Param labels query string false "Comma-separated labels, any of them (with project only)"
 // @Param isBlocked query string false "true or false"
 // @Param sortBy query string false "updated (default) or created"
-// @Param limit query int false "Page size, 1..100 (default 25)"
+// @Param limit query int false "Page size, 1..500 (default 25); a value outside the range is refused, never clamped" minimum(1) maximum(500) default(25)
 // @Param cursor query string false "The nextCursor of the previous page"
 // @Param fields query string false "Comma-separated fields of each item to return (plus id)"
 // @Success 200 {object} List[issues.IssueSummary] "A page of issues"
@@ -490,7 +490,7 @@ type readyCursor struct {
 // @Param assignee query string false "Exact assignee username"
 // @Param priorityMax query int false "Issues with priority <= N (0..4)"
 // @Param type query string false "Exact issue type"
-// @Param limit query int false "How many, 1..100 (default 25)"
+// @Param limit query int false "How many, 1..100 (default 25); a value outside the range is refused, never clamped" minimum(1) maximum(100) default(25)
 // @Param cursor query string false "The nextCursor of the previous page"
 // @Param fields query string false "Comma-separated fields of each item to return (plus id)"
 // @Success 200 {object} List[dependencies.IssueSummary] "The ready issues"
@@ -624,7 +624,7 @@ type eventCursor struct {
 // @Produce json
 // @Security SkeinApiKey[read]
 // @Param issue path string true "The issue's hierarchical id"
-// @Param limit query int false "Page size, 1..100 (default 20)"
+// @Param limit query int false "Page size, 1..100 (default 20); a value outside the range is refused, never clamped" minimum(1) maximum(100) default(20)
 // @Param cursor query string false "The nextCursor of the previous page"
 // @Param fields query string false "Comma-separated fields of each item to return (plus id)"
 // @Success 200 {object} List[issues.EventDTO] "A page of events"
@@ -765,7 +765,7 @@ type commentCursor struct {
 // @Produce json
 // @Security SkeinApiKey[read]
 // @Param issue path string true "The issue's hierarchical id"
-// @Param limit query int false "Page size, 1..100 (default 50)"
+// @Param limit query int false "Page size, 1..100 (default 50); a value outside the range is refused, never clamped" minimum(1) maximum(100) default(50)
 // @Param cursor query string false "The nextCursor of the previous page"
 // @Param fields query string false "Comma-separated fields of each item to return (plus id)"
 // @Success 200 {object} List[issues.CommentDTO] "A page of comments"
@@ -1046,7 +1046,7 @@ func (SearchPage) itemType() reflect.Type { return reflect.TypeFor[search.Item](
 // @Param labels query string false "Comma-separated issue labels"
 // @Param source query string false "Issue source: human, agent_directed, agent_autonomous or api"
 // @Param commentAuthorKinds query string false "Comma-separated comment author kinds: human, agent_directed, agent_autonomous, api"
-// @Param limit query int false "Page size (default 20)"
+// @Param limit query int false "Page size, 1..100 (default 25); a value outside the range is refused, never clamped" minimum(1) maximum(100) default(25)
 // @Param cursor query string false "The nextCursor of the previous page"
 // @Param fields query string false "Comma-separated fields of each item to return (plus id)"
 // @Success 200 {object} SearchPage "A page of hits; degraded marks a page ordered by full-text relevance only"
