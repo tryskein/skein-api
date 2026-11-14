@@ -77,7 +77,7 @@ func TestAuthenticateAPIKey_Outcomes(t *testing.T) {
 	newAuthn := func() *auth.APIKeyAuthenticator { return auth.NewAPIKeyAuthenticator(pool, auth.MinBcryptCost) }
 
 	t.Run("no key and a key not of the format are malformed", func(t *testing.T) {
-		for _, plain := range []string{"", "ska_short", "glpat-0123456789abcdefghijkl"} {
+		for _, plain := range []string{"", "ska_short", "other_0123456789abcdefghijkl"} {
 			wantRejected(t, newAuthn().AuthenticateAPIKey(ctx, plain), auth.RejectMalformed)
 		}
 	})

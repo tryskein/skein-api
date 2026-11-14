@@ -16,8 +16,8 @@ func TestMCPSessionHolder_MovesTheRESTNamespaceOut(t *testing.T) {
 	cases := []struct {
 		sent, want string
 	}{
-		{"api:0b6f3a8e-6f0e-4a57-9d4b-5a0d5f1e2c3d:w", "mcp:api:0b6f3a8e-6f0e-4a57-9d4b-5a0d5f1e2c3d:w"},
-		{"api:0b6f3a8e-6f0e-4a57-9d4b-5a0d5f1e2c3d", "mcp:api:0b6f3a8e-6f0e-4a57-9d4b-5a0d5f1e2c3d"},
+		{"api:00000000-0000-4000-8000-000000000001:w", "mcp:api:00000000-0000-4000-8000-000000000001:w"},
+		{"api:00000000-0000-4000-8000-000000000001", "mcp:api:00000000-0000-4000-8000-000000000001"},
 		{"mcp-session-7c1e9a2b-1111-4222-8333-944455556666", "mcp-session-7c1e9a2b-1111-4222-8333-944455556666"},
 		{"", ""},
 	}
@@ -36,7 +36,7 @@ func TestMCPSessionHolder_MovesTheRESTNamespaceOut(t *testing.T) {
 // X-Skein-Worker-Id is 1–64 characters of [A-Za-z0-9._-]; without the
 // header the key itself is the executor.
 func TestRESTHolder_WorkerIDFormat(t *testing.T) {
-	key := uuid.MustParse("0b6f3a8e-6f0e-4a57-9d4b-5a0d5f1e2c3d")
+	key := uuid.MustParse("00000000-0000-4000-8000-000000000001")
 	valid := map[string]string{
 		"":                      "api:" + key.String(),
 		"worker-1":              "api:" + key.String() + ":worker-1",
