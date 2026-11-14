@@ -39,7 +39,7 @@ import (
 const Retention = 24 * time.Hour
 
 // MarkerGrace is added to the write timeout to make the life of the
-// in-progress marker (ОСТ-2-6).
+// in-progress marker.
 const MarkerGrace = 30 * time.Second
 
 // CleanupInterval is how often the expired outcomes are deleted. A repeat
