@@ -326,7 +326,7 @@ func CloseMany(ctx context.Context, d Deps, userID uuid.UUID, a Args, loop Batch
 				}
 				failed++
 			}
-			slog.WarnContext(ctx, "mcp batch stopped early",
+			slog.WarnContext(ctx, transportMessage(ctx, "mcp batch stopped early", "public API batch stopped early"),
 				"tool", "skein_close_many", "code", code,
 				"appliedRows", succeeded, "unrunRows", len(items)-i,
 				"userId", userID.String())
@@ -595,7 +595,7 @@ func ClassifyUpdateError(ctx context.Context, err error, tool, userID, issueID s
 			Details: map[string]any{"componentIds": cerr.ComponentIDs},
 		}
 	}
-	slog.ErrorContext(ctx, "mcp tool error",
+	slog.ErrorContext(ctx, logMessage(ctx, "error"),
 		"tool", tool,
 		"reason", "store call failed",
 		"userId", userID, "issueId", issueID, "error", err.Error())
@@ -690,7 +690,7 @@ func UpdateMany(ctx context.Context, d Deps, userID uuid.UUID, a Args, loop Batc
 				}
 				failed++
 			}
-			slog.WarnContext(ctx, "mcp batch stopped early",
+			slog.WarnContext(ctx, transportMessage(ctx, "mcp batch stopped early", "public API batch stopped early"),
 				"tool", "skein_update_many", "code", code,
 				"appliedRows", succeeded, "unrunRows", len(rawSlice)-i,
 				"userId", userID.String())
@@ -1036,7 +1036,7 @@ func ClassifyDepAddError(ctx, loopCtx context.Context, err error, userID, fromID
 			Details: cls.Details,
 		}
 	}
-	slog.ErrorContext(ctx, "mcp tool error",
+	slog.ErrorContext(ctx, logMessage(ctx, "error"),
 		"tool", "skein_dep_add_many",
 		"reason", "store create failed",
 		"userId", userID,
@@ -1109,7 +1109,7 @@ func DepAddMany(ctx context.Context, d Deps, userID uuid.UUID, a Args, loop Batc
 				}
 				failed++
 			}
-			slog.WarnContext(ctx, "mcp batch stopped early",
+			slog.WarnContext(ctx, transportMessage(ctx, "mcp batch stopped early", "public API batch stopped early"),
 				"tool", "skein_dep_add_many", "code", code,
 				"appliedRows", succeeded, "unrunRows", len(rawSlice)-i,
 				"userId", userID.String())

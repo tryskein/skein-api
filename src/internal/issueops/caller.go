@@ -18,7 +18,8 @@ func CallerRole(ctx context.Context) string {
 	if role, ok := auth.UserRoleFrom(ctx); ok && role != "" {
 		return role
 	}
-	slog.WarnContext(ctx, "auth role missing in mcp tool ctx", "defaulted_to", "user")
+	slog.WarnContext(ctx, transportMessage(ctx, "auth role missing in mcp tool ctx", "auth role missing in public API ctx"),
+		"defaulted_to", "user")
 	return "user"
 }
 

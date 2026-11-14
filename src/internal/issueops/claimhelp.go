@@ -66,7 +66,7 @@ func LogClaimRejected(ctx context.Context, outcome, userID, sessionID, issueID s
 		"issueId", issueID,
 	)
 	args = append(args, extra...)
-	slog.WarnContext(ctx, "mcp tool rejected", args...)
+	slog.WarnContext(ctx, logMessage(ctx, "rejected"), args...)
 }
 
 // MapClaimError translates the typed errors emitted by issues.Store.Claim
