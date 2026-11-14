@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	netmail "net/mail"
+	"net/netip"
 	"net/url"
 	"strconv"
 	"strings"
@@ -684,6 +685,49 @@ type Config struct {
 	OperatorAPIPort    string `env:"SKEIN_OPERATOR_API_PORT" envDefault:"5101"`
 	OperatorAPIKey     string `env:"SKEIN_OPERATOR_API_KEY"`
 
+	// PublicAPIEnabled / PublicAPIPort — the public REST API (/api/v1 by
+	// API key) on its own port. Enabled by default; the port is validated
+	// only while it is enabled.
+	PublicAPIEnabled bool   `env:"SKEIN_PUBLIC_API_ENABLED" envDefault:"true"`
+	PublicAPIPort    string `env:"SKEIN_PUBLIC_API_PORT" envDefault:"5103"`
+	// PublicAPIURL — the external address of the public API, as clients
+	// reach it. Optional: it has no default, and without it the OpenAPI
+	// document carries no servers. Set = an absolute http(s) URL.
+	PublicAPIURL string `env:"SKEIN_PUBLIC_API_URL"`
+	// The values below are read as text and parsed by Load only while the
+	// public API is enabled: a disabled public API ignores them entirely, so
+	// switching it off never depends on their values. The parsed fields stay
+	// zero while it is disabled.
+	PublicAPIRateLimitPerMinuteRaw    string `env:"SKEIN_PUBLIC_API_RATE_LIMIT_PER_MINUTE" envDefault:"100"`
+	PublicAPIAuthFailuresPerMinuteRaw string `env:"SKEIN_PUBLIC_API_AUTH_FAILURES_PER_MINUTE" envDefault:"20"`
+	PublicAPIWriteTimeoutRaw          string `env:"SKEIN_PUBLIC_API_WRITE_TIMEOUT" envDefault:"30s"`
+	// PublicAPIRateLimitPerMinute — REST requests per minute per API key on
+	// the public port (one counter per replica). > 0.
+	PublicAPIRateLimitPerMinute int
+	// PublicAPIAuthFailuresPerMinute — failed authentications per minute per
+	// client IP on the public port before the key is checked. > 0.
+	PublicAPIAuthFailuresPerMinute int
+	// PublicAPITrustedProxiesRaw — the CIDR list as set; Load parses it into
+	// PublicAPITrustedProxies. Empty = no trusted proxy: forwarding headers
+	// are ignored and the client IP is the direct peer.
+	PublicAPITrustedProxiesRaw []string `env:"SKEIN_PUBLIC_API_TRUSTED_PROXIES"`
+	// PublicAPITrustedProxies — the parsed SKEIN_PUBLIC_API_TRUSTED_PROXIES.
+	PublicAPITrustedProxies []netip.Prefix
+	// PublicAPIWriteTimeout — the write timeout of the public server, which
+	// bounds the execution of one request. > 0.
+	PublicAPIWriteTimeout time.Duration
+
+	// APIKeyMaxTTL — the longest API key lifetime allowed (365 days, the
+	// ceiling: an operator may only lower it). 0 < max <= 365 days.
+	APIKeyMaxTTL time.Duration `env:"SKEIN_API_KEY_MAX_TTL" envDefault:"8760h"`
+	// APIKeyDefaultTTLSet — SKEIN_API_KEY_DEFAULT_TTL as set; nil = unset.
+	// Load resolves it into APIKeyDefaultTTL.
+	APIKeyDefaultTTLSet *time.Duration `env:"SKEIN_API_KEY_DEFAULT_TTL"`
+	// APIKeyDefaultTTL — the lifetime of a new API key when none is chosen:
+	// the value set, or, when unset, 90 days capped by APIKeyMaxTTL, so that
+	// lowering the maximum alone is enough. 0 < default <= max.
+	APIKeyDefaultTTL time.Duration
+
 	// Quotas (SAAS-PLAN 4.5). nil = no quota; must be >= 0.
 	QuotaPersonalProjects     *int   `env:"SKEIN_QUOTA_PERSONAL_PROJECTS"`
 	QuotaPersonalStorageBytes *int64 `env:"SKEIN_QUOTA_PERSONAL_STORAGE_BYTES"`
@@ -1085,7 +1129,103 @@ func validateInstanceSettings(cfg *Config) error {
 			return fmt.Errorf("skein_operator_api_port must differ from port; both are %q", cfg.Port)
 		}
 	}
+
+	if err := validatePublicAPI(cfg); err != nil {
+		return err
+	}
+
+	// API key lifetimes apply to every key, whether or not the public port
+	// is enabled: MCP clients use the same keys.
+	if cfg.APIKeyMaxTTL <= 0 || cfg.APIKeyMaxTTL > APIKeyTTLCeiling {
+		return fmt.Errorf("skein_api_key_max_ttl must be in (0, %s]; got %s", APIKeyTTLCeiling, cfg.APIKeyMaxTTL)
+	}
+	if cfg.APIKeyDefaultTTLSet == nil {
+		cfg.APIKeyDefaultTTL = min(APIKeyDefaultTTLFallback, cfg.APIKeyMaxTTL)
+		return nil
+	}
+	if *cfg.APIKeyDefaultTTLSet <= 0 || *cfg.APIKeyDefaultTTLSet > cfg.APIKeyMaxTTL {
+		return fmt.Errorf("skein_api_key_default_ttl must be in (0, skein_api_key_max_ttl=%s]; got %s",
+			cfg.APIKeyMaxTTL, *cfg.APIKeyDefaultTTLSet)
+	}
+	cfg.APIKeyDefaultTTL = *cfg.APIKeyDefaultTTLSet
 	return nil
+}
+
+// APIKeyTTLCeiling is the longest API key lifetime the product allows (365
+// days). SKEIN_API_KEY_MAX_TTL may lower it, never raise it.
+const APIKeyTTLCeiling = 365 * 24 * time.Hour
+
+// APIKeyDefaultTTLFallback is the lifetime of a new API key when
+// SKEIN_API_KEY_DEFAULT_TTL is unset (90 days), unless the maximum is lower.
+const APIKeyDefaultTTLFallback = 90 * 24 * time.Hour
+
+// validatePublicAPI parses and checks the settings of the public API server.
+// Nothing is parsed or checked while the server is disabled: none of these
+// settings is read then.
+func validatePublicAPI(cfg *Config) error {
+	if !cfg.PublicAPIEnabled {
+		return nil
+	}
+	port, err := strconv.Atoi(cfg.PublicAPIPort)
+	if err != nil || port < 1 || port > 65535 {
+		return fmt.Errorf("skein_public_api_port must be a port number in [1, 65535]; got %q", cfg.PublicAPIPort)
+	}
+	if cfg.PublicAPIPort == cfg.Port {
+		return fmt.Errorf("skein_public_api_port must differ from port; both are %q", cfg.Port)
+	}
+	if cfg.OperatorAPIEnabled && cfg.PublicAPIPort == cfg.OperatorAPIPort {
+		return fmt.Errorf("skein_public_api_port must differ from skein_operator_api_port; both are %q", cfg.OperatorAPIPort)
+	}
+	if cfg.PublicAPIURL != "" {
+		if err := validateAppBaseURL(cfg.PublicAPIURL); err != nil {
+			return fmt.Errorf("skein_public_api_url must be the absolute http(s) address of the public API: %w", err)
+		}
+	}
+	rate, err := strconv.Atoi(cfg.PublicAPIRateLimitPerMinuteRaw)
+	if err != nil || rate <= 0 {
+		return fmt.Errorf("skein_public_api_rate_limit_per_minute must be an integer > 0; got %q", cfg.PublicAPIRateLimitPerMinuteRaw)
+	}
+	authFailures, err := strconv.Atoi(cfg.PublicAPIAuthFailuresPerMinuteRaw)
+	if err != nil || authFailures <= 0 {
+		return fmt.Errorf("skein_public_api_auth_failures_per_minute must be an integer > 0; got %q", cfg.PublicAPIAuthFailuresPerMinuteRaw)
+	}
+	writeTimeout, err := time.ParseDuration(cfg.PublicAPIWriteTimeoutRaw)
+	if err != nil || writeTimeout <= 0 {
+		return fmt.Errorf("skein_public_api_write_timeout must be a duration > 0; got %q", cfg.PublicAPIWriteTimeoutRaw)
+	}
+	proxies, err := parseTrustedProxies(cfg.PublicAPITrustedProxiesRaw)
+	if err != nil {
+		return fmt.Errorf("skein_public_api_trusted_proxies: %w", err)
+	}
+	cfg.PublicAPIRateLimitPerMinute = rate
+	cfg.PublicAPIAuthFailuresPerMinute = authFailures
+	cfg.PublicAPIWriteTimeout = writeTimeout
+	cfg.PublicAPITrustedProxies = proxies
+	return nil
+}
+
+// parseTrustedProxies parses a comma-separated CIDR list. Items are trimmed and
+// empty ones dropped (a trailing comma, a space after a comma). A bare address
+// without a prefix length and a prefix with host bits set (10.1.2.3/8) are
+// refused, so a typo cannot silently trust a range other than the one meant.
+func parseTrustedProxies(in []string) ([]netip.Prefix, error) {
+	var out []netip.Prefix
+	for _, item := range in {
+		item = strings.TrimSpace(item)
+		if item == "" {
+			continue
+		}
+		prefix, err := netip.ParsePrefix(item)
+		if err != nil {
+			return nil, fmt.Errorf("%q is not a CIDR (want address/prefix-length, e.g. 10.0.0.0/8): %w", item, err)
+		}
+		if prefix != prefix.Masked() {
+			return nil, fmt.Errorf("%q has host bits set: write the network address %s, or the address with /%d to trust one host",
+				item, prefix.Masked(), prefix.Addr().BitLen())
+		}
+		out = append(out, prefix)
+	}
+	return out, nil
 }
 
 // checkSettingConflicts rejects the contradictions of SAAS-PLAN 2.5 that are

@@ -12,6 +12,9 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"skein-api/internal/apikeys"
+	"skein-api/internal/authz/authzsql"
 )
 
 // Token format: skm_<43 base64url chars>.
@@ -120,53 +123,130 @@ RETURNING id, user_id, minted_by_api_key_id, audience, capability,
 	return plaintext, c, nil
 }
 
-// ValidateAndRenew is the single atomic authentication step run on every
-// /agent/v1 request. It validates the presented plaintext (by its SHA-256
-// digest) against audience + every liveness predicate AND slides expires_at
-// forward in the same UPDATE — server clock only, so there is no read-then-
-// write race and no app/DB skew. Spec §5 verbatim.
+// ValidateAndRenew is the single authentication step run on every
+// /agent/v1 request, in one transaction. It validates the presented
+// plaintext (by its SHA-256 digest) against audience and the credential's
+// own liveness, then checks the parent key — the api key that minted it —
+// and slides expires_at forward (server clock only; expires_at is re-pinned
+// to LEAST(now + renewal window, absolute_deadline), so a renew can never
+// push past the immutable 12h cap).
 //
-// The WHERE clause folds in the cascade revocations via a join: the minting
-// api key must still be active (ak.revoked_at IS NULL), the owner must still
-// be active (u.deactivated_at IS NULL), and the credential's owner must
-// match the key's owner (mc.user_id = ak.user_id, defence-in-depth). expires_at
-// is re-pinned to LEAST(now + renewal window, absolute_deadline) so a renew can never
-// push past the immutable 12h cap.
+// The parent key is checked on every poll (sk-878.3.1 INV-11, SC-019): the
+// token never gives more than the key that minted it. The key must be
+// unrevoked and unexpired, hold a permission level (read or above), belong
+// to the credential's owner, the owner must be active (not deactivated, not
+// deleted), and the monitored issue must lie inside the key's scope. A token
+// whose parent fails is revoked FOR GOOD in the same transaction: a later
+// widening of the key or of its scope does not bring it back.
 //
-// Zero rows updated → ErrInvalidMonitorToken (every failure mode collapses
-// here; the caller maps it to 401). A real DB error (timeout, conn loss) is
-// wrapped and returned distinctly so the caller can map it to 5xx rather
-// than masquerade as an auth failure.
+// Every failure answers ErrInvalidMonitorToken (the caller maps it to 401,
+// as for a revoked monitor). A real DB error (timeout, conn loss) is wrapped
+// and returned distinctly so the caller can map it to 5xx rather than
+// masquerade as an auth failure.
 func (s *Store) ValidateAndRenew(ctx context.Context, plaintext, audience string) (Claims, error) {
 	digest := sha256.Sum256([]byte(plaintext))
 
-	var c Claims
-	err := s.pool.QueryRow(ctx, `
-UPDATE monitor_credentials mc
-   SET expires_at = LEAST(now() + $3::interval, mc.absolute_deadline),
-       last_used_at = now()
-  FROM api_keys ak
-  JOIN users u ON u.id = ak.user_id
+	var (
+		c       Claims
+		invalid bool
+	)
+	err := pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
+		var keyID uuid.UUID
+		err := tx.QueryRow(ctx, `
+SELECT mc.id, mc.user_id, mc.project_id, mc.scope_issue_id, mc.scope_subtree, mc.event_types, mc.created_at,
+       mc.minted_by_api_key_id
+  FROM monitor_credentials mc
  WHERE mc.token_digest = $1
    AND mc.audience = $2
    AND mc.revoked_at IS NULL
-   AND ak.id = mc.minted_by_api_key_id
-   AND ak.revoked_at IS NULL
-   AND u.deactivated_at IS NULL
-   AND mc.user_id = ak.user_id
    AND now() < mc.expires_at
    AND now() < mc.absolute_deadline
-RETURNING mc.id, mc.user_id, mc.project_id, mc.scope_issue_id, mc.scope_subtree, mc.event_types, mc.created_at`,
-		digest[:], audience, s.idleTTL,
-	).Scan(&c.ID, &c.UserID, &c.ProjectID, &c.ScopeIssueID, &c.ScopeSubtree, &c.EventTypes, &c.CreatedAt)
-	if err != nil {
+   FOR UPDATE`, digest[:], audience,
+		).Scan(&c.ID, &c.UserID, &c.ProjectID, &c.ScopeIssueID, &c.ScopeSubtree, &c.EventTypes, &c.CreatedAt, &keyID)
 		if errors.Is(err, pgx.ErrNoRows) {
-			return Claims{}, ErrInvalidMonitorToken
+			invalid = true
+			return nil
 		}
+		if err != nil {
+			return fmt.Errorf("reading monitor credential: %w", err)
+		}
+
+		ok, err := parentKeyAllows(ctx, tx, keyID, c.UserID, c.ScopeIssueID, c.ProjectID)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			invalid = true
+			if _, err := tx.Exec(ctx, `UPDATE monitor_credentials SET revoked_at = now() WHERE id = $1`, c.ID); err != nil {
+				return fmt.Errorf("revoking monitor credential %s after its parent key failed: %w", c.ID, err)
+			}
+			return nil
+		}
+
+		if _, err := tx.Exec(ctx, `
+UPDATE monitor_credentials
+   SET expires_at = LEAST(now() + $2::interval, absolute_deadline),
+       last_used_at = now()
+ WHERE id = $1`, c.ID, s.idleTTL); err != nil {
+			return fmt.Errorf("renewing monitor credential %s: %w", c.ID, err)
+		}
+		return nil
+	})
+	if err != nil {
 		return Claims{}, fmt.Errorf("validating monitor token: %w", err)
+	}
+	if invalid {
+		return Claims{}, ErrInvalidMonitorToken
 	}
 	c.CreatedAt = c.CreatedAt.UTC()
 	return c, nil
+}
+
+// parentKeyAllows reports whether the key keyID still lets its owner read
+// the monitored issue (INV-11): the key is unrevoked, unexpired, has a
+// permission level and belongs to owner; the owner is active; the issue —
+// its current project, or the credential's project when the issue is gone —
+// lies inside the key's scope. No row for the key is a failure too.
+func parentKeyAllows(ctx context.Context, tx pgx.Tx, keyID, owner uuid.UUID, issueID string, credProject uuid.UUID) (bool, error) {
+	var (
+		live    bool
+		mode    string
+		g       apikeys.Grant
+		project uuid.UUID
+	)
+	err := tx.QueryRow(ctx, `
+SELECT ak.revoked_at IS NULL
+       AND (ak.expires_at IS NULL OR now() < ak.expires_at)
+       AND ak.level IS NOT NULL
+       AND ak.user_id = $2
+       AND u.deactivated_at IS NULL AND u.deleted_at IS NULL,
+       ak.scope_mode,
+       ARRAY(SELECT project_id FROM api_key_scope_projects WHERE api_key_id = ak.id),
+       ARRAY(SELECT space_id FROM api_key_scope_spaces WHERE api_key_id = ak.id),
+       COALESCE((SELECT i.project_id FROM issues i WHERE i.id = $3), $4)
+  FROM api_keys ak
+  JOIN users u ON u.id = ak.user_id
+ WHERE ak.id = $1`, keyID, owner, issueID, credProject,
+	).Scan(&live, &mode, &g.Scope.Projects, &g.Scope.Spaces, &project)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("reading the parent key of a monitor credential: %w", err)
+	}
+	if !live {
+		return false, nil
+	}
+	g.Scope.Mode = apikeys.ScopeMode(mode)
+	args := []any{project}
+	var inScope bool
+	// $1 is always referenced: a scope without a limit renders the literal
+	// true and binds nothing of its own.
+	if err := tx.QueryRow(ctx, `SELECT $1::uuid IS NOT NULL AND `+authzsql.KeyLimitOf(g).Expr("$1::uuid", authzsql.Placeholders(&args)), args...).
+		Scan(&inScope); err != nil {
+		return false, fmt.Errorf("checking the monitored issue against the parent key scope: %w", err)
+	}
+	return inScope, nil
 }
 
 // RevokeOwned stops one monitor of userID (sk-579 US-6, INV-11): a single
@@ -185,13 +265,26 @@ RETURNING mc.id, mc.user_id, mc.project_id, mc.scope_issue_id, mc.scope_subtree,
 // transaction on the pool; do not call it inside an outer pgx.Tx that may
 // already have revoked the same row — a repeat there would read as fresh.
 func (s *Store) RevokeOwned(ctx context.Context, id, userID uuid.UUID) (bool, error) {
+	return s.RevokeOwnedWithin(ctx, id, userID, authzsql.KeyLimit{})
+}
+
+// RevokeOwnedWithin is RevokeOwned for a caller limited to a key's scope
+// (sk-878.3.1 US-3, INV-2): a monitor whose issue — its current project, or
+// the credential's project when the issue is gone — lies outside the scope
+// is not the caller's to stop and answers ErrNotFound, exactly as a monitor
+// that does not exist; it stays unrevoked. The zero KeyLimit narrows nothing.
+func (s *Store) RevokeOwnedWithin(ctx context.Context, id, userID uuid.UUID, key authzsql.KeyLimit) (bool, error) {
+	args := []any{id, userID}
+	inScope := key.Expr("COALESCE((SELECT i.project_id FROM issues i WHERE i.id = mc.scope_issue_id), mc.project_id)",
+		authzsql.Placeholders(&args))
 	var revokedNow bool
 	err := s.pool.QueryRow(ctx, `
-UPDATE monitor_credentials
-   SET revoked_at = COALESCE(revoked_at, now())
- WHERE id = $1
-   AND user_id = $2
-RETURNING revoked_at = now()`, id, userID).Scan(&revokedNow)
+UPDATE monitor_credentials mc
+   SET revoked_at = COALESCE(mc.revoked_at, now())
+ WHERE mc.id = $1
+   AND mc.user_id = $2
+   AND `+inScope+`
+RETURNING mc.revoked_at = now()`, args...).Scan(&revokedNow)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return false, ErrNotFound

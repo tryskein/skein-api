@@ -2,18 +2,14 @@ package tools
 
 import (
 	"context"
-	"errors"
-	"log/slog"
-	"strings"
-	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 
-	"skein-api/internal/authz"
 	"skein-api/internal/dependencies"
+	"skein-api/internal/issueops"
 	"skein-api/internal/issues"
 	skmcp "skein-api/internal/mcp"
 )
@@ -106,162 +102,22 @@ func RegisterReparent(s *server.MCPServer, pool *pgxpool.Pool, depsStore *depend
 }
 
 func handleReparent(pool *pgxpool.Pool, depsStore *dependencies.Store, issuesStore *issues.Store) server.ToolHandlerFunc {
+	d := issueops.Deps{Pool: pool, Issues: issuesStore, Deps: depsStore}
 	return func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-		start := time.Now()
 		userID, errResp := skmcp.RequireUser(ctx)
 		if errResp != nil {
 			return errResp, nil
 		}
-		role := callerRole(ctx)
-
-		// ---- Required: id / newParentId / expectedVersion ----
-		rawID, err := req.RequireString("id")
-		if err != nil {
-			return skmcp.ToolError(ErrCodeValidationError, "id is required", nil), nil
+		res, f := issueops.Reparent(ctx, d, userID, issueops.Args(req.GetArguments()))
+		if f != nil {
+			return toolFailure(f), nil
 		}
-		id := strings.TrimSpace(rawID)
-		if !looksLikeHierarchicalID(id) {
-			return skmcp.ToolError(ErrCodeValidationError,
-				"id must be a full hierarchical id like \"demo-42\"",
-				map[string]any{"id": rawID}), nil
-		}
-
-		rawNewParentID, err := req.RequireString("newParentId")
-		if err != nil {
-			return skmcp.ToolError(ErrCodeValidationError, "newParentId is required", nil), nil
-		}
-		newParentID := strings.TrimSpace(rawNewParentID)
-		if !looksLikeHierarchicalID(newParentID) {
-			return skmcp.ToolError(ErrCodeValidationError,
-				"newParentId must be a full hierarchical id like \"demo-42\"",
-				map[string]any{"newParentId": rawNewParentID}), nil
-		}
-
-		expectedVersion := req.GetInt("expectedVersion", 0)
-		if expectedVersion < 1 {
-			return skmcp.ToolError(ErrCodeValidationError,
-				"expectedVersion is required and must be >= 1", nil), nil
-		}
-
-		// ---- Visibility: load the issue once, ensure project visible ----
-		// Same pre-check shape as skein_update / skein_dep_add: surface
-		// issue_not_found for both "missing" and "not visible" so we don't
-		// leak the existence of a foreign issue.
-		issue, err := issuesStore.GetIssue(ctx, id)
-		if err != nil {
-			if errors.Is(err, issues.ErrNotFound) {
-				return skmcp.ToolError(ErrCodeIssueNotFound,
-					"issue does not exist or is not visible",
-					map[string]any{"id": id}), nil
-			}
-			slog.ErrorContext(ctx, "mcp tool error",
-				"tool", "skein_reparent",
-				"reason", "load issue failed",
-				"userId", userID.String(), "issueId", id, "error", err.Error())
-			return skmcp.ToolError(ErrCodeInternalError, "failed to load issue", nil), nil
-		}
-		if res := issueActionGate(ctx, pool, "skein_reparent", "id", id, issue.ProjectID, userID, authz.ActionWrite); res != nil {
-			return res, nil
-		}
-
-		// ---- Reparent ----
-		actor := DependenciesAgentActor(ctx, pool, userID)
-		_, err = depsStore.Reparent(ctx, id, newParentID, expectedVersion,
-			dependencies.CallerAccess{UserID: userID, Role: role}, actor)
-		if err != nil {
-			return mapReparentError(ctx, err, userID, id, newParentID), nil
-		}
-
-		// ---- Re-fetch the updated IssueDetail to return ----
-		// Reparent does not return an IssueDetail (it can't import issues),
-		// so we re-fetch the same way every other write tool returns its
-		// post-state. The version is now bumped and parentIdCurrent reflects
-		// the new parent.
-		final, err := issuesStore.GetIssue(ctx, id)
-		if err != nil {
-			slog.ErrorContext(ctx, "mcp tool error",
-				"tool", "skein_reparent",
-				"reason", "re-fetch after reparent failed",
-				"userId", userID.String(), "issueId", id, "error", err.Error())
-			return skmcp.ToolError(ErrCodeInternalError,
-				"reparent committed but re-fetch failed; re-read with skein_show", nil), nil
-		}
-
-		slog.InfoContext(ctx, "mcp tool ok",
-			"tool", "skein_reparent",
-			"userId", userID.String(), "issueId", id, "newParentId", newParentID,
-			"version", final.Version,
-			"latencyMs", time.Since(start).Milliseconds())
+		id, final := res.IssueID, res.Issue
 		return writeIssueAck(ctx, "skein_reparent", userID.String(), id,
 			final, req.GetBool("verbose", false))
 	}
 }
 
-// mapReparentError translates dependencies.Store.Reparent typed errors
-// into stable MCP error codes. Every frozen sentinel from the domain
-// layer is mapped here — none fall through to internal_error except a
-// genuinely unrecognised error.
 func mapReparentError(ctx context.Context, err error, userID uuid.UUID, id, newParentID string) *mcpgo.CallToolResult {
-	if vErr, ok := dependencies.IsValidationError(err); ok {
-		// sk-118 (F2e): the nested-standing ban is a *ValidationError but
-		// carries an actionable, branch-on-able code — promote it to the
-		// top-level envelope `error` (matching the F2c issues-side promotion)
-		// rather than burying it under validation_error.
-		if vErr.Code == ErrCodeNestedStandingForbidden {
-			return skmcp.ToolError(ErrCodeNestedStandingForbidden, vErr.Message,
-				map[string]any{"id": id, "newParentId": newParentID})
-		}
-		return skmcp.ToolError(ErrCodeValidationError, vErr.Message,
-			map[string]any{"code": vErr.Code})
-	}
-	var verr *dependencies.ErrVersionConflict
-	if errors.As(err, &verr) {
-		return skmcp.ToolError(ErrCodeVersionConflict,
-			"the issue was modified by another writer",
-			map[string]any{"currentVersion": verr.CurrentVersion})
-	}
-	if errors.Is(err, dependencies.ErrReparentSelf) {
-		return skmcp.ToolError(ErrCodeReparentSelf,
-			"an issue cannot be its own parent",
-			map[string]any{"id": id})
-	}
-	if errors.Is(err, dependencies.ErrReparentCrossProject) {
-		return skmcp.ToolError(ErrCodeReparentCrossProject,
-			"new parent must be in the same project as the issue",
-			map[string]any{"id": id, "newParentId": newParentID})
-	}
-	if errors.Is(err, dependencies.ErrFromNotFound) {
-		return skmcp.ToolError(ErrCodeIssueNotFound,
-			"issue does not exist or is not visible",
-			map[string]any{"id": id})
-	}
-	// INV-3 (sk-674.18 T033): a parent in a project the caller cannot see
-	// answers exactly as a nonexistent one — same code, text and details.
-	if errors.Is(err, dependencies.ErrTargetNotFound) || errors.Is(err, dependencies.ErrDependencyTargetNotVisible) {
-		return skmcp.ToolError(ErrCodeIssueNotFound,
-			"new parent does not exist or is not visible",
-			map[string]any{"newParentId": newParentID})
-	}
-	if errors.Is(err, dependencies.ErrSerializationRetry) {
-		return skmcp.ToolError(ErrCodeSerializationRetry,
-			"reparent lost a serialization race — safe to retry",
-			map[string]any{"id": id})
-	}
-	if errors.Is(err, dependencies.ErrDependencyTargetNotReady) {
-		return skmcp.ToolError(ErrCodeDependencyTargetNotVisibleYet,
-			"new parent not visible yet — retry shortly",
-			map[string]any{"newParentId": newParentID})
-	}
-	var cycle *dependencies.ErrDepCycle
-	if errors.As(err, &cycle) {
-		return skmcp.ToolError(ErrCodeDependencyCycle,
-			"this move would create a cycle (new parent is a descendant of the issue)",
-			map[string]any{"path": cycle.Path})
-	}
-	slog.ErrorContext(ctx, "mcp tool error",
-		"tool", "skein_reparent",
-		"reason", "store reparent failed",
-		"userId", userID.String(),
-		"issueId", id, "newParentId", newParentID, "error", err.Error())
-	return skmcp.ToolError(ErrCodeInternalError, "failed to reparent issue", nil)
+	return toolFailure(issueops.MapReparentError(ctx, err, userID, id, newParentID))
 }

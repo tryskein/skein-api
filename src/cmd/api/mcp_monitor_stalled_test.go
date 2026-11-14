@@ -33,7 +33,7 @@ func TestMCPRegisterTools_NoMonitorStalled(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GenerateAPIKey: %v", err)
 	}
-	keyID, _, err := apikeys.New(pool).Create(context.Background(), owner, "sk-669", keyPrefix, hash)
+	keyID, _, err := testsupport.CreateOwnerKey(context.Background(), pool, owner, "sk-669", keyPrefix, hash)
 	if err != nil {
 		t.Fatalf("create api key: %v", err)
 	}
@@ -68,6 +68,7 @@ func TestMCPRegisterTools_NoMonitorStalled(t *testing.T) {
 	ctx = auth.WithUserID(ctx, owner)
 	ctx = auth.WithUserRole(ctx, "user")
 	ctx = auth.WithAPIKeyID(ctx, keyID)
+	ctx = auth.WithKeyGrant(ctx, apikeys.Grant{Level: apikeys.LevelManage, Admin: false, Scope: apikeys.Scope{Mode: apikeys.ScopeAll}})
 	ctx = auth.WithSessionID(ctx, session)
 
 	for _, tc := range []struct {

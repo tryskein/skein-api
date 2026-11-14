@@ -376,6 +376,7 @@ VALUES ($1, $2, $3, '', '[]'::jsonb, NULL, $4, now(), now())`,
 	ctxAuth = auth.WithUserRole(ctxAuth, "admin")
 	ctxAuth = auth.WithSessionID(ctxAuth, "routing-"+nonce)
 	ctxAuth = auth.WithAPIKeyID(ctxAuth, uuid.Must(uuid.NewRandom()))
+	ctxAuth = auth.WithKeyGrant(ctxAuth, apikeys.Grant{Level: apikeys.LevelManage, Admin: true, Scope: apikeys.Scope{Mode: apikeys.ScopeAll}})
 
 	// INV-5 (T024): the member the project_members probes add is a
 	// participant of the project's space.

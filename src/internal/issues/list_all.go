@@ -94,6 +94,10 @@ type ListAllIssuesArgs struct {
 	// issues.source values, identical semantics to ListIssuesArgs.
 	// Pointer so nil = no filter.
 	OriginGroup *string
+	// Source narrows by the exact issues.source value, validated at the
+	// handler boundary (ValidateSource); intersects OriginGroup when both
+	// are set. Pointer so nil = no filter.
+	Source *string
 
 	// AssigneeUserID resolves "assignee=me" without forcing the caller
 	// to know the assignee's username. Mutually exclusive with Assignee.
@@ -620,7 +624,7 @@ func buildAllIssuesWhere(h, sh readerHorizon, args ListAllIssuesArgs) ([]string,
 		case OriginHumanDriven:
 			clauses = append(clauses, fmt.Sprintf(
 				"i.source = ANY(%s)",
-				addParam([]string{SourceHuman, SourceAgentDirected})))
+				addParam(HumanDrivenSources)))
 		case OriginAgentAutonomous:
 			clauses = append(clauses, fmt.Sprintf(
 				"i.source = %s",
@@ -628,6 +632,9 @@ func buildAllIssuesWhere(h, sh readerHorizon, args ListAllIssuesArgs) ([]string,
 		case OriginAll:
 			// no filter
 		}
+	}
+	if args.Source != nil {
+		clauses = append(clauses, fmt.Sprintf("i.source = %s", addParam(*args.Source)))
 	}
 	if args.AssigneeUserID != nil {
 		clauses = append(clauses, assignee.MatchesCaller("i", addParam(*args.AssigneeUserID)))

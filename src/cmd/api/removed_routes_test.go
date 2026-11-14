@@ -19,7 +19,7 @@ func registeredRoutes(t *testing.T) map[string]bool {
 	out := map[string]bool{}
 	err := chi.Walk(r, func(method, route string, _ http.Handler, _ ...func(http.Handler) http.Handler) error {
 		// chi reports the trailing-slash form for sub-router roots
-		// ("/api/v1/themes/"); annotations are written without it.
+		// ("/ui/v1/themes/"); annotations are written without it.
 		route = strings.TrimSuffix(route, "/")
 		if route == "" {
 			route = "/"
@@ -46,7 +46,7 @@ func TestRemovedOutboxRoutesAreUnrouted(t *testing.T) {
 	gone := []string{
 		// The per-issue notification tail existed only for the Outbox
 		// card's read history and went with it.
-		"GET /api/v1/issues/{issueID}/notifications",
+		"GET /ui/v1/issues/{issueID}/notifications",
 	}
 	for _, key := range gone {
 		if routes[key] {
@@ -57,9 +57,9 @@ func TestRemovedOutboxRoutesAreUnrouted(t *testing.T) {
 	// Neighbours on the same sub-router must be untouched: the removal is one
 	// route, not the group.
 	for _, key := range []string{
-		"POST /api/v1/issues/{issueID}/watch",
-		"DELETE /api/v1/issues/{issueID}/watch",
-		"GET /api/v1/issues/{issueID}/watchers",
+		"POST /ui/v1/issues/{issueID}/watch",
+		"DELETE /ui/v1/issues/{issueID}/watch",
+		"GET /ui/v1/issues/{issueID}/watchers",
 	} {
 		if !routes[key] {
 			t.Errorf("route %q disappeared with the Outbox removal — it is unrelated to it", key)

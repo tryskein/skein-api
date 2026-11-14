@@ -1,7 +1,7 @@
 package main
 
 // watching_read_card_route_test.go — sk-622.21, T023, matrix row No. 46
-// (US-7): POST /api/v1/me/watching/{issueId}/read is mounted on the
+// (US-7): POST /ui/v1/me/watching/{issueId}/read is mounted on the
 // PRODUCTION router. The handler-level
 // test (internal/handler/me_watching_read_card_test.go) builds a local chi
 // router, because buildRouter is not reachable from that package, so nothing
@@ -35,7 +35,7 @@ func TestWatchingReadCardRoute_MountedOnProductionRouter(t *testing.T) {
 	issue := testsupport.SeedIssue(t, pool, pid, actor, prefix+"-1", "card", "open", 2)
 	seedAgedNotification(t, pool, user, actor, pid, issue, "issue.status_changed", issue, 1)
 
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/me/watching/"+issue+"/read", nil)
+	req := httptest.NewRequest(http.MethodPost, "/ui/v1/me/watching/"+issue+"/read", nil)
 	req.Header.Set(auth.HeaderInternalSecret, wiringInternalSecret)
 	req.Header.Set(auth.HeaderUserID, user.String())
 	req.Header.Set(auth.HeaderSessionEpoch, wiringSessionEpoch)
@@ -43,7 +43,7 @@ func TestWatchingReadCardRoute_MountedOnProductionRouter(t *testing.T) {
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
-		t.Fatalf("POST /api/v1/me/watching/%s/read = %d, want 200 (route mounted); body %s",
+		t.Fatalf("POST /ui/v1/me/watching/%s/read = %d, want 200 (route mounted); body %s",
 			issue, rec.Code, rec.Body.String())
 	}
 	var body struct {

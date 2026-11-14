@@ -6,6 +6,7 @@ import (
 
 	"skein-api/internal/apikeys"
 	"skein-api/internal/auth"
+	"skein-api/internal/testsupport"
 )
 
 // sk-105.5 (S4) — API-key permission boundary.
@@ -48,10 +49,10 @@ func TestAPIKeyBoundary_ResolvesToOwningUserOnly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GenerateAPIKey B: %v", err)
 	}
-	if _, _, err := store.Create(ctx, userA, "key-a", prefixA, hashA); err != nil {
+	if _, _, err := testsupport.CreateOwnerKey(ctx, pool, userA, "key-a", prefixA, hashA); err != nil {
 		t.Fatalf("Create A: %v", err)
 	}
-	if _, _, err := store.Create(ctx, userB, "key-b", prefixB, hashB); err != nil {
+	if _, _, err := testsupport.CreateOwnerKey(ctx, pool, userB, "key-b", prefixB, hashB); err != nil {
 		t.Fatalf("Create B: %v", err)
 	}
 
@@ -106,7 +107,7 @@ func TestAPIKeyBoundary_UnknownPrefixNoFallback(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GenerateAPIKey: %v", err)
 	}
-	if _, _, err := store.Create(ctx, user, "real", prefix, hash); err != nil {
+	if _, _, err := testsupport.CreateOwnerKey(ctx, pool, user, "real", prefix, hash); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 

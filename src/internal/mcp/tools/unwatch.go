@@ -2,14 +2,12 @@ package tools
 
 import (
 	"context"
-	"log/slog"
-	"strings"
-	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 
+	"skein-api/internal/issueops"
 	skmcp "skein-api/internal/mcp"
 	"skein-api/internal/notifications"
 )
@@ -28,40 +26,16 @@ type unwatchResponse struct {
 // caller's notifications. Without a subscription (a historical card) only
 // the card is cleared — no opt-out (R3). Idempotent.
 func handleUnwatch(pool *pgxpool.Pool, notifStore *notifications.Store) server.ToolHandlerFunc {
+	d := issueops.Deps{Pool: pool, Notifications: notifStore}
 	return func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-		start := time.Now()
 		userID, errResp := skmcp.RequireUser(ctx)
 		if errResp != nil {
 			return errResp, nil
 		}
-
-		rawID, err := req.RequireString("issueId")
-		if err != nil {
-			return skmcp.ToolError(ErrCodeValidationError, "issueId is required", nil), nil
+		id, f := issueops.UnwatchIssue(ctx, d, userID, issueops.Args(req.GetArguments()))
+		if f != nil {
+			return toolFailure(f), nil
 		}
-		issueID := strings.TrimSpace(rawID)
-		if !looksLikeHierarchicalID(issueID) {
-			return skmcp.ToolError(ErrCodeValidationError,
-				"issueId must be a full hierarchical id like \"demo-42\"",
-				map[string]any{"issueId": rawID}), nil
-		}
-
-		if _, errResp := resolveVisibleIssueProject(ctx, pool, "skein_watchers", issueID, userID); errResp != nil {
-			return errResp, nil
-		}
-
-		if err := notifStore.RemoveIssueWatch(ctx, issueID, userID); err != nil {
-			slog.ErrorContext(ctx, "mcp tool error",
-				"tool", "skein_watchers", "action", "unwatch", "reason", "remove issue watch failed",
-				"userId", userID.String(), "issueId", issueID, "error", err.Error())
-			return skmcp.ToolError(ErrCodeInternalError, "failed to remove watch", nil), nil
-		}
-
-		slog.InfoContext(ctx, "mcp tool ok",
-			"tool", "skein_watchers", "action", "unwatch",
-			"userId", userID.String(), "issueId", issueID,
-			"latencyMs", time.Since(start).Milliseconds())
-
-		return skmcp.ToolJSON(unwatchResponse{IssueID: issueID, Watching: false})
+		return skmcp.ToolJSON(unwatchResponse{IssueID: id, Watching: false})
 	}
 }

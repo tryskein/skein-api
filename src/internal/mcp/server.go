@@ -174,6 +174,10 @@ func Setup(pool *pgxpool.Pool, heartbeatInterval time.Duration, registerTools fu
 		// add per-user / per-project dynamic tools we'll flip this and
 		// emit notifications/tools/list_changed; not in R2.1.
 		server.WithToolCapabilities(false),
+		// The key-rights matrix (authz.MCPToolRequirement): the first
+		// middleware, so a call the key may not make is refused before any
+		// other step and before the tool looks anything up.
+		server.WithToolHandlerMiddleware(KeyRights),
 		// sk-275: one WARN line per tool_call_syntax_leaked rejection,
 		// carrying what actually arrived (literal, bounded window around
 		// it, field, number of text fields in the call). Registered here
@@ -209,6 +213,11 @@ func Setup(pool *pgxpool.Pool, heartbeatInterval time.Duration, registerTools fu
 			ctx = auth.WithIsExternal(ctx, auth.IsExternalFrom(r.Context()))
 			if id, ok := auth.APIKeyIDFrom(r.Context()); ok {
 				ctx = auth.WithAPIKeyID(ctx, id)
+			}
+			// The key's grant: scope and key rights read it from the
+			// per-RPC ctx; a key id without it is refused there.
+			if g, ok := auth.KeyGrantFrom(r.Context()); ok {
+				ctx = auth.WithKeyGrant(ctx, g)
 			}
 			if sid := auth.SessionIDFrom(r.Context()); sid != "" {
 				ctx = auth.WithSessionID(ctx, sid)
@@ -462,7 +471,11 @@ func wrapAgentRegistry(pool *pgxpool.Pool, next http.Handler) http.Handler {
 		sessionID := auth.SessionIDFrom(ctx)
 
 		if hasUser && sessionID != "" {
-			if err := agents.Upsert(ctx, pool, userID, sessionID, agents.LastSeenGranularity); err != nil {
+			// D-6: the key the session called with rides on its row — the
+			// stale-lock reaper keeps the session's locks only while that
+			// key may write the issue.
+			keyID, _ := auth.APIKeyIDFrom(ctx)
+			if err := agents.UpsertWithKey(ctx, pool, userID, sessionID, keyID, agents.LastSeenGranularity); err != nil {
 				slog.WarnContext(ctx, "agents upsert failed",
 					"userId", userID.String(),
 					"sessionId", sessionID,

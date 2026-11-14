@@ -9,7 +9,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"skein-api/internal/apikeys"
+	"skein-api/internal/testsupport"
 )
 
 // TestRequireAPIKey_SurfaceGate is the fail-closed surface gate (sk-163 S7a,
@@ -25,7 +25,6 @@ import (
 func TestRequireAPIKey_SurfaceGate(t *testing.T) {
 	pool := newOIDCTestPool(t) // skips when TEST_DATABASE_URL is unset
 	ctx := context.Background()
-	store := apikeys.New(pool)
 
 	// seed inserts a user (external or internal) + a real api key, returns
 	// the plaintext key and registers cleanup.
@@ -45,7 +44,7 @@ VALUES ($1, $2, $3, $4, 'user', 'h', $5, now(), '{}'::jsonb)`,
 		if err != nil {
 			t.Fatalf("GenerateAPIKey: %v", err)
 		}
-		if _, _, err := store.Create(ctx, uid, "surface-test", prefix, hash); err != nil {
+		if _, _, err := testsupport.CreateOwnerKey(ctx, pool, uid, "surface-test", prefix, hash); err != nil {
 			t.Fatalf("Create key: %v", err)
 		}
 		return plain

@@ -1,8 +1,11 @@
 # skein-api
 
-Go backend of Skein: REST `/api/v1`, MCP server `/mcp`, agent task-monitor API
-`/agent/v1`, background workers. It is reached only through skein-web; it has no
-public port of its own.
+Go backend of Skein: the internal REST API of the web UI `/ui/v1`, MCP server
+`/mcp`, agent task-monitor API `/agent/v1`, background workers — reached only
+through skein-web — and the public REST API `/api/v1`, authenticated by an API
+key, on a port of its own (`SKEIN_PUBLIC_API_PORT`, package
+`internal/publicapi`). Read `docs/public-api.md` before changing the public API:
+rights, `force`, Idempotency-Key, limits and compatibility rules live there.
 
 This repository is cloned into `skein/projects/skein-api/` of the umbrella
 workspace ([tryskein/skein](https://github.com/tryskein/skein)). The umbrella
@@ -29,12 +32,15 @@ src/
     mcp/                   MCP server: tools, agent instructions, transport
     storage/               pgxpool, S3 client, queries/ (sqlc input), generated/ (sqlc output, committed)
     operator/              separate operator API (own port, own OpenAPI document)
+    publicapi/             public REST API: own server and port, route table routes.go, committed openapi/openapi.json
     <domain>/              one package per business domain (issues, projects, users, …)
   migrations/              golang-migrate SQL, 000NNN_name.{up,down}.sql
 infra/postgres/            Postgres image used by the umbrella stacks (pgvector + pg_trgm, vector)
 infra/test-runner/         Go + python3 image for the integration harness
 docs/env-reference.md      every environment variable
+docs/public-api.md         reference of the public API: rights, force, Idempotency-Key, limits, compatibility
 scripts/measure-*.sh       size of MCP tools/list and of tool responses
+scripts/generate-public-openapi.sh  regenerates the committed public OpenAPI 3.1 document
 ```
 
 ## Build and run
@@ -69,14 +75,21 @@ Those three variables are required; the full list is in `docs/env-reference.md`.
   generated files) and commit the result.
 - **Configuration**: `docs/env-reference.md` is the only list of variables. Adding,
   renaming or removing a variable updates that file in the same commit.
-- **API docs**: swag annotations on every handler. Generate the spec (output is
-  git-ignored):
-  `cd src && go tool swag init -g cmd/api/main.go -o docs/ --exclude internal/operator`
-  and `go tool swag init -g server.go -d internal/operator --instanceName operator -o docs/operator`.
-  The `tool github.com/swaggo/swag/cmd/swag` line in `go.mod` keeps the module
-  requirement that the generated `src/docs/docs.go` needs; do not drop it.
+- **API docs**: swag annotations on every handler. `go.mod` declares two swag
+  tools, so `go tool swag` is ambiguous: always call a tool by its full package
+  path.
+  - Internal API and operator API — swag v1 (Swagger 2.0), output git-ignored:
+    `cd src && go tool github.com/swaggo/swag/cmd/swag init -g cmd/api/main.go -o docs/ --exclude internal/operator,internal/publicapi`
+    and `cd src && go tool github.com/swaggo/swag/cmd/swag init -g server.go -d internal/operator --instanceName operator -o docs/operator`.
+    The `tool github.com/swaggo/swag/cmd/swag` line in `go.mod` keeps the module
+    requirement that the generated `src/docs/docs.go` needs; do not drop it.
+  - Public API (`internal/publicapi`) — swag v2 (`github.com/swaggo/swag/v2/cmd/swag`,
+    OpenAPI 3.1): `scripts/generate-public-openapi.sh`. It writes
+    `src/internal/publicapi/openapi/openapi.json`, which is committed; after
+    changing an annotation in `internal/publicapi`, run it and commit the result.
 - **Route list**: `buildRouter` in `src/cmd/api/main.go` is the authoritative
-  list of routes.
+  list of routes of the internal port; `ProductRoutes` in
+  `src/internal/publicapi/routes.go` is the one list of the public API.
 - **Theme mirrors**: `internal/themes/schema.go#TokenSchema` mirrors
   `TOKEN_SECTIONS` in skein-frontend `src/lib/themeTokens.ts`;
   `internal/themes/roles.go#RetiredRoles` mirrors `LEGACY_TO_NEW` in
@@ -113,7 +126,7 @@ session — the response stays in the transcript.
 | e2e | via skein-frontend | none of its own; the product e2e suite of skein-frontend runs against a live stack built with this image | from the top of `skein/`: `./scripts/e2e-test.sh` | `./scripts/e2e-test.sh -- -g '<title>'` | `skein-frontend/browser/e2e/` |
 | smoke (image contract) | not used | — | — | — | — |
 | mutation | not used | — | — | — | — |
-| source-reading checks | one permitted | routes of the **assembled** router under `/agent/v1` are GET/HEAD only; needed until it is decided that `/agent/v1` gets a write route | part of unit | `cd src && go test -count=1 -run TestAgentRoutes_ReadOnly ./cmd/api/` | `src/cmd/api/agent_routes_readonly_test.go` |
+| source-reading checks | two permitted | (1) routes of the **assembled** router under `/agent/v1` are GET/HEAD only; needed until it is decided that `/agent/v1` gets a write route. (2) routes of the **assembled** public router (`chi.Walk`) ↔ paths and methods of the embedded public OpenAPI document, both ways, with the operationId, the key right and the `force` query parameter (exactly on the guarded operations) of each operation as `routes.go` declares them; permitted by the owner because the public spec is declared apart from the routes, needed while that stays so | part of unit | (1) `cd src && go test -count=1 -run TestAgentRoutes_ReadOnly ./cmd/api/`; (2) `cd src && go test -count=1 -run TestPublicRoutesMatchOpenAPI ./cmd/api/` | (1) `src/cmd/api/agent_routes_readonly_test.go`; (2) `src/cmd/api/public_routes_spec_test.go` |
 | artifact contract | not used | — | — | — | — |
 
 Python runner tests (from the repository root):
@@ -126,12 +139,18 @@ Python runner tests (from the repository root):
 
 - Unit and integration are one suite; `TEST_DATABASE_URL` separates them, not
   build tags.
-- No other source-reading checks are added. Existing structural guards (users
-  of `internal/astguard`) are left as they are — neither removed nor extended.
+- No source-reading checks are added beyond the two in the table. Existing
+  structural guards (users of `internal/astguard`) are left as they are —
+  neither removed nor extended.
 - Checks that are not tests but must stay green: `cd src && go vet ./...`,
-  `cd src && gofmt -l .` (empty output), and the sqlc check
+  `cd src && gofmt -l .` (empty output), the sqlc check
   `cd src && sqlc generate && git status --porcelain --untracked-files=all -- internal/storage/generated`
-  (empty output).
+  (empty output), the public OpenAPI check
+  `scripts/generate-public-openapi.sh && git status --porcelain --untracked-files=all -- src/internal/publicapi/openapi`
+  (empty output; `ci.yml` job `public-openapi`), and the linter of that
+  document, vacuum (version `VACUUM_VERSION` in `ci.yml`):
+  `vacuum lint --errors --fail-severity error --min-score 0 src/internal/publicapi/openapi/openapi.json`
+  (exit code 0; a finding of severity error is red, warnings are not).
 
 ### Prerequisites
 
@@ -150,7 +169,7 @@ Python runner tests (from the repository root):
 
 | Event | unit | integration | e2e | smoke | mutation | other |
 |---|---|---|---|---|---|---|
-| pull request | `ci.yml` job `unit` | `ci.yml` job `integration` | not run | not used | not run | `ci.yml` jobs `lint`, `sqlc-generated`; `theme-mirror.yml` when `src/internal/themes/**` changes |
+| pull request | `ci.yml` job `unit` | `ci.yml` job `integration` | not run | not used | not run | `ci.yml` jobs `lint`, `sqlc-generated`, `public-openapi`; `theme-mirror.yml` when `src/internal/themes/**` changes |
 | push to `main` | same as pull request | same | not run | not used | not run | same |
 | release tag `X.Y.Z` | `ci.yml`, called by `release.yml` | same | not run | not used | not run | `release.yml` publishes `ghcr.io/tryskein/skein-api` |
 | tag `X.Y.Z-rc.N` | nothing | nothing | nothing | nothing | nothing | nothing is published |
@@ -159,6 +178,9 @@ Workflows live in `.github/workflows/`. `ci.yml` also runs on `workflow_call`.
 `integration` uses a `pgvector/pgvector:pg18` service container, creates
 `pg_trgm` and `vector`, applies `src/migrations` with golang-migrate and runs
 `go test -v -p 1 -count=1 ./...`; a run with zero passed tests is red.
+`public-openapi` runs `scripts/generate-public-openapi.sh` and is red when
+`src/internal/publicapi/openapi` differs from the committed document or when
+vacuum finds an error in it.
 `release.yml` starts only for a tag matching `X.Y.Z`, checks that the tagged
 commit is on `main`, runs `ci.yml`, builds `linux/amd64` and `linux/arm64`
 natively, publishes the manifest (`X.Y.Z` and `latest`) from jobs bound to the

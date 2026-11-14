@@ -113,7 +113,7 @@ func toSubscriptionDTO(s push.Subscription) subscriptionDTO {
 // @Security ApiKeyAuth
 // @Success 200 {object} pushConfigResponse "VAPID public key (possibly empty)"
 // @Failure 401 {object} map[string]any "Missing / invalid auth"
-// @Router /api/v1/push/config [get]
+// @Router /ui/v1/push/config [get]
 func (h *PushHandler) Config(w http.ResponseWriter, r *http.Request) {
 	if _, ok := caller(r); !ok {
 		writeProblem(w, http.StatusUnauthorized, "unauthenticated", "", nil)
@@ -150,7 +150,7 @@ func (h *PushHandler) Config(w http.ResponseWriter, r *http.Request) {
 // @Failure 401 {object} map[string]any "Missing / invalid auth"
 // @Failure 422 {object} map[string]any "invalid_subscription (endpoint / keys missing or endpoint not a public https URL)"
 // @Failure 500 {object} map[string]any "internal_error — the request could not be served"
-// @Router /api/v1/push/subscriptions [post]
+// @Router /ui/v1/push/subscriptions [post]
 func (h *PushHandler) Subscribe(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	c, ok := caller(r)
@@ -207,7 +207,7 @@ func (h *PushHandler) Subscribe(w http.ResponseWriter, r *http.Request) {
 // @Failure 401 {object} map[string]any "Missing / invalid auth"
 // @Failure 422 {object} map[string]any "invalid_subscription (endpoint missing)"
 // @Failure 500 {object} map[string]any "internal_error — the request could not be served"
-// @Router /api/v1/push/subscriptions [delete]
+// @Router /ui/v1/push/subscriptions [delete]
 func (h *PushHandler) Unsubscribe(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	c, ok := caller(r)
@@ -261,7 +261,7 @@ func (h *PushHandler) Unsubscribe(w http.ResponseWriter, r *http.Request) {
 // @Failure 401 {object} map[string]any "Missing / invalid auth"
 // @Failure 404 {object} map[string]any "Subscription not found or not owned by caller"
 // @Failure 500 {object} map[string]any "internal_error — the request could not be served"
-// @Router /api/v1/push/subscriptions/{id} [delete]
+// @Router /ui/v1/push/subscriptions/{id} [delete]
 func (h *PushHandler) DeleteByID(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	c, ok := caller(r)
@@ -301,7 +301,7 @@ func (h *PushHandler) DeleteByID(w http.ResponseWriter, r *http.Request) {
 // @Success 200 {array} subscriptionDTO "Caller's subscriptions"
 // @Failure 401 {object} map[string]any "Missing / invalid auth"
 // @Failure 500 {object} map[string]any "internal_error — the request could not be served"
-// @Router /api/v1/push/subscriptions [get]
+// @Router /ui/v1/push/subscriptions [get]
 func (h *PushHandler) List(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	c, ok := caller(r)

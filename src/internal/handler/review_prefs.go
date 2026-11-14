@@ -123,7 +123,7 @@ func parseNullableInt(raw json.RawMessage) (set bool, val *int, err error) {
 // @Success 200 {object} notifications.ReviewPrefsDTO "The caller's review-mechanic settings, effective schedule and bounds"
 // @Failure 401 {object} map[string]any "Missing / invalid auth"
 // @Failure 500 {object} map[string]any "internal_error — the request could not be served"
-// @Router /api/v1/me/review-prefs [get]
+// @Router /ui/v1/me/review-prefs [get]
 func (h *NotificationsHandler) GetReviewPrefs(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	c, ok := caller(r)
@@ -155,7 +155,7 @@ func (h *NotificationsHandler) GetReviewPrefs(w http.ResponseWriter, r *http.Req
 // @Failure 401 {object} map[string]any "Missing / invalid auth"
 // @Failure 422 {object} map[string]any "invalid_schedule_setting — a value outside the schedule contract bounds; nothing was written"
 // @Failure 500 {object} map[string]any "internal_error — the request could not be served"
-// @Router /api/v1/me/review-prefs [put]
+// @Router /ui/v1/me/review-prefs [put]
 func (h *NotificationsHandler) PutReviewPrefs(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	c, ok := caller(r)

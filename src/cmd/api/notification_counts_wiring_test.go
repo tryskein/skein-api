@@ -158,7 +158,7 @@ func countsWiringRouter(t *testing.T) (chi.Router, *pgxpool.Pool, *countsTracer)
 // countsInbox sends GET /me/notification-counts as user and returns inbox.
 func countsInbox(t *testing.T, router chi.Router, user uuid.UUID) int {
 	t.Helper()
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/me/notification-counts", nil)
+	req := httptest.NewRequest(http.MethodGet, "/ui/v1/me/notification-counts", nil)
 	req.Header.Set(auth.HeaderInternalSecret, wiringInternalSecret)
 	req.Header.Set(auth.HeaderUserID, user.String())
 	req.Header.Set(auth.HeaderSessionEpoch, wiringSessionEpoch)

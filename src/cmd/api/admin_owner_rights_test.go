@@ -49,7 +49,7 @@ SELECT EXISTS (SELECT 1 FROM project_members WHERE project_id = $1 AND user_id =
 	// assigneeUserID reads the card as the admin sees it over REST.
 	assigneeUserID := func(t *testing.T, issueID string) *uuid.UUID {
 		t.Helper()
-		status, raw := s.rest(testsupport.ActorAdmin0, http.MethodGet, "/api/v1/projects/"+p.ID.String()+"/issues/"+issueID, nil)
+		status, raw := s.rest(testsupport.ActorAdmin0, http.MethodGet, "/ui/v1/projects/"+p.ID.String()+"/issues/"+issueID, nil)
 		if status != http.StatusOK {
 			t.Fatalf("GET %s: %d %s", issueID, status, raw)
 		}
@@ -86,7 +86,7 @@ SELECT EXISTS (SELECT 1 FROM project_members WHERE project_id = $1 AND user_id =
 
 	t.Run("REST create assigned to himself by id", func(t *testing.T) {
 		title := "sk-741 rest " + uuid.NewString()
-		status, raw := s.rest(testsupport.ActorAdmin0, http.MethodPost, "/api/v1/projects/"+p.ID.String()+"/issues",
+		status, raw := s.rest(testsupport.ActorAdmin0, http.MethodPost, "/ui/v1/projects/"+p.ID.String()+"/issues",
 			map[string]any{"title": title, "assignee": admin.ID.String()})
 		if status != http.StatusCreated {
 			t.Fatalf("POST issue: %d %s, want 201", status, raw)
@@ -99,13 +99,13 @@ SELECT EXISTS (SELECT 1 FROM project_members WHERE project_id = $1 AND user_id =
 
 	t.Run("not departed as the author nor as the assignee", func(t *testing.T) {
 		title := "sk-741 marks " + uuid.NewString()
-		status, raw := s.rest(testsupport.ActorAdmin0, http.MethodPost, "/api/v1/projects/"+p.ID.String()+"/issues",
+		status, raw := s.rest(testsupport.ActorAdmin0, http.MethodPost, "/ui/v1/projects/"+p.ID.String()+"/issues",
 			map[string]any{"title": title, "assignee": admin.Username})
 		if status != http.StatusCreated {
 			t.Fatalf("POST issue: %d %s, want 201", status, raw)
 		}
 		status, raw = s.rest(testsupport.ActorProjectOwner, http.MethodGet,
-			"/api/v1/projects/"+p.ID.String()+"/issues/"+issueByTitle(t, title), nil)
+			"/ui/v1/projects/"+p.ID.String()+"/issues/"+issueByTitle(t, title), nil)
 		if status != http.StatusOK {
 			t.Fatalf("GET as the project owner: %d %s", status, raw)
 		}
@@ -140,7 +140,7 @@ SELECT EXISTS (SELECT 1 FROM project_members WHERE project_id = $1 AND user_id =
 		}
 		before := count()
 		status, raw := s.rest(testsupport.ActorProjectOwner, http.MethodPost,
-			"/api/v1/projects/"+p.ID.String()+"/issues/"+p.IssueID+"/comments",
+			"/ui/v1/projects/"+p.ID.String()+"/issues/"+p.IssueID+"/comments",
 			map[string]any{"body": "sk-741 ping @" + admin.Username})
 		if status != http.StatusCreated && status != http.StatusOK {
 			t.Fatalf("POST comment: %d %s", status, raw)
@@ -156,7 +156,7 @@ SELECT EXISTS (SELECT 1 FROM project_members WHERE project_id = $1 AND user_id =
 	// forbidden in MCP).
 	t.Run("deletes another author's comment, a plain member may not", func(t *testing.T) {
 		owner := s.f.User(t, testsupport.ActorProjectOwner)
-		commentsOf := "/api/v1/projects/" + p.ID.String() + "/issues/" + p.IssueID + "/comments/"
+		commentsOf := "/ui/v1/projects/" + p.ID.String() + "/issues/" + p.IssueID + "/comments/"
 		for _, c := range []struct {
 			actor   testsupport.Actor
 			allowed bool
@@ -200,7 +200,7 @@ SELECT EXISTS (SELECT 1 FROM project_members WHERE project_id = $1 AND user_id =
 			t.Fatal(err)
 		}
 		status, raw := s.restWith(testsupport.ActorOnlyA, http.MethodPatch,
-			"/api/v1/projects/"+personal.ID.String()+"/issues/"+personal.IssueID,
+			"/ui/v1/projects/"+personal.ID.String()+"/issues/"+personal.IssueID,
 			map[string]any{"assignee": admin.ID.String()}, map[string]string{"If-Match": fmt.Sprint(version)})
 		var body map[string]any
 		_ = json.Unmarshal(raw, &body)
@@ -211,7 +211,7 @@ SELECT EXISTS (SELECT 1 FROM project_members WHERE project_id = $1 AND user_id =
 
 	t.Run("another user's Personal stays out of reach", func(t *testing.T) {
 		personal := s.f.Personal[testsupport.ActorOnlyA]
-		status, raw := s.rest(testsupport.ActorAdmin0, http.MethodPost, "/api/v1/projects/"+personal.ID.String()+"/issues",
+		status, raw := s.rest(testsupport.ActorAdmin0, http.MethodPost, "/ui/v1/projects/"+personal.ID.String()+"/issues",
 			map[string]any{"title": "sk-741 personal"})
 		if status != http.StatusNotFound {
 			t.Errorf("REST create in Personal(uA): %d %s, want 404", status, raw)

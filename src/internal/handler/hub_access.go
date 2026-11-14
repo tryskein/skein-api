@@ -60,7 +60,7 @@ func NewHubAccessHandler(pool *pgxpool.Pool) *HubAccessHandler {
 // @Failure 400 {object} map[string]any "invalid_request: body is not JSON of the documented shape, users is missing, a userId is missing, or an id is not a UUID; also an oversized body"
 // @Failure 401 {object} map[string]any "Service secret missing or wrong"
 // @Failure 500 {object} map[string]any "internal_error: database failure"
-// @Router /api/v1/hub/project-access [post]
+// @Router /ui/v1/hub/project-access [post]
 func (h *HubAccessHandler) ProjectAccess(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 

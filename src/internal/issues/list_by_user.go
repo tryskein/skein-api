@@ -98,11 +98,15 @@ type ListByUserArgs struct {
 	// issues.source values. Validated at the handler boundary to one of
 	// {human-driven, agent-autonomous, all}; the store inlines the
 	// matching IN-list:
-	//   - "human-driven"     → source IN ('human', 'agent_directed')
+	//   - "human-driven"     → source IN ('human', 'agent_directed', 'api')
 	//   - "agent-autonomous" → source IN ('agent_autonomous')
 	//   - "all" / nil        → no filter
 	// Pointer so nil = no filter. Phase 2 ui-redesign — B5.
 	OriginGroup *string
+	// Source narrows by the exact issues.source value, validated at the
+	// handler boundary (ValidateSource); intersects OriginGroup when both
+	// are set. Pointer so nil = no filter.
+	Source *string
 
 	// IsBlocked filters by the derived blocked-ness flag (sk-31). Nil
 	// = no filter. Same EXISTS predicate as the project-scoped list.
@@ -235,6 +239,7 @@ func (s *Store) ListByUser(ctx context.Context, args ListByUserArgs) (*ListResul
 		clauses = append(clauses, review.UnreviewedPredicate(addParam, review.UnreviewedArgs{
 			Alias:    "i",
 			CallerID: args.UserID,
+			Key:      authz.ScopeFor(ctx, args.UserID).KeyLimit(),
 		}))
 	}
 
@@ -252,7 +257,7 @@ func (s *Store) ListByUser(ctx context.Context, args ListByUserArgs) (*ListResul
 		case OriginHumanDriven:
 			clauses = append(clauses, fmt.Sprintf(
 				"i.source = ANY(%s)",
-				addParam([]string{SourceHuman, SourceAgentDirected})))
+				addParam(HumanDrivenSources)))
 		case OriginAgentAutonomous:
 			clauses = append(clauses, fmt.Sprintf(
 				"i.source = %s",
@@ -260,6 +265,9 @@ func (s *Store) ListByUser(ctx context.Context, args ListByUserArgs) (*ListResul
 		case OriginAll:
 			// Explicit "no filter" sentinel — drop through.
 		}
+	}
+	if args.Source != nil {
+		clauses = append(clauses, fmt.Sprintf("i.source = %s", addParam(*args.Source)))
 	}
 	if args.IsBlocked != nil {
 		if *args.IsBlocked {

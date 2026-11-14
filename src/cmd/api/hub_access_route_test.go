@@ -2,7 +2,7 @@ package main
 
 // hub_access_route_test.go — sk-622.21, T006, test matrix row 11 (US-9: the
 // service endpoint is mounted). Reference — the T028 contract godoc
-// (projects/access_contract.go) and plan T006: POST /api/v1/hub/project-access
+// (projects/access_contract.go) and plan T006: POST /ui/v1/hub/project-access
 // on the PRODUCTION router (buildRouter over config.Load) answers only with the
 // service secret — 401 without it, 400 on bad syntax — and is outside the user
 // group: a call with the secret and no user headers is served (the user group
@@ -25,7 +25,7 @@ import (
 
 func (s *wiringStack) hubAccess(body string, headers map[string]string) *httptest.ResponseRecorder {
 	s.t.Helper()
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/hub/project-access", bytes.NewReader([]byte(body)))
+	req := httptest.NewRequest(http.MethodPost, "/ui/v1/hub/project-access", bytes.NewReader([]byte(body)))
 	req.Header.Set("Content-Type", "application/json")
 	for k, v := range headers {
 		req.Header.Set(k, v)

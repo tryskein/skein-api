@@ -239,8 +239,8 @@ func TestUserCreate_External(t *testing.T) {
 }
 
 // TestUserCreate_ExternalAdminRejected — sk-163 S8/S3. is_external=true +
-// role=admin is refused with the clean validation_error (external can never
-// be admin), no row written.
+// role=admin is refused — by API key no admin is ever created (T013); the
+// external-admin guard stays behind it. No row written.
 func TestUserCreate_ExternalAdminRejected(t *testing.T) {
 	pool := newTestPool(t)
 	adminID, _ := seedUser(t, pool, "admin")
@@ -264,9 +264,11 @@ func TestUserCreate_ExternalAdminRejected(t *testing.T) {
 	if !res.IsError {
 		t.Fatalf("expected isError for external+admin")
 	}
+	// By API key no admin is ever created (sk-878.3.1 T013): that refusal
+	// comes before the external-admin check.
 	body := extractToolJSON(t, res)
-	if body["error"] != ErrCodeValidationError {
-		t.Fatalf("error = %v, want %s", body["error"], ErrCodeValidationError)
+	if body["error"] != ErrCodeForbidden {
+		t.Fatalf("error = %v, want %s", body["error"], ErrCodeForbidden)
 	}
 	// No row should have been written.
 	var n int

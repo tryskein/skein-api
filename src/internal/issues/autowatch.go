@@ -30,7 +30,9 @@ import (
 //     inside an errand, and the errand's own subscription is where the
 //     person watches it from;
 //   - source=agent_autonomous, at any level → not subscribed: nobody
-//     asked for it, the agent spawned it on its own.
+//     asked for it, the agent spawned it on its own;
+//   - source=api is a write by the owner's key and follows agent_directed
+//     (RuleSource).
 //
 // An unknown source is treated as human: validation rejects anything
 // outside the closed set before a create reaches the store, so this
@@ -40,7 +42,7 @@ import (
 // The assignee rule is separate and unchanged — an issue assigned to a
 // person subscribes them as `assignee` whoever created it.
 func creatorAutoWatches(source string, hasParent bool) bool {
-	switch source {
+	switch RuleSource(source) {
 	case SourceAgentAutonomous:
 		return false
 	case SourceAgentDirected:

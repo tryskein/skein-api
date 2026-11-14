@@ -551,3 +551,52 @@ func TestStalled_OnlyVisibleProjects(t *testing.T) {
 		})
 	}
 }
+
+// TestStalled_RESTExecutorRowIsNotAClock — matrix row 46 (D-6, class of
+// agents readers). Reference — the plan's decision D-6: the clock of the
+// issuing session counts MCP sessions only, because a monitor is issued
+// over MCP; the agents row of a REST executor of the same key neither
+// extends that clock nor stops it.
+func TestStalled_RESTExecutorRowIsNotAClock(t *testing.T) {
+	const tenMin = 10 * time.Minute
+	restRow := func(t *testing.T, f *stallFixture, worker string, ago time.Duration) {
+		f.exec(t, `
+INSERT INTO agents (user_id, session_id, first_seen_at, last_seen_at, api_key_id, worker_id)
+VALUES ($1, $2, now() - $3::interval, now() - $3::interval, $4, $5)`,
+			f.owner, restHolder(t, f.key, worker), ago, f.key, worker)
+	}
+	mcpSeen := func(t *testing.T, f *stallFixture, session string, ago time.Duration) {
+		f.exec(t, `
+INSERT INTO agents (user_id, session_id, first_seen_at, last_seen_at)
+VALUES ($1, $2, now() - $3::interval, now() - $3::interval)`, f.owner, session, ago)
+	}
+
+	t.Run("a busy REST executor does not keep a quiet issuing session alive", func(t *testing.T) {
+		f := newStallFixture(t)
+		id := f.mint(t, f.key, "s-mint", tenMin, tenMin)
+		mcpSeen(t, f, "s-mint", tenMin)
+		restRow(t, f, "busy", 0)
+		if m, ok := has(f.stalled(t, f.key, "s-other", stallThreshold), id); !ok || m.Mine {
+			t.Fatalf("got (%+v, %v), want the monitor shown to another session — the issuing session is quiet", m, ok)
+		}
+	})
+	t.Run("a silent REST executor does not quiet an active issuing session", func(t *testing.T) {
+		f := newStallFixture(t)
+		id := f.mint(t, f.key, "s-mint", tenMin, tenMin)
+		mcpSeen(t, f, "s-mint", 0)
+		restRow(t, f, "silent", tenMin)
+		if _, ok := has(f.stalled(t, f.key, "s-other", stallThreshold), id); ok {
+			t.Fatalf("shown to another session while the issuing session is active")
+		}
+	})
+}
+
+// restHolder is agents.RESTHolder for a worker id the test knows is valid.
+func restHolder(t *testing.T, key uuid.UUID, worker string) string {
+	t.Helper()
+	h, err := agents.RESTHolder(key, worker)
+	if err != nil {
+		t.Fatalf("RESTHolder(%s, %q): %v", key, worker, err)
+	}
+	return h
+}

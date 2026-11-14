@@ -551,7 +551,7 @@ func (h *DependenciesHandler) Reparent(w http.ResponseWriter, r *http.Request) {
 // @Failure 401 {object} map[string]any "unauthenticated"
 // @Failure 404 {object} map[string]any "project not visible, issue not found or not in this project"
 // @Failure 500 {object} map[string]any "internal_error"
-// @Router /api/v1/projects/{projectID}/issues/{issueID}/dependencies [get]
+// @Router /ui/v1/projects/{projectID}/issues/{issueID}/dependencies [get]
 //
 // Order (sk-426): within each array, by edge type, then by the other side's
 // id under the id-order rule of sk-421.2 US-6 — digit segments compare by

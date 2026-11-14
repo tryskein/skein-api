@@ -76,7 +76,7 @@ func userParam(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
 // @Success 200 {object} spaces.MySpacesResponse "The caller's spaces"
 // @Failure 401 {object} map[string]any "Missing or invalid auth"
 // @Failure 500 {object} map[string]any "Internal error"
-// @Router /api/v1/me/spaces [get]
+// @Router /ui/v1/me/spaces [get]
 func (h *SpacesHandler) MySpaces(w http.ResponseWriter, r *http.Request) {
 	c, ok := spacesCaller(r)
 	if !ok {
@@ -111,7 +111,7 @@ func (h *SpacesHandler) MySpaces(w http.ResponseWriter, r *http.Request) {
 // @Failure 404 {object} map[string]any "user_not_found: the ownerId user does not exist or is not active"
 // @Failure 422 {object} map[string]any "external_user, space_creation_disabled, admin_only, owned_limit (ownedCount, ownedLimit), concurrent_change"
 // @Failure 500 {object} map[string]any "Internal error"
-// @Router /api/v1/spaces [post]
+// @Router /ui/v1/spaces [post]
 func (h *SpacesHandler) Create(w http.ResponseWriter, r *http.Request) {
 	c, ok := spacesCaller(r)
 	if !ok {
@@ -154,7 +154,7 @@ func (h *SpacesHandler) Create(w http.ResponseWriter, r *http.Request) {
 // @Failure 401 {object} map[string]any "Missing or invalid auth"
 // @Failure 404 {object} map[string]any "space_not_found"
 // @Failure 500 {object} map[string]any "Internal error"
-// @Router /api/v1/spaces/{id} [get]
+// @Router /ui/v1/spaces/{id} [get]
 func (h *SpacesHandler) Get(w http.ResponseWriter, r *http.Request) {
 	c, ok := spacesCaller(r)
 	if !ok {
@@ -186,7 +186,7 @@ func (h *SpacesHandler) Get(w http.ResponseWriter, r *http.Request) {
 // @Failure 404 {object} map[string]any "space_not_found"
 // @Failure 422 {object} map[string]any "personal_space, concurrent_change"
 // @Failure 500 {object} map[string]any "Internal error"
-// @Router /api/v1/spaces/{id} [patch]
+// @Router /ui/v1/spaces/{id} [patch]
 func (h *SpacesHandler) Rename(w http.ResponseWriter, r *http.Request) {
 	c, ok := spacesCaller(r)
 	if !ok {
@@ -224,7 +224,7 @@ func (h *SpacesHandler) Rename(w http.ResponseWriter, r *http.Request) {
 // @Failure 404 {object} map[string]any "space_not_found"
 // @Failure 422 {object} map[string]any "name_mismatch, personal_space, common_space_not_empty, common_space_enabled, concurrent_change"
 // @Failure 500 {object} map[string]any "Internal error"
-// @Router /api/v1/spaces/{id} [delete]
+// @Router /ui/v1/spaces/{id} [delete]
 func (h *SpacesHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	c, ok := spacesCaller(r)
 	if !ok {
@@ -257,7 +257,7 @@ func (h *SpacesHandler) Delete(w http.ResponseWriter, r *http.Request) {
 // @Failure 404 {object} map[string]any "space_not_found"
 // @Failure 422 {object} map[string]any "personal_space"
 // @Failure 500 {object} map[string]any "Internal error"
-// @Router /api/v1/spaces/{id}/deletion-preview [get]
+// @Router /ui/v1/spaces/{id}/deletion-preview [get]
 func (h *SpacesHandler) DeletionPreview(w http.ResponseWriter, r *http.Request) {
 	c, ok := spacesCaller(r)
 	if !ok {
@@ -288,7 +288,7 @@ func (h *SpacesHandler) DeletionPreview(w http.ResponseWriter, r *http.Request) 
 // @Failure 404 {object} map[string]any "space_not_found"
 // @Failure 422 {object} map[string]any "not_a_member, owner_cannot_leave, owner_cannot_be_removed, personal_space, concurrent_change"
 // @Failure 500 {object} map[string]any "Internal error"
-// @Router /api/v1/spaces/{id}/members/{userId}/removal-preview [get]
+// @Router /ui/v1/spaces/{id}/members/{userId}/removal-preview [get]
 func (h *SpacesHandler) RemovalPreview(w http.ResponseWriter, r *http.Request) {
 	c, ok := spacesCaller(r)
 	if !ok {
@@ -324,7 +324,7 @@ func (h *SpacesHandler) RemovalPreview(w http.ResponseWriter, r *http.Request) {
 // @Failure 404 {object} map[string]any "space_not_found"
 // @Failure 422 {object} map[string]any "owner_cannot_be_removed, not_a_member, personal_space, concurrent_change"
 // @Failure 500 {object} map[string]any "Internal error"
-// @Router /api/v1/spaces/{id}/members/{userId} [delete]
+// @Router /ui/v1/spaces/{id}/members/{userId} [delete]
 func (h *SpacesHandler) RemoveMember(w http.ResponseWriter, r *http.Request) {
 	c, ok := spacesCaller(r)
 	if !ok {
@@ -354,7 +354,7 @@ func (h *SpacesHandler) RemoveMember(w http.ResponseWriter, r *http.Request) {
 // @Failure 404 {object} map[string]any "space_not_found"
 // @Failure 422 {object} map[string]any "owner_cannot_leave, not_a_member (the admin seeing it without membership), personal_space, concurrent_change"
 // @Failure 500 {object} map[string]any "Internal error"
-// @Router /api/v1/spaces/{id}/leave [post]
+// @Router /ui/v1/spaces/{id}/leave [post]
 func (h *SpacesHandler) Leave(w http.ResponseWriter, r *http.Request) {
 	c, ok := spacesCaller(r)
 	if !ok {
@@ -387,7 +387,7 @@ func (h *SpacesHandler) Leave(w http.ResponseWriter, r *http.Request) {
 // @Failure 404 {object} map[string]any "space_not_found, user_not_found"
 // @Failure 422 {object} map[string]any "external_user, already_member, no_seats (memberCount, pendingInvitations, memberLimit), personal_space, concurrent_change"
 // @Failure 500 {object} map[string]any "Internal error"
-// @Router /api/v1/spaces/{id}/members [post]
+// @Router /ui/v1/spaces/{id}/members [post]
 func (h *SpacesHandler) AddMember(w http.ResponseWriter, r *http.Request) {
 	c, ok := spacesCaller(r)
 	if !ok {
@@ -431,7 +431,7 @@ func (h *SpacesHandler) AddMember(w http.ResponseWriter, r *http.Request) {
 // @Failure 404 {object} map[string]any "space_not_found"
 // @Failure 422 {object} map[string]any "not_a_member, personal_space, concurrent_change"
 // @Failure 500 {object} map[string]any "Internal error"
-// @Router /api/v1/spaces/{id}/owner [post]
+// @Router /ui/v1/spaces/{id}/owner [post]
 func (h *SpacesHandler) ChangeOwner(w http.ResponseWriter, r *http.Request) {
 	c, ok := spacesCaller(r)
 	if !ok {
@@ -480,7 +480,7 @@ func userIDParam(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
 // @Failure 403 {object} map[string]any "not_admin"
 // @Failure 404 {object} map[string]any "user_not_found"
 // @Failure 500 {object} map[string]any "Internal error"
-// @Router /api/v1/users/{id}/spaces [get]
+// @Router /ui/v1/users/{id}/spaces [get]
 func (h *SpacesHandler) UserSpaces(w http.ResponseWriter, r *http.Request) {
 	c, ok := spacesCaller(r)
 	if !ok {
@@ -516,7 +516,7 @@ func (h *SpacesHandler) UserSpaces(w http.ResponseWriter, r *http.Request) {
 // @Failure 404 {object} map[string]any "user_not_found, space_not_found"
 // @Failure 422 {object} map[string]any "owner_cannot_be_removed (spaceId), no_seats (spaceId, memberCount, pendingInvitations, memberLimit), external_user, personal_space, concurrent_change"
 // @Failure 500 {object} map[string]any "Internal error"
-// @Router /api/v1/users/{id}/spaces [put]
+// @Router /ui/v1/users/{id}/spaces [put]
 func (h *SpacesHandler) PutUserSpaces(w http.ResponseWriter, r *http.Request) {
 	c, ok := spacesCaller(r)
 	if !ok {
@@ -557,7 +557,7 @@ func (h *SpacesHandler) PutUserSpaces(w http.ResponseWriter, r *http.Request) {
 // @Failure 404 {object} map[string]any "user_not_found, space_not_found"
 // @Failure 422 {object} map[string]any "owner_cannot_be_removed (spaceId), external_user, personal_space, concurrent_change"
 // @Failure 500 {object} map[string]any "Internal error"
-// @Router /api/v1/users/{id}/spaces/preview [post]
+// @Router /ui/v1/users/{id}/spaces/preview [post]
 func (h *SpacesHandler) PreviewUserSpaces(w http.ResponseWriter, r *http.Request) {
 	c, ok := spacesCaller(r)
 	if !ok {

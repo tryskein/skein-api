@@ -85,6 +85,7 @@ func NewIssuesAllHandler(pool *pgxpool.Pool, issuesStore *issues.Store, embedder
 // @Param status query string false "Exactly one known status; blocked is refused (derived — use isBlocked=true)"
 // @Param type query string false "Exactly one known issue type"
 // @Param origin query string false "Origin group of the issue's source" Enums(human-driven, agent-autonomous, all)
+// @Param source query string false "Exact issue source; intersects origin" Enums(human, agent_directed, agent_autonomous, api)
 // @Param assignee query string false "me resolves to the caller; any other value is a username equality filter. Mutually exclusive with assigneeUserId"
 // @Param assigneeUserId query string false "Assignee user UUID. Mutually exclusive with assignee"
 // @Param createdBy query string false "me — issues the caller created; not-me — issues created by somebody else" Enums(me, not-me)
@@ -98,7 +99,7 @@ func NewIssuesAllHandler(pool *pgxpool.Pool, issuesStore *issues.Store, embedder
 // @Failure 401 {object} map[string]any "unauthenticated"
 // @Failure 422 {object} map[string]any "blocked_is_derived — status=blocked is a derived state and cannot be selected; use isBlocked=true"
 // @Failure 500 {object} map[string]any "internal_error — includes a malformed cursor"
-// @Router /api/v1/issues [get]
+// @Router /ui/v1/issues [get]
 func (h *IssuesAllHandler) List(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	c, ok := caller(r)
@@ -147,6 +148,15 @@ func (h *IssuesAllHandler) List(w http.ResponseWriter, r *http.Request) {
 				"origin must be one of human-driven, agent-autonomous, all", nil)
 			return
 		}
+	}
+	// Exact source, the same filter as GET /projects/{id}/issues.
+	if raw := strings.TrimSpace(q.Get("source")); raw != "" {
+		canon, err := issues.ValidateSource(raw)
+		if err != nil {
+			mapIssueValidation(w, err)
+			return
+		}
+		args.Source = &canon
 	}
 
 	// assignee resolution: "me" → caller.UserID via the LEFT JOIN to
@@ -311,7 +321,7 @@ func (h *IssuesAllHandler) List(w http.ResponseWriter, r *http.Request) {
 // @Failure 401 {object} map[string]any "unauthenticated"
 // @Failure 422 {object} map[string]any "tree_too_large — the walk exceeded the node limit (extra: limit)"
 // @Failure 500 {object} map[string]any "internal_error"
-// @Router /api/v1/issues/tree [get]
+// @Router /ui/v1/issues/tree [get]
 func (h *IssuesAllHandler) Tree(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	c, ok := caller(r)

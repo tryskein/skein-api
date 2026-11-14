@@ -10,7 +10,8 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// readBackTimeout bounds the read that follows a committed write (sk-607).
+// ReadBackTimeout bounds the read that follows a committed write (sk-607).
+// The public API server sizes its write timeout on it (publicapi.NewServer).
 //
 // That read runs DETACHED from the caller's context (ReadBackContext): the
 // write already happened, and a context that ends now must not turn a
@@ -32,14 +33,14 @@ import (
 // Three seconds also fits after a batch loop's 20 s budget
 // (tools.batchLoopDeadline) inside the proxy's window, which is 120 s by
 // default and was 30 s when this bound was chosen.
-const readBackTimeout = 3 * time.Second
+const ReadBackTimeout = 3 * time.Second
 
 // ReadBackContext derives the context for a read that follows a committed
 // write: the caller's values (request id, logging attributes) survive, its
-// cancellation and deadline do not, and readBackTimeout bounds the read.
+// cancellation and deadline do not, and ReadBackTimeout bounds the read.
 // Callers must call the returned CancelFunc.
 func ReadBackContext(ctx context.Context) (context.Context, context.CancelFunc) {
-	return context.WithTimeout(context.WithoutCancel(ctx), readBackTimeout)
+	return context.WithTimeout(context.WithoutCancel(ctx), ReadBackTimeout)
 }
 
 // CommittedState is what a writing transaction knows about one issue at the
@@ -191,4 +192,53 @@ func withCommittedState(ctx context.Context, id string, dst *CommittedState, fn 
 		*dst = st[0]
 		return nil
 	}
+}
+
+// BeforeCommitHook runs inside the transaction of an issue write just before
+// it commits, with the committed state of the issue the write is about.
+type BeforeCommitHook func(ctx context.Context, tx pgx.Tx, state CommittedState) error
+
+type beforeCommitKey struct{}
+
+// WithBeforeCommit returns ctx carrying hook: CreateIssue,
+// CreateEpicWithChildren (with the epic's state) and UpdateIssue run it
+// inside their transaction, after every step, just before it commits — the
+// point where a transport records the outcome of the write in the write's
+// own transaction (sk-878.3.1 D-8 rule 2, the Idempotency-Key of the public
+// API). An error rolls the write back and is returned as is; the hook runs
+// again on every retried attempt.
+func WithBeforeCommit(ctx context.Context, hook BeforeCommitHook) context.Context {
+	return context.WithValue(ctx, beforeCommitKey{}, hook)
+}
+
+// runBeforeCommit runs the hook of ctx, if any, for state.
+func runBeforeCommit(ctx context.Context, tx pgx.Tx, state CommittedState) error {
+	if hook, ok := ctx.Value(beforeCommitKey{}).(BeforeCommitHook); ok && hook != nil {
+		return hook(ctx, tx, state)
+	}
+	return nil
+}
+
+// CommentBeforeCommitHook runs inside the transaction of AddComment just
+// before it commits, with the comment as written.
+type CommentBeforeCommitHook func(ctx context.Context, tx pgx.Tx, comment *CommentDTO) error
+
+type commentBeforeCommitKey struct{}
+
+// WithCommentBeforeCommit returns ctx carrying hook: AddComment runs it
+// inside its transaction, after the comment, its event, notifications and
+// mentions, just before it commits — where the public API records the
+// outcome of a createComment with Idempotency-Key in the comment's own
+// transaction (sk-878.3.1 D-8 rule 2). An error rolls the comment back and
+// is returned as is; the hook runs again on every retried attempt.
+func WithCommentBeforeCommit(ctx context.Context, hook CommentBeforeCommitHook) context.Context {
+	return context.WithValue(ctx, commentBeforeCommitKey{}, hook)
+}
+
+// runCommentBeforeCommit runs the comment hook of ctx, if any.
+func runCommentBeforeCommit(ctx context.Context, tx pgx.Tx, comment *CommentDTO) error {
+	if hook, ok := ctx.Value(commentBeforeCommitKey{}).(CommentBeforeCommitHook); ok && hook != nil {
+		return hook(ctx, tx, comment)
+	}
+	return nil
 }

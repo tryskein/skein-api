@@ -37,6 +37,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/mark3labs/mcp-go/server"
 
+	"skein-api/internal/apikeys"
 	"skein-api/internal/auth"
 	"skein-api/internal/handler"
 	"skein-api/internal/mcp/tools"
@@ -249,6 +250,7 @@ func TestCursorScope_SpaceNarrowsRESTAndMCPAlike(t *testing.T) {
 		ctx := auth.WithUserID(context.Background(), caller.ID)
 		ctx = auth.WithUserRole(ctx, caller.Role)
 		ctx = auth.WithAPIKeyID(ctx, uuid.New())
+		ctx = auth.WithKeyGrant(ctx, apikeys.Grant{Level: apikeys.LevelManage, Admin: caller.Role == "admin", Scope: apikeys.Scope{Mode: apikeys.ScopeAll}})
 		msg, _ := json.Marshal(map[string]any{
 			"jsonrpc": "2.0", "id": 1, "method": "tools/call",
 			"params": map[string]any{"name": "skein_search", "arguments": map[string]any{
@@ -373,6 +375,7 @@ func TestCursorScope_IDLookupHonoursSpace(t *testing.T) {
 		ctx := auth.WithUserID(context.Background(), caller.ID)
 		ctx = auth.WithUserRole(ctx, caller.Role)
 		ctx = auth.WithAPIKeyID(ctx, uuid.New())
+		ctx = auth.WithKeyGrant(ctx, apikeys.Grant{Level: apikeys.LevelManage, Admin: caller.Role == "admin", Scope: apikeys.Scope{Mode: apikeys.ScopeAll}})
 		msg, _ := json.Marshal(map[string]any{
 			"jsonrpc": "2.0", "id": 1, "method": "tools/call",
 			"params": map[string]any{"name": "skein_search", "arguments": map[string]any{

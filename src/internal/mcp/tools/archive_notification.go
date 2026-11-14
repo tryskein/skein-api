@@ -2,14 +2,12 @@ package tools
 
 import (
 	"context"
-	"errors"
-	"log/slog"
-	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 
+	"skein-api/internal/issueops"
 	skmcp "skein-api/internal/mcp"
 	"skein-api/internal/notifications"
 )
@@ -31,39 +29,16 @@ type archiveNotificationResponse struct {
 // stays `id` — that is the tool's output shape, not its input, and the
 // REST endpoint returns the same.
 func handleArchiveNotification(_ *pgxpool.Pool, notifStore *notifications.Store) server.ToolHandlerFunc {
+	d := issueops.Deps{Notifications: notifStore}
 	return func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-		start := time.Now()
 		userID, errResp := skmcp.RequireUser(ctx)
 		if errResp != nil {
 			return errResp, nil
 		}
-
-		id, present, errResp := notificationIDArg(req)
-		if errResp != nil {
-			return errResp, nil
+		id, f := issueops.ArchiveNotification(ctx, d, userID, issueops.Args(req.GetArguments()))
+		if f != nil {
+			return toolFailure(f), nil
 		}
-		if !present {
-			return skmcp.ToolError(ErrCodeValidationError,
-				"notificationId is required for archive", nil), nil
-		}
-
-		if err := notifStore.Archive(ctx, id, userID); err != nil {
-			if errors.Is(err, notifications.ErrNotFound) {
-				return skmcp.ToolError(ErrCodeValidationError,
-					"notification not found",
-					map[string]any{"notificationId": id}), nil
-			}
-			slog.ErrorContext(ctx, "mcp tool error",
-				"tool", "skein_notifications", "action", "archive",
-				"userId", userID.String(), "notificationId", id, "error", err.Error())
-			return skmcp.ToolError(ErrCodeInternalError, "failed to archive notification", nil), nil
-		}
-
-		slog.InfoContext(ctx, "mcp tool ok",
-			"tool", "skein_notifications", "action", "archive",
-			"userId", userID.String(), "notificationId", id,
-			"latencyMs", time.Since(start).Milliseconds())
-
 		return skmcp.ToolJSON(archiveNotificationResponse{ID: id})
 	}
 }

@@ -179,9 +179,8 @@ A wrong hash is removed with `skein_commits_detach`.
 - **`expectedVersion`** on `skein_update` / `skein_close` is the version
   you just observed. `version_conflict` (`currentVersion` inside) →
   re-read, reconcile, retry. `serialization_retry` is a rolled-back
-  write with the version still valid → retry a close / accept
-  unchanged; a multi-step update may have landed earlier steps — re-read
-  and resend only what is missing.
+  write with the version still valid → retry unchanged. An update is
+  atomic: on any error nothing of it was written.
 - **Write tools answer with an acknowledgement**, not the card: id,
   applied state, the new `version`, the stamps that write moved. A key
   missing from an acknowledgement says nothing about the issue;
@@ -207,6 +206,9 @@ A wrong hash is removed with `skein_commits_detach`.
   have written — re-read and resend only rows whose live state is wrong.
 - A business failure is JSON with a stable `error` code
   (`{"error":"…"}`); never parse it as success.
+- `insufficient_scope`: your API key lacks the right (`required`:
+  read ⊂ write ⊂ manage, or admin; `force=true` needs manage). Nothing
+  ran; ask the key's owner.
 
 ## Anti-patterns
 

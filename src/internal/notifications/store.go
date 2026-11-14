@@ -355,6 +355,11 @@ func (s *Store) ListInbox(ctx context.Context, args ListInboxArgs) (*Notificatio
 	clauses = append(clauses, "n.feed_channel")
 	// sk-674.18 T029 (INV-11): only rows of a project the caller sees now.
 	clauses = append(clauses, authz.VisibleNowSetExpr("$1::uuid", "n.project_id"))
+	// sk-878.3.1 D-3: the key's scope narrows the same condition; a row of no
+	// project is not filtered by it, as by the relation.
+	if key := authz.ScopeFor(ctx, args.UserID).KeyLimit(); key.Limits() {
+		clauses = append(clauses, "(n.project_id IS NULL OR "+key.Expr("n.project_id", addParam)+")")
+	}
 
 	limitParam := addParam(args.Limit + 1)
 
@@ -1156,6 +1161,13 @@ func (s *Store) PollForMonitor(ctx context.Context, p PollParams) (PollResult, e
 // n.project_id = $2)` so a single statement covers both cases without
 // branching at the Go layer.
 func (s *Store) Counts(ctx context.Context, userID uuid.UUID, projectID *uuid.UUID) (CountsDTO, error) {
+	var pidParam any // nil → SQL NULL → predicate degenerates to TRUE
+	if projectID != nil {
+		pidParam = *projectID
+	}
+	args := []any{userID, pidParam}
+	// sk-878.3.1 D-3: the key's scope narrows the visibility condition.
+	keyed := authz.ScopeFor(ctx, userID).KeyLimit().Expr("n.project_id", authz.Placeholders(&args))
 	sql := `
 SELECT
     count(*) FILTER (WHERE n.read_at IS NULL AND n.archived_at IS NULL) AS unread,
@@ -1165,15 +1177,10 @@ SELECT
    AND n.feed_channel
    AND ($2::uuid IS NULL OR n.project_id = $2)
    AND ` + authz.VisibleNowSetExpr("$1::uuid", "n.project_id") + `
+   AND (n.project_id IS NULL OR ` + keyed + `)
 `
-	var (
-		c        CountsDTO
-		pidParam any // nil → SQL NULL → predicate degenerates to TRUE
-	)
-	if projectID != nil {
-		pidParam = *projectID
-	}
-	if err := s.pool.QueryRow(ctx, sql, userID, pidParam).Scan(&c.Unread, &c.Total); err != nil {
+	var c CountsDTO
+	if err := s.pool.QueryRow(ctx, sql, args...).Scan(&c.Unread, &c.Total); err != nil {
 		return CountsDTO{}, fmt.Errorf("counting notifications: %w", err)
 	}
 	return c, nil
@@ -1189,12 +1196,15 @@ SELECT
 // all (INV-11). Marking such a row read would also be a state change on
 // something no surface can ever show back.
 func (s *Store) MarkRead(ctx context.Context, notificationID int64, userID uuid.UUID) error {
+	args := []any{userID, notificationID}
+	keyed := keyScopeOn(ctx, userID, "n.project_id", &args)
 	n, err := s.updateOwnerRows(ctx, userID, `
 UPDATE notifications n
    SET read_at = COALESCE(n.read_at, now())
   FROM notifications o
  WHERE n.id = $2 AND n.user_id = $1 AND n.feed_channel AND o.id = n.id
-RETURNING n.type, o.read_at IS NULL AS changed`, notificationID)
+   AND `+keyed+`
+RETURNING n.type, o.read_at IS NULL AS changed`, args[1:]...)
 	if err != nil {
 		return fmt.Errorf("mark read: %w", err)
 	}
@@ -1207,12 +1217,15 @@ RETURNING n.type, o.read_at IS NULL AS changed`, notificationID)
 // MarkUnread clears read_at. Idempotent. Feed rows only — see MarkRead
 // for why a push-only row must not be addressable.
 func (s *Store) MarkUnread(ctx context.Context, notificationID int64, userID uuid.UUID) error {
+	args := []any{userID, notificationID}
+	keyed := keyScopeOn(ctx, userID, "n.project_id", &args)
 	n, err := s.updateOwnerRows(ctx, userID, `
 UPDATE notifications n
    SET read_at = NULL
   FROM notifications o
  WHERE n.id = $2 AND n.user_id = $1 AND n.feed_channel AND o.id = n.id
-RETURNING n.type, o.read_at IS NOT NULL AS changed`, notificationID)
+   AND `+keyed+`
+RETURNING n.type, o.read_at IS NOT NULL AS changed`, args[1:]...)
 	if err != nil {
 		return fmt.Errorf("mark unread: %w", err)
 	}
@@ -1226,13 +1239,16 @@ RETURNING n.type, o.read_at IS NOT NULL AS changed`, notificationID)
 // (archived_at IS NOT NULL). Idempotent — re-archiving doesn't bump
 // the timestamp. Feed rows only — see MarkRead.
 func (s *Store) Archive(ctx context.Context, notificationID int64, userID uuid.UUID) error {
+	args := []any{userID, notificationID}
+	keyed := keyScopeOn(ctx, userID, "n.project_id", &args)
 	n, err := s.updateOwnerRows(ctx, userID, `
 UPDATE notifications n
    SET archived_at = COALESCE(n.archived_at, now()),
        read_at     = COALESCE(n.read_at, now())
   FROM notifications o
  WHERE n.id = $2 AND n.user_id = $1 AND n.feed_channel AND o.id = n.id
-RETURNING n.type, (o.archived_at IS NULL OR o.read_at IS NULL) AS changed`, notificationID)
+   AND `+keyed+`
+RETURNING n.type, (o.archived_at IS NULL OR o.read_at IS NULL) AS changed`, args[1:]...)
 	if err != nil {
 		return fmt.Errorf("archive notification: %w", err)
 	}
@@ -1270,6 +1286,7 @@ func (s *Store) MarkAllRead(ctx context.Context, args MarkAllReadArgs) (int64, e
 		params = append(params, *args.ProjectID)
 		clauses = append(clauses, fmt.Sprintf("project_id = $%d", len(params)))
 	}
+	clauses = append(clauses, keyScopeOn(ctx, args.UserID, "project_id", &params))
 	sql := "UPDATE notifications SET read_at = now() WHERE " + joinAnd(clauses) + " RETURNING type, true AS changed"
 	n, err := s.updateOwnerRows(ctx, args.UserID, sql, params[1:]...)
 	if err != nil {
@@ -1297,17 +1314,20 @@ func (s *Store) MarkReadByEntity(
 	}
 
 	if entityType == "issue" {
+		args := []any{userID, entityID}
+		keyed := keyScopeOn(ctx, userID, "project_id", &args)
 		// Cover the issue itself + every comment on the issue. Two
 		// branches unioned via OR (cleaner than two UPDATEs) — the
 		// notifications.event_id IN (...) sub-select short-circuits on
 		// the index. We reuse the events.entity_type/entity_id index.
-		const sql = `
+		sql := `
 UPDATE notifications
    SET read_at = now()
  WHERE user_id = $1
    AND feed_channel
    AND read_at IS NULL
    AND archived_at IS NULL
+   AND ` + keyed + `
    AND event_id IN (
        SELECT e.id
          FROM events e
@@ -1319,7 +1339,7 @@ UPDATE notifications
                ))
    )
 RETURNING type, true AS changed`
-		n, err := s.updateOwnerRows(ctx, userID, sql, entityID)
+		n, err := s.updateOwnerRows(ctx, userID, sql, args[1:]...)
 		if err != nil {
 			return 0, fmt.Errorf("mark read by entity: %w", err)
 		}
@@ -1327,20 +1347,23 @@ RETURNING type, true AS changed`
 	}
 
 	// Generic path: match the entity directly by (type, id).
-	const sql = `
+	args := []any{userID, entityType, entityID}
+	keyed := keyScopeOn(ctx, userID, "project_id", &args)
+	sql := `
 UPDATE notifications
    SET read_at = now()
  WHERE user_id = $1
    AND feed_channel
    AND read_at IS NULL
    AND archived_at IS NULL
+   AND ` + keyed + `
    AND event_id IN (
        SELECT id FROM events
         WHERE entity_type = $2
           AND entity_id   = $3
    )
 RETURNING type, true AS changed`
-	n, err := s.updateOwnerRows(ctx, userID, sql, entityType, entityID)
+	n, err := s.updateOwnerRows(ctx, userID, sql, args[1:]...)
 	if err != nil {
 		return 0, fmt.Errorf("mark read by entity: %w", err)
 	}
@@ -1369,19 +1392,35 @@ func (s *Store) MarkReadCard(ctx context.Context, userID uuid.UUID, cardIssueID 
 	if cardIssueID == "" {
 		return MarkCardReadResult{}, fmt.Errorf("mark read card: card issue id required")
 	}
-	const sql = `
+	// A card with its subtree carries events of descendants that may lie in
+	// other projects: a key reads only those inside its scope.
+	args := []any{userID, cardIssueID}
+	keyed := keyScopeOn(ctx, userID, "project_id", &args)
+	sql := `
 UPDATE notifications
    SET read_at = now()
  WHERE user_id = $1
    AND card_issue_id = $2
    AND read_at IS NULL
    AND archived_at IS NULL
+   AND ` + keyed + `
 RETURNING type, true AS changed`
-	n, err := s.updateOwnerRows(ctx, userID, sql, cardIssueID)
+	n, err := s.updateOwnerRows(ctx, userID, sql, args[1:]...)
 	if err != nil {
 		return MarkCardReadResult{}, fmt.Errorf("mark read card: %w", err)
 	}
 	return MarkCardReadResult{Marked: int(n)}, nil
+}
+
+// keyScopeOn renders the condition of the caller's key scope over the
+// project column col of the caller's notification rows (sk-878.3.1 D-3,
+// US-3 "write acceptance"): a write by a key changes only notifications
+// inside its scope; a row of no project belongs to no project and is not
+// filtered. args are the statement's arguments with $1 = userID first; the
+// scope's value, if any, is appended. Without a key the condition is true.
+func keyScopeOn(ctx context.Context, userID uuid.UUID, col string, args *[]any) string {
+	return "(" + col + " IS NULL OR " +
+		authz.ScopeFor(ctx, userID).KeyLimit().Expr(col, authz.Placeholders(args)) + ")"
 }
 
 // updateOwnerRows runs one autocommit UPDATE over the caller's notification
@@ -1602,9 +1641,60 @@ UPDATE project_watchers
 
 // ----------------- R3.3 — custom watchers -----------------
 
+// ErrWatcherProjectNotFound is returned by AddCustomWatcher when the filter
+// names a project outside the scope of the caller's key: for the key it is
+// a project that does not exist (sk-878.3.1 D-3, US-3).
+var ErrWatcherProjectNotFound = errors.New("custom watcher project not found")
+
+// ErrWatcherAnyProjectNeedsScopeAll is returned by AddCustomWatcher when a
+// key whose scope is not "all" asks for a filter over any project (no
+// project named): such a filter would reach outside the scope (US-3).
+var ErrWatcherAnyProjectNeedsScopeAll = errors.New("a filter over any project needs a key with scope all")
+
+// watchersInKeyScope reports which of filters lie inside the scope of the
+// caller's key: every project the filter names is inside it, and a filter
+// over any project (none named) only under no limit. Without a key every
+// filter is inside. A malformed project id is outside.
+func (s *Store) watchersInKeyScope(ctx context.Context, userID uuid.UUID, filters []CustomWatcherFilter) ([]bool, error) {
+	out := make([]bool, len(filters))
+	key := authz.ScopeFor(ctx, userID).KeyLimit()
+	if !key.Limits() {
+		for i := range out {
+			out[i] = true
+		}
+		return out, nil
+	}
+	var ids []uuid.UUID
+	for _, f := range filters {
+		for _, raw := range f.Projects {
+			if id, err := uuid.Parse(raw); err == nil {
+				ids = append(ids, id)
+			}
+		}
+	}
+	reached, err := authz.KeyReaches(ctx, s.pool, key, ids)
+	if err != nil {
+		return nil, fmt.Errorf("checking custom watchers against the key scope: %w", err)
+	}
+	for i, f := range filters {
+		in := len(f.Projects) > 0
+		for _, raw := range f.Projects {
+			id, err := uuid.Parse(raw)
+			if err != nil || !reached[id] {
+				in = false
+				break
+			}
+		}
+		out[i] = in
+	}
+	return out, nil
+}
+
 // ListCustomWatchers returns every custom_watchers row owned by userID.
 // Sort by created_at ASC so the original watcher appears first — matches
-// the existing pattern used for issue/project watchers.
+// the existing pattern used for issue/project watchers. A request by a key
+// sees only the filters inside its scope (watchersInKeyScope): a filter over
+// a project outside it, or over any project, stays stored and unshown.
 func (s *Store) ListCustomWatchers(ctx context.Context, userID uuid.UUID) ([]CustomWatcherDTO, error) {
 	rows, err := s.pool.Query(ctx, `
 SELECT id, name, filter, created_at
@@ -1632,7 +1722,24 @@ SELECT id, name, filter, created_at
 		}
 		out = append(out, dto)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	filters := make([]CustomWatcherFilter, len(out))
+	for i, w := range out {
+		filters[i] = w.Filter
+	}
+	in, err := s.watchersInKeyScope(ctx, userID, filters)
+	if err != nil {
+		return nil, err
+	}
+	shown := make([]CustomWatcherDTO, 0, len(out))
+	for i, w := range out {
+		if in[i] {
+			shown = append(shown, w)
+		}
+	}
+	return shown, nil
 }
 
 // AddCustomWatcher inserts a new custom_watchers row for userID. Enforces
@@ -1647,6 +1754,18 @@ func (s *Store) AddCustomWatcher(
 	userID uuid.UUID,
 	input CreateCustomWatcherInput,
 ) (*CustomWatcherDTO, error) {
+	if key := authz.ScopeFor(ctx, userID).KeyLimit(); key.Limits() {
+		if len(input.Filter.Projects) == 0 {
+			return nil, ErrWatcherAnyProjectNeedsScopeAll
+		}
+		in, err := s.watchersInKeyScope(ctx, userID, []CustomWatcherFilter{input.Filter})
+		if err != nil {
+			return nil, err
+		}
+		if !in[0] {
+			return nil, ErrWatcherProjectNotFound
+		}
+	}
 	filterBytes, err := json.Marshal(input.Filter)
 	if err != nil {
 		return nil, fmt.Errorf("encoding filter: %w", err)
@@ -1702,7 +1821,34 @@ RETURNING created_at`,
 // Returns ErrNotFound when the row doesn't exist or doesn't belong to
 // the caller — same masking semantics as MarkRead/Archive (we don't want
 // to leak the existence of other users' watchers).
+//
+// A key deletes only a filter inside its scope; one outside it answers
+// ErrNotFound and stays (US-3).
 func (s *Store) DeleteCustomWatcher(ctx context.Context, userID, watcherID uuid.UUID) error {
+	if authz.ScopeFor(ctx, userID).KeyLimit().Limits() {
+		var filterBytes []byte
+		err := s.pool.QueryRow(ctx, `SELECT filter FROM custom_watchers WHERE id = $1 AND user_id = $2`,
+			watcherID, userID).Scan(&filterBytes)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrNotFound
+		}
+		if err != nil {
+			return fmt.Errorf("reading custom watcher: %w", err)
+		}
+		var f CustomWatcherFilter
+		if len(filterBytes) > 0 {
+			if err := json.Unmarshal(filterBytes, &f); err != nil {
+				return fmt.Errorf("decoding custom watcher filter %s: %w", watcherID, err)
+			}
+		}
+		in, err := s.watchersInKeyScope(ctx, userID, []CustomWatcherFilter{f})
+		if err != nil {
+			return err
+		}
+		if !in[0] {
+			return ErrNotFound
+		}
+	}
 	tag, err := s.pool.Exec(ctx,
 		`DELETE FROM custom_watchers WHERE id = $1 AND user_id = $2`,
 		watcherID, userID)
@@ -1725,16 +1871,22 @@ func (s *Store) DeleteCustomWatcher(ctx context.Context, userID, watcherID uuid.
 // flag truncation in the response. The cap is applied SQL-side via
 // LIMIT to keep the payload bounded.
 func (s *Store) ListAllWatchers(ctx context.Context, userID uuid.UUID) (*AllWatchersDTO, error) {
-	const issueSQL = `
+	// sk-878.3.1 D-3, US-3: a request by a key lists only the subscriptions
+	// inside its scope, as every other section of this answer; without a
+	// key the condition is the literal true and the statements are unchanged.
+	key := authz.ScopeFor(ctx, userID).KeyLimit()
+	issueArgs := []any{userID}
+	issueSQL := `
 SELECT iw.issue_id, COALESCE(i.title, ''), i.project_id, COALESCE(p.id_prefix, ''), iw.reasons, iw.since
   FROM issue_watchers iw
   JOIN issues i   ON i.id = iw.issue_id
   JOIN projects p ON p.id = i.project_id
  WHERE iw.user_id = $1
+   AND ` + key.Expr("i.project_id", authz.Placeholders(&issueArgs)) + `
  ORDER BY iw.since DESC
  LIMIT 50`
 
-	rows, err := s.pool.Query(ctx, issueSQL, userID)
+	rows, err := s.pool.Query(ctx, issueSQL, issueArgs...)
 	if err != nil {
 		return nil, fmt.Errorf("listing my issue watchers: %w", err)
 	}
@@ -1752,17 +1904,19 @@ SELECT iw.issue_id, COALESCE(i.title, ''), i.project_id, COALESCE(p.id_prefix, '
 		return nil, err
 	}
 
-	const projectSQL = `
+	projectArgs := []any{userID}
+	projectSQL := `
 SELECT pw.project_id, COALESCE(p.name, ''), COALESCE(p.id_prefix, ''),
        pw.reasons, pw.since, pw.event_types
   FROM project_watchers pw
   JOIN projects p ON p.id = pw.project_id
  WHERE pw.user_id = $1
    AND NOT 'unwatched' = ANY(pw.reasons)
+   AND ` + key.Expr("pw.project_id", authz.Placeholders(&projectArgs)) + `
  ORDER BY pw.since DESC
  LIMIT 50`
 
-	rows2, err := s.pool.Query(ctx, projectSQL, userID)
+	rows2, err := s.pool.Query(ctx, projectSQL, projectArgs...)
 	if err != nil {
 		return nil, fmt.Errorf("listing my project watchers: %w", err)
 	}
@@ -1972,6 +2126,16 @@ func (s *Store) ListWatchingFeed(ctx context.Context, userID uuid.UUID, state Wa
 	if _, ok := ParseWatchingState(string(state)); !ok {
 		return WatchingFeedResult{}, fmt.Errorf("listing watching feed: unknown state %q", state)
 	}
+	args := []any{userID, WatchingFeedLimit, string(state), s.watchingWindow}
+	// The key's scope narrows the caller's cards as it narrows every other
+	// view of the relation (D-3): a card outside it is a card of a project
+	// he does not see. Without a key the condition is the literal true.
+	keyed := authz.ScopeFor(ctx, userID).KeyLimit().Expr("i.project_id", authz.Placeholders(&args))
+	// The window too: a card with its subtree collects events of descendants
+	// in other projects; a key counts only those inside its scope, so the
+	// card's unread count, its last activity and UnreadTotal match the badge
+	// and what reading the card marks.
+	windowKeyed := keyScopeOn(ctx, userID, "n.project_id", &args)
 	sql := `
 WITH subs AS (
     SELECT iw.issue_id, iw.reasons, iw.since
@@ -1983,7 +2147,7 @@ win AS (
            count(*) FILTER (WHERE n.read_at IS NULL)::int AS unread_count,
            max(n.created_at)                              AS last_at
       FROM notifications n
-     WHERE ` + watchingInWindowPredicate("$1", "$4", "true") + `
+     WHERE ` + watchingInWindowPredicate("$1", "$4", windowKeyed) + `
      GROUP BY n.card_issue_id
 ),
 cards AS (
@@ -2003,6 +2167,7 @@ cards AS (
      -- form per card; the window rows need no check of their own: they reach
      -- the totals only through a visible card.
      WHERE ` + authz.RecipientVisibleExpr("$1::uuid", "i.project_id") + `
+       AND ` + keyed + `
 ),
 totals AS (
     SELECT count(*) FILTER (WHERE subscribed)::int    AS subscriptions_total,
@@ -2026,7 +2191,7 @@ SELECT p.issue_id, p.subscribed, p.reasons, p.since, p.unread_count, p.last_at, 
   LEFT JOIN picked p ON true
  ORDER BY p.last_at DESC NULLS LAST, p.issue_id`
 
-	rows, err := s.pool.Query(ctx, sql, userID, WatchingFeedLimit, string(state), s.watchingWindow)
+	rows, err := s.pool.Query(ctx, sql, args...)
 	if err != nil {
 		return WatchingFeedResult{}, fmt.Errorf("listing watching feed: %w", err)
 	}
@@ -3071,4 +3236,119 @@ func (s *Store) UpdateReasonPrefs(ctx context.Context, userID uuid.UUID, input U
 // US-5: without the token or the link).
 func (s *Store) PendingInvitations(ctx context.Context, user uuid.UUID) ([]spaces.PendingInvitation, error) {
 	return spaces.PendingInvitationsTo(ctx, s.pool, user)
+}
+
+// WatchersCursor is the position of a page of one section of
+// ListWatchersPage: the last row's subscription time and id (the issue id,
+// the project UUID).
+type WatchersCursor struct {
+	Since time.Time
+	ID    string
+}
+
+// WatchersPageArgs are the arguments of ListWatchersPage. A nil cursor
+// starts its section from the newest subscription.
+type WatchersPageArgs struct {
+	UserID        uuid.UUID
+	Limit         int
+	IssuesAfter   *WatchersCursor
+	ProjectsAfter *WatchersCursor
+}
+
+// WatchersPage is one page of each section of the caller's subscriptions;
+// *More reports a further page of that section. Custom is every filter:
+// a user holds at most MaxCustomWatchersPerUser of them.
+type WatchersPage struct {
+	Issues       []IssueWatcherForUserDTO
+	IssuesMore   bool
+	Projects     []ProjectWatcherDTO
+	ProjectsMore bool
+	Custom       []CustomWatcherDTO
+}
+
+// ListWatchersPage is ListAllWatchers with keyset paging of each section
+// (sk-878.3.1 T027, listWatching): issues and projects newest subscription
+// first, ties by id; the filters whole. The rows are those of
+// ListAllWatchers: the key's scope narrows every section, the project
+// opt-outs are not listed.
+func (s *Store) ListWatchersPage(ctx context.Context, a WatchersPageArgs) (*WatchersPage, error) {
+	key := authz.ScopeFor(ctx, a.UserID).KeyLimit()
+	out := &WatchersPage{Issues: []IssueWatcherForUserDTO{}, Projects: []ProjectWatcherDTO{}}
+
+	issueArgs := []any{a.UserID, a.Limit + 1}
+	after := "true"
+	if a.IssuesAfter != nil {
+		issueArgs = append(issueArgs, a.IssuesAfter.Since, a.IssuesAfter.ID)
+		after = "(iw.since < $3::timestamptz OR (iw.since = $3::timestamptz AND iw.issue_id > $4::text))"
+	}
+	rows, err := s.pool.Query(ctx, `
+SELECT iw.issue_id, COALESCE(i.title, ''), i.project_id, COALESCE(p.id_prefix, ''), iw.reasons, iw.since
+  FROM issue_watchers iw
+  JOIN issues i   ON i.id = iw.issue_id
+  JOIN projects p ON p.id = i.project_id
+ WHERE iw.user_id = $1
+   AND `+after+`
+   AND `+key.Expr("i.project_id", authz.Placeholders(&issueArgs))+`
+ ORDER BY iw.since DESC, iw.issue_id ASC
+ LIMIT $2`, issueArgs...)
+	if err != nil {
+		return nil, fmt.Errorf("paging my issue watchers: %w", err)
+	}
+	for rows.Next() {
+		var w IssueWatcherForUserDTO
+		if err := rows.Scan(&w.IssueID, &w.IssueTitle, &w.ProjectID, &w.ProjectIDPrefix, &w.Reasons, &w.Since); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("scanning my issue watcher: %w", err)
+		}
+		out.Issues = append(out.Issues, w)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("paging my issue watchers: %w", err)
+	}
+	if len(out.Issues) > a.Limit {
+		out.Issues, out.IssuesMore = out.Issues[:a.Limit], true
+	}
+
+	projectArgs := []any{a.UserID, a.Limit + 1}
+	after = "true"
+	if a.ProjectsAfter != nil {
+		projectArgs = append(projectArgs, a.ProjectsAfter.Since, a.ProjectsAfter.ID)
+		after = "(pw.since < $3::timestamptz OR (pw.since = $3::timestamptz AND pw.project_id::text > $4::text))"
+	}
+	rows, err = s.pool.Query(ctx, `
+SELECT pw.project_id, COALESCE(p.name, ''), COALESCE(p.id_prefix, ''), pw.reasons, pw.since, pw.event_types
+  FROM project_watchers pw
+  JOIN projects p ON p.id = pw.project_id
+ WHERE pw.user_id = $1
+   AND NOT 'unwatched' = ANY(pw.reasons)
+   AND `+after+`
+   AND `+key.Expr("pw.project_id", authz.Placeholders(&projectArgs))+`
+ ORDER BY pw.since DESC, pw.project_id::text ASC
+ LIMIT $2`, projectArgs...)
+	if err != nil {
+		return nil, fmt.Errorf("paging my project watchers: %w", err)
+	}
+	for rows.Next() {
+		var w ProjectWatcherDTO
+		var types []string
+		if err := rows.Scan(&w.ProjectID, &w.ProjectName, &w.ProjectIDPrefix, &w.Reasons, &w.Since, &types); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("scanning my project watcher: %w", err)
+		}
+		w.EventTypes = types
+		out.Projects = append(out.Projects, w)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("paging my project watchers: %w", err)
+	}
+	if len(out.Projects) > a.Limit {
+		out.Projects, out.ProjectsMore = out.Projects[:a.Limit], true
+	}
+
+	if out.Custom, err = s.ListCustomWatchers(ctx, a.UserID); err != nil {
+		return nil, err
+	}
+	return out, nil
 }

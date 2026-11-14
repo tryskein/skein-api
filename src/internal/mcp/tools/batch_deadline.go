@@ -2,7 +2,7 @@ package tools
 
 import (
 	"context"
-	"time"
+	"skein-api/internal/issueops"
 )
 
 // batchLoopDeadline bounds the per-row loop of a batch tool
@@ -45,7 +45,7 @@ import (
 // It is a var, not a const, for one reason: the tests shorten it to prove
 // the stop path without sleeping for twenty seconds. Production never
 // assigns it.
-var batchLoopDeadline = 20 * time.Second
+var batchLoopDeadline = issueops.BatchLoopDeadline
 
 // batchLoopContext derives the context the per-row work runs under. Callers
 // keep using the parent context for logging, so a log line still gets
@@ -59,26 +59,6 @@ var batchLoopContext = func(parent context.Context) (context.Context, context.Ca
 	return context.WithTimeout(parent, batchLoopDeadline)
 }
 
-// batchStopReason says whether the loop must stop before running another
-// row, and with which code the rows that did not run are marked.
-//
-// The two cases are reported apart on purpose. Until now both arrived as
-// internal_error with "request cancelled", which is also what a genuine
-// store failure returns — so a caller could not tell "the server gave up
-// on schedule and is telling you where it stopped" from "something broke
-// while writing this row". They call for different responses: the first is
-// retried for the remaining rows, the second is not retried blindly.
 func batchStopReason(parent, loop context.Context) (code, message string, stop bool) {
-	if parent.Err() != nil {
-		// The caller is gone (client disconnect, proxy teardown). Marking
-		// the rows still matters — the result is written into the log line
-		// and the audit trail even when nobody reads the response.
-		return ErrCodeRequestCancelled,
-			"the caller went away before this row ran; rows reported ok above were applied", true
-	}
-	if loop.Err() != nil {
-		return ErrCodeBatchDeadlineExceeded,
-			"the batch reached its server-side deadline before this row ran; rows reported ok above were applied and are not rolled back", true
-	}
-	return "", "", false
+	return issueops.BatchStopReason(parent, loop)
 }

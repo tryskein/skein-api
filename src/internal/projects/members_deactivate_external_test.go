@@ -23,8 +23,10 @@ func seedActiveAPIKey(t *testing.T, pool *pgxpool.Pool, userID uuid.UUID) uuid.U
 	t.Helper()
 	id := uuid.New()
 	if _, err := pool.Exec(context.Background(), `
-INSERT INTO api_keys (id, user_id, key_hash, prefix, label, created_at)
-VALUES ($1, $2, $3, $4, 'sk-159-test', now())`,
+INSERT INTO api_keys (id, user_id, key_hash, prefix, label, created_at,
+                      level, is_admin, scope_mode)
+VALUES ($1, $2, $3, $4, 'sk-159-test', now(),
+        'manage', (SELECT role = 'admin' FROM users WHERE id = $2), 'all')`,
 		id, userID, "hash-"+id.String(), "p"+id.String()[:11]); err != nil {
 		t.Fatalf("seed api key: %v", err)
 	}

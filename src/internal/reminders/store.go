@@ -213,10 +213,13 @@ func (s *Store) Snooze(ctx context.Context, id, ownerID uuid.UUID, newRemindAt t
 			issueID    string
 			prevRemind time.Time
 		)
+		args := []any{id, ownerID}
+		inScope := reminderInKeyScope(ctx, ownerID, &args)
 		err := tx.QueryRow(ctx, `
 SELECT issue_id, remind_at FROM reminders
  WHERE id = $1 AND user_id = $2
- FOR UPDATE`, id, ownerID).Scan(&issueID, &prevRemind)
+   AND `+inScope+`
+ FOR UPDATE`, args...).Scan(&issueID, &prevRemind)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrNotFound
 		}
@@ -281,10 +284,13 @@ func (s *Store) Dismiss(ctx context.Context, id, ownerID uuid.UUID, note string,
 			issueID  string
 			remindAt time.Time
 		)
+		args := []any{id, ownerID}
+		inScope := reminderInKeyScope(ctx, ownerID, &args)
 		err := tx.QueryRow(ctx, `
 DELETE FROM reminders
  WHERE id = $1 AND user_id = $2
-RETURNING issue_id, remind_at`, id, ownerID).Scan(&issueID, &remindAt)
+   AND `+inScope+`
+RETURNING issue_id, remind_at`, args...).Scan(&issueID, &remindAt)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrNotFound
 		}
@@ -351,14 +357,18 @@ func (s *Store) ListForUser(ctx context.Context, ownerID uuid.UUID, filter ListF
 
 	// sk-674.18 T029 (INV-11): only reminders on issues of a project the
 	// caller sees now; a reminder of a lost project stays stored, unshown.
+	// sk-878.3.1 D-3: and inside the key's scope (keyReach).
+	args := []any{ownerID, now.UTC()}
+	keyed := keyReach(ctx, ownerID, &args)
 	sql := `SELECT` + reminderColumns + `
   FROM reminders r
   JOIN issues i ON i.id = r.issue_id
  WHERE r.user_id = $1
    AND ` + authz.VisibleNowSetExpr("$1::uuid", "i.project_id") + where + `
+   AND ` + keyed + `
  ORDER BY (r.remind_at > $2) ASC, r.remind_at ASC, r.id ASC`
 
-	rows, err := s.pool.Query(ctx, sql, ownerID, now.UTC())
+	rows, err := s.pool.Query(ctx, sql, args...)
 	if err != nil {
 		return nil, fmt.Errorf("listing reminders: %w", err)
 	}
@@ -384,12 +394,15 @@ func (s *Store) ListForUser(ctx context.Context, ownerID uuid.UUID, filter ListF
 // issueId (not reminderId) and has exactly one reminder on that issue, the
 // tool targets it; >1 forces the caller to disambiguate with reminderId.
 func (s *Store) ListForUserIssue(ctx context.Context, ownerID uuid.UUID, issueID string, now time.Time) ([]Reminder, error) {
+	args := []any{ownerID, issueID}
+	keyed := keyReach(ctx, ownerID, &args)
 	rows, err := s.pool.Query(ctx, `SELECT`+reminderColumns+`
   FROM reminders r
   JOIN issues i ON i.id = r.issue_id
  WHERE r.user_id = $1 AND r.issue_id = $2
    AND `+authz.VisibleNowSetExpr("$1::uuid", "i.project_id")+`
- ORDER BY r.remind_at ASC, r.id ASC`, ownerID, issueID)
+   AND `+keyed+`
+ ORDER BY r.remind_at ASC, r.id ASC`, args...)
 	if err != nil {
 		return nil, fmt.Errorf("listing reminders for issue: %w", err)
 	}
@@ -415,12 +428,15 @@ func (s *Store) ListForUserIssue(ctx context.Context, ownerID uuid.UUID, issueID
 // reminders — two stacked reminders on one task is one ringing task.
 func (s *Store) CountRingingTasks(ctx context.Context, ownerID uuid.UUID, now time.Time) (int, error) {
 	var n int
+	args := []any{ownerID, now.UTC()}
+	keyed := keyReach(ctx, ownerID, &args)
 	err := s.pool.QueryRow(ctx, `
 SELECT COUNT(DISTINCT r.issue_id)
   FROM reminders r
   JOIN issues i ON i.id = r.issue_id
  WHERE r.user_id = $1 AND r.remind_at <= $2
-   AND `+authz.VisibleNowSetExpr("$1::uuid", "i.project_id"), ownerID, now.UTC()).Scan(&n)
+   AND `+authz.VisibleNowSetExpr("$1::uuid", "i.project_id")+`
+   AND `+keyed, args...).Scan(&n)
 	if err != nil {
 		return 0, fmt.Errorf("counting ringing tasks: %w", err)
 	}
@@ -442,4 +458,100 @@ func (s *Store) ListAndCount(ctx context.Context, ownerID uuid.UUID, filter List
 		return ListResponse{}, err
 	}
 	return ListResponse{Reminders: list, RingingTaskCount: count}, nil
+}
+
+// keyReach renders the condition of the caller's key scope on i.project_id,
+// binding its values after args (sk-878.3.1 D-3): a reminder on an issue
+// outside the scope is one of a project the caller does not see. The
+// literal true for a request without a key, or for another owner than the
+// request's caller.
+func keyReach(ctx context.Context, ownerID uuid.UUID, args *[]any) string {
+	return authz.ScopeFor(ctx, ownerID).KeyLimit().Expr("i.project_id", authz.Placeholders(args))
+}
+
+// reminderInKeyScope renders, for a statement over the reminders table,
+// the condition «the reminder's issue lies inside the caller's key scope»
+// (sk-878.3.1 US-3): a key snoozes or dismisses a reminder on an issue
+// outside its scope exactly as a reminder that does not exist. The literal
+// true without a key, so the statement is unchanged.
+func reminderInKeyScope(ctx context.Context, ownerID uuid.UUID, args *[]any) string {
+	key := authz.ScopeFor(ctx, ownerID).KeyLimit()
+	if !key.Limits() {
+		return "true"
+	}
+	return "EXISTS (SELECT 1 FROM issues ki WHERE ki.id = reminders.issue_id AND " +
+		key.Expr("ki.project_id", authz.Placeholders(args)) + ")"
+}
+
+// ListPosition is the keyset position of a page of ListPage: the last
+// row's remind_at and id.
+type ListPosition struct {
+	RemindAt time.Time
+	ID       uuid.UUID
+}
+
+// ListPageArgs are the arguments of ListPage. ProjectID narrows to one
+// project; After continues after a position; Limit is the page size.
+type ListPageArgs struct {
+	Filter    ListFilter
+	ProjectID *uuid.UUID
+	After     *ListPosition
+	Limit     int
+}
+
+// ListPage is ListForUser one keyset page at a time (sk-878.3.1 T027,
+// listReminders): the same rows — the caller's reminders on issues he sees
+// now and inside the key's scope — in remind_at, id order, which is the
+// ringing-first order of ListForUser (a ringing reminder rings no later
+// than an armed one), so a page boundary does not move as time passes.
+// more reports a further page.
+func (s *Store) ListPage(ctx context.Context, ownerID uuid.UUID, a ListPageArgs, now time.Time) (page []Reminder, more bool, err error) {
+	args := []any{ownerID, a.Limit + 1}
+	where := ""
+	// now is bound only when the filter reads it: an unused parameter has
+	// no type the server can infer.
+	switch a.Filter {
+	case FilterRinging:
+		args = append(args, now.UTC())
+		where += fmt.Sprintf(` AND r.remind_at <= $%d`, len(args))
+	case FilterArmed:
+		args = append(args, now.UTC())
+		where += fmt.Sprintf(` AND r.remind_at > $%d`, len(args))
+	}
+	if a.ProjectID != nil {
+		args = append(args, *a.ProjectID)
+		where += fmt.Sprintf(` AND i.project_id = $%d`, len(args))
+	}
+	if a.After != nil {
+		args = append(args, a.After.RemindAt, a.After.ID)
+		where += fmt.Sprintf(` AND (r.remind_at > $%d OR (r.remind_at = $%d AND r.id > $%d))`, len(args)-1, len(args)-1, len(args))
+	}
+	keyed := keyReach(ctx, ownerID, &args)
+	rows, err := s.pool.Query(ctx, `SELECT`+reminderColumns+`
+  FROM reminders r
+  JOIN issues i ON i.id = r.issue_id
+ WHERE r.user_id = $1
+   AND `+authz.VisibleNowSetExpr("$1::uuid", "i.project_id")+where+`
+   AND `+keyed+`
+ ORDER BY r.remind_at ASC, r.id ASC
+ LIMIT $2`, args...)
+	if err != nil {
+		return nil, false, fmt.Errorf("paging reminders: %w", err)
+	}
+	defer rows.Close()
+	page = make([]Reminder, 0, a.Limit+1)
+	for rows.Next() {
+		r, err := scanReminder(rows, now)
+		if err != nil {
+			return nil, false, fmt.Errorf("scanning reminder: %w", err)
+		}
+		page = append(page, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, false, fmt.Errorf("paging reminders: %w", err)
+	}
+	if len(page) > a.Limit {
+		return page[:a.Limit], true, nil
+	}
+	return page, false, nil
 }

@@ -95,7 +95,7 @@ func TestLinksSpaceBoundary_OtherSpaceAnswersAsNonexistent(t *testing.T) {
 			t.Errorf("%s with a target of the issue's own space was refused %+v (positive control)", what, got)
 		}
 	}
-	base := "/api/v1/projects/" + a.ID.String() + "/issues/"
+	base := "/ui/v1/projects/" + a.ID.String() + "/issues/"
 
 	t.Run("dependency REST", func(t *testing.T) {
 		from := next(a)

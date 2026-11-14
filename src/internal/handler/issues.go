@@ -600,7 +600,7 @@ type acceptIssueRequest struct {
 // @Failure 404 {object} map[string]any "project_not_found — absent or invisible; parent issue absent or invisible"
 // @Failure 422 {object} map[string]any "Domain refusals — e.g. an unusable parent or a component from another project; assignee_not_allowed — the assignee given as a user id names nobody who may work in this project now (INV-30; a username or e-mail is stored as text and never refused)"
 // @Failure 500 {object} map[string]any "internal_error"
-// @Router /api/v1/projects/{projectID}/issues [post]
+// @Router /ui/v1/projects/{projectID}/issues [post]
 func (h *IssuesHandler) Create(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	c, ok := caller(r)
@@ -798,7 +798,7 @@ func (h *IssuesHandler) Create(w http.ResponseWriter, r *http.Request) {
 // @Failure 404 {object} map[string]any "project_not_found — absent or invisible"
 // @Failure 422 {object} map[string]any "blocked_is_derived — status=blocked is a DERIVED state and cannot be selected as a status; use isBlocked=true. Raised by issues.ValidateStatus through mapIssueValidation"
 // @Failure 500 {object} map[string]any "internal_error"
-// @Router /api/v1/projects/{projectID}/issues [get]
+// @Router /ui/v1/projects/{projectID}/issues [get]
 func (h *IssuesHandler) List(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	c, ok := caller(r)
@@ -1134,7 +1134,7 @@ func (h *IssuesHandler) List(w http.ResponseWriter, r *http.Request) {
 // @Failure 404 {object} map[string]any "project_not_found — absent or invisible to the caller"
 // @Failure 422 {object} map[string]any "tree_too_large — the walk exceeded the node limit (extra: limit)"
 // @Failure 500 {object} map[string]any "internal_error"
-// @Router /api/v1/projects/{projectID}/issues/tree [get]
+// @Router /ui/v1/projects/{projectID}/issues/tree [get]
 func (h *IssuesHandler) Tree(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	c, ok := caller(r)
@@ -1359,7 +1359,7 @@ func parseTreeTypes(w http.ResponseWriter, r *http.Request) ([]string, bool) {
 // @Failure 404 {object} map[string]any "issue_not_found — absent, invisible, or in another project"
 // @Failure 422 {object} map[string]any "business refusals of the shared issue mappers — mapIssueValidation raises a validation code to 422 (for example a derived filter such as blocked), mapIssueErr raises id_taken / pinned_no_force"
 // @Failure 500 {object} map[string]any "internal_error"
-// @Router /api/v1/projects/{projectID}/issues/{issueID} [get]
+// @Router /ui/v1/projects/{projectID}/issues/{issueID} [get]
 func (h *IssuesHandler) Get(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	c, ok := caller(r)
@@ -1443,7 +1443,7 @@ func (h *IssuesHandler) canForceUnlock(ctx context.Context, level authz.Level, i
 // @Failure 404 {object} map[string]any "not_found — project not visible; issue_not_found — absent, invisible, or in another project"
 // @Failure 422 {object} map[string]any "force_unlock_forbidden — the claim is another holder's and the caller may not release it, nothing written; not_lock_holder — the claim changed while it was being released, re-read and retry"
 // @Failure 500 {object} map[string]any "internal_error"
-// @Router /api/v1/projects/{projectID}/issues/{issueID}/unlock [post]
+// @Router /ui/v1/projects/{projectID}/issues/{issueID}/unlock [post]
 func (h *IssuesHandler) Unlock(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	c, ok := caller(r)
@@ -1540,7 +1540,7 @@ func (h *IssuesHandler) Unlock(w http.ResponseWriter, r *http.Request) {
 // @Failure 422 {object} map[string]any "version_conflict — the presented version is stale; serialization_retry — the write transaction rolled back without a changed declared version; validation and domain refusals; review_forbidden — only the author may change the review flag; close_target_required — duplicate/superseded without closeTarget and without an existing matching edge; assignee_not_allowed — the assignee given as a user id names nobody who may work in this project now (INV-30), nothing is written"
 // @Failure 428 {object} map[string]any "If-Match is missing"
 // @Failure 500 {object} map[string]any "internal_error"
-// @Router /api/v1/projects/{projectID}/issues/{issueID} [patch]
+// @Router /ui/v1/projects/{projectID}/issues/{issueID} [patch]
 func (h *IssuesHandler) Patch(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	c, ok := caller(r)
@@ -1729,7 +1729,7 @@ func (h *IssuesHandler) Patch(w http.ResponseWriter, r *http.Request) {
 // @Failure 422 {object} map[string]any "force_unlock_forbidden — force=true without the right to release another holder's claim, nothing written; version_conflict — the presented version is stale; serialization_retry — the write transaction rolled back without a changed declared version; pinned_no_force; locked_by_other; standing lifecycle refusals; close_target_required — duplicate/superseded without closeTarget where no exception applies; target_not_found — closeTarget does not exist OR is in a project this caller cannot see, answered identically on purpose"
 // @Failure 428 {object} map[string]any "If-Match is missing"
 // @Failure 500 {object} map[string]any "internal_error"
-// @Router /api/v1/projects/{projectID}/issues/{issueID}/transitions [post]
+// @Router /ui/v1/projects/{projectID}/issues/{issueID}/transitions [post]
 func (h *IssuesHandler) UpdateStatus(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	c, ok := caller(r)
@@ -2118,7 +2118,7 @@ func (h *IssuesHandler) ListProjectLabels(w http.ResponseWriter, r *http.Request
 //
 // Optional query `origin=human-driven|agent-autonomous|all` (default
 // `all`) filters by comments.author_kind: "human-driven" returns
-// human + agent_directed (the "a human is behind this" lens), and
+// human + agent_directed + api (the "a human is behind this" lens), and
 // "agent-autonomous" returns only agent_autonomous (self-spawned agent
 // notes). Mirrors the same wire token already used by skein_list and
 // the project counters. Invalid values → 400 invalid_origin.
@@ -2706,7 +2706,7 @@ func (h *IssuesHandler) CheckDuplicates(w http.ResponseWriter, r *http.Request) 
 // @Failure 404 {object} map[string]any "issue_not_found — missing or invisible"
 // @Failure 422 {object} map[string]any "cannot_accept_closed; forbidden; version_conflict; serialization_retry"
 // @Failure 500 {object} map[string]any "internal_error"
-// @Router /api/v1/issues/{issueID}/accept [post]
+// @Router /ui/v1/issues/{issueID}/accept [post]
 func (h *IssuesHandler) Accept(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	c, ok := caller(r)
@@ -2835,7 +2835,7 @@ func (h *IssuesHandler) Accept(w http.ResponseWriter, r *http.Request) {
 // @Failure 404 {object} map[string]any "issue_not_found — absent, or in a project the caller cannot see; nothing written"
 // @Failure 422 {object} map[string]any "not_in_chain — the caller is neither the creator nor a previous assignee; nothing written"
 // @Failure 500 {object} map[string]any "internal_error — a DB fault, or a serialization conflict that outlived the 3 attempts"
-// @Router /api/v1/issues/{issueID}/dismiss [post]
+// @Router /ui/v1/issues/{issueID}/dismiss [post]
 func (h *IssuesHandler) Dismiss(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	c, ok := caller(r)
@@ -2923,7 +2923,7 @@ func (h *IssuesHandler) Dismiss(w http.ResponseWriter, r *http.Request) {
 // @Failure 401 {object} map[string]any "unauthenticated"
 // @Failure 404 {object} map[string]any "issue_not_found — absent, or in a project the caller cannot see; nothing written"
 // @Failure 500 {object} map[string]any "internal_error — a DB fault or a serialization conflict"
-// @Router /api/v1/issues/{issueID}/undismiss [post]
+// @Router /ui/v1/issues/{issueID}/undismiss [post]
 func (h *IssuesHandler) Undismiss(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	c, ok := caller(r)

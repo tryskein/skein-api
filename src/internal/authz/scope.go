@@ -56,6 +56,10 @@ import (
 type Scope struct {
 	unrestricted bool
 	callerID     uuid.UUID
+	// key is the scope of the API key the request authenticated with: it
+	// narrows the caller's relation (KeyLimit; zero — no key, nothing
+	// narrowed).
+	key KeyLimit
 	// cache is the request's memo of the caller's visible set
 	// (WithRequestCache); nil outside a request, then Bind reads the
 	// relation on every call.
@@ -65,11 +69,14 @@ type Scope struct {
 // FromContext derives the scope from the request context.
 //
 // A principal wins over the internal marker: a marker left on a context
-// that later acquired a user must not promote that user.
+// that later acquired a user must not promote that user. A request
+// authenticated by an API key reads its caller's relation narrowed to the
+// key's scope (sk-878.3.1 D-3); a key request without its grant reaches
+// nothing.
 func FromContext(ctx context.Context) Scope {
 	if p, ok := auth.PrincipalFrom(ctx); ok {
 		cache, _ := ctx.Value(requestSetKey{}).(*requestSet)
-		return Scope{callerID: p.UserID, cache: cache}
+		return Scope{callerID: p.UserID, cache: cache, key: keyLimitFromContext(ctx)}
 	}
 	if isDeclaredUnrestricted(ctx) {
 		return Unrestricted()
@@ -107,6 +114,10 @@ func (s Scope) IsUnrestricted() bool { return s.unrestricted }
 // unrestricted and the empty scope.
 func (s Scope) CallerID() uuid.UUID { return s.callerID }
 
+// KeyLimit is the limit of the key the scope's request authenticated with;
+// zero when there is none.
+func (s Scope) KeyLimit() KeyLimit { return s.key }
+
 // Bind returns the two bind values of the SQL fragments of this package
 // (ProjectVisibleExpr, VisibleExpr, the blocker fragments), in placeholder
 // order: the unrestricted flag, then the scope's visible set — the project
@@ -128,13 +139,18 @@ func (s Scope) Bind(ctx context.Context, q RowsQuerier) (unrestricted bool, visi
 		return false, []uuid.UUID{}, nil
 	}
 	if s.cache != nil {
-		ids, err := s.cache.get(ctx, q, s.callerID)
+		ids, err := s.cache.get(ctx, q, s.callerID, s.key)
 		return false, ids, err
 	}
-	ids, err := loadVisibleSet(ctx, q, s.callerID)
+	ids, err := loadVisibleSet(ctx, q, s.callerID, s.key)
 	return false, ids, err
 }
 
+// BindSpaces is NOT narrowed by the key's scope (decision of the lead,
+// sk-878.3.1 T010, variant B): a project outside the key's scope behaves
+// exactly as one the owner does not see, so in the owner's own spaces it is
+// counted as unavailable like any project hidden from him (US-3, INV-2).
+//
 // BindSpaces returns the scope's own non-personal spaces — the bind value
 // of the third placeholder of HiddenCountableExpr and the hidden-link
 // fragments (INV-28 (4)): hidden issues count in unavailable* numbers only
@@ -157,6 +173,7 @@ func (s Scope) BindSpaces(ctx context.Context, q RowsQuerier) ([]uuid.UUID, erro
 type requestSet struct {
 	mu     sync.Mutex
 	caller uuid.UUID
+	keyFP  string
 	ids    []uuid.UUID
 	loaded bool
 
@@ -188,17 +205,18 @@ func WithRequestCache(ctx context.Context) context.Context {
 	return context.WithValue(ctx, requestSetKey{}, &requestSet{})
 }
 
-func (r *requestSet) get(ctx context.Context, q RowsQuerier, caller uuid.UUID) ([]uuid.UUID, error) {
+func (r *requestSet) get(ctx context.Context, q RowsQuerier, caller uuid.UUID, key KeyLimit) ([]uuid.UUID, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.loaded && r.caller == caller {
+	fp := key.Fingerprint()
+	if r.loaded && r.caller == caller && r.keyFP == fp {
 		return r.ids, nil
 	}
-	ids, err := loadVisibleSet(ctx, q, caller)
+	ids, err := loadVisibleSet(ctx, q, caller, key)
 	if err != nil {
 		return nil, err
 	}
-	r.caller, r.ids, r.loaded = caller, ids, true
+	r.caller, r.keyFP, r.ids, r.loaded = caller, fp, ids, true
 	return ids, nil
 }
 
@@ -207,17 +225,29 @@ const (
 	loadSpacesSQL  = `SELECT space_id FROM skein_contribution_spaces($1::uuid)`
 )
 
-// loadVisibleSet reads the caller's row set of the relation, ids only. It
-// is also the set of projects he may work in: every level of the relation
-// may (INV-30, authzsql.WorkerEligibleExpr; the instance admin's bare reach
-// included since sk-741), so no second set is kept.
-func loadVisibleSet(ctx context.Context, q RowsQuerier, caller uuid.UUID) ([]uuid.UUID, error) {
-	return loadIDs(ctx, q, loadVisibleSQL, caller, "visible projects")
+// loadVisibleSet reads the caller's row set of the relation, ids only,
+// narrowed to the key's scope when the request has one. It is also the set
+// of projects he may work in: every level of the relation may (INV-30,
+// authzsql.WorkerEligibleExpr; the instance admin's bare reach included
+// since sk-741), so no second set is kept.
+func loadVisibleSet(ctx context.Context, q RowsQuerier, caller uuid.UUID, key KeyLimit) ([]uuid.UUID, error) {
+	if !key.Limits() {
+		return loadIDs(ctx, q, loadVisibleSQL, caller, "visible projects")
+	}
+	args := []any{caller}
+	sql := `SELECT va.project_id FROM skein_project_access_set($1::uuid) va WHERE ` +
+		key.Expr("va.project_id", Placeholders(&args))
+	return loadIDsArgs(ctx, q, sql, "visible projects", args...)
 }
 
 // loadIDs reads one uuid column of a per-caller set.
 func loadIDs(ctx context.Context, q RowsQuerier, sql string, caller uuid.UUID, what string) ([]uuid.UUID, error) {
-	rows, err := q.Query(ctx, sql, caller)
+	return loadIDsArgs(ctx, q, sql, what, caller)
+}
+
+// loadIDsArgs reads one uuid column of a set bound by args.
+func loadIDsArgs(ctx context.Context, q RowsQuerier, sql, what string, args ...any) ([]uuid.UUID, error) {
+	rows, err := q.Query(ctx, sql, args...)
 	if err != nil {
 		return nil, fmt.Errorf("loading %s: %w", what, err)
 	}

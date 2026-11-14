@@ -9,7 +9,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"skein-api/internal/apikeys"
+	"skein-api/internal/testsupport"
 )
 
 // TestRequireAPIKey_IsExternal_ColdAndWarm proves the api-key→cache→RPC ctx
@@ -39,8 +39,7 @@ VALUES ($1, $2, $3, $4, 'user', 'h', true, now(), '{}'::jsonb)`,
 	if err != nil {
 		t.Fatalf("GenerateAPIKey: %v", err)
 	}
-	store := apikeys.New(pool)
-	if _, _, err := store.Create(ctx, uid, "ext-test", prefix, hash); err != nil {
+	if _, _, err := testsupport.CreateOwnerKey(ctx, pool, uid, "ext-test", prefix, hash); err != nil {
 		t.Fatalf("Create key: %v", err)
 	}
 

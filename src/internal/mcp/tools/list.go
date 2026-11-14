@@ -14,6 +14,7 @@ import (
 	"github.com/mark3labs/mcp-go/server"
 
 	"skein-api/internal/authz"
+	"skein-api/internal/issueops"
 	"skein-api/internal/issues"
 	skmcp "skein-api/internal/mcp"
 	"skein-api/internal/projects"
@@ -158,7 +159,7 @@ func RegisterList(s *server.MCPServer, pool *pgxpool.Pool, issuesStore *issues.S
 		),
 		mcpgo.WithString("origin",
 			mcpgo.Description("Origin group filter (broader than `source`). "+
-				"\"human-driven\" matches source IN (human, agent_directed); "+
+				"\"human-driven\" matches source IN (human, agent_directed, api); "+
 				"\"agent-autonomous\" matches source = agent_autonomous; "+
 				"\"all\" or omitted = no filter. Use this to hide the agent "+
 				"firehose in default board mode."),
@@ -171,10 +172,11 @@ func RegisterList(s *server.MCPServer, pool *pgxpool.Pool, issuesStore *issues.S
 			mcpgo.Description("Filter on the pinned flag."),
 		),
 		mcpgo.WithString("source",
-			mcpgo.Description("Filter by origin: human|agent_directed|agent_autonomous. "+
+			mcpgo.Description("Filter by origin: human|agent_directed|agent_autonomous|api. "+
 				"\"agent_directed\" = agent created on user instruction; "+
-				"\"agent_autonomous\" = agent self-spawned mid-task."),
-			mcpgo.Enum("human", "agent_directed", "agent_autonomous"),
+				"\"agent_autonomous\" = agent self-spawned mid-task; "+
+				"\"api\" = written with an API key over the REST API."),
+			mcpgo.Enum("human", "agent_directed", "agent_autonomous", "api"),
 		),
 		mcpgo.WithString("text",
 			mcpgo.Description("Title ILIKE filter (substring match). For semantic / FTS search use skein_search."),
@@ -610,28 +612,5 @@ func handleListCrossProject(
 // the right tool-error payload. Shared across all tools that take a
 // project arg.
 func projectErrorResult(err error) (*mcpgo.CallToolResult, error) {
-	var val *ValidationProjectError
-	if errors.As(err, &val) {
-		return skmcp.ToolError(ErrCodeValidationError,
-			val.Message,
-			map[string]any{"field": val.Field}), nil
-	}
-	var ambig *AmbiguousProjectError
-	if errors.As(err, &ambig) {
-		return skmcp.ToolError(ErrCodeAmbiguousProject,
-			"project handle matched multiple projects — pick one and re-call",
-			map[string]any{
-				"q":          ambig.Query,
-				"candidates": ambig.Candidates,
-			}), nil
-	}
-	var notFound *ProjectNotFoundError
-	if errors.As(err, &notFound) {
-		return skmcp.ToolError(ErrCodeProjectNotFound,
-			"project does not exist or is not visible",
-			map[string]any{"q": notFound.Query}), nil
-	}
-	// Anything else is genuinely internal — never the agent's fault.
-	return skmcp.ToolError(ErrCodeInternalError,
-		"failed to resolve project handle", nil), nil
+	return toolFailure(issueops.ProjectFailure(err)), nil
 }

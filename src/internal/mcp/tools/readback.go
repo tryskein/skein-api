@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 
+	"skein-api/internal/issueops"
 	"skein-api/internal/issues"
 )
 
@@ -76,27 +77,6 @@ const cardUnavailableNote = " If the write applied but its card could not be rea
 	"the answer is the acknowledgement plus `cardUnavailable: true` — read the card " +
 	"with skein_show; do not repeat the write."
 
-// contextStop classifies cancellation/deadline errors using the batch tools'
-// existing codes. It does not establish whether a commit landed. An atomic
-// version-checked close may be resent with the old expectedVersion: a landed
-// close refuses that replay. force=true requires a re-read first.
-//
-// Single-tool update also uses this classifier. Its cancellation message
-// requires a re-read because earlier sub-transactions may have committed;
-// resend only missing changes. Batch update uses updateRowContextStop for
-// its partial-step message.
 func contextStop(parent, loop context.Context, err error) (code, message string, ok bool) {
-	if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
-		return "", "", false
-	}
-	code, _, stop := batchStopReason(parent, loop)
-	if !stop {
-		return "", "", false
-	}
-	if code == ErrCodeBatchDeadlineExceeded {
-		return code, "the batch reached its server-side deadline while this row was in progress; " +
-			"it did not report a commit — re-read it, or resend it with the same expectedVersion", true
-	}
-	return code, "the request ended while this write was in progress; it did not report a commit — " +
-		"re-read before repeating it", true
+	return issueops.ContextStop(parent, loop, err)
 }

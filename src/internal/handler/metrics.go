@@ -35,13 +35,14 @@ var (
 	// @metric calculation Incremented in handler.HTTPMetrics, the router-wide middleware installed in buildRouter (cmd/api/main.go) ahead of chi's Recoverer, from a defer that runs after the wrapped handler returns OR unwinds. Probe and scrape paths are matched on r.URL.Path against the closed probePaths set and return before any observation. status is read from chi's WrapResponseWriter after the handler ran; a handler that wrote a body without an explicit WriteHeader reports 0 and is recorded as 200, matching what net/http actually put on the wire. A panic is recorded as whatever status reached the wire, NOT as a dedicated value: chi's Recoverer sits below this middleware, so a handler that panicked before writing anything is recorded as the 500 Recoverer wrote, but a handler that panicked after its response header was already out keeps that earlier status (Recoverer's WriteHeader is a no-op by then) and a panic on a Connection: Upgrade request is recorded as 200 because chi's Recoverer writes no status for upgrades at all. status="500" is therefore a lower bound on panics and not a panic count — alert on it as an error-rate signal, and read the stack dumps Recoverer prints for the exact set.
 	// @label method HTTP request method, filtered through the closed set of RFC 9110 methods (GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS, CONNECT, TRACE). Any other method token an arbitrary client can put on the wire collapses to "other" so the label cannot be inflated from outside.
 	// @label path chi route PATTERN, not the request URL — "/api/v1/issues/{issueID}", never "/api/v1/issues/sk-255.9". Bounded by the routing tree. A request that matched no route (404) or no method for its route (405) is recorded as "unmatched". The whole MCP surface is one value, "/mcp/*": all 67 tools arrive as POST bodies on a single route, and the per-tool split already exists in skein_mcp_tool_calls_total — see internal/mcp/tools/metrics.go.
-	// @label status HTTP response status code as a decimal string, for example "200", "422", "500".
+	// @label status HTTP response status code as a decimal string, for example "200", "422", "500". On the public entry the 4xx statuses 401, 403, 404, 409, 412, 422, 428 and 429 are ordinary answers of the public API (a wrong key, a missing right, a stale version, a limit) and are not an alert signal by themselves.
+	// @label entry Which server served the request: "internal" (the port of the BFF — /ui/v1, /mcp, /agent/v1) or "public" (the public REST API on SKEIN_PUBLIC_API_PORT, /api/v1 by API key). Closed set of two. On the public entry, path is the route pattern of the public router and "unmatched" for a path outside its table.
 	httpRequestsTotal = promauto.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "http_requests_total",
-			Help: "Total HTTP requests by method, route pattern and status",
+			Help: "Total HTTP requests by method, route pattern, status and entry",
 		},
-		[]string{"method", "path", "status"},
+		[]string{"method", "path", "status", "entry"},
 	)
 
 	// httpRequestDuration observes server-side latency per request.
@@ -50,13 +51,14 @@ var (
 	// @metric calculation Observed in handler.HTTPMetrics, the router-wide middleware installed in buildRouter (cmd/api/main.go), as time.Since(start) taken in the same defer that increments http_requests_total; the same call site, the same exclusions and the same panic behaviour, so a request that panicked contributes a duration sample too. Not labelled by status on purpose: status would multiply the bucket count of an already bucketed metric for a split that latency questions do not ask.
 	// @label method HTTP request method, filtered through the same closed set as http_requests_total; anything else collapses to "other".
 	// @label path chi route PATTERN, identical semantics to the http_requests_total label of the same name — "unmatched" for a request that matched no route.
+	// @label entry Which server served the request: "internal" or "public", identical semantics to the http_requests_total label of the same name.
 	httpRequestDuration = promauto.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Name:    "http_request_duration_seconds",
-			Help:    "HTTP request duration in seconds by method and route pattern",
+			Help:    "HTTP request duration in seconds by method, route pattern and entry",
 			Buckets: prometheus.DefBuckets,
 		},
-		[]string{"method", "path"},
+		[]string{"method", "path", "entry"},
 	)
 
 	// notificationCountsRequestsTotal counts header-count requests by how
@@ -72,6 +74,14 @@ var (
 		},
 		[]string{"outcome"},
 	)
+)
+
+// The values of the `entry` label: which server served the request.
+const (
+	// EntryInternal — the internal port, behind the BFF.
+	EntryInternal = "internal"
+	// EntryPublic — the public REST API on its own port.
+	EntryPublic = "public"
 )
 
 // pathUnmatched is the `path` label for a request chi could not route (404)
@@ -141,7 +151,14 @@ var knownMethods = map[string]struct{}{
 // http.ErrAbortHandler that Recoverer deliberately re-raises — still
 // leaves the request counted instead of vanishing from both metrics.
 func HTTPMetrics(next http.Handler) http.Handler {
-	return httpMetricsWith(httpRequestsTotal, httpRequestDuration)(next)
+	return httpMetricsWith(httpRequestsTotal, httpRequestDuration, EntryInternal)(next)
+}
+
+// PublicHTTPMetrics is HTTPMetrics for the public REST API's router: the
+// same collectors, labelled entry="public". Install it outside the public
+// router's panic recovery, as HTTPMetrics is installed outside Recoverer.
+func PublicHTTPMetrics(next http.Handler) http.Handler {
+	return httpMetricsWith(httpRequestsTotal, httpRequestDuration, EntryPublic)(next)
 }
 
 // httpMetricsWith is HTTPMetrics with the collectors injected. It exists so
@@ -151,6 +168,7 @@ func HTTPMetrics(next http.Handler) http.Handler {
 func httpMetricsWith(
 	reqs *prometheus.CounterVec,
 	dur *prometheus.HistogramVec,
+	entry string,
 ) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -192,8 +210,8 @@ func httpMetricsWith(
 					status = http.StatusOK
 				}
 
-				reqs.WithLabelValues(method, path, strconv.Itoa(status)).Inc()
-				dur.WithLabelValues(method, path).Observe(time.Since(start).Seconds())
+				reqs.WithLabelValues(method, path, strconv.Itoa(status), entry).Inc()
+				dur.WithLabelValues(method, path, entry).Observe(time.Since(start).Seconds())
 			}()
 
 			next.ServeHTTP(ww, r)

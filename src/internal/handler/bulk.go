@@ -139,7 +139,7 @@ type bulkResponse struct {
 // @Failure 404 {object} map[string]any "not_found — the project is absent or invisible"
 // @Failure 422 {object} map[string]any "force_unlock_forbidden — force=true without the right to release another holder's claim (project owner, space owner, instance admin), NOTHING was applied; every id failed (the body is the same bulkResponse, with failed[] full); close_outcome_required — archive without closeOutcome while the batch holds an unclosed non-standing issue (`ids` lists them), NOTHING was applied; target_not_found — closeTarget does not exist OR is in a project this caller cannot see, answered identically on purpose, and NOTHING was applied"
 // @Failure 500 {object} map[string]any "internal_error"
-// @Router /api/v1/projects/{projectID}/issues/bulk [post]
+// @Router /ui/v1/projects/{projectID}/issues/bulk [post]
 func (h *BulkHandler) Bulk(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	c, ok := caller(r)

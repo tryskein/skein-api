@@ -16,6 +16,7 @@ import (
 
 	"skein-api/internal/agents"
 	"skein-api/internal/auth"
+	"skein-api/internal/authz"
 	"skein-api/internal/monitorcreds"
 )
 
@@ -129,6 +130,7 @@ func MonitorStalledMiddleware(cfg MonitorStalledConfig) server.ToolHandlerMiddle
 				RecipientSession: session,
 				Threshold:        cfg.Threshold,
 				Limit:            MonitorStalledMaxItems,
+				Key:              authz.ScopeFor(ctx, userID).KeyLimit(),
 			})
 			if herr != nil {
 				logHintFailure(ctx, herr, "monitorStalled: hint failed, answering without it",

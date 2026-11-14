@@ -2,16 +2,14 @@ package tools
 
 import (
 	"context"
-	"errors"
-	"log/slog"
 	"strings"
 
-	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 
+	"skein-api/internal/issueops"
 	skmcp "skein-api/internal/mcp"
 	"skein-api/internal/spaces"
 	"skein-api/internal/users"
@@ -78,14 +76,16 @@ func RegisterUser(s *server.MCPServer, store *users.Store, pool *pgxpool.Pool, s
 	tool := mcpgo.NewTool(
 		"skein_user",
 		mcpgo.WithDescription(
-			"Instance-wide user accounts. ADMIN ONLY — every action returns "+
-				"`not_admin` to a non-admin caller, before any database "+
-				"access. action=\"update\" covers both the patch "+
-				"(name / role / password) and the deactivate / reactivate "+
+			"Instance-wide user accounts. ADMIN ONLY — every action needs "+
+				"an API key with the `admin` right, which only an instance "+
+				"admin's key carries; any other key gets `insufficient_scope` "+
+				"(`required: admin`) before any database access. "+
+				"action=\"update\" covers both the patch "+
+				"(name / role) and the deactivate / reactivate "+
 				"flip: deactivating cascades into API key revocation in the "+
 				"same transaction and is reversible with deactivated=false. "+
-				"Role admin is refused with `admin_role_disabled` while the "+
-				"instance admin role is disabled on the installation. "+
+				"An existing user's password, the instance admin role and an "+
+				"admin's deactivation or reactivation are changed only in the web UI (`forbidden`). "+
 				"action=\"space_add\" makes the user a member of a space at once "+
 				"(no invitation, no consent). "+
 				"Read-only actions: list.",
@@ -97,7 +97,7 @@ func RegisterUser(s *server.MCPServer, store *users.Store, pool *pgxpool.Pool, s
 				"What to do:\n"+
 					"  - \"list\" → users of the instance, cursor-paginated, optionally filtered by `search`.\n"+
 					"  - \"create\" → a new account; the user can sign in immediately with the supplied password.\n"+
-					"  - \"update\" → patch name / role / password, or flip `deactivated`.\n"+
+					"  - \"update\" → patch name / role, or flip `deactivated`.\n"+
 					"  - \"space_add\" → add `userId` to the space `space` at once.",
 			),
 		),
@@ -111,10 +111,10 @@ func RegisterUser(s *server.MCPServer, store *users.Store, pool *pgxpool.Pool, s
 			mcpgo.Description("Display name (free-form, trimmed). Required for create; on update, omit to leave it unchanged."),
 		),
 		mcpgo.WithString("password",
-			mcpgo.Description("Password, at least 8 characters. Required for create; on update, set it to reset the user's password. The user should rotate an admin-supplied password via POST /api/v1/me/password on first sign-in."),
+			mcpgo.Description("Initial password, at least 8 characters. Required for create. Not accepted by update: an existing user's password is changed only in the web UI (`forbidden`). The user should rotate the initial password on first sign-in."),
 		),
 		mcpgo.WithString("role",
-			mcpgo.Description("Role of the account. Required for create; on update, omit to leave it unchanged. Demoting the last active admin returns `last_admin_cannot_demote`; a concurrent change after three attempts returns `concurrent_change` (retry)."),
+			mcpgo.Description("Role of the account. Required for create; on update, omit to leave it unchanged. `admin` is accepted only as the unchanged role of an existing admin: the instance admin role is never created, assigned or removed here — only in the web UI (`forbidden`); a concurrent change after three attempts returns `concurrent_change` (retry)."),
 			mcpgo.Enum("admin", "user"),
 		),
 		mcpgo.WithBoolean("is_external",
@@ -131,7 +131,7 @@ func RegisterUser(s *server.MCPServer, store *users.Store, pool *pgxpool.Pool, s
 			mcpgo.Description("Only read by space_add: short id of the space (skein_whoami lists the spaces)."),
 		),
 		mcpgo.WithBoolean("deactivated",
-			mcpgo.Description("Only read by update: true → soft-deactivate (cascades into API key revocation), false → reactivate (does not un-revoke the previous keys). When set, name/role/password are ignored. Deactivating the last active admin returns `last_admin_cannot_demote`; a concurrent change after three attempts returns `concurrent_change` (retry)."),
+			mcpgo.Description("Only read by update: true → soft-deactivate (cascades into API key revocation), false → reactivate (does not un-revoke the previous keys). When set, name/role/password are ignored. An instance admin is neither deactivated nor reactivated here — only in the web UI (`forbidden`); a concurrent change after three attempts returns `concurrent_change` (retry)."),
 		),
 		mcpgo.WithBoolean("archived",
 			mcpgo.Description("Only read by list: list deactivated users instead of active ones. Default false."),
@@ -173,53 +173,24 @@ type userSpaceAddResponse struct {
 // agent's behalf. The admin gate runs before any database access, like the
 // other actions; the service then reads the admin right from the database.
 func handleUserSpaceAdd(pool *pgxpool.Pool, svc *spaces.Service) server.ToolHandlerFunc {
+	d := issueops.Deps{Pool: pool, Spaces: svc}
 	return func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 		userID, errResp := skmcp.RequireUser(ctx)
 		if errResp != nil {
 			return errResp, nil
 		}
-		if res := requireAdminTool(ctx); res != nil {
-			return res, nil
-		}
-		target, err := uuid.Parse(strings.TrimSpace(req.GetString("userId", "")))
-		if err != nil {
-			return skmcp.ToolError(ErrCodeValidationError, "userId must be a UUID",
-				map[string]any{"field": "userId"}), nil
-		}
 		space := strings.TrimSpace(req.GetString("space", ""))
-		if space == "" {
-			return skmcp.ToolError(ErrCodeValidationError, "space is required",
-				map[string]any{"field": "space"}), nil
+		m, f := issueops.UserSpaceAdd(ctx, d, userID, issueops.Args(req.GetArguments()))
+		if f != nil {
+			return toolFailure(f), nil
 		}
-		a := ProjectsAgentActor(ctx, pool, userID)
-		m, err := svc.AddMember(ctx, spaces.Caller{
-			UserID:   userID,
-			Username: a.Username,
-			Actor:    spaces.Actor{UserID: a.UserID, Username: a.Username, SessionID: a.SessionID, Type: "agent"},
-		}, space, target)
-		if err != nil {
-			if res, ok := spacesToolError(err); ok {
-				return res, nil
-			}
-			slog.ErrorContext(ctx, "mcp tool error",
-				"tool", "skein_user", "action", "space_add",
-				"userId", userID.String(), "spaceId", space, "error", err.Error())
-			return skmcp.ToolError(ErrCodeInternalError, "failed to add the user to the space", nil), nil
-		}
-		slog.InfoContext(ctx, "mcp tool ok",
-			"tool", "skein_user", "action", "space_add",
-			"userId", userID.String(), "spaceId", space)
 		return skmcp.ToolJSON(userSpaceAddResponse{SpaceID: space, Member: m})
 	}
 }
 
-// spacesToolError renders a refusal of the spaces code registry
-// (spaces.Refusal) as the MCP error envelope — the same `error` code and
-// extra fields as REST (SC-012). false when err is not one.
+// spacesToolError is the envelope of a refusal of the spaces service; ok is
+// false for an error that is not one (issueops.SpacesFailure).
 func spacesToolError(err error) (*mcpgo.CallToolResult, bool) {
-	var ref *spaces.Refusal
-	if !errors.As(err, &ref) {
-		return nil, false
-	}
-	return skmcp.ToolError(ref.Code, ref.Message, ref.Extra), true
+	f, ok := issueops.SpacesFailure(err)
+	return toolFailure(f), ok
 }

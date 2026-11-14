@@ -108,7 +108,7 @@ func RegisterWatchers(
 					"  - \"unwatch\" → unsubscribe from one issue: the subscription is deleted, an opt-out stops automatic re-subscription, the issue's Watching card is cleared. Not subscribed → only the card is removed, no opt-out.\n"+
 					"  - \"project_watch\" → subscribe to a whole project's notifiable events.\n"+
 					"  - \"project_unwatch\" → unsubscribe from a project.\n"+
-					"  - \"filter_create\" → create a saved-filter watcher from `name` + `filter`.\n"+
+					"  - \"filter_create\" → create a saved-filter watcher from `name` + `filter`. By an API key limited to projects or spaces: a project outside the key's scope → `project_not_found`; no project (any project) → `forbidden`.\n"+
 					"  - \"filter_delete\" → remove one filter watcher by `filterId`.\n"+
 					"  - \"filter_list\" → list the caller's filter watchers.\n"+
 					"  - \"list\" → the caller's full subscription state: issues, projects and filters at once.\n"+

@@ -30,6 +30,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
 	"skein-api/internal/agents"
+	"skein-api/internal/apikeys"
 	"skein-api/internal/auth"
 	"skein-api/internal/dependencies"
 	"skein-api/internal/issues"
@@ -50,6 +51,7 @@ func hintCtx(user, key uuid.UUID, session string) context.Context {
 	ctx = auth.WithUserID(ctx, user)
 	ctx = auth.WithUserRole(ctx, "user")
 	ctx = auth.WithAPIKeyID(ctx, key)
+	ctx = auth.WithKeyGrant(ctx, apikeys.Grant{Level: apikeys.LevelManage, Admin: false, Scope: apikeys.Scope{Mode: apikeys.ScopeAll}})
 	if session != "" {
 		ctx = auth.WithSessionID(ctx, session)
 	}

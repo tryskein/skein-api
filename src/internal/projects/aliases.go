@@ -33,6 +33,9 @@ func (s *Store) AddAlias(ctx context.Context, projectID, addedBy uuid.UUID, alia
 	var dto AliasDTO
 
 	err := signals.BeginTxFunc(ctx, s.pool, pgx.TxOptions{IsoLevel: pgx.Serializable}, func(tx pgx.Tx) error {
+		if err := checkNewAliasInTx(ctx, tx, projectID, alias); err != nil {
+			return err
+		}
 		row := tx.QueryRow(ctx, `
 INSERT INTO project_aliases (alias, project_id, added_by, added_by_kind, created_at)
 VALUES ($1, $2, $3, 'human', now())

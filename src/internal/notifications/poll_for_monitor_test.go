@@ -1574,8 +1574,10 @@ func seedMonitorCredential(t *testing.T, pool *pgxpool.Pool, caller, projectID u
 	keyID := uuid.New()
 	prefix := "ska_" + strings.ReplaceAll(keyID.String()[:12], "-", "")
 	if _, err := pool.Exec(ctx, `
-INSERT INTO api_keys (id, user_id, key_hash, prefix, label, created_at)
-VALUES ($1, $2, 'fake-hash-for-test', $3, 'poll_for_monitor test', now())`,
+INSERT INTO api_keys (id, user_id, key_hash, prefix, label, created_at,
+                      level, is_admin, scope_mode)
+VALUES ($1, $2, 'fake-hash-for-test', $3, 'poll_for_monitor test', now(),
+        'manage', (SELECT role = 'admin' FROM users WHERE id = $2), 'all')`,
 		keyID, caller, prefix); err != nil {
 		t.Fatalf("seed api key: %v", err)
 	}

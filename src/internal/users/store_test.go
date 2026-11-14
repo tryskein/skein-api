@@ -13,6 +13,7 @@ import (
 
 	"skein-api/internal/apikeys"
 	"skein-api/internal/auth"
+	"skein-api/internal/testsupport"
 )
 
 const testDatabaseURL = "TEST_DATABASE_URL"
@@ -692,7 +693,7 @@ func TestDeactivate_CascadesAPIKeys(t *testing.T) {
 		t.Fatalf("generate api key: %v", err)
 	}
 	_ = plain
-	keyID, _, err := apikeys.New(pool).Create(context.Background(), target, "test", prefix, hash)
+	keyID, _, err := testsupport.CreateOwnerKey(context.Background(), pool, target, "test", prefix, hash)
 	if err != nil {
 		t.Fatalf("Create api key: %v", err)
 	}

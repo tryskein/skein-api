@@ -21,6 +21,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 
+	"skein-api/internal/apikeys"
 	"skein-api/internal/auth"
 	"skein-api/internal/handler"
 	"skein-api/internal/monitorcreds"
@@ -38,8 +39,10 @@ func seedAPIKeyForTool(t *testing.T, pool *pgxpool.Pool, userID uuid.UUID) uuid.
 	id := uuid.Must(uuid.NewRandom())
 	prefix := "ska_" + strings.ReplaceAll(id.String()[:12], "-", "")
 	_, err := pool.Exec(context.Background(), `
-INSERT INTO api_keys (id, user_id, key_hash, prefix, label, created_at)
-VALUES ($1, $2, 'fake-hash-for-test', $3, 'gms test', now())`, id, userID, prefix)
+INSERT INTO api_keys (id, user_id, key_hash, prefix, label, created_at,
+                      level, is_admin, scope_mode)
+VALUES ($1, $2, 'fake-hash-for-test', $3, 'gms test', now(),
+        'manage', (SELECT role = 'admin' FROM users WHERE id = $2), 'all')`, id, userID, prefix)
 	if err != nil {
 		t.Fatalf("seed api key: %v", err)
 	}
@@ -60,6 +63,7 @@ func withCtxKey(userID uuid.UUID, role string, keyID uuid.UUID) context.Context 
 	ctx = auth.WithSessionID(ctx, "test-session-"+userID.String()[:8])
 	if keyID != uuid.Nil {
 		ctx = auth.WithAPIKeyID(ctx, keyID)
+		ctx = auth.WithKeyGrant(ctx, apikeys.Grant{Level: apikeys.LevelManage, Admin: role == "admin", Scope: apikeys.Scope{Mode: apikeys.ScopeAll}})
 	}
 	return ctx
 }
@@ -238,6 +242,7 @@ func TestGetMonitorScript_ResponseNamesTheMonitor(t *testing.T) {
 	handler := handleGetMonitorScript(pool, notifications.NewStore(pool), monitorcreds.New(pool, 6*time.Hour), gmsTestPublicURL)
 
 	sessionless := auth.WithAPIKeyID(auth.WithUserRole(auth.WithUserID(context.Background(), userID), "user"), keyID)
+	sessionless = auth.WithKeyGrant(sessionless, apikeys.Grant{Level: apikeys.LevelManage, Admin: false, Scope: apikeys.Scope{Mode: apikeys.ScopeAll}})
 	cases := []struct {
 		name        string
 		ctx         context.Context

@@ -252,6 +252,8 @@ var knownErrCodes = map[string]struct{}{
 	ErrCodeReviewForbidden: {},
 
 	ErrCodeMonitorNotFound: {},
+
+	ErrCodeInsufficientScope: {},
 }
 
 // instrumentTool wraps a tool handler so every dispatch lands in

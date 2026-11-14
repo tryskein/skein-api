@@ -352,9 +352,10 @@ type ProjectWatcherDTO struct {
 	ProjectIDPrefix string    `json:"projectIdPrefix"`
 	Reasons         []string  `json:"reasons"`
 	Since           time.Time `json:"since"`
-	// EventTypes mirrors project_watchers.event_types. nil means "all
-	// notifiable types"; an explicit list is a strict whitelist.
-	EventTypes []string `json:"eventTypes"`
+	// EventTypes mirrors project_watchers.event_types. nil (null on the
+	// wire) means "all notifiable types"; an explicit list is a strict
+	// whitelist.
+	EventTypes []string `json:"eventTypes" extensions:"x-nullable"`
 }
 
 // IssueWatcherForUserDTO is the per-row shape returned by

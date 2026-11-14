@@ -244,6 +244,9 @@ RETURNING id`,
 			addedByKind = "human"
 		}
 		for _, alias := range args.AliasesAdd {
+			if err := checkNewAliasInTx(ctx, tx, id, alias); err != nil {
+				return err
+			}
 			row := tx.QueryRow(ctx, `
 INSERT INTO project_aliases (alias, project_id, added_by, added_by_kind, created_at)
 VALUES ($1, $2, $3, $4, now())

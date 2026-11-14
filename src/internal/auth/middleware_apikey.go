@@ -1,7 +1,7 @@
 package auth
 
 import (
-	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -10,7 +10,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"golang.org/x/crypto/bcrypt"
 
-	"skein-api/internal/apikeys"
+	"skein-api/internal/agents"
 )
 
 // apiKeyAuthLogger captures structured audit fields without leaking the
@@ -65,7 +65,8 @@ func constantTimeMissCompare(plain string) {
 // RequireAPIKey returns a middleware that authenticates an MCP request via
 // the X-Skein-Api-Key header. On success it stashes:
 //
-//	UserID, UserRole, IsExternal, APIKeyID — the resolved user identity (lookup → bcrypt)
+//	UserID, UserRole, IsExternal, APIKeyID — the resolved user identity
+//	KeyGrant                               — the key's grant as it applies now (RequestGrant)
 //	SessionID                              — copied from the Mcp-Session-Id header (may be "")
 //
 // in the request context, then calls next. On failure it writes a 401 with
@@ -80,8 +81,8 @@ func constantTimeMissCompare(plain string) {
 // privileged internal path with an internal-owner key. External-owner keys
 // pass on either surface; internal-owner keys pass only on the internal
 // surface. The gate runs identically on the cold (DB) and warm (cache) paths
-// because is_external rides in the cache entry (S1) — a warm hit must be
-// gated exactly like a cold lookup.
+// because is_external is read with the key's status on every request — a
+// warm hit is gated exactly like a cold lookup.
 //
 // Trust chain for the marker: /mcp requires RequireInternalSecret, a secret
 // only the BFF holds; the BFF strips every inbound X-Skein-* header before
@@ -89,19 +90,15 @@ func constantTimeMissCompare(plain string) {
 // internal host. So when this middleware sees the marker it provably came
 // from the BFF, not the client.
 //
-// Lookup path:
-//  1. Read header. If missing/short/wrong-tag → 401 (no DB hit).
-//  2. Cache hit → stash ctx and dispatch (skips DB and bcrypt). Cache
-//     miss falls through to the DB path below.
-//  3. ExtractPrefix → LookupByPrefix (single SQL round-trip, joins users).
-//  4. bcrypt.Verify(plain, hash). On mismatch → negative-cache + 401.
-//  5. TouchLastUsed (throttled in SQL; soft-fail on error — log only).
-//  6. Stash ctx, next.
+// The decision itself is AuthenticateAPIKey (D-4): this middleware maps its
+// outcome to the /mcp wire format — a rejection of the credential, whatever
+// its reason, is the same 401 with the challenge; an internal error (the
+// lookup or the status read failed) is 500 `{"error":"internal_error"}`, so a
+// transient pool failure never tells the agent its key is wrong. The bcrypt
+// result is cached; status, owner and grant are read on every request.
 //
-// bcryptCost is the cost used to hash live keys. The middleware seeds a
-// dummy bcrypt hash at this cost so the prefix-not-found branch takes
-// the same time as a real hash mismatch (see W1 mitigation,
-// constantTimeMissCompare).
+// bcryptCost is the cost used to hash live keys (see
+// NewAPIKeyAuthenticator).
 //
 // Note: the function returns a constructor so wiring at startup (where
 // the pool is built) can stay in main.go without smuggling the pool
@@ -110,212 +107,82 @@ func RequireAPIKey(pool *pgxpool.Pool, bcryptCost int, challenge string) func(ht
 	if pool == nil {
 		panic("RequireAPIKey: pool is nil")
 	}
-	store := apikeys.New(pool)
-	cache := newAPIKeyCache(apiKeyCacheCapacity, apiKeyCacheTTL, nil)
-
-	// Lazily seed the dummy hash on first request; computing it at boot
-	// would block startup for ~250 ms at cost 12. Once-init is fine — by
-	// the time the second request arrives, the value is set.
-	seedDummy := func() {
-		dummyHashOnce.Do(func() {
-			dummyHash = computeDummyHash(bcryptCost)
-		})
-	}
+	authn := NewAPIKeyAuthenticator(pool, bcryptCost)
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			ctx := r.Context()
 			plain := strings.TrimSpace(r.Header.Get(HeaderAPIKey))
 
-			// Surface marker (sk-163 S7a). Read once up-front; the
-			// fail-closed gate below consults it on whichever path
-			// (warm/cold) resolves is_external. Absent → public.
-			surfaceInternal := SurfaceIsInternal(r.Header.Get(HeaderSurface))
-
-			// Cheap shape filter — saves a DB round-trip on obviously
-			// invalid input (missing header, wrong tag, too short).
-			if !IsAPIKeyShape(plain) {
-				slog.WarnContext(ctx, "mcp auth failed: missing or malformed api key",
+			out := authn.AuthenticateAPIKey(ctx, plain)
+			switch out.Kind {
+			case APIKeyRejected:
+				slog.WarnContext(ctx, "mcp auth failed",
 					"path", r.URL.Path,
 					"masked", MaskAPIKey(plain),
+					"reason", string(out.Reason),
+					"warm", out.Warm,
 				)
 				writeUnauthenticatedChallenge(w, challenge)
 				return
-			}
-
-			prefix := ExtractPrefix(plain)
-			if prefix == "" {
-				writeUnauthenticatedChallenge(w, challenge)
-				return
-			}
-
-			// Hot path: cache hit returns the resolved identity without
-			// touching the DB or running bcrypt. Negative entries (ok=false)
-			// short-circuit a typo'd key with a generic 401 — no DB hit
-			// either. TTL-bounded so revocation propagates within
-			// apiKeyCacheTTL.
-			if entry, hit := cache.Get(plain); hit {
-				if !entry.ok {
-					slog.WarnContext(ctx, "mcp auth failed: cached negative",
-						"path", r.URL.Path,
-						"masked", MaskAPIKey(plain),
-					)
-					writeUnauthenticatedChallenge(w, challenge)
-					return
-				}
-				// The cache maps the key to its id only (K-16): its status,
-				// the owner's role, external flag, deactivation and deletion
-				// are read now, by primary key, so a revocation or a
-				// deactivation answers 401 from the next request on.
-				status, err := store.Status(ctx, entry.keyID)
-				if errors.Is(err, apikeys.ErrNotFound) {
-					slog.WarnContext(ctx, "mcp auth failed: key or its user no longer active",
-						"path", r.URL.Path,
-						"masked", MaskAPIKey(plain),
-						"keyId", entry.keyID.String(),
-					)
-					writeUnauthenticatedChallenge(w, challenge)
-					return
-				}
-				if err != nil {
-					slog.ErrorContext(ctx, "mcp auth failed: status read error",
-						"path", r.URL.Path,
-						"keyId", entry.keyID.String(),
-						"error", err.Error(),
-					)
-					w.Header().Set("Content-Type", "application/json")
-					w.WriteHeader(http.StatusInternalServerError)
-					_, _ = w.Write([]byte(`{"error":"internal_error"}`))
-					return
-				}
-				// Fail-closed surface gate on the WARM path, on the external
-				// flag read just now.
-				if surfaceGateRejects(surfaceInternal, status.IsExternal) {
-					slog.WarnContext(ctx, "mcp auth failed: internal key on public surface (warm)",
-						"path", r.URL.Path,
-						"masked", MaskAPIKey(plain),
-						"keyId", entry.keyID.String(),
-					)
-					writeSurfaceForbidden(w)
-					return
-				}
-				// TouchLastUsed is throttled at the SQL layer (1 minute), so
-				// hitting it on every cache hit costs at most one UPDATE
-				// per key per minute — the same amortisation we'd get
-				// without a cache.
-				if err := store.TouchLastUsed(ctx, entry.keyID); err != nil {
-					slog.WarnContext(ctx, "failed to touch api key last_used_at",
-						"keyId", entry.keyID.String(),
-						"error", err.Error(),
-					)
-				}
-				ctx = WithUserID(ctx, status.UserID)
-				ctx = WithUserRole(ctx, status.UserRole)
-				ctx = WithIsExternal(ctx, status.IsExternal)
-				ctx = WithAPIKeyID(ctx, entry.keyID)
-				if sid := strings.TrimSpace(r.Header.Get(HeaderMcpSessionID)); sid != "" {
-					ctx = WithSessionID(ctx, sid)
-				}
-				next.ServeHTTP(w, r.WithContext(ctx))
-				return
-			}
-
-			// Make sure the dummy hash exists before either the not-found or
-			// the mismatch branch can execute.
-			seedDummy()
-
-			lookup, err := store.LookupByPrefix(ctx, prefix)
-			switch {
-			case errors.Is(err, apikeys.ErrNotFound):
-				// W1: pay the bcrypt cost on prefix-miss so the timing of
-				// "prefix not in DB" matches "prefix found, hash mismatch".
-				// We do NOT cache this case — keeping the path identical
-				// per request makes the timing-oracle mitigation robust
-				// against future cache-side changes.
-				constantTimeMissCompare(plain)
-				slog.WarnContext(ctx, "mcp auth failed: prefix not found",
+			case APIKeyAuthenticated:
+			default:
+				slog.ErrorContext(ctx, "mcp auth failed: key lookup or status read error",
 					"path", r.URL.Path,
 					"masked", MaskAPIKey(plain),
-				)
-				writeUnauthenticatedChallenge(w, challenge)
-				return
-			case err != nil:
-				// DB error — log with context, return 500. Don't 401 here:
-				// a transient pool failure shouldn't tell the agent its key
-				// is wrong (it would invalidate the cached key in their config).
-				slog.ErrorContext(ctx, "mcp auth failed: lookup error",
-					"path", r.URL.Path,
-					"masked", MaskAPIKey(plain),
-					"error", err.Error(),
+					"warm", out.Warm,
+					"error", fmt.Sprint(out.Err),
 				)
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(http.StatusInternalServerError)
 				_, _ = w.Write([]byte(`{"error":"internal_error"}`))
 				return
 			}
+			key := out.Key
 
-			if err := VerifyAPIKey(lookup.KeyHash, plain); err != nil {
-				// Negative-cache wrong keys so a typo doesn't cost bcrypt
-				// on every retry. We still return 401 to the client.
-				cache.Put(plain, apiKeyCacheEntry{ok: false})
-				slog.WarnContext(ctx, "mcp auth failed: hash mismatch",
+			// Fail-closed surface gate (sk-163 S7a), on the external flag
+			// read on this request — the same on the warm and cold paths.
+			// It belongs to /mcp; the public entry does not apply it.
+			if surfaceGateRejects(SurfaceIsInternal(r.Header.Get(HeaderSurface)), key.IsExternal) {
+				slog.WarnContext(ctx, "mcp auth failed: internal key on public surface",
 					"path", r.URL.Path,
 					"masked", MaskAPIKey(plain),
-					"keyId", lookup.KeyID.String(),
-				)
-				writeUnauthenticatedChallenge(w, challenge)
-				return
-			}
-
-			// Successful verify — populate cache so subsequent requests
-			// within the TTL window skip bcrypt entirely. The entry maps the
-			// key to its id and owner only; the warm path re-reads the
-			// status, role and external flag (K-16).
-			cache.Put(plain, apiKeyCacheEntry{
-				keyID:  lookup.KeyID,
-				userID: lookup.UserID,
-				ok:     true,
-			})
-
-			// Fail-closed surface gate on the COLD path. We cache the entry
-			// first (the key IS valid — it's only being used on the wrong
-			// surface, and a later internal-surface request should hit the
-			// warm path), then reject. External-owner keys pass on either
-			// surface; internal-owner keys only on the internal surface.
-			if surfaceGateRejects(surfaceInternal, lookup.IsExternal) {
-				slog.WarnContext(ctx, "mcp auth failed: internal key on public surface (cold)",
-					"path", r.URL.Path,
-					"masked", MaskAPIKey(plain),
-					"keyId", lookup.KeyID.String(),
+					"keyId", key.KeyID.String(),
+					"warm", out.Warm,
 				)
 				writeSurfaceForbidden(w)
 				return
 			}
 
-			// Best-effort last_used_at touch. Throttled in SQL so a burst
-			// of MCP requests doesn't spam the row; failure here must not
-			// block the request — the user is already authenticated.
-			if err := store.TouchLastUsed(ctx, lookup.KeyID); err != nil {
+			// Best-effort last_used_at touch. Throttled in SQL (one UPDATE
+			// per key per minute); failure must not block the request — the
+			// user is already authenticated.
+			if err := authn.TouchLastUsed(ctx, key.KeyID); err != nil {
 				slog.WarnContext(ctx, "failed to touch api key last_used_at",
-					"keyId", lookup.KeyID.String(),
+					"keyId", key.KeyID.String(),
 					"error", err.Error(),
 				)
 			}
 
 			// Identity → ctx. Same shape as cookie-auth's ParseUserHeaders
 			// so handlers can call UserIDFrom / UserRoleFrom without
-			// caring which middleware put it there.
-			ctx = WithUserID(ctx, lookup.UserID)
-			ctx = WithUserRole(ctx, lookup.UserRole)
-			ctx = WithIsExternal(ctx, lookup.IsExternal)
-			ctx = WithAPIKeyID(ctx, lookup.KeyID)
+			// caring which middleware put it there; the grant rides along.
+			ctx = WithUserID(ctx, key.UserID)
+			ctx = WithUserRole(ctx, key.UserRole)
+			ctx = WithIsExternal(ctx, key.IsExternal)
+			ctx = WithAPIKeyID(ctx, key.KeyID)
+			ctx = WithKeyGrant(ctx, RequestGrant(key))
 
 			// MCP session id: present on every request EXCEPT the very
 			// first initialize call (the SDK generates it server-side and
 			// returns it in the response header). Empty is valid; the
 			// agents UPSERT skips when missing.
+			//
+			// D-6: an id inside the REST holder namespace (api:…) is moved
+			// out of it, so an MCP session never holds a lock as a REST
+			// executor of the same key.
 			if sid := strings.TrimSpace(r.Header.Get(HeaderMcpSessionID)); sid != "" {
-				ctx = WithSessionID(ctx, sid)
+				ctx = WithSessionID(ctx, agents.MCPSessionHolder(sid))
 			}
 
 			next.ServeHTTP(w, r.WithContext(ctx))

@@ -200,8 +200,10 @@ func seedMonitorAPIKey(t *testing.T, pool *pgxpool.Pool, userID uuid.UUID) uuid.
 	id := uuid.Must(uuid.NewRandom())
 	prefix := "ska_" + strings.ReplaceAll(id.String()[:12], "-", "")
 	_, err := pool.Exec(context.Background(), `
-INSERT INTO api_keys (id, user_id, key_hash, prefix, label, created_at)
-VALUES ($1, $2, 'fake-hash-for-test', $3, 'monitor middleware test', now())`,
+INSERT INTO api_keys (id, user_id, key_hash, prefix, label, created_at,
+                      level, is_admin, scope_mode)
+VALUES ($1, $2, 'fake-hash-for-test', $3, 'monitor middleware test', now(),
+        'manage', (SELECT role = 'admin' FROM users WHERE id = $2), 'all')`,
 		id, userID, prefix)
 	if err != nil {
 		t.Fatalf("seed api key: %v", err)

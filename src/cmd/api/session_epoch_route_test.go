@@ -6,7 +6,7 @@ package main
 // previous epoch is refused with 401 session_revoked, the new one passes,
 // another user's sessions are untouched, and the same user's agent key
 // keeps working. The router is the one main builds, so a missing mount of
-// RequireSessionEpoch on /api/v1 turns this red
+// RequireSessionEpoch on /ui/v1 turns this red
 // (handler/middleware_session_test.go checks the middleware itself).
 
 import (
@@ -22,7 +22,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
-	"skein-api/internal/apikeys"
 	"skein-api/internal/auth"
 	"skein-api/internal/testsupport"
 	"skein-api/internal/users"
@@ -39,12 +38,12 @@ func TestSessionEpoch_ProductionRouter(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := apikeys.New(pool).Create(ctx, u, "epoch-route", prefix, hash); err != nil {
+	if _, _, err := testsupport.CreateOwnerKey(ctx, pool, u, "epoch-route", prefix, hash); err != nil {
 		t.Fatalf("create key: %v", err)
 	}
 
 	session := func(user uuid.UUID, epoch int64) (int, string) {
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/me/notification-counts", nil)
+		req := httptest.NewRequest(http.MethodGet, "/ui/v1/me/notification-counts", nil)
 		req.Header.Set(auth.HeaderInternalSecret, wiringInternalSecret)
 		req.Header.Set(auth.HeaderUserID, user.String())
 		req.Header.Set(auth.HeaderUserRole, "user")

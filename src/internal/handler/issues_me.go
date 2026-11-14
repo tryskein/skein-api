@@ -73,6 +73,7 @@ func NewIssuesMeHandler(pool *pgxpool.Pool, issuesStore *issues.Store) *IssuesMe
 // @Param acceptedAt query string false "null (not yet accepted) or not-null (accepted)" Enums(null, not-null)
 // @Param createdBy query string false "me or not-me" Enums(me, not-me)
 // @Param origin query string false "Origin grouping" Enums(human-driven, agent-autonomous, all)
+// @Param source query string false "Exact issue source; intersects origin" Enums(human, agent_directed, agent_autonomous, api)
 // @Param isBlocked query bool false "Blocked only / unblocked only. Blocked = an open, in-progress or deferred blocks / waits-for target in a project the caller can see; blockers outside the caller's horizon never count (sk-423) — the same rule as item.isBlocked"
 // @Param cursor query string false "Keyset cursor from the previous page"
 // @Param limit query int false "Page size"
@@ -81,7 +82,7 @@ func NewIssuesMeHandler(pool *pgxpool.Pool, issuesStore *issues.Store) *IssuesMe
 // @Failure 401 {object} map[string]any "unauthenticated"
 // @Failure 422 {object} map[string]any "blocked_is_derived — status=blocked is a DERIVED state and cannot be selected as a status; use isBlocked=true. Raised by issues.ValidateStatus inside the shared runMine driver, through mapIssueValidation"
 // @Failure 500 {object} map[string]any "internal_error"
-// @Router /api/v1/me/assigned-by [get]
+// @Router /ui/v1/me/assigned-by [get]
 func (h *IssuesMeHandler) AssignedBy(w http.ResponseWriter, r *http.Request) {
 	h.runMine(w, r, issues.ModeAssignedBy)
 }
@@ -118,6 +119,7 @@ func (h *IssuesMeHandler) AssignedBy(w http.ResponseWriter, r *http.Request) {
 // @Param acceptedAt query string false "null (not yet accepted) or not-null (accepted)" Enums(null, not-null)
 // @Param createdBy query string false "me or not-me" Enums(me, not-me)
 // @Param origin query string false "Origin grouping" Enums(human-driven, agent-autonomous, all)
+// @Param source query string false "Exact issue source; intersects origin" Enums(human, agent_directed, agent_autonomous, api)
 // @Param isBlocked query bool false "Blocked only / unblocked only. Blocked = an open, in-progress or deferred blocks / waits-for target in a project the caller can see; blockers outside the caller's horizon never count (sk-423) — the same rule as item.isBlocked"
 // @Param cursor query string false "Keyset cursor from the previous page"
 // @Param limit query int false "Page size"
@@ -126,7 +128,7 @@ func (h *IssuesMeHandler) AssignedBy(w http.ResponseWriter, r *http.Request) {
 // @Failure 401 {object} map[string]any "unauthenticated"
 // @Failure 422 {object} map[string]any "blocked_is_derived — status=blocked is a DERIVED state and cannot be selected as a status; use isBlocked=true. Raised by issues.ValidateStatus inside the shared runMine driver, through mapIssueValidation"
 // @Failure 500 {object} map[string]any "internal_error"
-// @Router /api/v1/me/assigned-to [get]
+// @Router /ui/v1/me/assigned-to [get]
 func (h *IssuesMeHandler) AssignedTo(w http.ResponseWriter, r *http.Request) {
 	h.runMine(w, r, issues.ModeAssignedTo)
 }
@@ -164,6 +166,7 @@ func (h *IssuesMeHandler) AssignedTo(w http.ResponseWriter, r *http.Request) {
 // @Param acceptedAt query string false "null (not yet accepted) or not-null (accepted)" Enums(null, not-null)
 // @Param createdBy query string false "me or not-me" Enums(me, not-me)
 // @Param origin query string false "Origin grouping" Enums(human-driven, agent-autonomous, all)
+// @Param source query string false "Exact issue source; intersects origin" Enums(human, agent_directed, agent_autonomous, api)
 // @Param isBlocked query bool false "Blocked only / unblocked only. Blocked = an open, in-progress or deferred blocks / waits-for target in a project the caller can see; blockers outside the caller's horizon never count (sk-423) — the same rule as item.isBlocked"
 // @Param cursor query string false "Keyset cursor from the previous page"
 // @Param limit query int false "Page size"
@@ -172,7 +175,7 @@ func (h *IssuesMeHandler) AssignedTo(w http.ResponseWriter, r *http.Request) {
 // @Failure 401 {object} map[string]any "unauthenticated"
 // @Failure 422 {object} map[string]any "blocked_is_derived — status=blocked is a DERIVED state and cannot be selected as a status; use isBlocked=true. Raised by issues.ValidateStatus inside the shared runMine driver, through mapIssueValidation"
 // @Failure 500 {object} map[string]any "internal_error"
-// @Router /api/v1/me/created-by [get]
+// @Router /ui/v1/me/created-by [get]
 func (h *IssuesMeHandler) CreatedBy(w http.ResponseWriter, r *http.Request) {
 	h.runMine(w, r, issues.ModeCreatedBy)
 }
@@ -295,6 +298,15 @@ func (h *IssuesMeHandler) runMine(w http.ResponseWriter, r *http.Request, mode s
 				"origin must be one of human-driven, agent-autonomous, all", nil)
 			return
 		}
+	}
+	// Exact source, the same filter as GET /projects/{id}/issues.
+	if raw := strings.TrimSpace(q.Get("source")); raw != "" {
+		canon, err := issues.ValidateSource(raw)
+		if err != nil {
+			mapIssueValidation(w, err)
+			return
+		}
+		args.Source = &canon
 	}
 	// sk-31: derived blocked-ness filter; same shape as other list paths.
 	if raw := q.Get("isBlocked"); raw != "" {

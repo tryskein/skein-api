@@ -18,6 +18,40 @@ type Agent struct {
 	SessionID   string             `json:"session_id"`
 	FirstSeenAt pgtype.Timestamptz `json:"first_seen_at"`
 	LastSeenAt  pgtype.Timestamptz `json:"last_seen_at"`
+	// API key the holder called with: a REST executor (session_id api:<keyId>[:<workerId>]) or an MCP session that used a key; NULL for a session without a key.
+	ApiKeyID pgtype.UUID `json:"api_key_id"`
+	// X-Skein-Worker-Id of a REST executor; NULL when the key itself is the executor.
+	WorkerID *string `json:"worker_id"`
+}
+
+// Outcomes of public REST requests with Idempotency-Key, per API key, kept until expires_at (24 h).
+type ApiIdempotency struct {
+	ApiKeyID       pgtype.UUID `json:"api_key_id"`
+	IdempotencyKey string      `json:"idempotency_key"`
+	OperationID    string      `json:"operation_id"`
+	// Target object from the request path (empty when the operation has none).
+	Target string `json:"target"`
+	// Digest of the request body; a repeat with a different body is refused.
+	BodyFingerprint []byte `json:"body_fingerprint"`
+	// Prefer header of the request; NULL when absent.
+	Prefer *string `json:"prefer"`
+	// The force mode of the request; part of the request identity.
+	Force bool   `json:"force"`
+	State string `json:"state"`
+	// Token of the executor that owns the row; every write after the marker is a compare-and-swap on it.
+	MarkerToken pgtype.UUID `json:"marker_token"`
+	// End of the in-progress marker: the write timeout plus 30 s.
+	InProgressUntil pgtype.Timestamptz `json:"in_progress_until"`
+	ResponseStatus  *int32             `json:"response_status"`
+	ResponseID      *string            `json:"response_id"`
+	ResponseVersion *int64             `json:"response_version"`
+	// References to the objects of the response, read again when the body was not stored.
+	ResponseRefs        []byte  `json:"response_refs"`
+	ResponseContentType *string `json:"response_content_type"`
+	// Response body, written after the commit; NULL until then.
+	ResponseBody []byte             `json:"response_body"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+	ExpiresAt    pgtype.Timestamptz `json:"expires_at"`
 }
 
 type ApiKey struct {
@@ -31,6 +65,26 @@ type ApiKey struct {
 	RevokedAt  pgtype.Timestamptz `json:"revoked_at"`
 	// Last MCP tool call without Mcp-Session-Id with this key (granularity 60 s, sk-579). NULL — there were no such calls.
 	SessionlessSeenAt pgtype.Timestamptz `json:"sessionless_seen_at"`
+	// Permission level: read, write or manage (a higher level includes the lower ones). NULL only when the key carries just the admin flag.
+	Level *string `json:"level"`
+	// Admin permission, independent of the level; allowed only with scope_mode all. Effective only while the owner is an instance admin.
+	IsAdmin bool `json:"is_admin"`
+	// Scope of the key: projects or spaces (members in api_key_scope_projects / api_key_scope_spaces) or all.
+	ScopeMode string `json:"scope_mode"`
+	// End of the key lifetime. NULL only on keys created before 000086.
+	ExpiresAt pgtype.Timestamptz `json:"expires_at"`
+	// The key this one was reissued from; NULL for a key created directly.
+	ReissuedFromID pgtype.UUID `json:"reissued_from_id"`
+}
+
+type ApiKeyScopeProject struct {
+	ApiKeyID  pgtype.UUID `json:"api_key_id"`
+	ProjectID pgtype.UUID `json:"project_id"`
+}
+
+type ApiKeyScopeSpace struct {
+	ApiKeyID pgtype.UUID `json:"api_key_id"`
+	SpaceID  pgtype.UUID `json:"space_id"`
 }
 
 type Attachment struct {

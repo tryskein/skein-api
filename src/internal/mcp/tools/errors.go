@@ -183,9 +183,9 @@ const (
 	//                         issue that already has a (different) parent;
 	//                         use skein_reparent to move it.
 	// serialization_retry   — a write transaction lost a SERIALIZABLE race
-	//                         (40001 or 40P01). That transaction rolled back;
-	//                         a multi-step update may have earlier commits,
-	//                         so re-read it before resending missing changes.
+	//                         (40001 or 40P01). That transaction rolled back
+	//                         and an update is one transaction, so nothing of
+	//                         it was written: resend it unchanged.
 	// dependency_target_not_visible_yet — the to_id FK tripped because the
 	//                         target row was not visible in this snapshot
 	//                         (created in a still-uncommitted concurrent
@@ -334,6 +334,14 @@ const (
 	// exist (never minted, or already purged by cleanup) get this same code,
 	// so the refusal never reveals that another user's monitor exists.
 	ErrCodeMonitorNotFound = "monitor_not_found"
+
+	// ErrCodeInsufficientScope — the API key does not hold the right the
+	// call requires (read, write, manage, admin; force=true on a guarded
+	// tool requires manage). Refused before the tool runs, so it never
+	// reveals whether the named object exists. The error carries `required`,
+	// `tool` and, for a consolidated tool, `action`. Declared with its class
+	// and transience in internal/errcode.
+	ErrCodeInsufficientScope = "insufficient_scope"
 )
 
 // ErrCodeLockRequiredSessionID is returned when a tool requires Mcp-Session-Id

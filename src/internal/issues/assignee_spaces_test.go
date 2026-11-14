@@ -42,6 +42,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/mark3labs/mcp-go/server"
 
+	"skein-api/internal/apikeys"
 	"skein-api/internal/auth"
 	"skein-api/internal/authz"
 	"skein-api/internal/dependencies"
@@ -175,6 +176,7 @@ func TestAssigneeSpaces_ChoiceByIdOfLeaverRefused(t *testing.T) {
 			ctx := auth.WithUserID(context.Background(), w.owner.ID)
 			ctx = auth.WithUserRole(ctx, w.owner.Role)
 			ctx = auth.WithAPIKeyID(ctx, uuid.New())
+			ctx = auth.WithKeyGrant(ctx, apikeys.Grant{Level: apikeys.LevelManage, Admin: w.owner.Role == "admin", Scope: apikeys.Scope{Mode: apikeys.ScopeAll}})
 			ctx = auth.WithSessionID(ctx, "assignee-spaces")
 			msg, _ := json.Marshal(map[string]any{
 				"jsonrpc": "2.0", "id": 1, "method": "tools/call",

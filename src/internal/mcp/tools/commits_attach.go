@@ -2,16 +2,12 @@ package tools
 
 import (
 	"context"
-	"errors"
-	"log/slog"
-	"strings"
-	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 
-	"skein-api/internal/authz"
+	"skein-api/internal/issueops"
 	"skein-api/internal/issues"
 	skmcp "skein-api/internal/mcp"
 )
@@ -78,7 +74,7 @@ func RegisterCommitsAttach(s *server.MCPServer, pool *pgxpool.Pool, issuesStore 
 			mcpgo.Items(commitInputItemSchema()),
 		),
 		mcpgo.WithBoolean("force",
-			mcpgo.Description("Bypass lock predicate. Needs force_unlock on the issue's project (project owner, space owner, instance admin); others get `force_unlock_forbidden`. Default: false."),
+			mcpgo.Description("Bypass lock predicate. Needs the key right `manage` (else `insufficient_scope`) and force_unlock on the issue's project (project owner, space owner, instance admin); others get `force_unlock_forbidden`. Default: false."),
 			mcpgo.DefaultBool(false),
 		),
 		mcpgo.WithBoolean("verbose",
@@ -95,91 +91,17 @@ func RegisterCommitsAttach(s *server.MCPServer, pool *pgxpool.Pool, issuesStore 
 }
 
 func handleCommitsAttach(pool *pgxpool.Pool, issuesStore *issues.Store) server.ToolHandlerFunc {
+	d := issueops.Deps{Pool: pool, Issues: issuesStore}
 	return func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-		start := time.Now()
 		userID, errResp := skmcp.RequireUser(ctx)
 		if errResp != nil {
 			return errResp, nil
 		}
-
-		rawID, err := req.RequireString("issueId")
-		if err != nil {
-			return skmcp.ToolError(ErrCodeValidationError, "issueId is required", nil), nil
+		res, f := issueops.AttachCommits(ctx, d, userID, issueops.Args(req.GetArguments()))
+		if f != nil {
+			return toolFailure(f), nil
 		}
-		id := strings.TrimSpace(rawID)
-		if !looksLikeHierarchicalID(id) {
-			return skmcp.ToolError(ErrCodeValidationError,
-				"issueId must be a full hierarchical id like \"demo-42\"",
-				map[string]any{"issueId": rawID}), nil
-		}
-
-		force := req.GetBool("force", false)
-		// sk-674.18 T034 (K-28): force is force_unlock of US-6, checked
-		// on the issue's project (forceUnlockGate), not by the role.
-
-		rawCommits, ok := req.GetArguments()["commits"]
-		if !ok {
-			return skmcp.ToolError(ErrCodeValidationError, "commits is required", nil), nil
-		}
-		commits, parseErr := parseCommitInputs(rawCommits, "commits")
-		if parseErr != nil {
-			return skmcp.ToolError(parseErr.Code, parseErr.Message, parseErr.Details), nil
-		}
-		if len(commits) == 0 {
-			return skmcp.ToolError(ErrCodeValidationError, "commits must be non-empty", nil), nil
-		}
-
-		// Visibility check before delegating to the store. Mirrors the
-		// skein_close pattern: load issue → ensure caller can see the
-		// owning project → otherwise render as issue_not_found (don't
-		// leak project existence).
-		issue, err := issuesStore.GetIssue(ctx, id)
-		if err != nil {
-			if errors.Is(err, issues.ErrNotFound) {
-				return skmcp.ToolError(ErrCodeIssueNotFound,
-					"issue does not exist or is not visible",
-					map[string]any{"id": id}), nil
-			}
-			slog.ErrorContext(ctx, "mcp tool error",
-				"tool", "skein_commits_attach",
-				"reason", "load issue failed",
-				"userId", userID.String(), "issueId", id, "error", err.Error())
-			return skmcp.ToolError(ErrCodeInternalError, "failed to load issue", nil), nil
-		}
-		if res := issueActionGate(ctx, pool, "skein_commits_attach", "id", id, issue.ProjectID, userID, authz.ActionWrite); res != nil {
-			return res, nil
-		}
-		if force {
-			if res := forceUnlockGate(ctx, pool, "skein_commits_attach", "id", id, issue.ProjectID, userID); res != nil {
-				return res, nil
-			}
-		}
-
-		actor := IssuesAgentActor(ctx, pool, userID)
-
-		dto, err := issuesStore.AttachCommits(ctx, issues.AttachCommitsInput{
-			ID:        id,
-			Commits:   commits,
-			SessionID: actor.SessionID,
-			Actor:     actor,
-			Force:     force,
-		})
-		if err != nil {
-			// Reuse the close-error classifier: validation_error
-			// (invalid hash / too-many), repo_not_found, repo_ambiguous,
-			// issue_not_found, locked_by_other, and the
-			// serialization-failure → version_conflict fallback are
-			// already handled there. pinned_no_force won't fire because
-			// AttachCommits doesn't gate on the pin flag.
-			return mapCloseError(ctx, pool, issue.ProjectID, err, "skein_commits_attach", userID.String(), id, ""), nil
-		}
-
-		slog.InfoContext(ctx, "mcp tool ok",
-			"tool", "skein_commits_attach",
-			"userId", userID.String(), "issueId", id,
-			"commitCount", len(commits),
-			"latencyMs", time.Since(start).Milliseconds())
-
+		id, dto := res.IssueID, res.Issue
 		return writeIssueAck(ctx, "skein_commits_attach", userID.String(), id,
 			dto, req.GetBool("verbose", false))
 	}

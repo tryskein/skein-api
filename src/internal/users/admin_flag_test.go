@@ -9,6 +9,11 @@ package users_test
 // the flag off (no admin appears; the REST and MCP refusals carry
 // admin_role_disabled) and, as the control, with the flag on (the same call
 // gives the admin role), so a path that does not check is red.
+//
+// MCP skein_user is a call by API key, which never creates or assigns the
+// admin role in either mode (sk-878.3.1 T013, "MCP changes" (2)): its
+// subtests assert that refusal; the REST paths under the BFF identity stay
+// the control of the flag.
 
 import (
 	"bytes"
@@ -110,6 +115,7 @@ func TestAdminFlag_NoPathGivesTheAdminRole(t *testing.T) {
 		s := server.NewMCPServer("admin-flag", "1", server.WithToolCapabilities(true))
 		mcptools.RegisterUser(s, store, pool, spacesSvc)
 		ctx := auth.WithAPIKeyID(auth.WithUserRole(auth.WithUserID(context.Background(), admin), "admin"), uuid.New())
+		ctx = auth.WithKeyGrant(ctx, apikeys.Grant{Level: apikeys.LevelManage, Admin: true, Scope: apikeys.Scope{Mode: apikeys.ScopeAll}})
 		return func(args map[string]any) (bool, map[string]any) {
 			raw, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": 1, "method": "tools/call",
 				"params": map[string]any{"name": "skein_user", "arguments": args}})
@@ -173,28 +179,30 @@ func TestAdminFlag_NoPathGivesTheAdminRole(t *testing.T) {
 					}
 				})
 
+				// By API key the admin role is never created or assigned,
+				// whatever the flag ("MCP changes" (2)): refused, no admin.
 				t.Run("skein_user create", func(t *testing.T) {
 					email := newEmail("mc")
 					isErr, body := mcp(store)(map[string]any{"action": "create",
 						"email": email, "username": username(email), "name": "Flag", "password": "long-enough-pass-1", "role": "admin"})
-					if !on && (!isErr || body["error"] != spaces.CodeAdminRoleDisabled) {
-						t.Errorf("%v, want %s", body, spaces.CodeAdminRoleDisabled)
+					if !isErr || body["error"] != "forbidden" {
+						t.Errorf("%v, want forbidden", body)
 					}
-					if got := roleOf(t, pool, email); got != map[bool]string{false: "", true: "admin"}[on] {
-						t.Errorf("stored role %q", got)
+					if got := roleOf(t, pool, email); got != "" {
+						t.Errorf("stored role %q, want no account", got)
 					}
 				})
 
 				t.Run("skein_user update", func(t *testing.T) {
 					u, _ := testsupport.SeedUser(t, pool, "user")
 					isErr, body := mcp(store)(map[string]any{"action": "update", "userId": u.String(), "role": "admin"})
-					if !on && (!isErr || body["error"] != spaces.CodeAdminRoleDisabled) {
-						t.Errorf("%v, want %s", body, spaces.CodeAdminRoleDisabled)
+					if !isErr || body["error"] != "forbidden" {
+						t.Errorf("%v, want forbidden", body)
 					}
 					var role string
 					_ = pool.QueryRow(context.Background(), `SELECT role FROM users WHERE id = $1`, u).Scan(&role)
-					if role != want {
-						t.Errorf("stored role %q, want %q", role, want)
+					if role != "user" {
+						t.Errorf("stored role %q, want user", role)
 					}
 				})
 			})

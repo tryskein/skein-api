@@ -157,7 +157,7 @@ VALUES ($1, $2, 'member', now(), $3)`, target, only, me.ID); err != nil {
 	}
 
 	t.Run("two accessible same-named projects: ambiguous everywhere", func(t *testing.T) {
-		code, raw := s.rest(a, http.MethodGet, "/api/v1/projects/resolve?q="+url.QueryEscape(ambName), nil)
+		code, raw := s.rest(a, http.MethodGet, "/ui/v1/projects/resolve?q="+url.QueryEscape(ambName), nil)
 		if code != http.StatusUnprocessableEntity {
 			t.Errorf("REST: %d %s, want 422", code, raw)
 		}
@@ -177,7 +177,7 @@ VALUES ($1, $2, 'member', now(), $3)`, target, only, me.ID); err != nil {
 	})
 
 	t.Run("a prefix that is another's name: the prefix's project everywhere", func(t *testing.T) {
-		code, raw := s.rest(a, http.MethodGet, "/api/v1/projects/resolve?q="+url.QueryEscape(targetPrefix), nil)
+		code, raw := s.rest(a, http.MethodGet, "/ui/v1/projects/resolve?q="+url.QueryEscape(targetPrefix), nil)
 		if code != http.StatusOK || !strings.Contains(string(raw), `"id":"`+target.String()+`"`) {
 			t.Errorf("REST: %d %s, want the match %s", code, raw, target)
 		}

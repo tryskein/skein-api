@@ -124,9 +124,19 @@ UPDATE users SET deactivated_at = NULL WHERE role='admin'`)
 	if !res.IsError {
 		t.Fatalf("expected isError for last-admin demote")
 	}
+	// By API key the admin role is never removed (sk-878.3.1 T013): that
+	// refusal comes before the last-admin recheck, which stays on the web
+	// UI path (users.Store with a human actor).
 	body := extractToolJSON(t, res)
-	if body["error"] != ErrCodeLastAdminCannotDemote {
-		t.Fatalf("error = %v, want %s", body["error"], ErrCodeLastAdminCannotDemote)
+	if body["error"] != ErrCodeForbidden {
+		t.Fatalf("error = %v, want %s", body["error"], ErrCodeForbidden)
+	}
+	var role string
+	if err := pool.QueryRow(context.Background(), `SELECT role FROM users WHERE id = $1`, adminID).Scan(&role); err != nil {
+		t.Fatalf("read role: %v", err)
+	}
+	if role != "admin" {
+		t.Fatalf("stored role = %q after the refusal, want admin", role)
 	}
 }
 

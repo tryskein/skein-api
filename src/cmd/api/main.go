@@ -33,7 +33,9 @@ import (
 	"skein-api/internal/dashboard"
 	"skein-api/internal/dependencies"
 	"skein-api/internal/handler"
+	"skein-api/internal/idempotency"
 	"skein-api/internal/invitations"
+	"skein-api/internal/issueops"
 	"skein-api/internal/issues"
 	"skein-api/internal/issues/lockreap"
 	"skein-api/internal/logging"
@@ -45,6 +47,7 @@ import (
 	"skein-api/internal/operator"
 	"skein-api/internal/outbox"
 	"skein-api/internal/projects"
+	"skein-api/internal/publicapi"
 	"skein-api/internal/push"
 	"skein-api/internal/pwned"
 	"skein-api/internal/reminders"
@@ -380,6 +383,61 @@ func operatorServer(cfg *config.Config, ops operator.Operations) *http.Server {
 	return operator.NewServer(":"+cfg.OperatorAPIPort, operator.NewRouter(cfg.OperatorAPIKey, ops))
 }
 
+// publicAPIURLVariable is the variable naming the external address of the
+// public API; publicServer warns once when it is unset.
+const publicAPIURLVariable = "SKEIN_PUBLIC_API_URL"
+
+// publicServer is the public API server built from cfg (plan D-1): nil while
+// SKEIN_PUBLIC_API_ENABLED=false — nothing listens on SKEIN_PUBLIC_API_PORT
+// and nothing is logged — otherwise a server on that port whose router
+// carries only the public API's route table. Enabled without
+// SKEIN_PUBLIC_API_URL it logs one warning naming the variable: the API
+// works, but its OpenAPI document carries no servers. chain is the request
+// chain put in front of every operation that authenticates with a key
+// (publicapi.NewProductChain in production); deps are the stores its
+// operations read and write through (Doc is filled here).
+func publicServer(cfg *config.Config, chain publicapi.RouteWrapper, deps publicapi.Deps, logger *slog.Logger) (*http.Server, error) {
+	if !cfg.PublicAPIEnabled {
+		return nil, nil
+	}
+	if cfg.PublicAPIURL == "" {
+		logger.Warn("public API address is not set: the OpenAPI document is served without servers",
+			"variable", publicAPIURLVariable)
+	}
+	doc, err := publicapi.NewOpenAPIDocument(cfg.PublicAPIURL)
+	if err != nil {
+		return nil, err
+	}
+	deps.Doc = doc
+	deps.Outcomes = idempotency.Hooks{}
+	router := publicapi.NewRouter(
+		publicapi.RouterOptions{
+			OperationTimeout: cfg.PublicAPIWriteTimeout,
+			Chain:            chain,
+			Versions:         publicapi.IssueVersions{Pool: deps.Pool, Issues: deps.Issues},
+			Idempotency:      idempotency.NewMiddleware(deps.Pool, cfg.PublicAPIWriteTimeout),
+		},
+		publicapi.ProductRoutes(deps),
+	)
+	return publicapi.NewServer(":"+cfg.PublicAPIPort, router, cfg.PublicAPIWriteTimeout), nil
+}
+
+// publicAPIServer is the public API server of the process, wired from cfg:
+// the request chain with the limits and the trusted proxies of the
+// configuration (publicapi.NewProductChain) in front of the product route
+// table over pool and the stores of deps, with the operation deadline of
+// SKEIN_PUBLIC_API_WRITE_TIMEOUT. nil while SKEIN_PUBLIC_API_ENABLED=false.
+func publicAPIServer(cfg *config.Config, pool *pgxpool.Pool, deps publicapi.Deps, logger *slog.Logger) (*http.Server, error) {
+	var chain publicapi.RouteWrapper
+	if cfg.PublicAPIEnabled {
+		chain = publicapi.NewProductChain(pool, cfg.BcryptCost,
+			cfg.PublicAPIRateLimitPerMinute, cfg.PublicAPIAuthFailuresPerMinute, cfg.PublicAPITrustedProxies)
+	}
+	deps.Pool = pool
+	deps.DefaultVisibility = cfg.ProjectDefaultVisibility
+	return publicServer(cfg, chain, deps, logger)
+}
+
 // main wires and runs skein-api.
 //
 // swag general API info. Only the security schemes are declared here; the
@@ -389,7 +447,7 @@ func operatorServer(cfg *config.Config, ops operator.Operations) *http.Server {
 // @securityDefinitions.apikey InternalSecretAuth
 // @in header
 // @name X-Skein-Internal-Secret
-// @description Service secret shared by skein-web and skein-api. Service-only endpoints (POST /api/v1/hub/project-access, GET /api/v1/internal/instance-config) are authorized by it alone, with no user headers.
+// @description Service secret shared by skein-web and skein-api. Service-only endpoints (POST /ui/v1/hub/project-access, GET /ui/v1/internal/instance-config) are authorized by it alone, with no user headers.
 func main() {
 	cfg, err := config.Load()
 	if err != nil {
@@ -481,7 +539,7 @@ func main() {
 	}
 
 	// R4.2 — S3 client (optional). When S3_URL is empty the
-	// attachments subsystem is disabled: every /api/v1/.../attachments/*
+	// attachments subsystem is disabled: every /ui/v1/.../attachments/*
 	// endpoint returns 503 and the cleanup goroutine is not started.
 	// This mirrors how NATS_URL gates the outbox dispatcher, so an
 	// offline dev environment can still bring up the rest of the API.
@@ -578,7 +636,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	// projectsHandler reuses the same embedder so GET /api/v1/projects?q=
+	// projectsHandler reuses the same embedder so GET /ui/v1/projects?q=
 	// can do FTS + semantic rerank when the FTS layer returns thin
 	// results. typed-nil dance: avoid passing a nil *search.Embedder
 	// boxed in an interface (the classic Go gotcha where iface != nil
@@ -632,7 +690,7 @@ func main() {
 	bulkHandler := handler.NewBulkHandler(pool, issuesStore)
 	// R3.3 — caller-scoped /me/assigned-by + /me/assigned-to wrappers.
 	issuesMeHandler := handler.NewIssuesMeHandler(pool, issuesStore)
-	// Sc3 — cross-project /api/v1/issues for the "All projects" Tasks
+	// Sc3 — cross-project /ui/v1/issues for the "All projects" Tasks
 	// column. Shares the same embedder as the projects FTS path so
 	// semantic rerank lights up when the FTS layer returns thin results.
 	// typed-nil dance — see the projectsEmbedder block above; we mirror
@@ -659,7 +717,11 @@ func main() {
 	dashboardHandler := handler.NewDashboardHandler(pool, dashboardStore, issuesStore)
 	// R2.1 — long-lived API keys (CRUD via Settings UI). MCP middleware
 	// reuses the apikeys.Store directly; the handler is only for /me.
-	apiKeysHandler := handler.NewAPIKeysHandler(pool, cfg.BcryptCost)
+	apiKeysHandler := handler.NewAPIKeysHandler(pool, cfg.BcryptCost, handler.APIKeysSettings{
+		TTL:              apikeys.TTLPolicy{Default: cfg.APIKeyDefaultTTL, Max: cfg.APIKeyMaxTTL},
+		PublicAPIEnabled: cfg.PublicAPIEnabled,
+		PublicAPIURL:     cfg.PublicAPIURL,
+	})
 
 	// R3.1 — admin user management. usersStore wraps the users package
 	// and holds the apikeys.Store reference for the deactivation cascade
@@ -682,7 +744,7 @@ func main() {
 	}
 	usersStore := users.NewStore(pool, cfg.BcryptCost, apikeysStore, cfg.AuthMode, cfg.BreakGlassAdmin, pwnedChecker)
 	usersStore.SetSpaceMemberLimit(cfg.SpaceMemberLimit)
-	// projectsStore feeds GET /api/v1/me/memberships (R3.2c).
+	// projectsStore feeds GET /ui/v1/me/memberships (R3.2c).
 	usersHandler := handler.NewUsersHandler(pool, usersStore, projectsStore)
 
 	// R4.2 — attachments handler. s3Access is nil when S3_URL is
@@ -874,6 +936,11 @@ func main() {
 		RevokedRetention: cfg.MonitorCredentialRevokedRetention,
 	})
 
+	// sk-878.3.1 T021 — the cleanup of public API Idempotency-Key outcomes
+	// past their 24-hour retention. Started whether or not the public API is
+	// enabled now: rows of an earlier enabled run must still go.
+	go idempotency.RunCleanup(workerCtx, idempotency.NewStore(pool), idempotency.CleanupInterval)
+
 	// R3.2a — outbox dispatcher. Single goroutine, sibling to the
 	// embedding worker. Lifetime is tied to workerCtx so SIGTERM cancels
 	// both in lockstep before HTTP server shutdown begins.
@@ -1004,9 +1071,39 @@ func main() {
 	// (nil when SKEIN_OPERATOR_API_ENABLED=false).
 	opSrv := operatorServer(cfg, operator.NewAccounts(pool, usersStore))
 
+	// The public API, its own server on its own port (nil when
+	// SKEIN_PUBLIC_API_ENABLED=false).
+	var pubIssuesEmbedder issues.QueryEmbedder
+	if e := searchSvc.Embedder(); e != nil {
+		pubIssuesEmbedder = e
+	}
+	pubSrv, err := publicAPIServer(cfg, pool, publicapi.Deps{
+		Projects:         projectsStore,
+		Users:            usersStore,
+		ProjectsEmbedder: projectsEmbedder,
+		Issues:           issuesStore,
+		Dependencies:     depsStore,
+		Search:           searchSvc,
+		IssuesEmbedder:   pubIssuesEmbedder,
+		Notifications:    notifStore,
+		Reminders:        remindersStore,
+		// The spaces service as the MCP tools get it (addSpaceMember).
+		Spaces: spaces.NewService(pool, spacesOptions(cfg)),
+		// The attachment store and storage of the MCP tool; S3 nil when
+		// S3_URL is unset — the operations then answer attachments_unavailable.
+		Attachments: issueops.AttachmentDeps{
+			Store: attachmentsStoreWithQuotas(pool, cfg), S3: s3Access, Bucket: cfg.S3Bucket,
+			MaxSize: cfg.AttachmentMaxSizeBytes, URLTTL: time.Duration(cfg.AttachmentURLTTLSeconds) * time.Second,
+		},
+	}, slog.Default())
+	if err != nil {
+		slog.Error("public API setup failed", "error", err.Error())
+		os.Exit(1)
+	}
+
 	// Run the servers in goroutines so the main goroutine can wait on
 	// signals; the first failure of either stops the process.
-	serverErr := make(chan error, 2)
+	serverErr := make(chan error, 3)
 	go func() {
 		slog.Info("HTTP server listening", "addr", srv.Addr)
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -1018,6 +1115,14 @@ func main() {
 			slog.Info("operator API listening", "addr", opSrv.Addr)
 			if err := opSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 				serverErr <- fmt.Errorf("operator API: %w", err)
+			}
+		}()
+	}
+	if pubSrv != nil {
+		go func() {
+			slog.Info("public API listening", "addr", pubSrv.Addr)
+			if err := pubSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				serverErr <- fmt.Errorf("public API: %w", err)
 			}
 		}()
 	}
@@ -1051,6 +1156,19 @@ func main() {
 		}
 	}()
 	defer func() { <-opStopped }()
+
+	// The public API's server stops in the same window.
+	pubStopped := make(chan struct{})
+	go func() {
+		defer close(pubStopped)
+		if pubSrv == nil {
+			return
+		}
+		if err := pubSrv.Shutdown(shutdownCtx); err != nil {
+			slog.Error("public API shutdown error", "error", err.Error())
+		}
+	}()
+	defer func() { <-pubStopped }()
 
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		slog.Error("HTTP server shutdown error", "error", err.Error())
@@ -1235,17 +1353,23 @@ func buildSearchStack(pool *pgxpool.Pool, cfg *config.Config) (*search.Service, 
 // /metrics) sit at the root with NO auth — they're consumed by Kubernetes
 // and Prometheus, which can't carry the internal-secret header.
 //
-// Everything under /api/v1 goes through:
-//  1. RequireInternalSecret — every request from the BFF must present the
-//     shared secret. Direct ingress from outside the cluster has no way to
-//     hold this secret, so this is the channel-auth boundary.
-//  2. ParseUserHeaders — best-effort decode of X-Skein-User-* headers into
+// The internal API of the frontend is served under /ui/v1 and, for one
+// transitional release, under /api/v1 (mountInternalAPI). Every request under
+// either prefix — matched route or not, any method — goes through
+// RequireInternalSecret first: every request from the BFF must present the
+// shared secret. Direct ingress from outside the cluster has no way to hold
+// this secret, so this is the channel-auth boundary. The user group then adds:
+//  1. ParseUserHeaders — best-effort decode of X-Skein-User-* headers into
 //     the request context. Auth bootstrap routes (/auth/login,
 //     /auth/logout) intentionally do not require a user; user-bound routes
 //     compose RequireUser on top.
-//  3. RequireSessionEpoch — a request that carries a user is refused with
+//  2. RequireSessionEpoch — a request that carries a user is refused with
 //     401 session_revoked when the session's epoch is not the user's
 //     current one or the user is deactivated or deleted (K-16).
+//
+// The service routes outside the user group (OIDC provision, hub access,
+// instance config, the account routes of a visitor) are authorized by the
+// secret alone.
 func buildRouter(
 	pool *pgxpool.Pool,
 	cfg *config.Config,
@@ -1376,37 +1500,10 @@ func buildRouter(
 		}
 	}
 
-	// R5.1 — OIDC provision endpoint. Mounted OUTSIDE the /api/v1 group
-	// because that group applies ParseUserHeaders to every request, and
-	// the provision call has no user yet (it's the call that establishes
-	// one). Channel auth (RequireInternalSecret) is sufficient: only the
-	// skein-web BFF holds the secret, and the BFF is the only legitimate
-	// caller. The handler itself short-circuits with 410 oidc_disabled
-	// when the provisioner is nil (defensive — wiring always sets it).
-	r.With(handler.RequireInternalSecret(cfg.InternalSecret, "")).
-		Post("/api/v1/auth/oidc/provision", authH.OIDCProvision)
-
-	// sk-622.21 T006 — service-only batch project access check for
-	// skein-web's SignalR hub (contract: projects/access_contract.go).
-	// Mounted OUTSIDE the /api/v1 group for the same reason as the provision
-	// route: that group applies ParseUserHeaders, and this call is made by
-	// the BFF for many users at once, not for one logged-in user — whose
-	// access is checked is named in the body. Channel auth
-	// (RequireInternalSecret) is the whole authorization.
-	r.With(handler.RequireInternalSecret(cfg.InternalSecret, "")).
-		Post("/api/v1/hub/project-access", handler.NewHubAccessHandler(pool).ProjectAccess)
-
-	// sk-674.18 T012 — installation settings for skein-web (contract:
-	// accounts/contract.go#InstanceConfig). Service-only, outside the /api/v1
-	// group like the two routes above: skein-web calls it at startup with no
-	// user at all, and the channel secret is the whole authorization.
-	r.With(handler.RequireInternalSecret(cfg.InternalSecret, "")).
-		Get("/api/v1/internal/instance-config", handler.NewInstanceConfigHandler(cfg).Get)
-
 	// sk-674.18 T038 — the public account routes of a visitor without a
-	// session (contract: accounts/contract.go). Outside the /api/v1 group
-	// like the routes above: there is no user, the channel secret is the
-	// whole authorization, the client address comes in X-Skein-Client-Ip.
+	// session (contract: accounts/contract.go), mounted by mountInternalAPI
+	// below. The services are built once here: both prefixes of the
+	// transitional release share them, and with them the rate limits.
 	turnstile := accounts.NewTurnstile(cfg.TurnstileSecret, accounts.TurnstileVerifyURL)
 	accountsSvc := accounts.NewService(
 		accounts.ServiceConfig{
@@ -1426,28 +1523,11 @@ func buildRouter(
 	})
 	accountsSvc.UseInvitations(invitationsSvc)
 	accountsH := handler.NewAccountsHandler(accountsSvc)
-	r.With(handler.RequireInternalSecret(cfg.InternalSecret, "")).
-		Post("/api/v1/auth/signup", accountsH.Signup)
-	r.With(handler.RequireInternalSecret(cfg.InternalSecret, "")).
-		Get("/api/v1/auth/username-suggestions", accountsH.UsernameSuggestions)
-	// T039 — password reset and email confirmation by link.
-	r.With(handler.RequireInternalSecret(cfg.InternalSecret, "")).
-		Post("/api/v1/auth/password-reset", accountsH.PasswordReset)
-	r.With(handler.RequireInternalSecret(cfg.InternalSecret, "")).
-		Post("/api/v1/auth/password-reset/{token}", accountsH.PasswordResetComplete)
-	r.With(handler.RequireInternalSecret(cfg.InternalSecret, "")).
-		Post("/api/v1/auth/confirm-email/{token}", accountsH.ConfirmEmail)
-	// T040 — the invitation link without a session: its view and signup
-	// by invitation.
-	r.With(handler.RequireInternalSecret(cfg.InternalSecret, "")).
-		Get("/api/v1/auth/invitations/{token}", accountsH.InvitationPreview)
-	r.With(handler.RequireInternalSecret(cfg.InternalSecret, "")).
-		Post("/api/v1/auth/invitations/{token}/signup", accountsH.InvitationSignup)
 
 	// R2.1 — MCP Streamable HTTP endpoint. Sits at the root, NOT under
-	// /api/v1/*: MCP clients are not browser-cookie-authenticated and
+	// the internal API prefix: MCP clients are not browser-cookie-authenticated and
 	// the BFF proxies the /mcp path on its own without going through
-	// the cookie-protected /api/v1/* path. Auth here is X-Skein-Api-Key
+	// the cookie-protected internal API. Auth here is X-Skein-Api-Key
 	// (resolves to a user) gated on top of the channel-secret check.
 	//
 	// R2.2a — read tools depend on the issues, dependencies, projects
@@ -1455,7 +1535,7 @@ func buildRouter(
 	// it in the registration closure so the existing Setup seam
 	// (callback that takes (server, pool)) doesn't need to change.
 	// projectsEmbedder is the same embedder instance used by the
-	// HTTP /api/v1/projects handler for FTS+semantic rerank. We pull
+	// HTTP /ui/v1/projects handler for FTS+semantic rerank. We pull
 	// it from searchSvc rather than parameterising buildRouter — the
 	// search service is already in scope here. typed-nil dance: when
 	// searchSvc.Embedder() returns nil we leave projectsEmbedder as
@@ -1525,8 +1605,9 @@ func buildRouter(
 		// challenge is attached here too — and the MCP authorization spec
 		// requires the header on a 401 from an MCP server unconditionally,
 		// not "on the interesting 401s". Two doors, one behaviour. The other
-		// three mounts of this middleware (/api/v1, /agent/v1 and the OIDC
-		// provision route) pass an empty challenge: their 401s are not
+		// mounts of this middleware (the internal API prefixes /ui/v1 and,
+		// for the transitional release, /api/v1, and /agent/v1) pass an
+		// empty challenge: their 401s are not
 		// protected-resource failures and must not advertise one.
 		r.Use(handler.RequireInternalSecret(cfg.InternalSecret, oauthChallenge))
 		// sk-304 — the api-key gate's 401 carries the RFC 9728 §5.1
@@ -1535,7 +1616,7 @@ func buildRouter(
 		// discovery route and the well-known probe only a fallback, so this
 		// removes the client's guess between the root and path-aware
 		// documents. The channel-secret gate above deliberately does NOT
-		// carry it: it is shared with /api/v1 and /agent/v1, whose 401s are
+		// carry it: it is shared with the internal API and /agent/v1, whose 401s are
 		// not OAuth-protected-resource failures, and only the BFF ever
 		// trips it.
 		r.Use(auth.RequireAPIKey(pool, cfg.BcryptCost, oauthChallenge))
@@ -1543,7 +1624,7 @@ func buildRouter(
 	})
 
 	// sk-142.4 — agent task-monitor data plane. SIBLING route group to /mcp,
-	// NOT under /api/v1: monitor-token runners are not browser-cookie
+	// NOT under the internal API prefix: monitor-token runners are not browser-cookie
 	// callers, and the BFF passes /agent/v1 through on its own door (T3).
 	// Two auth gates, composed like /mcp: the channel secret (only the BFF
 	// holds it) then RequireMonitorToken, which accepts ONLY skm_ tokens
@@ -1570,8 +1651,20 @@ func buildRouter(
 		r.Get("/monitor-script", agentScriptHandler.Script)
 	})
 
-	r.Route("/api/v1", func(r chi.Router) {
-		r.Use(handler.RequireInternalSecret(cfg.InternalSecret, ""))
+	// The internal API of the frontend (contract for skein-web: the BFF
+	// proxies the browser's /api/v1/* here as /ui/v1/* and makes its service
+	// calls on /ui/v1/*). mountInternalAPI is the one place these routes are
+	// registered; it is mounted on both prefixes below.
+	hubAccessH := handler.NewHubAccessHandler(pool)
+	instanceConfigH := handler.NewInstanceConfigHandler(cfg)
+	spacesH := handler.NewSpacesHandler(spacesSvc)
+	invitationsH := handler.NewInvitationsHandler(invitationsSvc)
+	accountDeletionH := handler.NewAccountDeletionHandler(usersStore, cfg.SignupEnabled)
+
+	// mountUserAPI is the user group of the internal API: every route below
+	// is reached with the BFF's user headers. The channel secret is checked
+	// by mountInternalAPI for the whole prefix.
+	mountUserAPI := func(r chi.Router) {
 		r.Use(handler.ParseUserHeaders)
 		// sk-674.18 K-16: a session whose epoch was raised (password reset,
 		// deactivation, account deletion) is refused on its next request.
@@ -1599,7 +1692,7 @@ func buildRouter(
 		r.With(handler.RequireUser).Post("/search/lookup-id-batch", searchH.LookupIDBatch)
 
 		// sk-17 — dashboard surface (scoring matrix + live feed). Two
-		// endpoints sit at the /api/v1 top-level (not under /me)
+		// endpoints sit at the top level of the internal API (not under /me)
 		// because the URL is consumed by a dedicated /activity SPA
 		// route and the convention across the codebase is that
 		// org-wide cross-project surfaces (/search, /issues, /search/
@@ -1725,7 +1818,7 @@ func buildRouter(
 
 			// R4.2 — attachment listing + upload-URL minting under the
 			// same issue-scoped path. Confirm / download / delete live
-			// under /api/v1/attachments/{id} below since they need
+			// under /ui/v1/attachments/{id} below since they need
 			// only the attachment uuid.
 			r.Get("/attachments", attachmentsH.List)
 			r.Post("/attachments/upload-url", attachmentsH.UploadURL)
@@ -1745,18 +1838,15 @@ func buildRouter(
 		// route needs a user; who may do what is spaces.Service's decision
 		// (owner, member, the effective admin read from the database). The
 		// two admin-only routes also sit behind RequireAdmin, whose refusal
-		// (403 not_admin) is the contract's.
-		spacesH := handler.NewSpacesHandler(spacesSvc)
-		// T040 — invitations (spaces/contract.go): sending, the Inbox
-		// answers and the link with a session.
-		invitationsH := handler.NewInvitationsHandler(invitationsSvc)
+		// (403 not_admin) is the contract's. T040 — invitations
+		// (spaces/contract.go): sending, the Inbox answers and the link with
+		// a session.
 		// R1.6 — per-user notification preferences. /me/* lives under
 		// auth conceptually but the prefs are notification-domain.
 		// R2.1 added /me/api-keys/* under the same group — same gate
 		// (RequireUser), same scoping ("the calling user's own data").
 		// sk-674.18 T041 — the account deletes itself (open registration
 		// only; the operator's deletion of T042 uses the same store).
-		accountDeletionH := handler.NewAccountDeletionHandler(usersStore, cfg.SignupEnabled)
 		r.Route("/me", func(r chi.Router) {
 			r.Use(handler.RequireUser)
 			r.Delete("/", accountDeletionH.DeleteMe)
@@ -1805,10 +1895,15 @@ func buildRouter(
 			r.Get("/quiet-hours", notifH.GetQuietHours)
 			r.Put("/quiet-hours", notifH.PutQuietHours)
 
+			// sk-878.3.1 T007 — the key's grant: narrowing in place,
+			// reissue, and the page settings (public API, lifetimes).
 			r.Route("/api-keys", func(r chi.Router) {
 				r.Get("/", apiKeysH.List)
 				r.Post("/", apiKeysH.Create)
+				r.Get("/settings", apiKeysH.Settings)
+				r.Patch("/{id}", apiKeysH.Narrow)
 				r.Delete("/{id}", apiKeysH.Revoke)
+				r.Post("/{id}/reissue", apiKeysH.Reissue)
 			})
 
 			// R3.1 — self-service password change. Available to every
@@ -2154,10 +2249,76 @@ func buildRouter(
 				r.Get("/activity", activityH.ListProjectActivity)
 			})
 		})
-	})
+	}
+
+	// mountInternalAPI registers the whole internal API under one prefix.
+	// RequireInternalSecret guards the prefix itself, so an unknown path or
+	// a wrong method without the secret is refused with 401 like every route,
+	// and tells a caller without the secret nothing about which routes exist.
+	mountInternalAPI := func(r chi.Router) {
+		r.Use(handler.RequireInternalSecret(cfg.InternalSecret, ""))
+
+		// R5.1 — OIDC provision endpoint. Outside the user group because
+		// that group applies ParseUserHeaders to every request, and the
+		// provision call has no user yet (it's the call that establishes
+		// one). The channel secret, checked for the whole prefix, is
+		// sufficient: only the skein-web BFF holds the secret, and the BFF is
+		// the only legitimate caller. The handler itself short-circuits with 410 oidc_disabled
+		// when the provisioner is nil (defensive — wiring always sets it).
+		r.Post("/auth/oidc/provision", authH.OIDCProvision)
+
+		// sk-622.21 T006 — service-only batch project access check for
+		// skein-web's SignalR hub (contract: projects/access_contract.go).
+		// Outside the user group for the same reason as the provision route:
+		// this call is made by the BFF for many users at once, not for one
+		// logged-in user — whose access is checked is named in the body.
+		// The channel secret is the whole authorization.
+		r.Post("/hub/project-access", hubAccessH.ProjectAccess)
+
+		// sk-674.18 T012 — installation settings for skein-web (contract:
+		// accounts/contract.go#InstanceConfig). Service-only, outside the
+		// user group like the two routes above: skein-web calls it at startup
+		// with no user at all, and the channel secret is the whole
+		// authorization.
+		r.Get("/internal/instance-config", instanceConfigH.Get)
+
+		// sk-674.18 T038 — the public account routes of a visitor without a
+		// session (contract: accounts/contract.go). Outside the user group
+		// like the routes above: there is no user, the channel secret is the
+		// whole authorization, the client address comes in X-Skein-Client-Ip.
+		r.Post("/auth/signup", accountsH.Signup)
+		r.Get("/auth/username-suggestions", accountsH.UsernameSuggestions)
+		// T039 — password reset and email confirmation by link.
+		r.Post("/auth/password-reset", accountsH.PasswordReset)
+		r.Post("/auth/password-reset/{token}", accountsH.PasswordResetComplete)
+		r.Post("/auth/confirm-email/{token}", accountsH.ConfirmEmail)
+		// T040 — the invitation link without a session: its view and signup
+		// by invitation.
+		r.Get("/auth/invitations/{token}", accountsH.InvitationPreview)
+		r.Post("/auth/invitations/{token}/signup", accountsH.InvitationSignup)
+
+		r.Group(mountUserAPI)
+	}
+
+	// /ui/v1 is the prefix of the internal API. /api/v1 is accepted as well
+	// for one transitional release, so the browser keeps working while
+	// skein-web still calls /api/v1. Roll skein-api out before skein-web or
+	// together with it: the new skein-web calls /ui/v1 at startup, which an
+	// older skein-api does not serve. The next release of skein-api removes
+	// /api/v1 here, and /api/v1 then belongs to the public API only.
+	r.Route(internalAPIPrefix, mountInternalAPI)
+	r.Route(transitionalInternalAPIPrefix, mountInternalAPI)
 
 	return r, drainMCPStreams
 }
+
+const (
+	// internalAPIPrefix is the prefix of the frontend's internal API.
+	internalAPIPrefix = "/ui/v1"
+	// transitionalInternalAPIPrefix is the former prefix of the internal
+	// API, still accepted for one transitional release.
+	transitionalInternalAPIPrefix = "/api/v1"
+)
 
 // spacesOptions are the installation settings of the spaces surface
 // (sk-674.18 T023), shared by REST and MCP.

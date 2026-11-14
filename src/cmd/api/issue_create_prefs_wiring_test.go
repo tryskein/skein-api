@@ -1,14 +1,14 @@
 package main
 
 // issue_create_prefs_wiring_test.go — sk-565, T026, test matrix row 12: GET
-// and PUT /api/v1/me/issue-create-prefs are wired into the PRODUCTION
+// and PUT /ui/v1/me/issue-create-prefs are wired into the PRODUCTION
 // router. The handler tests call the methods directly and cannot see a
 // missing r.Get / r.Put; here the request goes through buildRouter with a
 // real NotificationsHandler, the internal secret and the BFF user headers,
 // as the web BFF sends it. A missing route answers 404/405, not 200.
 //
 // Beyond the monitor_config_wiring_test.go sample (wiringStack), which only
-// talks to /mcp and /agent/v1: a REST request under /api/v1/me.
+// talks to /mcp and /agent/v1: a REST request under /ui/v1/me.
 
 import (
 	"bytes"
@@ -76,9 +76,9 @@ func serveIssueCreatePrefs(t *testing.T, router chi.Router, user uuid.UUID, meth
 	t.Helper()
 	var req *http.Request
 	if body == "" {
-		req = httptest.NewRequest(method, "/api/v1/me/issue-create-prefs", nil)
+		req = httptest.NewRequest(method, "/ui/v1/me/issue-create-prefs", nil)
 	} else {
-		req = httptest.NewRequest(method, "/api/v1/me/issue-create-prefs", bytes.NewBufferString(body))
+		req = httptest.NewRequest(method, "/ui/v1/me/issue-create-prefs", bytes.NewBufferString(body))
 		req.Header.Set("Content-Type", "application/json")
 	}
 	req.Header.Set(auth.HeaderInternalSecret, wiringInternalSecret)
@@ -97,11 +97,11 @@ func TestIssueCreatePrefsWiring_RoutesReachTheHandler(t *testing.T) {
 
 	status, body := serveIssueCreatePrefs(t, router, user, http.MethodGet, "")
 	if status != http.StatusOK || body["assignAgentIssuesToMe"] != true {
-		t.Errorf("GET /api/v1/me/issue-create-prefs = %d %v, want 200 {assignAgentIssuesToMe:true}", status, body)
+		t.Errorf("GET /ui/v1/me/issue-create-prefs = %d %v, want 200 {assignAgentIssuesToMe:true}", status, body)
 	}
 
 	status, body = serveIssueCreatePrefs(t, router, user, http.MethodPut, `{"assignAgentIssuesToMe":false}`)
 	if status != http.StatusOK || body["assignAgentIssuesToMe"] != false {
-		t.Errorf("PUT /api/v1/me/issue-create-prefs = %d %v, want 200 {assignAgentIssuesToMe:false}", status, body)
+		t.Errorf("PUT /ui/v1/me/issue-create-prefs = %d %v, want 200 {assignAgentIssuesToMe:false}", status, body)
 	}
 }

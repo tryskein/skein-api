@@ -249,7 +249,7 @@ func TestMCP401_ChannelSecretGateAlsoChallenges(t *testing.T) {
 }
 
 // TestNonMCP401_CarriesNoChallenge is the other half of F5: the challenge is
-// per-MOUNT. The same RequireInternalSecret guards /api/v1 and /agent/v1, whose
+// per-MOUNT. The same RequireInternalSecret guards /ui/v1 and /agent/v1, whose
 // 401s are cookie/monitor-token failures with no OAuth protected resource
 // behind them. Advertising the /mcp metadata document there would point a
 // client at an identifier that does not describe the door it was refused at —
@@ -258,7 +258,7 @@ func TestMCP401_ChannelSecretGateAlsoChallenges(t *testing.T) {
 func TestNonMCP401_CarriesNoChallenge(t *testing.T) {
 	r := newRouterUnderTest(t)
 
-	for _, path := range []string{"/api/v1/projects", "/agent/v1/notifications/poll"} {
+	for _, path := range []string{"/ui/v1/projects", "/agent/v1/notifications/poll"} {
 		t.Run(path, func(t *testing.T) {
 			rec := httptest.NewRecorder()
 			r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))

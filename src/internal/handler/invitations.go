@@ -85,7 +85,7 @@ func invitationParam(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
 // @Failure 404 {object} map[string]any "space_not_found; user_not_found (userId of no active account)"
 // @Failure 422 {object} map[string]any "personal_space, external_user, no_such_user, email_disabled, no_seats, daily_limit, captcha_required, captcha_failed, concurrent_change; invitation_agent_forbidden for an API-key caller (INV-17)"
 // @Failure 500 {object} map[string]any "Internal error"
-// @Router /api/v1/spaces/{id}/invitations [post]
+// @Router /ui/v1/spaces/{id}/invitations [post]
 func (h *InvitationsHandler) Create(w http.ResponseWriter, r *http.Request) {
 	c, ok := invitationsCaller(w, r, true)
 	if !ok {
@@ -126,7 +126,7 @@ func (h *InvitationsHandler) Create(w http.ResponseWriter, r *http.Request) {
 // @Failure 404 {object} map[string]any "space_not_found, invitation_not_found"
 // @Failure 422 {object} map[string]any "personal_space, invitation_not_pending, daily_limit, captcha_required, captcha_failed, concurrent_change; invitation_agent_forbidden for an API-key caller"
 // @Failure 500 {object} map[string]any "Internal error"
-// @Router /api/v1/spaces/{id}/invitations/{invId}/resend [post]
+// @Router /ui/v1/spaces/{id}/invitations/{invId}/resend [post]
 func (h *InvitationsHandler) Resend(w http.ResponseWriter, r *http.Request) {
 	c, ok := invitationsCaller(w, r, true)
 	if !ok {
@@ -168,7 +168,7 @@ func (h *InvitationsHandler) Resend(w http.ResponseWriter, r *http.Request) {
 // @Failure 404 {object} map[string]any "space_not_found, invitation_not_found"
 // @Failure 422 {object} map[string]any "personal_space, concurrent_change"
 // @Failure 500 {object} map[string]any "Internal error"
-// @Router /api/v1/spaces/{id}/invitations/{invId} [delete]
+// @Router /ui/v1/spaces/{id}/invitations/{invId} [delete]
 func (h *InvitationsHandler) Revoke(w http.ResponseWriter, r *http.Request) {
 	c, ok := invitationsCaller(w, r, false)
 	if !ok {
@@ -195,7 +195,7 @@ func (h *InvitationsHandler) Revoke(w http.ResponseWriter, r *http.Request) {
 // @Success 200 {object} spaces.MyInvitationsResponse "The pending invitations"
 // @Failure 401 {object} map[string]any "Missing or invalid auth"
 // @Failure 500 {object} map[string]any "Internal error"
-// @Router /api/v1/me/invitations [get]
+// @Router /ui/v1/me/invitations [get]
 func (h *InvitationsHandler) Mine(w http.ResponseWriter, r *http.Request) {
 	c, ok := invitationsCaller(w, r, false)
 	if !ok {
@@ -227,7 +227,7 @@ func (h *InvitationsHandler) Mine(w http.ResponseWriter, r *http.Request) {
 // @Failure 404 {object} map[string]any "invitation_not_found"
 // @Failure 422 {object} map[string]any "space_deleted, email_unconfirmed, invitation_invalid, external_user, concurrent_change; invitation_agent_forbidden for an API-key caller (INV-17)"
 // @Failure 500 {object} map[string]any "Internal error"
-// @Router /api/v1/me/invitations/{invId}/accept [post]
+// @Router /ui/v1/me/invitations/{invId}/accept [post]
 func (h *InvitationsHandler) AcceptMine(w http.ResponseWriter, r *http.Request) {
 	c, ok := invitationsCaller(w, r, true)
 	if !ok {
@@ -262,7 +262,7 @@ func (h *InvitationsHandler) AcceptMine(w http.ResponseWriter, r *http.Request) 
 // @Failure 404 {object} map[string]any "invitation_not_found"
 // @Failure 422 {object} map[string]any "space_deleted, invitation_invalid, concurrent_change; invitation_agent_forbidden for an API-key caller"
 // @Failure 500 {object} map[string]any "Internal error"
-// @Router /api/v1/me/invitations/{invId}/decline [post]
+// @Router /ui/v1/me/invitations/{invId}/decline [post]
 func (h *InvitationsHandler) DeclineMine(w http.ResponseWriter, r *http.Request) {
 	c, ok := invitationsCaller(w, r, true)
 	if !ok {
@@ -292,7 +292,7 @@ func (h *InvitationsHandler) DeclineMine(w http.ResponseWriter, r *http.Request)
 // @Success 200 {object} spaces.TokenInvitationView "The link's state"
 // @Failure 401 {object} map[string]any "Missing or invalid auth"
 // @Failure 500 {object} map[string]any "Internal error"
-// @Router /api/v1/invitations/{token} [get]
+// @Router /ui/v1/invitations/{token} [get]
 func (h *InvitationsHandler) View(w http.ResponseWriter, r *http.Request) {
 	c, ok := invitationsCaller(w, r, false)
 	if !ok {
@@ -322,7 +322,7 @@ func (h *InvitationsHandler) View(w http.ResponseWriter, r *http.Request) {
 // @Failure 401 {object} map[string]any "Missing or invalid auth"
 // @Failure 422 {object} map[string]any "invitation_invalid, space_deleted, invitation_other_email, external_user, concurrent_change; invitation_agent_forbidden for an API-key caller (INV-17)"
 // @Failure 500 {object} map[string]any "Internal error"
-// @Router /api/v1/invitations/{token}/accept [post]
+// @Router /ui/v1/invitations/{token}/accept [post]
 func (h *InvitationsHandler) AcceptByToken(w http.ResponseWriter, r *http.Request) {
 	c, ok := invitationsCaller(w, r, true)
 	if !ok {
@@ -349,7 +349,7 @@ func (h *InvitationsHandler) AcceptByToken(w http.ResponseWriter, r *http.Reques
 // @Failure 401 {object} map[string]any "Missing or invalid auth"
 // @Failure 422 {object} map[string]any "invitation_invalid, space_deleted, invitation_other_email, concurrent_change; invitation_agent_forbidden for an API-key caller"
 // @Failure 500 {object} map[string]any "Internal error"
-// @Router /api/v1/invitations/{token}/decline [post]
+// @Router /ui/v1/invitations/{token}/decline [post]
 func (h *InvitationsHandler) DeclineByToken(w http.ResponseWriter, r *http.Request) {
 	c, ok := invitationsCaller(w, r, true)
 	if !ok {
@@ -378,7 +378,7 @@ func (h *InvitationsHandler) DeclineByToken(w http.ResponseWriter, r *http.Reque
 // @Failure 401 {object} map[string]any "Service secret missing or wrong"
 // @Failure 429 {object} map[string]any "rate_limited"
 // @Failure 500 {object} map[string]any "internal_error"
-// @Router /api/v1/auth/invitations/{token} [get]
+// @Router /ui/v1/auth/invitations/{token} [get]
 func (h *AccountsHandler) InvitationPreview(w http.ResponseWriter, r *http.Request) {
 	resp, err := h.svc.InvitationPreview(r.Context(), chi.URLParam(r, "token"), loginClientIP(r))
 	if err != nil {
@@ -408,7 +408,7 @@ func (h *AccountsHandler) InvitationPreview(w http.ResponseWriter, r *http.Reque
 // @Failure 422 {object} map[string]any "signup_disabled, captcha_failed, space_deleted, invitation_invalid, terms_required, username_invalid, password_weak, password_pwned, email_taken, username_taken (suggestions)"
 // @Failure 429 {object} map[string]any "rate_limited"
 // @Failure 500 {object} map[string]any "internal_error"
-// @Router /api/v1/auth/invitations/{token}/signup [post]
+// @Router /ui/v1/auth/invitations/{token}/signup [post]
 func (h *AccountsHandler) InvitationSignup(w http.ResponseWriter, r *http.Request) {
 	var req accounts.InvitationSignupRequest
 	if err := decodeAccountsBody(r, &req); err != nil {

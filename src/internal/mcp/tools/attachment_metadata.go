@@ -2,13 +2,12 @@ package tools
 
 import (
 	"context"
-	"log/slog"
-	"time"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 
 	"skein-api/internal/attachments"
+	"skein-api/internal/issueops"
 	skmcp "skein-api/internal/mcp"
 )
 
@@ -22,31 +21,14 @@ type metadataResponse struct {
 // URL.
 func handleAttachmentMetadata(deps attachmentDeps) server.ToolHandlerFunc {
 	return func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-		start := time.Now()
 		userID, errResp := skmcp.RequireUser(ctx)
 		if errResp != nil {
 			return errResp, nil
 		}
-		role := callerRole(ctx)
-
-		raw, err := req.RequireString("attachmentId")
-		if err != nil {
-			return skmcp.ToolError(ErrCodeValidationError, "attachmentId is required", nil), nil
+		res, f := issueops.AttachmentMetadata(ctx, deps.ops(), userID, issueops.Args(req.GetArguments()))
+		if f != nil {
+			return toolFailure(f), nil
 		}
-		id, errResp := parseAttachmentID(raw)
-		if errResp != nil {
-			return errResp, nil
-		}
-
-		att, _, _, errResp := loadAttachmentChecked(ctx, deps.pool, deps.store, id, userID, role)
-		if errResp != nil {
-			return errResp, nil
-		}
-
-		slog.InfoContext(ctx, "mcp tool ok",
-			"tool", "skein_attachments", "action", "metadata",
-			"userId", userID.String(), "attachmentId", id.String(),
-			"latencyMs", time.Since(start).Milliseconds())
-		return skmcp.ToolJSON(metadataResponse{Attachment: att})
+		return skmcp.ToolJSON(metadataResponse{Attachment: res})
 	}
 }

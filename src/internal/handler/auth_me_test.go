@@ -68,7 +68,7 @@ func TestAuthMe_AccountFacts(t *testing.T) {
 		t.Fatal(err)
 	}
 	keys := apikeys.New(pool)
-	key, _, err := keys.Create(ctx, u, "auth me", prefix, hash)
+	key, _, err := testsupport.CreateOwnerKey(ctx, pool, u, "auth me", prefix, hash)
 	if err != nil {
 		t.Fatal(err)
 	}

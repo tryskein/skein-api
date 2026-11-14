@@ -2,17 +2,12 @@ package tools
 
 import (
 	"context"
-	"errors"
-	"fmt"
-	"log/slog"
-	"strings"
-	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 
-	"skein-api/internal/authz"
+	"skein-api/internal/issueops"
 	"skein-api/internal/issues"
 	skmcp "skein-api/internal/mcp"
 )
@@ -99,7 +94,7 @@ func RegisterCommitsDetach(s *server.MCPServer, pool *pgxpool.Pool, issuesStore 
 			}),
 		),
 		mcpgo.WithBoolean("force",
-			mcpgo.Description("Bypass lock predicate. Needs force_unlock on the issue's project (project owner, space owner, instance admin); others get `force_unlock_forbidden`. Default: false."),
+			mcpgo.Description("Bypass lock predicate. Needs the key right `manage` (else `insufficient_scope`) and force_unlock on the issue's project (project owner, space owner, instance admin); others get `force_unlock_forbidden`. Default: false."),
 			mcpgo.DefaultBool(false),
 		),
 		mcpgo.WithBoolean("verbose",
@@ -115,56 +110,11 @@ func RegisterCommitsDetach(s *server.MCPServer, pool *pgxpool.Pool, issuesStore 
 	addTool(s, tool, handleCommitsDetach(pool, issuesStore))
 }
 
-// parseDetachHashes reads the `hashes` argument: a non-empty array of
-// strings, capped at the same maximum the attach side uses.
-//
-// Shape errors are classified here rather than at the store boundary so
-// the caller is told WHICH element was wrong. The hash CONTENT is left
-// to the store's commitHashRegex — one validator, one message, whichever
-// door the request came through.
+// parseDetachHashes — see issueops.ParseDetachHashes; the refusal as a
+// batch row error.
 func parseDetachHashes(raw any) ([]string, *batchErrorDTO) {
-	rawSlice, ok := raw.([]any)
-	if !ok {
-		return nil, &batchErrorDTO{
-			Code:    ErrCodeValidationError,
-			Message: "hashes must be an array",
-		}
-	}
-	if len(rawSlice) == 0 {
-		return nil, &batchErrorDTO{
-			Code:    ErrCodeValidationError,
-			Message: "hashes must be non-empty",
-		}
-	}
-	if len(rawSlice) > maxCommitsPerCloseCall {
-		return nil, &batchErrorDTO{
-			Code:    ErrCodeValidationError,
-			Message: fmt.Sprintf("hashes may carry at most %d items (got %d)", maxCommitsPerCloseCall, len(rawSlice)),
-			Details: map[string]any{"max": maxCommitsPerCloseCall, "got": len(rawSlice)},
-		}
-	}
-
-	out := make([]string, 0, len(rawSlice))
-	for i, entry := range rawSlice {
-		s, ok := entry.(string)
-		if !ok {
-			return nil, &batchErrorDTO{
-				Code:    ErrCodeValidationError,
-				Message: fmt.Sprintf("hashes[%d] must be a string", i),
-				Details: map[string]any{"field": fmt.Sprintf("hashes[%d]", i)},
-			}
-		}
-		s = strings.TrimSpace(s)
-		if s == "" {
-			return nil, &batchErrorDTO{
-				Code:    ErrCodeValidationError,
-				Message: fmt.Sprintf("hashes[%d] is empty", i),
-				Details: map[string]any{"field": fmt.Sprintf("hashes[%d]", i)},
-			}
-		}
-		out = append(out, s)
-	}
-	return out, nil
+	h, f := issueops.ParseDetachHashes(raw)
+	return h, batchErrorFrom(f)
 }
 
 // detachReportKeys renders the per-hash verdict for the response's top
@@ -195,89 +145,17 @@ func detachReportKeys(res *issues.DetachCommitsResult) map[string]any {
 }
 
 func handleCommitsDetach(pool *pgxpool.Pool, issuesStore *issues.Store) server.ToolHandlerFunc {
+	d := issueops.Deps{Pool: pool, Issues: issuesStore}
 	return func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-		start := time.Now()
 		userID, errResp := skmcp.RequireUser(ctx)
 		if errResp != nil {
 			return errResp, nil
 		}
-
-		rawID, err := req.RequireString("issueId")
-		if err != nil {
-			return skmcp.ToolError(ErrCodeValidationError, "issueId is required", nil), nil
+		out, f := issueops.DetachCommits(ctx, d, userID, issueops.Args(req.GetArguments()))
+		if f != nil {
+			return toolFailure(f), nil
 		}
-		id := strings.TrimSpace(rawID)
-		if !looksLikeHierarchicalID(id) {
-			return skmcp.ToolError(ErrCodeValidationError,
-				"issueId must be a full hierarchical id like \"demo-42\"",
-				map[string]any{"issueId": rawID}), nil
-		}
-
-		force := req.GetBool("force", false)
-		// sk-674.18 T034 (K-28): force is force_unlock of US-6, checked
-		// on the issue's project (forceUnlockGate), not by the role.
-
-		rawHashes, ok := req.GetArguments()["hashes"]
-		if !ok || rawHashes == nil {
-			return skmcp.ToolError(ErrCodeValidationError, "hashes is required", nil), nil
-		}
-		hashes, parseErr := parseDetachHashes(rawHashes)
-		if parseErr != nil {
-			return skmcp.ToolError(parseErr.Code, parseErr.Message, parseErr.Details), nil
-		}
-
-		// Visibility before the store, exactly as skein_commits_attach
-		// does it: load the issue, check the owning project, and render
-		// an invisible project as issue_not_found so the answer never
-		// betrays that the id exists somewhere the caller cannot see.
-		issue, err := issuesStore.GetIssue(ctx, id)
-		if err != nil {
-			if errors.Is(err, issues.ErrNotFound) {
-				return skmcp.ToolError(ErrCodeIssueNotFound,
-					"issue does not exist or is not visible",
-					map[string]any{"id": id}), nil
-			}
-			slog.ErrorContext(ctx, "mcp tool error",
-				"tool", "skein_commits_detach",
-				"reason", "load issue failed",
-				"userId", userID.String(), "issueId", id, "error", err.Error())
-			return skmcp.ToolError(ErrCodeInternalError, "failed to load issue", nil), nil
-		}
-		if res := issueActionGate(ctx, pool, "skein_commits_detach", "id", id, issue.ProjectID, userID, authz.ActionWrite); res != nil {
-			return res, nil
-		}
-		if force {
-			if res := forceUnlockGate(ctx, pool, "skein_commits_detach", "id", id, issue.ProjectID, userID); res != nil {
-				return res, nil
-			}
-		}
-
-		actor := IssuesAgentActor(ctx, pool, userID)
-
-		res, err := issuesStore.DetachCommits(ctx, issues.DetachCommitsInput{
-			ID:        id,
-			Hashes:    hashes,
-			SessionID: actor.SessionID,
-			Actor:     actor,
-			Force:     force,
-		})
-		if err != nil {
-			// The close-error classifier already covers every failure
-			// this path can produce: validation_error (malformed or
-			// over-cap hashes), issue_not_found, locked_by_other, and
-			// the serialization-abort fallback. Repo resolution is not
-			// among them — detach matches on hash alone.
-			return mapCloseError(ctx, pool, issue.ProjectID, err, "skein_commits_detach", userID.String(), id, ""), nil
-		}
-
-		slog.InfoContext(ctx, "mcp tool ok",
-			"tool", "skein_commits_detach",
-			"userId", userID.String(), "issueId", id,
-			"requestedCount", len(hashes),
-			"detachedCount", len(res.Detached),
-			"notFoundCount", len(res.NotFound),
-			"latencyMs", time.Since(start).Milliseconds())
-
+		id, res := out.IssueID, out.Detach
 		return writeIssueAckWith(ctx, "skein_commits_detach", userID.String(), id,
 			res.Issue, req.GetBool("verbose", false), detachReportKeys(res))
 	}

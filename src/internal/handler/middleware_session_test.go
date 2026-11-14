@@ -22,7 +22,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
-	"skein-api/internal/apikeys"
 	"skein-api/internal/auth"
 	"skein-api/internal/testsupport"
 	"skein-api/internal/users"
@@ -65,7 +64,7 @@ func TestSessionEpoch_RaiseEndsTheUsersSessionsOnly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GenerateAPIKey: %v", err)
 	}
-	if _, _, err := apikeys.New(pool).Create(ctx, u, "epoch-test", prefix, hash); err != nil {
+	if _, _, err := testsupport.CreateOwnerKey(ctx, pool, u, "epoch-test", prefix, hash); err != nil {
 		t.Fatalf("create key: %v", err)
 	}
 	keyChain := auth.RequireAPIKey(pool, auth.MinBcryptCost, "")(

@@ -1,5 +1,7 @@
 package tools
 
+import "skein-api/internal/issueops"
+
 // close_outcome_arg.go — parsing and checking of `closeOutcome` / `closeTarget`
 // on the agent surfaces (sk-489, US-1, US-2, US-9).
 //
@@ -76,12 +78,6 @@ package tools
 // goes in the same transaction as the link (issues.EnsureCloseTargetVisible).
 // Its errors are rendered by classifyCloseError.
 
-import (
-	"strings"
-
-	"skein-api/internal/issues"
-)
-
 // closeOutcomeParamDescription / closeTargetParamDescription — descriptions of
 // the pair of parameters, shared by the four schemas.
 //
@@ -101,99 +97,15 @@ const closeTargetParamDescription = "The issue this one duplicates " +
 	"(duplicate) or that replaced it (superseded); creates that edge in " +
 	"the same transaction."
 
-// closeOutcomeArgs — the parsed pair "outcome and target" of one call.
-type closeOutcomeArgs struct {
-	// Outcome — nil means "the caller said not a word about the outcome".
-	// A pointer exactly for this distinction: "not passed" and "passed
-	// an empty string" have different consequences, and the second must be a refusal.
-	Outcome *string
-	// Target — an empty string = no target.
-	Target string
-}
+// closeOutcomeArgs — see issueops.CloseOutcomeArgs.
+type closeOutcomeArgs = issueops.CloseOutcomeArgs
 
-// HasAny reports whether the caller mentioned at least one of the two fields.
-func (a closeOutcomeArgs) HasAny() bool {
-	return a.Outcome != nil || a.Target != ""
-}
-
-// parseCloseOutcomeArgs reads `closeOutcome` / `closeTarget` from the map
-// of arguments and performs all the checks that need no database.
-//
-// `issueID` — the issue the call refers to; it catches a target
-// equal to the issue itself. An empty string disables exactly this check (it is
-// done by whoever knows the id of the position).
-//
-// `field` — a prefix of the field name in the error message: for the batch it is
-// `items[i].`, for the single tool it is empty. The message is read by an agent, and
-// "items[i].closeTarget" versus "closeTarget" is the difference between "some one of
-// a hundred positions" and "my call".
-//
-// The error is returned in the batchErrorDTO form, because both sides need it:
-// the batch puts it into results[i], the single tool unfolds it
-// into the tool error envelope via closeOutcomeArgError.
+// parseCloseOutcomeArgs — see issueops.ParseCloseOutcomeArgs; the refusal
+// as a batch row error.
 func parseCloseOutcomeArgs(args map[string]any, issueID, field string) (closeOutcomeArgs, *batchErrorDTO) {
-	var out closeOutcomeArgs
-
-	if raw, present := args["closeOutcome"]; present && raw != nil {
-		s, ok := raw.(string)
-		if !ok {
-			return out, &batchErrorDTO{
-				Code:    ErrCodeValidationError,
-				Message: field + "closeOutcome must be a string",
-			}
-		}
-		// Not trimmed: the value is checked against a closed set of four, and
-		// " done" is not "done with a space", it is not one of the four.
-		// Silently fixing it here, we would accept an input that REST rejects on the
-		// same value.
-		out.Outcome = &s
-	}
-	if raw, present := args["closeTarget"]; present && raw != nil {
-		s, ok := raw.(string)
-		if !ok {
-			return out, &batchErrorDTO{
-				Code:    ErrCodeValidationError,
-				Message: field + "closeTarget must be a string",
-			}
-		}
-		out.Target = strings.TrimSpace(s)
-	}
-
-	if !out.HasAny() {
-		return out, nil
-	}
-
-	// One resolver for all surfaces and both writers. The decision
-	// is discarded deliberately: here it would be a decision for an issue
-	// whose state we have not read yet, and the real one is made by the writer,
-	// knowing the previous outcome and whether the issue is closed.
-	if _, err := issues.DecideCloseOutcome(issues.CloseOutcomeRequest{
-		IssueID:   issueID,
-		Requested: out.Outcome,
-		Target:    out.Target,
-		// sk-540.2: whether duplicate/superseded may go without a target
-		// depends on the row (already closed? edge present?), which is not
-		// read yet — the writer enforces that rule.
-		RowStateUnknown: true,
-	}); err != nil {
-		if ve, ok := issues.IsValidationError(err); ok {
-			return out, &batchErrorDTO{
-				Code:    ErrCodeValidationError,
-				Message: ve.Message,
-				Details: map[string]any{"code": ve.Code},
-			}
-		}
-		return out, &batchErrorDTO{
-			Code:    ErrCodeValidationError,
-			Message: err.Error(),
-		}
-	}
-	return out, nil
+	o, f := issueops.ParseCloseOutcomeArgs(args, issueID, field)
+	return o, batchErrorFrom(f)
 }
 
-// closeTargetDetails — the refusal detail for the target, shared by all surfaces.
-// The key is exactly `closeTarget`, not `toId`: an agent that got a refusal must
-// see WHICH of its arguments did not resolve, and it did not send `toId`.
-func closeTargetDetails(target string) map[string]any {
-	return map[string]any{"closeTarget": target}
-}
+// closeTargetDetails — see issueops.CloseTargetDetails.
+func closeTargetDetails(target string) map[string]any { return issueops.CloseTargetDetails(target) }
