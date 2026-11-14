@@ -2257,6 +2257,9 @@ func buildRouter(
 	// and tells a caller without the secret nothing about which routes exist.
 	mountInternalAPI := func(r chi.Router) {
 		r.Use(handler.RequireInternalSecret(cfg.InternalSecret, ""))
+		// U+0000 anywhere in the request is refused before any route runs:
+		// the database cannot store it.
+		r.Use(handler.RefuseNUL)
 
 		// R5.1 — OIDC provision endpoint. Outside the user group because
 		// that group applies ParseUserHeaders to every request, and the

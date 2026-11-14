@@ -178,6 +178,9 @@ func Setup(pool *pgxpool.Pool, heartbeatInterval time.Duration, registerTools fu
 		// middleware, so a call the key may not make is refused before any
 		// other step and before the tool looks anything up.
 		server.WithToolHandlerMiddleware(KeyRights),
+		// U+0000 in any argument string is refused before the tool runs:
+		// the database cannot store it.
+		server.WithToolHandlerMiddleware(RefuseNUL),
 		// sk-275: one WARN line per tool_call_syntax_leaked rejection,
 		// carrying what actually arrived (literal, bounded window around
 		// it, field, number of text fields in the call). Registered here

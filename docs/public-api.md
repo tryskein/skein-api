@@ -283,10 +283,18 @@ Statuses (`internal/publicapi/problem.go#Status`):
 | 412 | stale `If-Match` (`version_conflict`) |
 | 413 | body over 1 MiB (`payload_too_large`) |
 | 415 | body is not `application/json` (`unsupported_media_type`) |
-| 422 | business refusal (`locked_by_other`, `cannot_claim_closed`, `duplicate_suspected`, …); a reference in the body to a missing or out-of-scope object, with the code MCP answers (`parent_not_found`, `issue_not_found`, …); `idempotency_key_reused` |
+| 422 | business refusal (`locked_by_other`, `cannot_claim_closed`, `duplicate_suspected`, …); a value the domain refuses (`validation_error`, its subcode in `validation`); a reference in the body to a missing or out-of-scope object, with the code MCP answers (`parent_not_found`, `issue_not_found`, …); `idempotency_key_reused` |
 | 428 | `If-Match` required and missing (`precondition_required`) |
 | 429 | a limit is exceeded (`rate_limited`), with `Retry-After` |
 | 500 / 503 | internal error (`internal_error`); a dependency unavailable (`database_unavailable`, `attachments_unavailable`) |
+
+U+0000 cannot be stored, so a request that carries it anywhere — a string
+value or a member name of the body (JSON `\u0000`), a query parameter, the
+path — is 422 `validation_error` with `validation: "nul_character"` and
+`field` naming where (`labels[1]`, `q`, `path`; absent for a member name at
+the top of the body), before the operation runs
+(`internal/textvalidate/nul.go#ScanJSONForNUL`). The character is never
+stripped. MCP refuses it the same way, `code: "nul_character"`.
 
 Successes: 200, 201 for a creation, 204 with no body for every `DELETE`, 207
 for a batch with per-item results (`bulkUpdateIssues`, `bulkCloseIssues`,

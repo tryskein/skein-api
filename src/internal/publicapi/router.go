@@ -11,9 +11,11 @@ package publicapi
 // (no middleware.RealIP).
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"mime"
 	"net/http"
@@ -26,6 +28,7 @@ import (
 	"skein-api/internal/errcode"
 	"skein-api/internal/handler"
 	"skein-api/internal/issueops"
+	"skein-api/internal/textvalidate"
 )
 
 // MaxBodyBytes is the largest request body the public API accepts (1 MiB,
@@ -128,7 +131,8 @@ func NewRouter(opts RouterOptions, routes []Route) http.Handler {
 // routeHandler wraps the handler of rt: the operation runs under its
 // deadline with the route in its context; the request chain comes first,
 // then Idempotency-Key is refused on a route that does not accept it, then
-// the body is checked (media type, size), then the request rules of the
+// the body is checked (media type, size), then U+0000 is refused anywhere in
+// the request (refuseNUL), then the request rules of the
 // route — fields=, Idempotency, If-Match, Prefer — all before the
 // operation.
 func routeHandler(opts RouterOptions, rt Route) http.Handler {
@@ -159,7 +163,11 @@ func routeHandler(opts RouterOptions, rt Route) http.Handler {
 			}
 			r.Body = http.MaxBytesReader(w, r.Body, MaxBodyBytes)
 		}
-		r, ok := checkFields(w, r, rt)
+		r, ok := refuseNUL(w, r)
+		if !ok {
+			return
+		}
+		r, ok = checkFields(w, r, rt)
 		if !ok {
 			return
 		}
@@ -177,6 +185,51 @@ func routeHandler(opts RouterOptions, rt Route) http.Handler {
 		ctx = issueops.WithPublicAPI(ctx)
 		chained.ServeHTTP(w, r.WithContext(ctx))
 	})
+}
+
+// refuseNUL answers 422 validation_error (validation nul_character, field
+// naming where) when the path, a query parameter or a string of the JSON
+// body carries U+0000, which the database cannot store
+// (textvalidate.ScanJSONForNUL). It runs before every operation, so no
+// operation reaches the store with one. The body is read here, within
+// MaxBodyBytes, and handed on unchanged; a body that is not valid JSON is
+// left to the decoder of the operation, which answers it. The status is the
+// domain's 422, not the parsing layer's 400: the request is well-formed and
+// the value is refused because it cannot be stored.
+func refuseNUL(w http.ResponseWriter, r *http.Request) (*http.Request, bool) {
+	if err := textvalidate.FindNULInURL(r.URL); err != nil {
+		writeNULProblem(w, err)
+		return r, false
+	}
+	if !hasBody(r) {
+		return r, true
+	}
+	raw, err := io.ReadAll(r.Body)
+	if err != nil {
+		if IsBodyTooLarge(err) {
+			WriteProblem(w, Problem{Code: errcode.PayloadTooLarge, Origin: OriginParse})
+			return r, false
+		}
+		WriteParseError(w, errors.New("the request body could not be read"))
+		return r, false
+	}
+	r.Body = io.NopCloser(bytes.NewReader(raw))
+	var nulErr *textvalidate.NULError
+	if err := textvalidate.ScanJSONForNUL(raw); errors.As(err, &nulErr) {
+		writeNULProblem(w, nulErr)
+		return r, false
+	}
+	return r, true
+}
+
+// writeNULProblem answers a refused U+0000.
+func writeNULProblem(w http.ResponseWriter, err error) {
+	ext := map[string]any{"validation": textvalidate.NULCode}
+	var nulErr *textvalidate.NULError
+	if errors.As(err, &nulErr) && nulErr.Field != "" {
+		ext["field"] = nulErr.Field
+	}
+	WriteProblem(w, Problem{Code: errcode.ValidationError, Origin: OriginDomain, Detail: err.Error(), Extensions: ext})
 }
 
 // IsBodyTooLarge reports whether err is the failure of reading a body past
