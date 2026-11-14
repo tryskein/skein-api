@@ -8,6 +8,7 @@ package logging
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"strings"
@@ -91,13 +92,74 @@ func (h *DualHandler) Enabled(_ context.Context, level slog.Level) bool {
 }
 
 // Handle dispatches the record to JSON for Error+ and text for everything else,
-// after folding in any context-derived attrs.
+// after folding in any context-derived attrs. An error record about a request
+// its client cancelled is written at INFO (clientCanceled).
 func (h *DualHandler) Handle(ctx context.Context, r slog.Record) error {
 	r = h.withContextAttrs(ctx, r)
+	if r.Level >= slog.LevelError && clientCanceled(ctx, r) {
+		if slog.LevelInfo < h.level {
+			return nil
+		}
+		r = canceledRecord(r)
+	}
 	if r.Level >= slog.LevelError {
 		return h.jsonHandler.Handle(ctx, r)
 	}
 	return h.textHandler.Handle(ctx, r)
+}
+
+// CancelKey and CanceledByClient are the attribute a record downgraded by
+// clientCanceled carries: cancel=client_canceled. A key of its own, so it
+// never collides with the reason or outcome many lines already carry.
+const (
+	CancelKey        = "cancel"
+	CanceledByClient = "client_canceled"
+)
+
+// clientCanceled reports whether r reports a failure that is only the
+// cancellation of the request by its client: the context of the record was
+// cancelled — not timed out — and the record's "error" attribute is that
+// cancellation (an error wrapping context.Canceled, or its text inside the
+// usual err.Error() string). Such a failure is not a fault of the service:
+// the client went away (left the page, changed the filter, re-sent), and an
+// ERROR line for it drowns the real ones and fires alerts. A timeout on our
+// side (context.DeadlineExceeded) and any other error stay ERROR.
+//
+// The rule lives in the one handler every log line passes through, so a
+// handler, a store or a tool that logs ErrorContext with the request's
+// context needs no check of its own.
+func clientCanceled(ctx context.Context, r slog.Record) bool {
+	if ctx == nil || !errors.Is(ctx.Err(), context.Canceled) {
+		return false
+	}
+	canceled := false
+	r.Attrs(func(a slog.Attr) bool {
+		if a.Key != "error" {
+			return true
+		}
+		v := a.Value.Resolve()
+		switch v.Kind() {
+		case slog.KindString:
+			canceled = strings.Contains(v.String(), context.Canceled.Error())
+		case slog.KindAny:
+			if err, ok := v.Any().(error); ok {
+				canceled = errors.Is(err, context.Canceled)
+			}
+		}
+		return false
+	})
+	return canceled
+}
+
+// canceledRecord is r at INFO with cancel=client_canceled.
+func canceledRecord(r slog.Record) slog.Record {
+	out := slog.NewRecord(r.Time, slog.LevelInfo, r.Message, r.PC)
+	r.Attrs(func(a slog.Attr) bool {
+		out.AddAttrs(a)
+		return true
+	})
+	out.AddAttrs(slog.String(CancelKey, CanceledByClient))
+	return out
 }
 
 // withContextAttrs appends the configured context-derived attrs to a copy of
