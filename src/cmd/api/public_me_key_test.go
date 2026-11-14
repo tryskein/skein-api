@@ -10,7 +10,9 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
+	"net/http/httptest"
 	"slices"
 	"sort"
 	"strings"
@@ -20,6 +22,7 @@ import (
 
 	"skein-api/internal/apikeys"
 	"skein-api/internal/auth"
+	"skein-api/internal/testsupport"
 )
 
 // meKeyOf reads the key member of GET /api/v1/me with key.
@@ -158,4 +161,32 @@ func TestPublicMe_Key(t *testing.T) {
 			t.Errorf("unavailableRights %v, want [admin]", got)
 		}
 	})
+}
+
+// TestPublicMe_DeletedKeyIsUnauthenticated — a key deleted after the request
+// authenticated with it is answered 401 unauthenticated, not 500: the
+// request no longer has a key. The request chain is left out so the request
+// can carry the id of a key that does not exist, as it would after the
+// deletion.
+func TestPublicMe_DeletedKeyIsUnauthenticated(t *testing.T) {
+	pool := testsupport.NewTestPool(t)
+	owner, _ := testsupport.SeedUser(t, pool, "")
+	deps := classDeps(pool)
+	deps.Pool = pool
+	srv, err := publicServer(publicConfig(true, freePort(t), ""), nil, deps, slog.New(&recordingHandler{}))
+	if err != nil || srv == nil {
+		t.Fatalf("publicServer = %v, %v", srv, err)
+	}
+	ctx := auth.WithUserID(context.Background(), owner)
+	ctx = auth.WithAPIKeyID(ctx, uuid.New())
+	ctx = auth.WithKeyGrant(ctx, apikeys.Grant{Level: apikeys.LevelRead, Scope: apikeys.Scope{Mode: apikeys.ScopeAll}})
+	rec := httptest.NewRecorder()
+	srv.Handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/me", nil).WithContext(ctx))
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("answer %d %q: %v", rec.Code, rec.Body.String(), err)
+	}
+	if rec.Code != http.StatusUnauthorized || body["code"] != "unauthenticated" {
+		t.Errorf("answered %d %s, want 401 unauthenticated", rec.Code, rec.Body.String())
+	}
 }

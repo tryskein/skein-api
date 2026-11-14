@@ -10550,7 +10550,7 @@
                                 }
                             }
                         },
-                        "description": "No key, or the key is invalid, expired or revoked, or its owner is deactivated (code unauthenticated)"
+                        "description": "No key, or the key is invalid, expired, revoked or deleted, or its owner is deactivated (code unauthenticated)"
                     },
                     "404": {
                         "content": {

@@ -318,7 +318,7 @@ func meKey(k apikeys.APIKey) MeKey {
 // @Produce json
 // @Security SkeinApiKey
 // @Success 200 {object} MeResponse "The caller and the key"
-// @Failure 401 {object} ProblemDocument "No key, or the key is invalid, expired or revoked, or its owner is deactivated (code unauthenticated)"
+// @Failure 401 {object} ProblemDocument "No key, or the key is invalid, expired, revoked or deleted, or its owner is deactivated (code unauthenticated)"
 // @Failure 404 {object} ProblemDocument "The key's owner no longer exists (code user_not_found)"
 // @Failure 429 {object} ProblemDocument "Request limit of the key or failed-authentication limit of the address exceeded (code rate_limited, Retry-After)"
 // @Failure 500 {object} ProblemDocument "Internal error (code internal_error)"
@@ -344,6 +344,12 @@ func (a *projectsAPI) getMe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	key, err := apikeys.New(a.pool).GetByUser(r.Context(), callerOf(r), keyID)
+	if errors.Is(err, apikeys.ErrNotFound) {
+		// The key was deleted after the request authenticated with it: the
+		// request no longer has a key.
+		writeCode(w, errcode.Unauthenticated, OriginDomain, "the API key of the request no longer exists", nil)
+		return
+	}
 	if err != nil {
 		WriteInternalError(w, r, "reading the API key of the request", err)
 		return
