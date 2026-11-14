@@ -115,9 +115,21 @@ type Route struct {
 	// return=minimal (a single operation returning one resource with its
 	// own version).
 	Prefer bool
+	// Location is the Location of the resource an Idempotent creation
+	// answers, from the id of the resource: the operation sets the header
+	// with it, and a repeat answered from the stored outcome sets it again,
+	// so the repeat is the first answer (US-7). nil for an operation that
+	// answers no Location.
+	Location func(id string) string
 	// Handler serves the operation.
 	Handler http.Handler
 }
+
+// IssueLocation is the Location of a created issue (an epic included).
+func IssueLocation(id string) string { return PathPrefix + "issues/" + id }
+
+// CommentLocation is the Location of a created comment.
+func CommentLocation(id string) string { return PathPrefix + "comments/" + id }
 
 // ObjectKind is the kind of an object a response refers to.
 type ObjectKind string
@@ -301,9 +313,9 @@ func ProductRoutes(d Deps) []Route {
 
 		// Issue writes (T024).
 		writeRoute(OperationCreateIssue, http.MethodPost, "projects/{project}/issues", ObjectPathProject, wa.createIssue,
-			routeFlags{prefer: true, idempotent: true, hydrate: wa.hydrateIssue}),
+			routeFlags{prefer: true, idempotent: true, hydrate: wa.hydrateIssue, location: IssueLocation}),
 		writeRoute(OperationCreateEpic, http.MethodPost, "projects/{project}/epics", ObjectPathProject, wa.createEpic,
-			routeFlags{prefer: true, idempotent: true, hydrate: wa.hydrateEpic}),
+			routeFlags{prefer: true, idempotent: true, hydrate: wa.hydrateEpic, location: IssueLocation}),
 		writeRoute(OperationUpdateIssue, http.MethodPatch, "issues/{issue}", ObjectPathIssueProject, wa.updateIssue,
 			routeFlags{prefer: true, guarded: true, ifMatch: IfMatchRequired}),
 		writeRoute(OperationClaimIssue, http.MethodPost, "issues/{issue}/claim", ObjectPathIssueProject, wa.claimIssue,
@@ -338,7 +350,7 @@ func ProductRoutes(d Deps) []Route {
 		// attachment of the path is checked by its operation, as in MCP: the
 		// route names no project of its own.
 		writeRoute(OperationCreateComment, http.MethodPost, "issues/{issue}/comments", ObjectPathIssueProject, wa.createComment,
-			routeFlags{prefer: true, idempotent: true, hydrate: wa.hydrateComment}),
+			routeFlags{prefer: true, idempotent: true, hydrate: wa.hydrateComment, location: CommentLocation}),
 		key(OperationGetComment, http.MethodGet, "comments/{comment}", read, ObjectNone, nil, wa.getComment),
 		writeRoute(OperationUpdateComment, http.MethodPatch, "comments/{comment}", ObjectNone, wa.updateComment,
 			routeFlags{prefer: true, ifMatch: IfMatchRequired, noActions: true}),
@@ -424,6 +436,9 @@ type routeFlags struct {
 	prefer, guarded, idempotent bool
 	ifMatch                     IfMatch
 	hydrate                     Hydrator
+	// location is the Location of the resource an Idempotent creation
+	// answers (Route.Location).
+	location func(id string) string
 	// actions are the owner's actions on the object; nil — write.
 	actions []authz.Action
 	// noActions — the route checks no action on one object (a batch).
@@ -440,6 +455,6 @@ func writeRoute(id, method, path string, obj ActionObject, h http.HandlerFunc, f
 		OperationID: id, Method: method, Path: PathPrefix + path, Auth: AuthKey,
 		Key: authz.KeyRequirement{Right: authz.KeyRightWrite}, Guarded: f.guarded,
 		Actions: actions, Object: obj, IfMatch: f.ifMatch, Idempotent: f.idempotent,
-		Hydrate: f.hydrate, Prefer: f.prefer, Handler: h,
+		Hydrate: f.hydrate, Prefer: f.prefer, Location: f.location, Handler: h,
 	}
 }

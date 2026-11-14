@@ -237,7 +237,10 @@ operation answers 400 `idempotency_not_supported` to it, batches included.
   every object of the stored answer. If that fails, the ordinary refusal is
   answered, not the stored one. Then the stored answer is returned without
   re-checking business preconditions (`If-Match`, the duplicate gate); no new
-  object, event or notification is created.
+  object, event or notification is created. The repeat carries the status,
+  the body and the headers of the first answer: `ETag`, the `Location` of a
+  creation (`internal/publicapi/routes.go#Route`, its `Location`),
+  `Content-Type`, `Preference-Applied`.
 - **Still running.** A repeat while the first request runs is 409
   `idempotency_in_progress` (`retryable`); send it again later. The mark lives
   `SKEIN_PUBLIC_API_WRITE_TIMEOUT` plus 30 seconds
@@ -248,8 +251,8 @@ operation answers 400 `idempotency_not_supported` to it, batches included.
 - **A crash between commit and answer.** The outcome (status, `id`, version)
   is recorded in the same transaction as the write; the body is stored after
   the commit. If the process failed in between, a repeat answers the same
-  status, `id` and version (`ETag`), and the other fields of the resource as
-  they are now.
+  status, `id` and version (`ETag`), the same `Location`, and the other fields
+  of the resource as they are now.
 
 ## The duplicate gate
 

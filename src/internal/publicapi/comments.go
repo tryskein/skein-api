@@ -135,7 +135,7 @@ func (a *issueWrites) createComment(w http.ResponseWriter, r *http.Request) {
 		writeFailure(w, f, id)
 		return
 	}
-	w.Header().Set("Location", PathPrefix+"comments/"+c.ID.String())
+	w.Header().Set("Location", CommentLocation(c.ID.String()))
 	writeComment(w, r, http.StatusCreated, c)
 }
 

@@ -342,7 +342,7 @@ func (a *issueWrites) createIssue(w http.ResponseWriter, r *http.Request) {
 	if res.ReadBack != nil {
 		issue = detailFromCommitted(res.ReadBack.State)
 	}
-	w.Header().Set("Location", PathPrefix+"issues/"+issue.ID)
+	w.Header().Set("Location", IssueLocation(issue.ID))
 	writeIssue(w, r, http.StatusCreated, issue)
 }
 
@@ -457,7 +457,7 @@ func (a *issueWrites) createEpic(w http.ResponseWriter, r *http.Request) {
 	if children == nil {
 		children = []*issues.IssueDetail{}
 	}
-	w.Header().Set("Location", PathPrefix+"issues/"+epic.ID)
+	w.Header().Set("Location", IssueLocation(epic.ID))
 	SetETag(w, epic.Version)
 	WriteJSON(w, r, http.StatusCreated, EpicCreated{IssueDetail: *epic, Children: children})
 }

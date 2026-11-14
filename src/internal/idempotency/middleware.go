@@ -358,8 +358,11 @@ func namedResource(rec *recorder) (string, int) {
 	return body.ID, version
 }
 
-// replay answers the stored outcome s, after re-checking what a repeat must
-// still pass (US-7): the key right in the mode of the first request, the
+// replay answers the stored outcome s with the status, body and headers of
+// the first answer — ETag from the recorded version, Location from the
+// recorded id by the route (Route.Location), Content-Type and
+// Preference-Applied — after re-checking what a repeat must still pass
+// (US-7): the key right in the mode of the first request, the
 // key's scope and the owner's visibility of the target and of every object
 // of the response, then the owner's role on the target by the effective
 // actions of the route in that mode. A failed check answers as for any
@@ -431,6 +434,9 @@ func (m *Middleware) replay(w http.ResponseWriter, r *http.Request, rt publicapi
 	}
 	if s.Version != nil {
 		publicapi.SetETag(w, int(*s.Version))
+	}
+	if success && rt.Location != nil && s.ID != nil {
+		w.Header().Set("Location", rt.Location(*s.ID))
 	}
 	if minimal {
 		w.Header().Set("Preference-Applied", "return=minimal")
