@@ -13,8 +13,10 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -816,7 +818,7 @@ func main() {
 	nc, ncErr := connectNATS(cfg, natsClosed)
 	if ncErr != nil {
 		slog.Error("NATS connect failed; outbox dispatcher disabled",
-			"natsUrl", cfg.NATSURL, "error", ncErr.Error())
+			"natsUrl", redactNATSURL(cfg.NATSURL), "error", ncErr.Error())
 	}
 	themesPublisher := themes.NewPublisher(nc)
 	// sk-622.21 T014: personal signals (`skein.user.{uid}.signal`) are
@@ -1258,22 +1260,55 @@ func connectNATS(cfg *config.Config, closed chan<- struct{}) (*nats.Conn, error)
 			}
 		}),
 		nats.ReconnectHandler(func(c *nats.Conn) {
-			slog.Info("nats reconnected", "url", c.ConnectedUrl())
+			slog.Info("nats reconnected", "url", redactNATSURL(c.ConnectedUrl()))
 		}),
 	)
 	if err != nil {
-		return nil, fmt.Errorf("nats connect %q: %w", cfg.NATSURL, err)
+		// A url.Error quotes the raw URL, credentials included: keep only
+		// its cause.
+		var uerr *url.Error
+		if errors.As(err, &uerr) {
+			err = uerr.Err
+		}
+		return nil, fmt.Errorf("nats connect %s: %w", redactNATSURL(cfg.NATSURL), err)
 	}
 	if nc.IsConnected() {
-		slog.Info("nats connected", "url", nc.ConnectedUrl())
+		slog.Info("nats connected", "url", redactNATSURL(nc.ConnectedUrl()))
 	} else {
 		// RetryOnFailedConnect: the first dial failed and the client keeps
 		// dialling in the background; ConnectedUrl() is empty until then.
 		// "nats reconnected" (ReconnectHandler) marks the moment it lands.
 		slog.Warn("nats unreachable at startup; connecting in background",
-			"natsUrl", cfg.NATSURL)
+			"natsUrl", redactNATSURL(cfg.NATSURL))
 	}
 	return nc, nil
+}
+
+// redactNATSURL renders NATS_URL (a comma-separated server list) for logs
+// and errors without its userinfo: NATS credentials travel in the URL as
+// user:password or as a bare token in the user part, and url.URL.Redacted
+// masks only a password. A schemeless entry gets the nats:// scheme first,
+// as the client does, so "user:pass@host" is not read as a scheme. An entry
+// that does not parse is replaced, never echoed.
+func redactNATSURL(raw string) string {
+	if raw == "" {
+		return ""
+	}
+	parts := strings.Split(raw, ",")
+	for i, part := range parts {
+		part = strings.TrimSpace(part)
+		if !strings.Contains(part, "://") {
+			part = "nats://" + part
+		}
+		u, err := url.Parse(part)
+		if err != nil {
+			parts[i] = "<invalid url>"
+			continue
+		}
+		u.User = nil
+		parts[i] = u.String()
+	}
+	return strings.Join(parts, ",")
 }
 
 // setupLogger installs a slog default logger using DualHandler:
