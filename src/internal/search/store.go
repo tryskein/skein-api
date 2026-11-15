@@ -326,7 +326,11 @@ func (s *Store) SearchComments(ctx context.Context, in SearchInput) ([]Item, err
 		commentFilterFrag = fmt.Sprintf(" AND c.author_kind = ANY(%s)", addArg(in.Filters.CommentAuthorKinds))
 	}
 
-	whereCommon := fmt.Sprintf("%s%s%s", permFrag, projectFrag, commentFilterFrag)
+	// A soft-deleted comment keeps its body, tsvectors and embedding in the
+	// row, but its text never reaches a client: the predicate sits in
+	// whereCommon, so neither candidate CTE (and therefore no snippet) can
+	// pick the row.
+	whereCommon := fmt.Sprintf("c.deleted_at IS NULL AND %s%s%s", permFrag, projectFrag, commentFilterFrag)
 
 	var query string
 	if in.Vec != nil {
