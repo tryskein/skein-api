@@ -15,10 +15,11 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
-// MinBcryptCost is the cheapest bcrypt cost the package is exercised with
-// (bcrypt.DefaultCost); tests pass it to keep hashing fast. It is NOT the
-// production floor and nothing enforces it: the configured cost is validated
-// by config.Load against config.MinBcryptCost (12).
+// MinBcryptCost is the reduced bcrypt cost (bcrypt.DefaultCost, 10) that
+// tests pass to Hash, GenerateAPIKey and the stores to keep hashing fast;
+// some tests go lower still (bcrypt.MinCost). It is NOT the production
+// floor and nothing enforces it: the configured cost is validated by
+// config.Load against config.MinBcryptCost (12).
 const MinBcryptCost = bcrypt.DefaultCost
 
 // MaxBcryptCost is the ceiling enforced by golang.org/x/crypto/bcrypt itself
