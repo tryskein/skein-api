@@ -23,6 +23,7 @@ class _SkeinLoaderStop(Exception):
 _SKEIN_LOADER_STOPS = {
     "token_expired": ("closed", 0),
     "token_file_missing": ("closed", 1),
+    "token_file_insecure": ("closed", 1),
     "misconfigured": ("closed", 1),
     "runner_mismatch": ("closed", 1),
     "server_unreachable": ("paused", 1),
@@ -39,6 +40,10 @@ def _skein_loader_action(reason, issue):
     if reason == "token_file_missing":
         return ("The monitor for issue %s cannot start: its token file is missing, empty or unreadable. "
                 "Mint a new monitor with %s." % (issue, mint))
+    if reason == "token_file_insecure":
+        return ("The token file of the monitor for issue %s can be read by other users, so the monitor "
+                "did not start. Mint a new monitor with %s and run its `prepare` before writing the "
+                "token." % (issue, mint))
     if reason == "misconfigured":
         return ("The bootstrap of the monitor for issue %s is broken (the server address, the token "
                 "file path or the runner digest is not set). Mint a new monitor with %s." % (issue, mint))
@@ -65,6 +70,9 @@ def _skein_loader_finish(stop):
     if stop.delete_token and path:
         try:
             os.remove(path)
+            parent = os.path.dirname(os.path.abspath(path))
+            if os.path.basename(parent).startswith("skein-mon-"):
+                os.rmdir(parent)
         except OSError:
             pass
     event, code = _SKEIN_LOADER_STOPS[stop.reason]
@@ -78,19 +86,38 @@ def _skein_loader_finish(stop):
 
 
 def _skein_loader_fetch():
-    import hashlib, http.client, os, urllib.error, urllib.request as u
+    import hashlib, http.client, os, stat, urllib.error, urllib.request as u
     path = os.environ.get("SKEIN_TOKEN_FILE", "")
     base = os.environ.get("SKEIN_PUBLIC_URL", "")
     want = os.environ.get("SKEIN_RUNNER_SHA256", "")
     if not path or not base or not want:
         raise _SkeinLoaderStop("misconfigured", delete_token=bool(path))
     try:
-        with open(path) as fh:
-            token = fh.read().strip()
-    except FileNotFoundError:
+        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    except OSError:
         raise _SkeinLoaderStop("token_file_missing")
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode):
+            raise _SkeinLoaderStop("token_file_missing")
+        # No one else may read the token: the file is ours and private, or
+        # sits in a private directory of ours (made by the prepare command).
+        if hasattr(os, "getuid"):
+            uid = os.getuid()
+            private = st.st_uid == uid and not st.st_mode & 0o077
+            if st.st_uid == uid and not private:
+                try:
+                    d = os.lstat(os.path.dirname(os.path.abspath(path)))
+                    private = stat.S_ISDIR(d.st_mode) and d.st_uid == uid and not d.st_mode & 0o077
+                except OSError:
+                    pass
+            if not private:
+                raise _SkeinLoaderStop("token_file_insecure")
+        token = os.read(fd, 65536).decode("utf-8").strip()
     except (OSError, UnicodeDecodeError):
         raise _SkeinLoaderStop("token_file_missing")
+    finally:
+        os.close(fd)
     if not token:
         raise _SkeinLoaderStop("token_file_missing", delete_token=True)
     req = u.Request(base + "/agent/v1/monitor-script", headers={"X-Skein-Api-Key": token})

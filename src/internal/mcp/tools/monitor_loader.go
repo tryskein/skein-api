@@ -9,7 +9,7 @@ import (
 // via `python3 -c` (sk-579 T006: moved out of a Go string constant into an
 // embedded asset so it can grow into multi-line code and be executed by the
 // Python tests directly). It interpolates NO caller-supplied value: it reads
-// the token from the 0600 file named by SKEIN_TOKEN_FILE, fetches the runner
+// the token from the private file named by SKEIN_TOKEN_FILE, fetches the runner
 // body from SKEIN_PUBLIC_URL + /agent/v1/monitor-script with the token in the
 // X-Skein-Api-Key header, verifies the HTTP status, and exec()s the body at
 // module level (the runner runs as __main__, exactly as before).

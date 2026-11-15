@@ -24,8 +24,11 @@
 #     nothing every cycle for as long as the monitor runs.
 #
 # Auth + secret hygiene (spec §6 / R8):
-#   - The skm_ token is read once from the 0600 file at SKEIN_TOKEN_FILE —
-#     never from argv / process-env / shell history. The file's fate on each
+#   - The skm_ token is read once from the file at SKEIN_TOKEN_FILE — never
+#     from argv / process-env / shell history. The file must be no one else's
+#     to read: ours, not a symlink, and either without group/other bits or
+#     inside a directory of ours without them (the mint's `prepare`);
+#     otherwise the runner stops with token_file_insecure. The file's fate on each
 #     stop is the token-file column of the stop table: it is kept on a
 #     signal or an internal error, so the same bootstrap can restart the
 #     monitor while the token lives, and deleted when the token is dead.
@@ -53,6 +56,7 @@ import json
 import os
 import random
 import signal
+import stat
 import subprocess
 import sys
 import time
@@ -140,19 +144,32 @@ def jitter(base):
 def open_token(path):
     """Open the token file, take the one-runner lock, read the token.
 
-    Order is open → lock → read (sk-579 INV-13): a missing file is reported
-    as missing, never as somebody else's lock. Raises Stop for every outcome
+    Order is open → check → lock → read (sk-579 INV-13): a missing file is
+    reported as missing, never as somebody else's lock, and a file others can
+    read is refused before its token is read. Raises Stop for every outcome
     that ends the runner; returns (fd, token) otherwise. The fd stays open for
     the life of the process — it holds the lock, which the kernel releases on
     any death of the process, SIGKILL included.
     """
     try:
-        fd = os.open(path, os.O_RDONLY)
+        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
     except FileNotFoundError:
         raise Stop("token_file_missing")
     except OSError:
-        # Unreadable (a directory, no permission): not ours to touch.
+        # Unreadable (a symlink, no permission): not ours to touch.
         raise Stop("token_file_missing")
+    try:
+        st = os.fstat(fd)
+    except OSError:
+        os.close(fd)
+        raise Stop("token_file_missing")
+    if not stat.S_ISREG(st.st_mode):
+        # A directory or a device: not ours to touch.
+        os.close(fd)
+        raise Stop("token_file_missing")
+    if not token_file_private(path, st):
+        os.close(fd)
+        raise Stop("token_file_insecure")
     if fcntl is None:
         log_stderr("monitor runner: this platform has no OS file locks; running without the "
                    "one-runner lock, so a second runner on this token file is not prevented")
@@ -183,6 +200,39 @@ def open_token(path):
         os.close(fd)
         raise Stop("token_file_missing", delete_token=True)
     return fd, token
+
+
+def token_file_private(path, st):
+    """True when no other user can read the token file of stat st: it is
+    ours and either has no group/other bits or sits in a directory of ours
+    that has none. Platforms without POSIX owners (Windows) are not checked."""
+    if not hasattr(os, "getuid"):
+        return True
+    uid = os.getuid()
+    if st.st_uid != uid:
+        return False
+    if not st.st_mode & 0o077:
+        return True
+    try:
+        parent = os.lstat(os.path.dirname(os.path.abspath(path)))
+    except OSError:
+        return False
+    return stat.S_ISDIR(parent.st_mode) and parent.st_uid == uid and not parent.st_mode & 0o077
+
+
+def remove_token_file(path):
+    """Delete the token file, and its directory when it is the mint's own
+    skein-mon-* directory and nothing else is left in it."""
+    try:
+        os.remove(path)
+    except OSError:
+        return
+    parent = os.path.dirname(os.path.abspath(path))
+    if os.path.basename(parent).startswith("skein-mon-"):
+        try:
+            os.rmdir(parent)
+        except OSError:
+            pass
 
 
 def build_url(base, cursor, exclude_session=""):
@@ -218,6 +268,7 @@ def build_url(base, cursor, exclude_session=""):
 # visibility_lost     closed    0     deleted
 # token_file_missing  closed    1     missing stays missing; empty → deleted;
 #                                     unreadable → not touched
+# token_file_insecure closed    1     not touched
 # misconfigured       closed    1     deleted when its path is known
 # stopped             paused    0     kept
 # internal_error      paused    1     kept
@@ -227,6 +278,7 @@ STOPS = {
     "token_expired": ("closed", 0),
     "visibility_lost": ("closed", 0),
     "token_file_missing": ("closed", 1),
+    "token_file_insecure": ("closed", 1),
     "misconfigured": ("closed", 1),
     "stopped": ("paused", 0),
     "internal_error": ("paused", 1),
@@ -247,6 +299,10 @@ def stop_action(reason, issue):
     if reason == "token_file_missing":
         return ("The monitor for issue %s cannot run: its token file is missing, empty or unreadable. "
                 "Mint a new monitor with %s." % (issue, mint))
+    if reason == "token_file_insecure":
+        return ("The token file of the monitor for issue %s can be read by other users, so the monitor "
+                "did not start. Mint a new monitor with %s and run its `prepare` before writing the "
+                "token." % (issue, mint))
     if reason == "misconfigured":
         return ("The bootstrap of the monitor for issue %s is broken (the server address or the token "
                 "file path is not set). Mint a new monitor with %s." % (issue, mint))
@@ -577,10 +633,7 @@ def finish(outcome, issue, token_file):
     """Apply the token-file fate of the stop, print its line, return its code."""
     event, code = STOPS[outcome.reason]
     if outcome.delete_token and token_file:
-        try:
-            os.remove(token_file)
-        except OSError:
-            pass
+        remove_token_file(token_file)
     line = {"event": event, "reason": outcome.reason, "action": stop_action(outcome.reason, issue)}
     if outcome.status is not None:
         line["status"] = outcome.status

@@ -36,7 +36,7 @@ const (
 // the /agent/v1 data plane. Like AgentPollHandler it is mounted under
 // RequireInternalSecret + RequireMonitorToken, so a request only reaches Script
 // with a valid skm_ monitor token — the gate is for audit (the body itself is
-// generic: it carries no secret, the token is read by the runner from a 0600
+// generic: it carries no secret, the token is read by the runner from a private
 // file at runtime).
 type AgentScriptHandler struct {
 	// body is the runner source with the timing placeholders already
@@ -90,7 +90,7 @@ func wholeSecondsAtLeastOne(d time.Duration) int {
 // @Description  Returns the Python 3 stdlib poll-runner body, ready to be
 // @Description  executed by the calling agent under Claude Code's Monitor
 // @Description  tool. The body is generic — it carries no secret; the runner
-// @Description  reads its skm_ token from a 0600 file (SKEIN_TOKEN_FILE) at
+// @Description  reads its skm_ token from a private file (SKEIN_TOKEN_FILE) at
 // @Description  runtime. The operator-configured timings — poll cadence,
 // @Description  backoff ceiling, per-request limit and stall threshold
 // @Description  (sk-579) — are substituted into the body before it is served.

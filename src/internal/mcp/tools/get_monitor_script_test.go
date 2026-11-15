@@ -178,12 +178,17 @@ func TestGetMonitorScript_HappyPath(t *testing.T) {
 	// path the bootstrap embeds, AND a concrete literal /tmp/... path (no shell
 	// expansion), because the agent writes the token with the Write tool, which
 	// does NOT expand ${XDG_RUNTIME_DIR:-/tmp}. A mismatch was the bug.
-	// sk-239: the path is /tmp/skein-mon-<id>-<random hex>.token — per minted
+	// sk-239: the path is /tmp/skein-mon-<id>-<random hex>/token — per minted
 	// credential, not per issue (see TestGetMonitorScript_TokenFilePathIsPerCall).
 	tokenFilePath, _ := body["tokenFilePath"].(string)
 	wantPrefix := "/tmp/skein-mon-" + issueID + "-"
-	if !strings.HasPrefix(tokenFilePath, wantPrefix) || !strings.HasSuffix(tokenFilePath, ".token") {
-		t.Fatalf("tokenFilePath = %q, want literal %q<hex>.token", tokenFilePath, wantPrefix)
+	if !strings.HasPrefix(tokenFilePath, wantPrefix) || !strings.HasSuffix(tokenFilePath, "/token") {
+		t.Fatalf("tokenFilePath = %q, want literal %q<hex>/token", tokenFilePath, wantPrefix)
+	}
+	// prepare creates the token file's own directory, private to the user.
+	wantPrepare := "mkdir -m 700 " + shellSingleQuote(strings.TrimSuffix(tokenFilePath, "/token"))
+	if got, _ := body["prepare"].(string); got != wantPrepare {
+		t.Fatalf("prepare = %q, want %q", got, wantPrepare)
 	}
 	// Literal path: no shell parameter expansion the Write tool cannot resolve.
 	if strings.ContainsAny(tokenFilePath, "$}{") {
@@ -472,8 +477,8 @@ func TestMonitorTokenFilePath_UniquePerCall(t *testing.T) {
 
 		// Still a concrete literal under /tmp, still issue-scoped for humans
 		// eyeballing /tmp during a run.
-		if !strings.HasPrefix(p, "/tmp/skein-mon-"+issueID+"-") || !strings.HasSuffix(p, ".token") {
-			t.Fatalf("path %q lost its literal /tmp/skein-mon-<id>-<hex>.token shape", p)
+		if p != "/tmp/skein-mon-"+issueID+"-"+d+"/token" {
+			t.Fatalf("path %q lost its literal /tmp/skein-mon-<id>-<hex>/token shape", p)
 		}
 		// The discriminator must be hex: it lands in a filesystem path AND in
 		// the runner's os.remove() target, so it can never carry a separator or
@@ -871,6 +876,50 @@ func TestBootstrapCommand_EndToEnd(t *testing.T) {
 		assertOneStopLine(t, run.rest(t), "runner_mismatch", "closed")
 		if fileExists(marker) {
 			t.Fatalf("the loader executed a runner whose digest differs from the minted one")
+		}
+	})
+
+	t.Run("prepare keeps a token written with the default mode private", func(t *testing.T) {
+		// The Write tool sets no mode: a token file of 0644 is accepted only
+		// inside the 0700 directory that prepare creates.
+		srv := newBootstrapServer(t, runnerBody)
+		token := filepath.Join(t.TempDir(), "skein-mon-zz-24-0123456789abcdef", "token")
+		if out, err := exec.Command("sh", "-c", monitorPrepareCommand(token)).CombinedOutput(); err != nil {
+			t.Fatalf("prepare: %v: %s", err, out)
+		}
+		if err := os.WriteFile(token, []byte("skm_"+strings.Repeat("f", 43)), 0o644); err != nil {
+			t.Fatalf("token: %v", err)
+		}
+		if err := os.Chmod(token, 0o644); err != nil {
+			t.Fatalf("chmod token: %v", err)
+		}
+		run := startBootstrap(t, buildMonitorBootstrap(srv.srv.URL, "zz-24", "", token, runnerSHA256))
+		if got := run.next(t); got["event"] != "monitor_started" {
+			t.Fatalf("first line = %v, want monitor_started", got)
+		}
+	})
+
+	t.Run("a token file other users can read is refused", func(t *testing.T) {
+		srv := newBootstrapServer(t, runnerBody)
+		dir := t.TempDir()
+		if err := os.Chmod(dir, 0o755); err != nil {
+			t.Fatalf("chmod dir: %v", err)
+		}
+		token := filepath.Join(dir, "token")
+		if err := os.WriteFile(token, []byte("skm_"+strings.Repeat("f", 43)), 0o644); err != nil {
+			t.Fatalf("token: %v", err)
+		}
+		if err := os.Chmod(token, 0o644); err != nil {
+			t.Fatalf("chmod token: %v", err)
+		}
+		srv.script = func(w http.ResponseWriter, r *http.Request) {
+			t.Error("the token of a file others can read was sent to the server")
+			w.WriteHeader(http.StatusUnauthorized)
+		}
+		run := startBootstrap(t, buildMonitorBootstrap(srv.srv.URL, "zz-24", "", token, runnerSHA256))
+		assertOneStopLine(t, run.rest(t), "token_file_insecure", "closed")
+		if !fileExists(token) {
+			t.Fatalf("token file removed on token_file_insecure")
 		}
 	})
 

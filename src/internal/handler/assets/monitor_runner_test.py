@@ -922,10 +922,34 @@ class RejectedCursorTest(unittest.TestCase):
 ROOT = "zz-77"
 
 
+def place_token(tmpdir, token, token_as_dir=False, token_mode=0o600, subdir=None,
+                dir_mode=0o700, symlink=False):
+    """Create the token file for a runner or loader run and return its path:
+    in tmpdir, or in tmpdir/subdir made with dir_mode; with symlink, the
+    path is a symlink to the real file."""
+    if subdir is not None:
+        tmpdir = os.path.join(tmpdir, subdir)
+        os.mkdir(tmpdir)
+        os.chmod(tmpdir, dir_mode)
+    token_path = os.path.join(tmpdir, "tok")
+    if token_as_dir:
+        os.mkdir(token_path)
+    elif token is not None:
+        real = token_path + ".real" if symlink else token_path
+        with open(real, "w") as fh:
+            fh.write(token)
+        os.chmod(real, token_mode)
+        if symlink:
+            os.symlink(real, token_path)
+    return token_path
+
+
 def run_runner_subprocess(server_mode=None, token="skm_" + "c" * 43, token_as_dir=False,
-                          no_token_path=False, no_url=False, send_signal=None, site_env=None):
+                          no_token_path=False, no_url=False, send_signal=None, site_env=None,
+                          requests=None, **placement):
     """Run the rendered runner to completion; returns (rc, stdout lines,
-    stderr text, token path, server)."""
+    stderr text, token path). requests, when a list, receives the requests
+    the fake server saw; placement goes to place_token."""
     server = None
     if server_mode is not None:
         server = ThreadingHTTPServer(("127.0.0.1", 0), _FakeHandler)
@@ -936,13 +960,7 @@ def run_runner_subprocess(server_mode=None, token="skm_" + "c" * 43, token_as_di
     runner_path = os.path.join(tmpdir, "runner.py")
     with open(runner_path, "w") as fh:
         fh.write(render_runner(poll_sec=1))
-    token_path = os.path.join(tmpdir, "tok")
-    if token_as_dir:
-        os.mkdir(token_path)
-    elif token is not None:
-        with open(token_path, "w") as fh:
-            fh.write(token)
-        os.chmod(token_path, 0o600)
+    token_path = place_token(tmpdir, token, token_as_dir, **placement)
     env = dict(os.environ)
     env.pop("SKEIN_EXCLUDE_SESSION", None)
     env["SKEIN_ISSUE"] = ROOT
@@ -970,6 +988,8 @@ def run_runner_subprocess(server_mode=None, token="skm_" + "c" * 43, token_as_di
         if server is not None:
             server.shutdown()
             server.server_close()
+            if requests is not None:
+                requests.extend(server.requests)
     lines = [json.loads(line) for line in out.splitlines() if line.strip()]
     return proc.returncode, lines, err, token_path
 
@@ -1022,6 +1042,32 @@ class StopLineTest(StopLineAssertions, unittest.TestCase):
             self.assert_single_stop_line(lines, "token_file_missing", "closed")
             self.assertEqual(rc, 1)
             self.assertTrue(os.path.isdir(tok), "an unreadable path must not be touched")
+        with self.subTest(case="a symlink"):
+            rc, lines, err, tok = run_runner_subprocess(symlink=True)
+            self.assert_single_stop_line(lines, "token_file_missing", "closed")
+            self.assertEqual(rc, 1)
+            self.assertTrue(os.path.islink(tok), "a symlink must not be touched")
+
+    def test_token_file_others_can_read(self):
+        # A token file others can read is refused before the token is used;
+        # the same mode inside a private directory of ours is fine.
+        requests = []
+        rc, lines, err, tok = run_runner_subprocess("empty", token_mode=0o644, subdir="open",
+                                                    dir_mode=0o755, requests=requests)
+        self.assert_single_stop_line(lines, "token_file_insecure", "closed")
+        self.assertEqual(rc, 1)
+        self.assertTrue(os.path.exists(tok), "the token file must not be touched")
+        self.assertEqual(requests, [], "the token was sent to the server")
+
+        rc, lines, err, tok = run_runner_subprocess("empty", token_mode=0o644, subdir="private",
+                                                    dir_mode=0o700, send_signal=signal.SIGTERM)
+        self.assert_single_stop_line(lines, "stopped", "paused")
+        self.assertEqual(lines[0].get("event"), "monitor_started")
+
+    def test_deleted_token_takes_its_mint_directory_along(self):
+        rc, lines, err, tok = run_runner_subprocess("401", subdir="skein-mon-sk-1-0123456789abcdef")
+        self.assert_single_stop_line(lines, "token_expired", "closed", 401)
+        self.assertFalse(os.path.exists(os.path.dirname(tok)), "the emptied mint directory stays behind")
 
     def test_misconfigured(self):
         with self.subTest(case="no server address"):
@@ -1124,21 +1170,16 @@ def closed_port_url():
 
 
 def run_loader(url, token="skm_" + "d" * 43, token_as_dir=False, no_url=False,
-               site_env=None, signal_when=None, sig=None, extra_env=None, runner=None):
+               site_env=None, signal_when=None, sig=None, extra_env=None, runner=None, **placement):
     """Run the loader asset as `python3 -c`; returns (rc, lines, stderr, token path).
     signal_when: a threading.Event set once the process may be signalled.
     runner: the body whose digest the bootstrap names (SKEIN_RUNNER_SHA256);
-    by default the rendered runner the handover tests serve."""
+    by default the rendered runner the handover tests serve. placement goes
+    to place_token."""
     with open(LOADER_SRC) as fh:
         loader = fh.read()
     tmpdir = make_tmpdir(prefix="skein-loader-")
-    token_path = os.path.join(tmpdir, "tok")
-    if token_as_dir:
-        os.mkdir(token_path)
-    elif token is not None:
-        with open(token_path, "w") as fh:
-            fh.write(token)
-        os.chmod(token_path, 0o600)
+    token_path = place_token(tmpdir, token, token_as_dir, **placement)
     env = dict(os.environ)
     env.pop("SKEIN_EXCLUDE_SESSION", None)
     env["SKEIN_ISSUE"] = ROOT
@@ -1203,6 +1244,36 @@ class LoaderStopTest(StopLineAssertions, unittest.TestCase):
                 self.assert_single_stop_line(lines, "token_file_missing", "closed")
                 self.assertEqual(rc, 1)
                 self.assertEqual(os.path.exists(tok), exists)
+
+    def test_token_file_others_can_read(self):
+        srv = LoaderServer(lambda h: h.send_body(200, b"pass\n"))
+        try:
+            rc, lines, err, tok = run_loader(srv.url(), token_mode=0o644, subdir="open", dir_mode=0o755)
+        finally:
+            srv.stop()
+        self.assert_single_stop_line(lines, "token_file_insecure", "closed")
+        self.assertEqual(rc, 1)
+        self.assertTrue(os.path.exists(tok), "the token file must not be touched")
+        self.assertEqual(srv.script_hits, 0, "the token was sent to the server")
+
+    def test_token_file_in_a_private_directory_is_used(self):
+        # The Write tool sets no mode: 0644 inside the 0700 directory of
+        # prepare is accepted, and the downloaded runner runs.
+        body = b'raise RuntimeError("runner reached")\n'
+        srv = LoaderServer(lambda h: h.send_body(200, body))
+        try:
+            rc, lines, err, tok = run_loader(srv.url(), runner=body, token_mode=0o644,
+                                             subdir="private", dir_mode=0o700)
+        finally:
+            srv.stop()
+        self.assert_single_stop_line(lines, "internal_error", "paused")
+        self.assertIn("runner reached", err)
+
+    def test_token_file_symlink_is_not_followed(self):
+        rc, lines, err, tok = run_loader(closed_port_url(), symlink=True)
+        self.assert_single_stop_line(lines, "token_file_missing", "closed")
+        self.assertEqual(rc, 1)
+        self.assertTrue(os.path.islink(tok))
 
     def test_misconfigured(self):
         rc, lines, err, tok = run_loader("", no_url=True)

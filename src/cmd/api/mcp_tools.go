@@ -264,7 +264,7 @@ func mcpRegisterToolsFn(d mcpDeps) func(*server.MCPServer) {
 
 		// sk-142.7 — agent task-monitor setup. One call auto-watches the
 		// issue (subtree-aware), mints a scoped short-lived skm_ token, and
-		// returns a bootstrap command (token in a 0600 file, never in argv).
+		// returns a bootstrap command (token in a private file, never in argv).
 		mcptools.RegisterGetMonitorScript(s, d.pool, d.notifStore, d.monitorCredsStore, d.agentPublicURL, d.runnerSHA256, d.monitorTokenIdleTTL)
 
 		// sk-669 — the monitorStalled response layer (sk-579 US-5,

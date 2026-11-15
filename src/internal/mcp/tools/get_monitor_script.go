@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"log/slog"
+	"path"
 	"strconv"
 	"strings"
 	"time"
@@ -48,9 +49,12 @@ var defaultMonitorEventTypes = []string{"comment.created", "issue.closed"}
 // command that streams new notifications into the agent's context.
 //
 // The token is returned in a separate result field with an instruction to
-// write it to a 0600 file — it is deliberately NOT interpolated into the
-// bootstrap command (which references the token FILE), so the secret never
-// lands in argv / shell history / /proc/<pid>/environ (spec §6 / R8).
+// write it to a file in a private (0700) directory that the `prepare` command
+// creates — it is deliberately NOT interpolated into the bootstrap command
+// (which references the token FILE), so the secret never lands in argv / shell
+// history / /proc/<pid>/environ (spec §6 / R8). The directory, not the file
+// mode, keeps the token from other local users: the Write tool sets no mode.
+// The loader and the runner refuse a token file another user could read.
 //
 // Annotations:
 //
@@ -82,8 +86,8 @@ func RegisterGetMonitorScript(s *server.MCPServer, pool *pgxpool.Pool, notifStor
 				"The runner keeps retrying through server or network trouble and "+
 				"stops by itself when the issue is closed.\n\n"+
 				"SECURITY: the token is returned in the `token` field, NOT in the "+
-				"`bootstrap` command. Write `token` to the 0600 file named by "+
-				"`tokenFilePath` (use the Write tool) and run `bootstrap` as-is — "+
+				"`bootstrap` command. Run `prepare`, write `token` to "+
+				"`tokenFilePath` with the Write tool and run `bootstrap` as-is — "+
 				"the runner reads the token from that file. Do NOT paste the token "+
 				"into a shell command (it would leak into argv / shell history).",
 		),
@@ -120,16 +124,19 @@ func RegisterGetMonitorScript(s *server.MCPServer, pool *pgxpool.Pool, notifStor
 type getMonitorScriptResponse struct {
 	// MonitorID is the id of the minted monitor (monitor_credentials.id,
 	// sk-579 US-6): the handle skein_watchers(action="monitor_stop") takes.
-	MonitorID        string   `json:"monitorId"`
-	IssueID          string   `json:"issueId"`
-	Subtree          bool     `json:"subtree"`
-	EventTypes       []string `json:"eventTypes"`
-	Watching         bool     `json:"watching"`
-	Token            string   `json:"token"`
-	TokenFilePath    string   `json:"tokenFilePath"`
-	TokenInstruction string   `json:"tokenInstruction"`
-	Bootstrap        string   `json:"bootstrap"`
-	Usage            string   `json:"usage"`
+	MonitorID     string   `json:"monitorId"`
+	IssueID       string   `json:"issueId"`
+	Subtree       bool     `json:"subtree"`
+	EventTypes    []string `json:"eventTypes"`
+	Watching      bool     `json:"watching"`
+	Token         string   `json:"token"`
+	TokenFilePath string   `json:"tokenFilePath"`
+	// Prepare creates the private directory of tokenFilePath; it is run
+	// before the token is written.
+	Prepare          string `json:"prepare"`
+	TokenInstruction string `json:"tokenInstruction"`
+	Bootstrap        string `json:"bootstrap"`
+	Usage            string `json:"usage"`
 }
 
 func handleGetMonitorScript(pool *pgxpool.Pool, notifStore *notifications.Store, monitorStore *monitorcreds.Store, agentPublicURL, runnerSHA256 string) server.ToolHandlerFunc {
@@ -253,9 +260,9 @@ func handleGetMonitorScript(pool *pgxpool.Pool, notifStore *notifications.Store,
 			Watching:      true,
 			Token:         plaintext,
 			TokenFilePath: tokenFilePath,
-			TokenInstruction: "Write `token` to a 0600 file at `tokenFilePath` using the Write tool " +
-				"(NOT a shell command — the token must not appear in argv or shell history). " +
-				"Then run `bootstrap` as-is; the runner reads the token from that file.",
+			Prepare:       monitorPrepareCommand(tokenFilePath),
+			TokenInstruction: "Run `prepare`, then write `token` to `tokenFilePath` with the Write tool " +
+				"(never in a shell command), then run `bootstrap` as-is.",
 			Bootstrap: bootstrap,
 			Usage:     monitorUsage,
 		})
@@ -328,8 +335,9 @@ func newMonitorTokenDiscriminator() (string, error) {
 	return hex.EncodeToString(buf), nil
 }
 
-// monitorTokenFilePath returns the suggested 0600 token-file path for one
-// minted credential: a CONCRETE LITERAL /tmp/skein-mon-<id>-<discriminator>.token.
+// monitorTokenFilePath returns the token-file path for one minted credential:
+// a CONCRETE LITERAL /tmp/skein-mon-<id>-<discriminator>/token, a file in a
+// directory of its own that monitorPrepareCommand creates with mode 0700.
 //
 // The discriminator is per-CALL, not per-issue (sk-239). The path used to be
 // derived from the issue id alone, which made it shared state between every
@@ -360,15 +368,26 @@ func newMonitorTokenDiscriminator() (string, error) {
 // expand shell parameter expansions. An earlier ${XDG_RUNTIME_DIR:-/tmp}/...
 // form expanded in the (shell) bootstrap but stayed literal in the Write target,
 // so the agent wrote one path and the runner read another → "token file missing
-// or empty". A plain /tmp path with 0600 perms is acceptable for this
-// short-lived token; consistency between Write and bootstrap is the requirement.
+// or empty". Consistency between Write and bootstrap is the requirement.
+//
+// /tmp is shared by every local user and the Write tool creates the file with
+// the umask's mode (0644 at the usual 022), so the file lives in a directory
+// of its own: prepare makes it 0700, which keeps others out whatever the
+// file's mode, and the runner removes it with the token.
 func monitorTokenFilePath(issueID, discriminator string) string {
-	return "/tmp/skein-mon-" + issueID + "-" + discriminator + ".token"
+	return "/tmp/skein-mon-" + issueID + "-" + discriminator + "/token"
+}
+
+// monitorPrepareCommand is the shell command that creates the private
+// directory of tokenFilePath. It carries no secret; mkdir fails when the
+// directory already exists, so nobody else's directory is adopted.
+func monitorPrepareCommand(tokenFilePath string) string {
+	return "mkdir -m 700 " + shellSingleQuote(path.Dir(tokenFilePath))
 }
 
 // buildMonitorBootstrap assembles the shell bootstrap command (spec §6). The
 // token NEVER appears here — only the public URL, the issue id, and the path
-// to the 0600 token file the runner reads. Every interpolated value is
+// to the private token file the runner reads. Every interpolated value is
 // shell-single-quoted so metacharacters (quotes, spaces, $(...), ;, &, …) in
 // the issue id or (admin-supplied, already-validated) public URL cannot break
 // out of the command or inject.

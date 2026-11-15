@@ -231,9 +231,9 @@ comments and the close of an issue into your context. Use it to watch
 or pair on an issue, or after posting a blocking question as a comment.
 
 1. `skein_get_monitor_script(id, subtree=…)` returns `token`,
-   `tokenFilePath`, `bootstrap`, `monitorId`. Write the token to
-   `tokenFilePath` (0600) with the Write tool — never into a command
-   line.
+   `tokenFilePath`, `prepare`, `bootstrap`, `monitorId`. Run `prepare`,
+   then write the token to `tokenFilePath` with the Write tool — never
+   into a command line.
 2. Run `bootstrap` under the Claude Code `Monitor` tool with the maximum
    `timeout_ms` (plain `bash` / `python3` without one). It prints
    one JSON object per line: `{"event":"notification","notification":{…}}`
