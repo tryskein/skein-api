@@ -15,9 +15,10 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
-// MinBcryptCost is the floor for password hashing. The project guidelines
-// pin production bcrypt cost at 12; allowing values below this floor in
-// non-test contexts would silently weaken every password.
+// MinBcryptCost is the cheapest bcrypt cost the package is exercised with
+// (bcrypt.DefaultCost); tests pass it to keep hashing fast. It is NOT the
+// production floor and nothing enforces it: the configured cost is validated
+// by config.Load against config.MinBcryptCost (12).
 const MinBcryptCost = bcrypt.DefaultCost
 
 // MaxBcryptCost is the ceiling enforced by golang.org/x/crypto/bcrypt itself
