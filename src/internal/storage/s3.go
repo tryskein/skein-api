@@ -225,13 +225,15 @@ func (c *S3Client) ensureCORS(ctx context.Context) error {
 // buildCORSConfig is the CORS rule the browser needs: the multipart POST of
 // the upload, the GET of the download and the preflight in front of them.
 // Content-Disposition is exposed so the browser sees the file name the
-// download URL asks for.
+// download URL asks for. Nothing more is allowed: the upload is a presigned
+// POST of a form without custom headers, so no PUT and no header beyond
+// Content-Type.
 func buildCORSConfig(origins []string) *cors.Config {
 	return cors.NewConfig([]cors.Rule{{
 		ID:            "skein-attachments",
 		AllowedOrigin: origins,
-		AllowedMethod: []string{"GET", "HEAD", "POST", "PUT"},
-		AllowedHeader: []string{"*"},
+		AllowedMethod: []string{"GET", "HEAD", "POST"},
+		AllowedHeader: []string{"Content-Type"},
 		ExposeHeader:  []string{"ETag", "Content-Disposition"},
 		MaxAgeSeconds: 3000,
 	}})

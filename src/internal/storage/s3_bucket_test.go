@@ -137,12 +137,23 @@ func TestBuildCORSConfig(t *testing.T) {
 		"<AllowedMethod>POST</AllowedMethod>",
 		"<AllowedMethod>GET</AllowedMethod>",
 		"<AllowedMethod>HEAD</AllowedMethod>",
-		"<AllowedHeader>*</AllowedHeader>",
+		"<AllowedHeader>Content-Type</AllowedHeader>",
 		"<ExposeHeader>ETag</ExposeHeader>",
 		"<ExposeHeader>Content-Disposition</ExposeHeader>",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("CORS rule lacks %s:\n%s", want, got)
+		}
+	}
+	// The browser only uploads by presigned POST and downloads by GET: a
+	// wider rule than that is a grant nothing uses.
+	for _, unwanted := range []string{
+		"<AllowedMethod>PUT</AllowedMethod>",
+		"<AllowedMethod>DELETE</AllowedMethod>",
+		"<AllowedHeader>*</AllowedHeader>",
+	} {
+		if strings.Contains(got, unwanted) {
+			t.Errorf("CORS rule allows %s:\n%s", unwanted, got)
 		}
 	}
 }
