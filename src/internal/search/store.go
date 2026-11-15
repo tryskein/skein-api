@@ -3,9 +3,9 @@ package search
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
-	"hash/fnv"
 	"regexp"
 	"slices"
 	"strings"
@@ -91,7 +91,8 @@ func (s *Store) visibleSet(ctx context.Context, callerID uuid.UUID) ([]uuid.UUID
 }
 
 // visibilityFingerprint is a stable digest of the caller's visible set —
-// its size and an FNV-1a hash of the sorted project ids — and of the
+// its size and a SHA-256 of the sorted project ids, collision-resistant so
+// that no two visible sets can share a pool — and of the
 // deletion generation, for the result cache key (Service.Search). Two
 // requests share a cached pool only when they see exactly the same
 // projects and no account was deleted in between.
@@ -115,11 +116,11 @@ func (s *Store) visibilityFingerprint(ctx context.Context, callerID uuid.UUID) (
 	}
 	ids := slices.Clone(visible)
 	slices.SortFunc(ids, func(a, b uuid.UUID) int { return bytes.Compare(a[:], b[:]) })
-	h := fnv.New64a()
+	h := sha256.New()
 	for _, id := range ids {
 		_, _ = h.Write(id[:]) // hash.Hash.Write never returns an error
 	}
-	return fmt.Sprintf("%d:%016x:%d", len(ids), h.Sum64(), generation), nil
+	return fmt.Sprintf("%d:%x:%d", len(ids), h.Sum(nil), generation), nil
 }
 
 // SearchIssues runs the per-kind RRF query against the issues table.

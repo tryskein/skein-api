@@ -66,8 +66,8 @@ package dashboard
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
-	"hash/fnv"
 	"sort"
 	"strings"
 	"sync"
@@ -375,16 +375,17 @@ type AgentsResult struct {
 //     Such callers all see the same global aggregate and must share one
 //     cache slot, distinct from scoped callers who only see their own
 //     visible projects.
-//   - visibilityHash — FNV-1a 64 over the lexicographically-sorted
-//     uuid.UUID keys of visibleProjects (16 bytes each). 0 when no
-//     visibility filter applies so all no-filter callers consistently
-//     key against the same slot regardless of what visibleProjects
-//     contains.
+//   - visibilityHash — SHA-256 over the lexicographically-sorted
+//     uuid.UUID keys of visibleProjects (16 bytes each): a collision
+//     would serve one caller the aggregate of another project set, so
+//     the digest is collision-resistant. Zero when no visibility filter
+//     applies so all no-filter callers consistently key against the same
+//     slot regardless of what visibleProjects contains.
 type scoringCacheKey struct {
 	projectFilter      uuid.UUID
 	usernameFilter     string
 	noVisibilityFilter bool
-	visibilityHash     uint64
+	visibilityHash     [sha256.Size]byte
 }
 
 // scoringCacheEntry holds one cached ScoringResult plus its TTL deadline.
@@ -437,9 +438,9 @@ func NewWithClock(pool *pgxpool.Pool, now func() time.Time) *Store {
 // hashing so map iteration order doesn't perturb the result. Returns 0
 // when the input is empty so callers with no visible projects share one
 // slot (they all see zero rows anyway).
-func hashVisibility(visibleProjects map[uuid.UUID]struct{}) uint64 {
+func hashVisibility(visibleProjects map[uuid.UUID]struct{}) [sha256.Size]byte {
 	if len(visibleProjects) == 0 {
-		return 0
+		return [sha256.Size]byte{}
 	}
 	ids := make([]uuid.UUID, 0, len(visibleProjects))
 	for pid := range visibleProjects {
@@ -448,12 +449,11 @@ func hashVisibility(visibleProjects map[uuid.UUID]struct{}) uint64 {
 	sort.Slice(ids, func(i, j int) bool {
 		return ids[i].String() < ids[j].String()
 	})
-	h := fnv.New64a()
+	buf := make([]byte, 0, len(ids)*len(uuid.UUID{}))
 	for _, id := range ids {
-		bytes := id // uuid.UUID is [16]byte
-		_, _ = h.Write(bytes[:])
+		buf = append(buf, id[:]...)
 	}
-	return h.Sum64()
+	return sha256.Sum256(buf)
 }
 
 // cloneScoringResult returns a deep copy of the supplied result so a
@@ -779,14 +779,14 @@ func strOrEmpty(s *string) string {
 	return *s
 }
 
-// visibilityHashForCache returns 0 when no visibility filter applies
+// visibilityHashForCache returns zero when no visibility filter applies
 // (declared internal work skips visibility filtering entirely), otherwise
-// the FNV-1a hash of the sorted project UUIDs of the filter set — the
+// the SHA-256 of the sorted project UUIDs of the filter set — the
 // caller's HOT ZONE reach (K-6, sk-674.18 T030): a project deleted or out of
 // reach changes the set, so a warm cache entry is never served for it.
-func visibilityHashForCache(filterSet map[uuid.UUID]struct{}, noVisibilityFilter bool) uint64 {
+func visibilityHashForCache(filterSet map[uuid.UUID]struct{}, noVisibilityFilter bool) [sha256.Size]byte {
 	if noVisibilityFilter {
-		return 0
+		return [sha256.Size]byte{}
 	}
 	return hashVisibility(filterSet)
 }
