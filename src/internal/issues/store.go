@@ -8446,15 +8446,10 @@ func (s *Store) ListIssueActivity(
 		types = DefaultActivityEventTypes
 	}
 
-	// Patterns for dep entity_id matching:
-	//   "<issueID>::%"      → fromID side
-	//   "%::<issueID>::%"   → toID side (depType is the trailing segment;
-	//                         issueID never appears in depType because
-	//                         depType is one of blocks/relates_to/etc.)
-	depFromPattern := issueID + "::%"
-	depToPattern := "%::" + issueID + "::%"
-
-	args := []any{projectID, types, issueID, depFromPattern, depToPattern}
+	// A dep entity_id is fromID::toID::depType: the issue is matched by
+	// equality against its first or second '::' segment. Not by LIKE — an
+	// issue id may contain '_', which LIKE reads as a wildcard.
+	args := []any{projectID, types, issueID}
 	clauses := []string{
 		"e.project_id = $1",
 		"e.type = ANY($2)",
@@ -8464,7 +8459,7 @@ func (s *Store) ListIssueActivity(
 		"(" +
 			"(e.entity_type = 'issue' AND e.entity_id = $3) OR " +
 			"(e.entity_type = 'comment' AND c.issue_id = $3) OR " +
-			"(e.entity_type = 'dep' AND (e.entity_id LIKE $4 OR e.entity_id LIKE $5))" +
+			"(e.entity_type = 'dep' AND (split_part(e.entity_id, '::', 1) = $3 OR split_part(e.entity_id, '::', 2) = $3))" +
 			")",
 	}
 	if cursor != nil {
