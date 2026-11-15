@@ -16,6 +16,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -136,6 +137,11 @@ func readRequest(r *http.Request) (AccountRequest, bool) {
 // serve runs one operation and answers it.
 func (h *handlers) serve(w http.ResponseWriter, r *http.Request, operation string, op func(context.Context, string) error) {
 	req, ok := readRequest(r)
+	// The body is read: the server's ReadTimeout has done its job and must
+	// not cancel the operation's context (NewServer).
+	if err := http.NewResponseController(w).SetReadDeadline(time.Time{}); err != nil && !errors.Is(err, http.ErrNotSupported) {
+		slog.WarnContext(r.Context(), "operator: lifting the read deadline failed", "error", err.Error())
+	}
 	if !ok {
 		h.finish(operation, CodeInvalidRequest)
 		writeError(w, http.StatusBadRequest, CodeInvalidRequest, `body: {"email": "…"}`, nil)

@@ -32,9 +32,28 @@ func NewRouter(key string, ops Operations) http.Handler {
 	return r
 }
 
+// The timeouts of the operator's server. ReadTimeout bounds reading a
+// request, its body included, so a client without the key cannot hold the
+// connection with a slow body; serve lifts the read deadline once the body is
+// read, because net/http cancels the request context when a read deadline
+// passes while the handler still runs, and an account deletion must not be
+// cut by it. IdleTimeout bounds a kept-alive connection waiting for its next
+// request.
+const (
+	readHeaderTimeout = 10 * time.Second
+	readTimeout       = 30 * time.Second
+	idleTimeout       = 120 * time.Second
+)
+
 // NewServer is the operator's http.Server on addr.
 func NewServer(addr string, handler http.Handler) *http.Server {
-	return &http.Server{Addr: addr, Handler: handler, ReadHeaderTimeout: 10 * time.Second}
+	return &http.Server{
+		Addr:              addr,
+		Handler:           handler,
+		ReadHeaderTimeout: readHeaderTimeout,
+		ReadTimeout:       readTimeout,
+		IdleTimeout:       idleTimeout,
+	}
 }
 
 // requireKey answers 401 to a request without the key, whatever its path:

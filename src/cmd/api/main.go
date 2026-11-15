@@ -1055,10 +1055,15 @@ func main() {
 	// below, not via defer) — same position the two original defers held.
 	defer runTeardownOnce()
 
+	// No ReadTimeout or WriteTimeout: the port serves MCP SSE streams and
+	// agent long-polls, and net/http cancels a running handler's context
+	// when a read deadline passes. IdleTimeout only bounds a kept-alive
+	// connection between requests.
 	srv := &http.Server{
 		Addr:              ":" + cfg.Port,
 		Handler:           router,
 		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       120 * time.Second,
 	}
 	// sk-303.16 — cancel every open MCP standalone GET (SSE) stream's request
 	// context when Shutdown starts. RegisterOnShutdown funcs run in their own
