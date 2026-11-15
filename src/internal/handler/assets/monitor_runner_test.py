@@ -1064,6 +1064,24 @@ class StopLineTest(StopLineAssertions, unittest.TestCase):
         self.assert_single_stop_line(lines, "stopped", "paused")
         self.assertEqual(lines[0].get("event"), "monitor_started")
 
+    def test_refused_token_file_that_is_not_ours_is_kept(self):
+        # A refused readable token file is deleted only when it is ours and
+        # its path still names the file that was opened.
+        for case, hook, kept in (
+                ("another user's file", "SKEIN_TEST_FOREIGN_UID", "skm_" + "c" * 43),
+                ("path replaced after the open", "SKEIN_TEST_SWAP_TOKEN_FILE", "swapped\n")):
+            with self.subTest(case=case):
+                requests = []
+                rc, lines, err, tok = run_runner_subprocess(
+                    "empty", token_mode=0o644, subdir="open", dir_mode=0o755,
+                    site_env=site_with(**{hook: "1"}), requests=requests)
+                self.assert_single_stop_line(lines, "token_file_insecure", "closed")
+                self.assertEqual(rc, 1, err)
+                self.assertTrue(os.path.exists(tok), "a token file that is not ours was deleted")
+                with open(tok) as fh:
+                    self.assertEqual(fh.read(), kept)
+                self.assertEqual(requests, [], "the token was sent to the server")
+
     def test_deleted_token_takes_its_mint_directory_along(self):
         rc, lines, err, tok = run_runner_subprocess("401", subdir="skein-mon-sk-1-0123456789abcdef")
         self.assert_single_stop_line(lines, "token_expired", "closed", 401)
@@ -1255,6 +1273,26 @@ class LoaderStopTest(StopLineAssertions, unittest.TestCase):
         self.assertEqual(rc, 1)
         self.assertFalse(os.path.exists(tok), "our readable token file must be deleted")
         self.assertEqual(srv.script_hits, 0, "the token was sent to the server")
+
+    def test_refused_token_file_that_is_not_ours_is_kept(self):
+        # A refused readable token file is deleted only when it is ours and
+        # its path still names the file that was opened.
+        for case, hook, kept in (
+                ("another user's file", "SKEIN_TEST_FOREIGN_UID", "skm_" + "d" * 43),
+                ("path replaced after the open", "SKEIN_TEST_SWAP_TOKEN_FILE", "swapped\n")):
+            with self.subTest(case=case):
+                srv = LoaderServer(lambda h: h.send_body(200, b"pass\n"))
+                try:
+                    rc, lines, err, tok = run_loader(srv.url(), token_mode=0o644, subdir="open",
+                                                     dir_mode=0o755, site_env=site_with(**{hook: "1"}))
+                finally:
+                    srv.stop()
+                self.assert_single_stop_line(lines, "token_file_insecure", "closed")
+                self.assertEqual(rc, 1, err)
+                self.assertTrue(os.path.exists(tok), "a token file that is not ours was deleted")
+                with open(tok) as fh:
+                    self.assertEqual(fh.read(), kept)
+                self.assertEqual(srv.script_hits, 0, "the token was sent to the server")
 
     def test_token_file_in_a_private_directory_is_used(self):
         # The Write tool sets no mode: 0644 inside the 0700 directory of

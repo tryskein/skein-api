@@ -44,6 +44,14 @@
 #                                  finite and positive — the limit "expires"
 #                                  without real waiting — and otherwise appends
 #                                  "violation" and raises RuntimeError.
+#   SKEIN_TEST_FOREIGN_UID=1       os.getuid() reports another uid, so every
+#                                  file this process opens looks like another
+#                                  user's.
+#   SKEIN_TEST_SWAP_TOKEN_FILE=1   the first os.fstat of the file at
+#                                  SKEIN_TOKEN_FILE returns its real stat, then
+#                                  renames that file to <path>.opened and
+#                                  writes a new file "swapped\n" at <path>: the
+#                                  path names another inode right after fstat.
 import os
 
 if os.environ.get("SKEIN_TEST_SITE") == "1":
@@ -192,3 +200,27 @@ if os.environ.get("SKEIN_TEST_SITE") == "1":
         def _failing_flock(fd, op):
             raise OSError(int(_flock_errno), os.strerror(int(_flock_errno)))
         _fcntl.flock = _failing_flock
+
+    if os.environ.get("SKEIN_TEST_FOREIGN_UID") == "1":
+        _foreign_uid = os.getuid() + 1
+        os.getuid = lambda: _foreign_uid
+
+    if os.environ.get("SKEIN_TEST_SWAP_TOKEN_FILE") == "1":
+        _swap_path = os.environ.get("SKEIN_TOKEN_FILE", "")
+        _real_fstat = os.fstat
+        _swapped = [False]
+
+        def _swapping_fstat(fd):
+            st = _real_fstat(fd)
+            if not _swapped[0] and _swap_path:
+                try:
+                    cur = os.lstat(_swap_path)
+                except OSError:
+                    cur = None
+                if cur is not None and (cur.st_dev, cur.st_ino) == (st.st_dev, st.st_ino):
+                    _swapped[0] = True
+                    os.rename(_swap_path, _swap_path + ".opened")
+                    with open(_swap_path, "w") as fh:
+                        fh.write("swapped\n")
+            return st
+        os.fstat = _swapping_fstat
