@@ -9,9 +9,12 @@ obj/
 *.swp
 *.swo
 
-# Local env files (must never be baked into images)
+# Local env files (must never be baked into images), at any depth: a pattern
+# without **/ matches only at the root of the build context.
 .env
 .env.*
+**/.env
+**/.env.*
 
 # Git metadata
 .git/
