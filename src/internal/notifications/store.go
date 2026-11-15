@@ -1865,7 +1865,9 @@ func (s *Store) DeleteCustomWatcher(ctx context.Context, userID, watcherID uuid.
 // sections (issues, projects, custom) hydrated with the metadata the
 // /watching UI needs (issue title, project name, project prefix). All
 // sections exclude sticky-unwatched rows so the page only shows active
-// subscriptions.
+// subscriptions. The issue and project sections list only rows of a project
+// the user sees now: a subscription that outlived the user's access (a path
+// of losing it that does not delete the row) shows no title or name.
 //
 // Caps follow R3.3 plan G16: no paging, hard cap 50 per section and
 // flag truncation in the response. The cap is applied SQL-side via
@@ -1882,6 +1884,7 @@ SELECT iw.issue_id, COALESCE(i.title, ''), i.project_id, COALESCE(p.id_prefix, '
   JOIN issues i   ON i.id = iw.issue_id
   JOIN projects p ON p.id = i.project_id
  WHERE iw.user_id = $1
+   AND ` + authz.VisibleNowSetExpr("$1::uuid", "i.project_id") + `
    AND ` + key.Expr("i.project_id", authz.Placeholders(&issueArgs)) + `
  ORDER BY iw.since DESC
  LIMIT 50`
@@ -1912,6 +1915,7 @@ SELECT pw.project_id, COALESCE(p.name, ''), COALESCE(p.id_prefix, ''),
   JOIN projects p ON p.id = pw.project_id
  WHERE pw.user_id = $1
    AND NOT 'unwatched' = ANY(pw.reasons)
+   AND ` + authz.VisibleNowSetExpr("$1::uuid", "pw.project_id") + `
    AND ` + key.Expr("pw.project_id", authz.Placeholders(&projectArgs)) + `
  ORDER BY pw.since DESC
  LIMIT 50`
@@ -3271,8 +3275,8 @@ type WatchersPage struct {
 // ListWatchersPage is ListAllWatchers with keyset paging of each section
 // (sk-878.3.1 T027, listWatching): issues and projects newest subscription
 // first, ties by id; the filters whole. The rows are those of
-// ListAllWatchers: the key's scope narrows every section, the project
-// opt-outs are not listed.
+// ListAllWatchers: only projects the user sees now, the key's scope narrows
+// every section, the project opt-outs are not listed.
 func (s *Store) ListWatchersPage(ctx context.Context, a WatchersPageArgs) (*WatchersPage, error) {
 	key := authz.ScopeFor(ctx, a.UserID).KeyLimit()
 	out := &WatchersPage{Issues: []IssueWatcherForUserDTO{}, Projects: []ProjectWatcherDTO{}}
@@ -3290,6 +3294,7 @@ SELECT iw.issue_id, COALESCE(i.title, ''), i.project_id, COALESCE(p.id_prefix, '
   JOIN projects p ON p.id = i.project_id
  WHERE iw.user_id = $1
    AND `+after+`
+   AND `+authz.VisibleNowSetExpr("$1::uuid", "i.project_id")+`
    AND `+key.Expr("i.project_id", authz.Placeholders(&issueArgs))+`
  ORDER BY iw.since DESC, iw.issue_id ASC
  LIMIT $2`, issueArgs...)
@@ -3325,6 +3330,7 @@ SELECT pw.project_id, COALESCE(p.name, ''), COALESCE(p.id_prefix, ''), pw.reason
  WHERE pw.user_id = $1
    AND NOT 'unwatched' = ANY(pw.reasons)
    AND `+after+`
+   AND `+authz.VisibleNowSetExpr("$1::uuid", "pw.project_id")+`
    AND `+key.Expr("pw.project_id", authz.Placeholders(&projectArgs))+`
  ORDER BY pw.since DESC, pw.project_id::text ASC
  LIMIT $2`, projectArgs...)
