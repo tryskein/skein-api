@@ -52,15 +52,24 @@ RUN apk add --no-cache \
 # golang-migrate CLI — used in production for explicit "run migrations once"
 # invocations via `docker run --rm --entrypoint migrate <image> -path ...`.
 # Installed before USER switch so the binary lives at /usr/local/bin/migrate
-# and is owned by root (read+execute for everyone).
+# and is owned by root (read+execute for everyone). The archive is checked
+# against a pinned sha256 before it is unpacked (release assets can be
+# replaced); bumping MIGRATE_VERSION means updating both sums from the
+# release's sha256sum.txt. An unknown architecture fails the build.
 ARG MIGRATE_VERSION=4.20.1
-RUN ARCH=$(uname -m) && \
-    case "$ARCH" in \
-        x86_64)  ARCH="amd64" ;; \
-        aarch64) ARCH="arm64" ;; \
-    esac && \
-    curl -fsSL "https://github.com/golang-migrate/migrate/releases/download/v${MIGRATE_VERSION}/migrate.linux-${ARCH}.tar.gz" \
-    | tar -xz -C /usr/local/bin/ migrate
+ARG MIGRATE_SHA256_AMD64=b1e13121d4178b7804a9fb29dca62d57b732390f7e5ae33f2cd65e9b192e1bd4
+ARG MIGRATE_SHA256_ARM64=03ea70d9ba535b68fe03602120d1856a567cd0fa2fbca3748ba8070e9d4b8f60
+RUN set -eu; \
+    case "$(uname -m)" in \
+        x86_64)  ARCH="amd64"; SUM="$MIGRATE_SHA256_AMD64" ;; \
+        aarch64) ARCH="arm64"; SUM="$MIGRATE_SHA256_ARM64" ;; \
+        *) echo "unsupported architecture: $(uname -m)" >&2; exit 1 ;; \
+    esac; \
+    archive="/tmp/migrate.linux-${ARCH}.tar.gz"; \
+    curl -fsSL -o "$archive" "https://github.com/golang-migrate/migrate/releases/download/v${MIGRATE_VERSION}/migrate.linux-${ARCH}.tar.gz"; \
+    printf '%s  %s\n' "$SUM" "$archive" | sha256sum -c -; \
+    tar -xzf "$archive" -C /usr/local/bin/ migrate; \
+    rm -f "$archive"
 
 # Non-root user — running as root inside containers is forbidden by org policy
 # and breaks Kubernetes PodSecurity restricted profiles.
