@@ -260,7 +260,7 @@ func textAnswer(text string, isError bool) func() (*mcpgo.CallToolResult, error)
 func probeBoth(t *testing.T, answer func() (*mcpgo.CallToolResult, error), src MonitorStalledSource, ctx context.Context) (bare, hinted []byte) {
 	t.Helper()
 	bare = rawCall(t, probeServer(answer, nil), ctx, "probe", nil)
-	mw := MonitorStalledMiddleware(MonitorStalledConfig{Source: src, Threshold: 3 * time.Minute, AgentPublicURL: gmsTestPublicURL})
+	mw := MonitorStalledMiddleware(MonitorStalledConfig{Source: src, Threshold: 3 * time.Minute, AgentPublicURL: gmsTestPublicURL, RunnerSHA256: gmsTestRunnerSHA256})
 	hinted = rawCall(t, probeServer(answer, mw), ctx, "probe", nil)
 	return bare, hinted
 }
@@ -415,7 +415,7 @@ func TestMonitorStalledMiddleware_NoThresholdPassesThrough(t *testing.T) {
 	for _, threshold := range []time.Duration{0, -time.Minute} {
 		src := &fakeStalledSource{monitors: oneFakeMonitor()}
 		bare := rawCall(t, probeServer(answer, nil), ctx, "probe", nil)
-		mw := MonitorStalledMiddleware(MonitorStalledConfig{Source: src, Threshold: threshold, AgentPublicURL: gmsTestPublicURL})
+		mw := MonitorStalledMiddleware(MonitorStalledConfig{Source: src, Threshold: threshold, AgentPublicURL: gmsTestPublicURL, RunnerSHA256: gmsTestRunnerSHA256})
 		hinted := rawCall(t, probeServer(answer, mw), ctx, "probe", nil)
 		if string(bare) != string(hinted) {
 			t.Errorf("threshold %s: response changed\nbare:   %s\nhinted: %s", threshold, bare, hinted)
@@ -501,7 +501,7 @@ func recordLevels(t *testing.T) *levelRecorder {
 func TestMonitorStalledMiddleware_FailureLogLevel(t *testing.T) {
 	answer := textAnswer(`{"b":1,"a":[2]}`, false)
 	mwFor := func(src MonitorStalledSource) server.ToolHandlerMiddleware {
-		return MonitorStalledMiddleware(MonitorStalledConfig{Source: src, Threshold: 3 * time.Minute, AgentPublicURL: gmsTestPublicURL})
+		return MonitorStalledMiddleware(MonitorStalledConfig{Source: src, Threshold: 3 * time.Minute, AgentPublicURL: gmsTestPublicURL, RunnerSHA256: gmsTestRunnerSHA256})
 	}
 
 	t.Run("request cancelled: not an error", func(t *testing.T) {
@@ -587,7 +587,7 @@ func (f *hintFixture) server(pool *pgxpool.Pool) *server.MCPServer {
 		return mcpgo.NewToolResultText(`{"ok":true}`), nil
 	})
 	s.Use(MonitorStalledMiddleware(MonitorStalledConfig{
-		Source: store, Threshold: hintThreshold, AgentPublicURL: gmsTestPublicURL,
+		Source: store, Threshold: hintThreshold, AgentPublicURL: gmsTestPublicURL, RunnerSHA256: gmsTestRunnerSHA256,
 	}))
 	return s
 }
@@ -1078,7 +1078,7 @@ func TestMonitorStalledMiddleware_OnlyVisibleProjects(t *testing.T) {
 	f := testsupport.SeedTenancy(t, pool)
 	store := monitorcreds.New(pool, 6*time.Hour)
 	srv := probeServer(textAnswer(`{"ok":true}`, false), MonitorStalledMiddleware(MonitorStalledConfig{
-		Source: store, Threshold: hintThreshold, AgentPublicURL: gmsTestPublicURL,
+		Source: store, Threshold: hintThreshold, AgentPublicURL: gmsTestPublicURL, RunnerSHA256: gmsTestRunnerSHA256,
 	}))
 	ctx := context.Background()
 
