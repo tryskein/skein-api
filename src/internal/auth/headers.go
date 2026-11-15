@@ -48,8 +48,10 @@ const (
 	// not the single BFF egress address. Trusted only because the /api/v1/*
 	// channel already passed RequireInternalSecret — a credential no internet
 	// client holds — and the BFF strips any client-supplied X-Skein-* before
-	// setting its own. Absent (a direct caller that did not set it) → the
-	// handler falls back to the transport RemoteAddr. Must match the constant
+	// setting its own. Absent (a direct caller that did not set it, or no
+	// trusted proxy configured in skein-web) → there is deliberately NO
+	// RemoteAddr fallback: the per-IP bucket is skipped and only the per-email
+	// bucket applies (see loginClientIP). Must match the constant
 	// SkeinHeaders.ClientIp in skein-web.
 	HeaderClientIP = "X-Skein-Client-Ip"
 	// HeaderSurface carries the fail-closed surface marker (sk-163 S7a,
