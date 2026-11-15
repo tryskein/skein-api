@@ -214,6 +214,13 @@ func (s *Service) Search(ctx context.Context, p Params) (*Result, error) {
 	if continuationMode != rankingFTS && s.embedder != nil {
 		v, err := s.embedder.EmbedSingle(ctx, p.Query)
 		if err != nil {
+			// The embedder wraps the transport error as text, so a
+			// caller that went away is recognised by its own context:
+			// it is not a degradation, and the rest of the search
+			// would run for nobody.
+			if cerr := ctx.Err(); cerr != nil {
+				return nil, cerr
+			}
 			if errors.Is(err, ErrEmbedderUnavailable) {
 				slog.WarnContext(ctx, "search degraded: embedder unavailable",
 					"queryLen", len(p.Query),
