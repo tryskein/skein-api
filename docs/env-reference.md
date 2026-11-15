@@ -152,12 +152,12 @@ starts either way and logs a warning naming the variable.
 #### `SKEIN_BCRYPT_COST`
 
 - **Purpose:** bcrypt work factor for password and API-key hashing.
-- **Required:** no · **Default:** `12` · **Format:** integer in `[4, 31]`
-  (bcrypt's `MinCost`..`MaxCost`).
+- **Required:** no · **Default:** `12` · **Format:** integer in `[12, 31]`
+  (the production floor up to bcrypt's `MaxCost`).
 - **If unset:** 12, the organisation-wide default. Out-of-range values abort
-  startup.
-- **Careful:** lowering it speeds up test suites and weakens production
-  password hashes by the same factor. Production must stay at 12 or above.
+  startup (`skein_bcrypt_cost must be in [12, 31]; got N`).
+- **Careful:** values below 12 are refused rather than silently weakening
+  password and API-key hashes; raising it slows every login and key check.
 
 ## First-admin bootstrap
 

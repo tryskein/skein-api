@@ -47,7 +47,6 @@ func setWorkersEnv(t *testing.T) {
 	t.Helper()
 	t.Setenv("DATABASE_URL", os.Getenv(testsupport.TestDatabaseURL))
 	t.Setenv("SKEIN_INTERNAL_SECRET", wiringInternalSecret)
-	t.Setenv("SKEIN_BCRYPT_COST", "4")
 	t.Setenv("ENVIRONMENT", "development")
 	t.Setenv("SKEIN_AGENT_PUBLIC_URL", "http://skein-wiring.test")
 	t.Setenv("NOTIFICATIONS_RETENTION_DAYS", "30")

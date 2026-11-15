@@ -124,7 +124,6 @@ func countsWiringRouter(t *testing.T) (chi.Router, *pgxpool.Pool, *countsTracer)
 
 	t.Setenv("DATABASE_URL", url)
 	t.Setenv("SKEIN_INTERNAL_SECRET", wiringInternalSecret)
-	t.Setenv("SKEIN_BCRYPT_COST", "4")
 	t.Setenv("ENVIRONMENT", "development")
 	t.Setenv("SKEIN_AGENT_PUBLIC_URL", "http://skein-wiring.test")
 	cfg, err := config.Load()

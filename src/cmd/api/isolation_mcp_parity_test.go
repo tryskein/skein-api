@@ -77,7 +77,6 @@ func newParityStackOn(t *testing.T, pool *pgxpool.Pool) *parityStack {
 
 	t.Setenv("DATABASE_URL", os.Getenv("TEST_DATABASE_URL"))
 	t.Setenv("SKEIN_INTERNAL_SECRET", wiringInternalSecret)
-	t.Setenv("SKEIN_BCRYPT_COST", "4")
 	t.Setenv("ENVIRONMENT", "development")
 	t.Setenv("SKEIN_AGENT_PUBLIC_URL", "http://skein-parity.test")
 	cfg, err := config.Load()
@@ -100,7 +99,7 @@ func newParityStackOn(t *testing.T, pool *pgxpool.Pool) *parityStack {
 
 	for _, a := range testsupport.TenancyActors {
 		u := f.User(t, a)
-		plain, prefix, hash, err := auth.GenerateAPIKey(cfg.BcryptCost)
+		plain, prefix, hash, err := auth.GenerateAPIKey(auth.MinBcryptCost)
 		if err != nil {
 			t.Fatalf("GenerateAPIKey: %v", err)
 		}

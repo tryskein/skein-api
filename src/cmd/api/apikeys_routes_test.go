@@ -35,7 +35,6 @@ func apiKeysRouteRouter(t *testing.T, pool *pgxpool.Pool) chi.Router {
 	t.Helper()
 	t.Setenv("DATABASE_URL", os.Getenv("TEST_DATABASE_URL"))
 	t.Setenv("SKEIN_INTERNAL_SECRET", wiringInternalSecret)
-	t.Setenv("SKEIN_BCRYPT_COST", "4")
 	t.Setenv("ENVIRONMENT", "development")
 	t.Setenv("SKEIN_AGENT_PUBLIC_URL", "http://skein-wiring.test")
 	cfg, err := config.Load()

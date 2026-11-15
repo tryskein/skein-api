@@ -19,6 +19,10 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
+// MinBcryptCost is the lowest SKEIN_BCRYPT_COST Load accepts — the
+// production cost for password and API-key hashes.
+const MinBcryptCost = 12
+
 // MinMCPHeartbeatInterval is the smallest non-zero MCP_HEARTBEAT_INTERVAL
 // Load() accepts. The knob's job is to stay under a gateway idle timeout
 // measured in minutes; anything sub-second is a typo, and mcp-go arms one
@@ -80,10 +84,10 @@ type Config struct {
 	// rather than at first 401. Validated for non-trivial length below.
 	InternalSecret string `env:"SKEIN_INTERNAL_SECRET,required"`
 
-	// BcryptCost is the work factor passed to bcrypt for password hashing.
-	// 12 is the project-wide default (the project guidelines). Tests may
-	// override down to bcrypt.MinCost (4) to keep suites fast — production
-	// MUST stay at 12 or higher.
+	// BcryptCost is the work factor passed to bcrypt for password and
+	// API-key hashing. Load refuses a value below MinBcryptCost (12): a
+	// lower cost silently weakens every stored hash. Tests that want fast
+	// hashing pass a cost to the stores directly instead of through Load.
 	BcryptCost int `env:"SKEIN_BCRYPT_COST" envDefault:"12"`
 
 	// InitialAdminEmail seeds the first admin user when the users table is
@@ -801,9 +805,9 @@ func Load() (*Config, error) {
 	if len(cfg.InternalSecret) < 16 {
 		return nil, fmt.Errorf("skein_internal_secret must be at least 16 characters")
 	}
-	if cfg.BcryptCost < bcrypt.MinCost || cfg.BcryptCost > bcrypt.MaxCost {
+	if cfg.BcryptCost < MinBcryptCost || cfg.BcryptCost > bcrypt.MaxCost {
 		return nil, fmt.Errorf("skein_bcrypt_cost must be in [%d, %d]; got %d",
-			bcrypt.MinCost, bcrypt.MaxCost, cfg.BcryptCost)
+			MinBcryptCost, bcrypt.MaxCost, cfg.BcryptCost)
 	}
 
 	// sk-142 — monitor-credential cleanup knobs. A non-positive interval

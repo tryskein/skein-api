@@ -1409,3 +1409,44 @@ func TestLoad_PublicAPIDisabledIgnoresItsSettings(t *testing.T) {
 			cfg.PublicAPIWriteTimeout, cfg.PublicAPITrustedProxies)
 	}
 }
+
+// TestLoad_BcryptCostFloor — a SKEIN_BCRYPT_COST below the production cost
+// of 12 (or above bcrypt's ceiling of 31) is a configuration error that names
+// the variable, not a silently weaker hash; 12 and the default boot.
+func TestLoad_BcryptCostFloor(t *testing.T) {
+	cases := []struct {
+		name    string
+		env     map[string]string
+		want    int  // accepted cost; ignored when wantErr
+		wantErr bool // Load must refuse
+	}{
+		{name: "default", env: map[string]string{}, want: 12},
+		{name: "floor accepted", env: map[string]string{"SKEIN_BCRYPT_COST": "12"}, want: 12},
+		{name: "ceiling accepted", env: map[string]string{"SKEIN_BCRYPT_COST": "31"}, want: 31},
+		{name: "bcrypt minimum rejected", env: map[string]string{"SKEIN_BCRYPT_COST": "4"}, wantErr: true},
+		{name: "one below floor rejected", env: map[string]string{"SKEIN_BCRYPT_COST": "11"}, wantErr: true},
+		{name: "above ceiling rejected", env: map[string]string{"SKEIN_BCRYPT_COST": "32"}, wantErr: true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			withBaseEnv(t, tc.env)
+			cfg, err := Load()
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("Load() with %v = cost %d, want an error", tc.env, cfg.BcryptCost)
+				}
+				if !strings.Contains(err.Error(), "skein_bcrypt_cost") {
+					t.Fatalf("Load() error = %q, want it to name skein_bcrypt_cost", err.Error())
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Load() with %v = %v, want nil", tc.env, err)
+			}
+			if cfg.BcryptCost != tc.want {
+				t.Errorf("Load() with %v: BcryptCost = %d, want %d", tc.env, cfg.BcryptCost, tc.want)
+			}
+		})
+	}
+}

@@ -41,7 +41,6 @@ func issueCreatePrefsRouter(t *testing.T) (chi.Router, uuid.UUID) {
 
 	t.Setenv("DATABASE_URL", os.Getenv("TEST_DATABASE_URL"))
 	t.Setenv("SKEIN_INTERNAL_SECRET", wiringInternalSecret)
-	t.Setenv("SKEIN_BCRYPT_COST", "4")
 	t.Setenv("ENVIRONMENT", "development")
 	t.Setenv("SKEIN_AGENT_PUBLIC_URL", "http://skein-wiring.test")
 	cfg, err := config.Load()

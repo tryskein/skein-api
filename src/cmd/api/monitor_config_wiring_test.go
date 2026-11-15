@@ -77,7 +77,6 @@ func newWiringStack(t *testing.T) *wiringStack {
 
 	t.Setenv("DATABASE_URL", os.Getenv("TEST_DATABASE_URL"))
 	t.Setenv("SKEIN_INTERNAL_SECRET", wiringInternalSecret)
-	t.Setenv("SKEIN_BCRYPT_COST", "4")
 	t.Setenv("ENVIRONMENT", "development")
 	t.Setenv("SKEIN_AGENT_PUBLIC_URL", "http://skein-wiring.test")
 	cfg, err := config.Load()
@@ -89,7 +88,7 @@ func newWiringStack(t *testing.T) *wiringStack {
 	project, prefix := testsupport.SeedProject(t, pool, owner, "mcw")
 	root := testsupport.SeedIssue(t, pool, project, owner, prefix+"-1", "wiring", "open", 2)
 
-	plain, keyPrefix, hash, err := auth.GenerateAPIKey(cfg.BcryptCost)
+	plain, keyPrefix, hash, err := auth.GenerateAPIKey(auth.MinBcryptCost)
 	if err != nil {
 		t.Fatalf("GenerateAPIKey: %v", err)
 	}

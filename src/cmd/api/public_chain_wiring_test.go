@@ -34,7 +34,6 @@ func chainWiringEnv(t *testing.T, writeTimeout string) *config.Config {
 	t.Helper()
 	t.Setenv("DATABASE_URL", os.Getenv("TEST_DATABASE_URL"))
 	t.Setenv("SKEIN_INTERNAL_SECRET", wiringInternalSecret)
-	t.Setenv("SKEIN_BCRYPT_COST", "4")
 	t.Setenv("ENVIRONMENT", "development")
 	t.Setenv("SKEIN_AGENT_PUBLIC_URL", "http://skein-chain.test")
 	t.Setenv("SKEIN_PUBLIC_API_RATE_LIMIT_PER_MINUTE", "3")
