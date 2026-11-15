@@ -1,7 +1,9 @@
 package handler
 
 import (
+	"crypto/sha256"
 	_ "embed"
+	"encoding/hex"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -41,6 +43,11 @@ type AgentScriptHandler struct {
 	// substituted once at construction time — the served bytes are identical
 	// for every request, so there is no need to re-template per call.
 	body string
+	// sha256 is the hex SHA-256 of body. The mint (skein_get_monitor_script)
+	// bakes it into the bootstrap, and the loader refuses to run a
+	// downloaded body with another digest: a tampered download is never
+	// executed.
+	sha256 string
 }
 
 // NewAgentScriptHandler builds the handler, substituting the runner timings
@@ -60,7 +67,13 @@ func NewAgentScriptHandler(pollIntervalSec int, backoffCeiling, requestLimit, st
 	body = strings.ReplaceAll(body, backoffCeilingPlaceholder, strconv.Itoa(wholeSecondsAtLeastOne(backoffCeiling)))
 	body = strings.ReplaceAll(body, requestLimitPlaceholder, strconv.Itoa(wholeSecondsAtLeastOne(requestLimit)))
 	body = strings.ReplaceAll(body, stallThresholdPlaceholder, strconv.Itoa(wholeSecondsAtLeastOne(stallThreshold)))
-	return &AgentScriptHandler{body: body}
+	sum := sha256.Sum256([]byte(body))
+	return &AgentScriptHandler{body: body, sha256: hex.EncodeToString(sum[:])}
+}
+
+// SHA256 returns the hex SHA-256 of the exact bytes Script serves.
+func (h *AgentScriptHandler) SHA256() string {
+	return h.sha256
 }
 
 // wholeSecondsAtLeastOne truncates d to whole seconds, floored at 1.

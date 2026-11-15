@@ -24,6 +24,7 @@ _SKEIN_LOADER_STOPS = {
     "token_expired": ("closed", 0),
     "token_file_missing": ("closed", 1),
     "misconfigured": ("closed", 1),
+    "runner_mismatch": ("closed", 1),
     "server_unreachable": ("paused", 1),
     "stopped": ("paused", 0),
     "internal_error": ("paused", 1),
@@ -39,8 +40,12 @@ def _skein_loader_action(reason, issue):
         return ("The monitor for issue %s cannot start: its token file is missing, empty or unreadable. "
                 "Mint a new monitor with %s." % (issue, mint))
     if reason == "misconfigured":
-        return ("The bootstrap of the monitor for issue %s is broken (the server address or the token "
-                "file path is not set). Mint a new monitor with %s." % (issue, mint))
+        return ("The bootstrap of the monitor for issue %s is broken (the server address, the token "
+                "file path or the runner digest is not set). Mint a new monitor with %s." % (issue, mint))
+    if reason == "runner_mismatch":
+        return ("The runner downloaded for the monitor of issue %s differs from the one this bootstrap "
+                "was minted for (the server was updated, or the download was altered), so it was not "
+                "run. Mint a new monitor with %s." % (issue, mint))
     if reason == "server_unreachable":
         return ("The monitor for issue %s could not download its runner: the Skein server is "
                 "unreachable or refused the download. Run the same bootstrap again later; its token "
@@ -73,10 +78,11 @@ def _skein_loader_finish(stop):
 
 
 def _skein_loader_fetch():
-    import http.client, os, urllib.error, urllib.request as u
+    import hashlib, http.client, os, urllib.error, urllib.request as u
     path = os.environ.get("SKEIN_TOKEN_FILE", "")
     base = os.environ.get("SKEIN_PUBLIC_URL", "")
-    if not path or not base:
+    want = os.environ.get("SKEIN_RUNNER_SHA256", "")
+    if not path or not base or not want:
         raise _SkeinLoaderStop("misconfigured", delete_token=bool(path))
     try:
         with open(path) as fh:
@@ -97,13 +103,17 @@ def _skein_loader_fetch():
         with u.build_opener(NoRedirect).open(req, timeout=30) as resp:
             if resp.getcode() != 200:
                 raise _SkeinLoaderStop("server_unreachable")
-            return resp.read().decode("utf-8")
+            body = resp.read()
     except urllib.error.HTTPError as exc:
         if exc.code == 401:
             raise _SkeinLoaderStop("token_expired", status=401, delete_token=True)
         raise _SkeinLoaderStop("server_unreachable")
-    except (urllib.error.URLError, http.client.HTTPException, OSError, UnicodeDecodeError):
+    except (urllib.error.URLError, http.client.HTTPException, OSError):
         raise _SkeinLoaderStop("server_unreachable")
+    # Only the exact runner the mint named is executed.
+    if hashlib.sha256(body).hexdigest() != want:
+        raise _SkeinLoaderStop("runner_mismatch", delete_token=True)
+    return body.decode("utf-8")
 
 
 # One protected phase from the moment the handlers exist: they are installed

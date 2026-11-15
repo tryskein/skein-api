@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -406,4 +408,17 @@ func TestAgentScript_ServedBodyAppliesTimings(t *testing.T) {
 			t.Errorf("first executor at 8s virtual (limit 7s) = %q, want dead", got)
 		}
 	})
+}
+
+// TestAgentScriptHandler_SHA256IsOfTheServedBytes asserts that the digest the
+// mint bakes into every bootstrap is the SHA-256 of exactly the bytes the
+// script door serves, so the loader's check passes for the real runner.
+func TestAgentScriptHandler_SHA256IsOfTheServedBytes(t *testing.T) {
+	h := NewAgentScriptHandler(7, 20*time.Second, 25*time.Second, 4*time.Minute)
+	rec := httptest.NewRecorder()
+	h.Script(rec, httptest.NewRequest(http.MethodGet, "/agent/v1/monitor-script", nil))
+	sum := sha256.Sum256(rec.Body.Bytes())
+	if got, want := h.SHA256(), hex.EncodeToString(sum[:]); got != want {
+		t.Fatalf("SHA256() = %s, want the digest of the served body %s", got, want)
+	}
 }

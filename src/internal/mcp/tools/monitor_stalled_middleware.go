@@ -75,6 +75,9 @@ type MonitorStalledConfig struct {
 	Threshold time.Duration
 	// AgentPublicURL rebuilds each item's bootstrap (cfg.AgentPublicURL).
 	AgentPublicURL string
+	// RunnerSHA256 is the digest of the served runner the rebuilt bootstrap
+	// verifies (handler.AgentScriptHandler.SHA256).
+	RunnerSHA256 string
 	// Timeout bounds the hint's work; zero means monitorStalledTimeout.
 	Timeout time.Duration
 }
@@ -195,7 +198,7 @@ func attachMonitorStalled(ctx context.Context, cfg MonitorStalledConfig, res *mc
 			IssueID:             m.IssueID,
 			LastPollSucceededAt: m.LastPollSucceededAt,
 			Mine:                m.Mine,
-			Bootstrap:           buildMonitorBootstrap(cfg.AgentPublicURL, m.IssueID, m.IssuedSessionID, m.TokenFilePath),
+			Bootstrap:           buildMonitorBootstrap(cfg.AgentPublicURL, m.IssueID, m.IssuedSessionID, m.TokenFilePath, cfg.RunnerSHA256),
 			Action:              action,
 		})
 	}

@@ -19,6 +19,7 @@ fake server and asserts the stdout/lifecycle contract.
 
 import atexit
 import contextlib
+import hashlib
 import io
 import json
 import os
@@ -1123,9 +1124,11 @@ def closed_port_url():
 
 
 def run_loader(url, token="skm_" + "d" * 43, token_as_dir=False, no_url=False,
-               site_env=None, signal_when=None, sig=None, extra_env=None):
+               site_env=None, signal_when=None, sig=None, extra_env=None, runner=None):
     """Run the loader asset as `python3 -c`; returns (rc, lines, stderr, token path).
-    signal_when: a threading.Event set once the process may be signalled."""
+    signal_when: a threading.Event set once the process may be signalled.
+    runner: the body whose digest the bootstrap names (SKEIN_RUNNER_SHA256);
+    by default the rendered runner the handover tests serve."""
     with open(LOADER_SRC) as fh:
         loader = fh.read()
     tmpdir = make_tmpdir(prefix="skein-loader-")
@@ -1141,6 +1144,9 @@ def run_loader(url, token="skm_" + "d" * 43, token_as_dir=False, no_url=False,
     env["SKEIN_ISSUE"] = ROOT
     env["SKEIN_PUBLIC_URL"] = "" if no_url else url
     env["SKEIN_TOKEN_FILE"] = token_path
+    if runner is None:
+        runner = render_runner(poll_sec=1).encode()
+    env["SKEIN_RUNNER_SHA256"] = hashlib.sha256(runner).hexdigest()
     if site_env:
         env.update(site_env)
     if extra_env:
@@ -1264,6 +1270,32 @@ class LoaderStopTest(StopLineAssertions, unittest.TestCase):
                 self.assertEqual(rc, 0)
                 self.assertTrue(os.path.exists(tok))
 
+    def test_runner_other_than_the_minted_one_is_not_run(self):
+        # The digest comes from the mint; a body that does not match it —
+        # tampered with, or served by an updated server — is never executed.
+        marker_dir = make_tmpdir(prefix="skein-loader-mark-")
+        marker = os.path.join(marker_dir, "executed")
+        body = ('open(%r, "w").write("x")\n' % marker).encode()
+        srv = LoaderServer(lambda h: h.send_body(200, body))
+        try:
+            rc, lines, err, tok = run_loader(srv.url(), runner=b"the minted runner\n")
+        finally:
+            srv.stop()
+        self.assert_single_stop_line(lines, "runner_mismatch", "closed")
+        self.assertEqual(rc, 1)
+        self.assertFalse(os.path.exists(marker), "a runner with another digest was executed")
+        self.assertFalse(os.path.exists(tok))
+
+    def test_missing_runner_digest_is_misconfigured(self):
+        srv = LoaderServer(lambda h: h.send_body(200, b"pass\n"))
+        try:
+            rc, lines, err, tok = run_loader(srv.url(), extra_env={"SKEIN_RUNNER_SHA256": ""})
+        finally:
+            srv.stop()
+        self.assert_single_stop_line(lines, "misconfigured", "closed")
+        self.assertEqual(rc, 1)
+        self.assertEqual(srv.script_hits, 0)
+
     def test_redirect_is_not_followed(self):
         # A 3xx from the script door must neither carry the token to the
         # Location host nor run what that host serves.
@@ -1283,9 +1315,10 @@ class LoaderStopTest(StopLineAssertions, unittest.TestCase):
         self.assertEqual(elsewhere.script_hits, 0, "the loader followed the redirect")
 
     def test_internal_error_in_the_body(self):
-        srv = LoaderServer(lambda h: h.send_body(200, b'raise RuntimeError("body is broken")\n'))
+        body = b'raise RuntimeError("body is broken")\n'
+        srv = LoaderServer(lambda h: h.send_body(200, body))
         try:
-            rc, lines, err, tok = run_loader(srv.url())
+            rc, lines, err, tok = run_loader(srv.url(), runner=body)
         finally:
             srv.stop()
         self.assert_single_stop_line(lines, "internal_error", "paused")

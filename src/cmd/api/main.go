@@ -1595,6 +1595,18 @@ func buildRouter(
 	// sk-579 — the renewal window comes from cfg (config.Load), so mint and
 	// validate-and-renew both slide by the configured window (INV-1).
 	monitorStore := monitorcreds.New(pool, cfg.MonitorTokenIdleTTL)
+	// sk-142.6 — the Python poll runner served on the /agent/v1 door below;
+	// built here because the mint tool bakes the digest of its body into
+	// every bootstrap.
+	// sk-579 — every runner timing comes from the single derivation that
+	// config.Load checked the stall threshold against (INV-6).
+	runnerTimings := config.RunnerTimings(cfg.MonitorRunnerPollInterval)
+	agentScriptHandler := handler.NewAgentScriptHandler(
+		runnerTimings.PollIntervalSec,
+		runnerTimings.BackoffCeiling,
+		runnerTimings.RequestLimit,
+		cfg.MonitorStallThreshold,
+	)
 	// Reuse the same store instances main() already built for REST —
 	// stores are stateless over the pool; no observable behaviour change,
 	// just one fewer NewStore allocation per process for projects /
@@ -1627,6 +1639,7 @@ func buildRouter(
 		monitorCredsStore:   monitorStore,
 		agentPublicURL:      cfg.AgentPublicURL,
 		monitorTokenIdleTTL: cfg.MonitorTokenIdleTTL,
+		runnerSHA256:        agentScriptHandler.SHA256(),
 		// sk-674.18 T024 — the space of a new project and the admin agent
 		// adding to a space: the same service and defaults as REST.
 		spacesSvc:                spaces.NewService(pool, spacesOptions(cfg)),
@@ -1674,16 +1687,6 @@ func buildRouter(
 	// monitorStore is built once above (mcpDepsBundle) and shared with the
 	// skein_get_monitor_script MCP tool — the mint side of this same door.
 	agentPollHandler := handler.NewAgentPollHandler(pool, cfg.MonitorPollSafetyLag)
-	// sk-142.6 — the Python poll runner served on the same /agent/v1 door.
-	// sk-579 — every runner timing comes from the single derivation that
-	// config.Load checked the stall threshold against (INV-6).
-	runnerTimings := config.RunnerTimings(cfg.MonitorRunnerPollInterval)
-	agentScriptHandler := handler.NewAgentScriptHandler(
-		runnerTimings.PollIntervalSec,
-		runnerTimings.BackoffCeiling,
-		runnerTimings.RequestLimit,
-		cfg.MonitorStallThreshold,
-	)
 	r.Route("/agent/v1", func(r chi.Router) {
 		r.Use(handler.RequireInternalSecret(cfg.InternalSecret, ""))
 		r.Use(auth.RequireMonitorToken(monitorStore, "notifications:poll"))

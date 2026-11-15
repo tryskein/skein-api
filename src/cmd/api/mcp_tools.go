@@ -78,6 +78,9 @@ type mcpDeps struct {
 	// sk-579 — the token renewal window (cfg.MonitorTokenIdleTTL) quoted in
 	// the skein_get_monitor_script description.
 	monitorTokenIdleTTL time.Duration
+	// runnerSHA256 is the digest of the runner body /agent/v1/monitor-script
+	// serves; the bootstrap carries it so the loader verifies the download.
+	runnerSHA256 string
 	// sk-674.18 T024 — the spaces service (skein_user action space_add,
 	// the space of skein_project_create) and SKEIN_PROJECT_DEFAULT_VISIBILITY.
 	spacesSvc                *spaces.Service
@@ -262,7 +265,7 @@ func mcpRegisterToolsFn(d mcpDeps) func(*server.MCPServer) {
 		// sk-142.7 — agent task-monitor setup. One call auto-watches the
 		// issue (subtree-aware), mints a scoped short-lived skm_ token, and
 		// returns a bootstrap command (token in a 0600 file, never in argv).
-		mcptools.RegisterGetMonitorScript(s, d.pool, d.notifStore, d.monitorCredsStore, d.agentPublicURL, d.monitorTokenIdleTTL)
+		mcptools.RegisterGetMonitorScript(s, d.pool, d.notifStore, d.monitorCredsStore, d.agentPublicURL, d.runnerSHA256, d.monitorTokenIdleTTL)
 
 		// sk-669 — the monitorStalled response layer (sk-579 US-5,
 		// mcptools.MonitorStalledMiddleware) is deliberately NOT registered:

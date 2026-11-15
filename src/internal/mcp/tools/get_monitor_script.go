@@ -61,7 +61,9 @@ var defaultMonitorEventTypes = []string{"comment.created", "issue.closed"}
 //
 // idleTTL is the token renewal window from cfg.MonitorTokenIdleTTL (sk-579
 // US-2): the description quotes the configured value, never a constant.
-func RegisterGetMonitorScript(s *server.MCPServer, pool *pgxpool.Pool, notifStore *notifications.Store, monitorStore *monitorcreds.Store, agentPublicURL string, idleTTL time.Duration) {
+// runnerSHA256 is the hex SHA-256 of the runner body the /agent/v1 door serves
+// (handler.AgentScriptHandler.SHA256), baked into every bootstrap.
+func RegisterGetMonitorScript(s *server.MCPServer, pool *pgxpool.Pool, notifStore *notifications.Store, monitorStore *monitorcreds.Store, agentPublicURL, runnerSHA256 string, idleTTL time.Duration) {
 	tool := mcpgo.NewTool(
 		"skein_get_monitor_script",
 		mcpgo.WithDescription(
@@ -112,7 +114,7 @@ func RegisterGetMonitorScript(s *server.MCPServer, pool *pgxpool.Pool, notifStor
 		mcpgo.WithIdempotentHintAnnotation(false),
 		mcpgo.WithOpenWorldHintAnnotation(false),
 	)
-	addTool(s, tool, handleGetMonitorScript(pool, notifStore, monitorStore, agentPublicURL))
+	addTool(s, tool, handleGetMonitorScript(pool, notifStore, monitorStore, agentPublicURL, runnerSHA256))
 }
 
 type getMonitorScriptResponse struct {
@@ -130,7 +132,7 @@ type getMonitorScriptResponse struct {
 	Usage            string   `json:"usage"`
 }
 
-func handleGetMonitorScript(pool *pgxpool.Pool, notifStore *notifications.Store, monitorStore *monitorcreds.Store, agentPublicURL string) server.ToolHandlerFunc {
+func handleGetMonitorScript(pool *pgxpool.Pool, notifStore *notifications.Store, monitorStore *monitorcreds.Store, agentPublicURL, runnerSHA256 string) server.ToolHandlerFunc {
 	return func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 		start := time.Now()
 		userID, errResp := skmcp.RequireUser(ctx)
@@ -236,7 +238,7 @@ func handleGetMonitorScript(pool *pgxpool.Pool, notifStore *notifications.Store,
 		// in verbatim: it must be byte-identical to the response field, and the
 		// suffix is random per call, so recomputing here would yield a different
 		// path.
-		bootstrap := buildMonitorBootstrap(agentPublicURL, issueID, sess, tokenFilePath)
+		bootstrap := buildMonitorBootstrap(agentPublicURL, issueID, sess, tokenFilePath, runnerSHA256)
 
 		slog.InfoContext(ctx, "mcp tool ok",
 			"tool", "skein_get_monitor_script",
@@ -387,12 +389,17 @@ func monitorTokenFilePath(issueID, discriminator string) string {
 // empty session bakes SKEIN_EXCLUDE_SESSION=” — the poll predicate treats that
 // as "no suppression" (safe, INV-9). Single-quoted like every other value so a
 // hostile session string cannot break out of the command.
-func buildMonitorBootstrap(publicURL, issueID, excludeSession, tokenFilePath string) string {
+//
+// runnerSHA256 is baked as SKEIN_RUNNER_SHA256: the loader executes the
+// downloaded runner only when its SHA-256 equals it. The digest travels over
+// the MCP channel, so whoever alters the HTTP download cannot also alter it.
+func buildMonitorBootstrap(publicURL, issueID, excludeSession, tokenFilePath, runnerSHA256 string) string {
 	tokenFileValue := shellSingleQuote(tokenFilePath)
 	return "SKEIN_PUBLIC_URL=" + shellSingleQuote(publicURL) +
 		" SKEIN_ISSUE=" + shellSingleQuote(issueID) +
 		" SKEIN_TOKEN_FILE=" + tokenFileValue +
 		" SKEIN_EXCLUDE_SESSION=" + shellSingleQuote(excludeSession) +
+		" SKEIN_RUNNER_SHA256=" + shellSingleQuote(runnerSHA256) +
 		" python3 -c " + shellSingleQuote(monitorLoader())
 }
 
