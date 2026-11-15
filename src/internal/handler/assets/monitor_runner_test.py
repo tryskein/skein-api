@@ -1056,7 +1056,7 @@ class StopLineTest(StopLineAssertions, unittest.TestCase):
                                                     dir_mode=0o755, requests=requests)
         self.assert_single_stop_line(lines, "token_file_insecure", "closed")
         self.assertEqual(rc, 1)
-        self.assertTrue(os.path.exists(tok), "the token file must not be touched")
+        self.assertFalse(os.path.exists(tok), "our readable token file must be deleted")
         self.assertEqual(requests, [], "the token was sent to the server")
 
         rc, lines, err, tok = run_runner_subprocess("empty", token_mode=0o644, subdir="private",
@@ -1253,7 +1253,7 @@ class LoaderStopTest(StopLineAssertions, unittest.TestCase):
             srv.stop()
         self.assert_single_stop_line(lines, "token_file_insecure", "closed")
         self.assertEqual(rc, 1)
-        self.assertTrue(os.path.exists(tok), "the token file must not be touched")
+        self.assertFalse(os.path.exists(tok), "our readable token file must be deleted")
         self.assertEqual(srv.script_hits, 0, "the token was sent to the server")
 
     def test_token_file_in_a_private_directory_is_used(self):

@@ -918,8 +918,8 @@ func TestBootstrapCommand_EndToEnd(t *testing.T) {
 		}
 		run := startBootstrap(t, buildMonitorBootstrap(srv.srv.URL, "zz-24", "", token, runnerSHA256))
 		assertOneStopLine(t, run.rest(t), "token_file_insecure", "closed")
-		if !fileExists(token) {
-			t.Fatalf("token file removed on token_file_insecure")
+		if fileExists(token) {
+			t.Fatalf("our readable token file kept on token_file_insecure, want it deleted")
 		}
 	})
 

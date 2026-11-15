@@ -169,6 +169,10 @@ def open_token(path):
         raise Stop("token_file_missing")
     if not token_file_private(path, st):
         os.close(fd)
+        # The token is burnt: delete our readable copy so it does not
+        # outlive the refusal on disk. Another user's file is not ours to touch.
+        if hasattr(os, "getuid") and st.st_uid == os.getuid():
+            remove_token_file(path, opened=st)
         raise Stop("token_file_insecure")
     if fcntl is None:
         log_stderr("monitor runner: this platform has no OS file locks; running without the "
@@ -220,10 +224,16 @@ def token_file_private(path, st):
     return stat.S_ISDIR(parent.st_mode) and parent.st_uid == uid and not parent.st_mode & 0o077
 
 
-def remove_token_file(path):
+def remove_token_file(path, opened=None):
     """Delete the token file, and its directory when it is the mint's own
-    skein-mon-* directory and nothing else is left in it."""
+    skein-mon-* directory and nothing else is left in it. With opened (the
+    fstat of the opened file), only that same file is deleted: a path that
+    now names another inode is left alone."""
     try:
+        if opened is not None:
+            cur = os.lstat(path)
+            if (cur.st_ino, cur.st_dev) != (opened.st_ino, opened.st_dev):
+                return
         os.remove(path)
     except OSError:
         return
@@ -268,7 +278,7 @@ def build_url(base, cursor, exclude_session=""):
 # visibility_lost     closed    0     deleted
 # token_file_missing  closed    1     missing stays missing; empty → deleted;
 #                                     unreadable → not touched
-# token_file_insecure closed    1     not touched
+# token_file_insecure closed    1     deleted when ours; another user's not touched
 # misconfigured       closed    1     deleted when its path is known
 # stopped             paused    0     kept
 # internal_error      paused    1     kept

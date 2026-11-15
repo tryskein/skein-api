@@ -63,18 +63,28 @@ def _skein_loader_action(reason, issue):
             "happens again, mint a new monitor with %s." % (issue, mint))
 
 
+def _skein_loader_rm(path, opened=None):
+    # With opened (the fstat of the file read), delete only that same inode.
+    import os
+    try:
+        if opened is not None:
+            cur = os.lstat(path)
+            if (cur.st_ino, cur.st_dev) != (opened.st_ino, opened.st_dev):
+                return
+        os.remove(path)
+        parent = os.path.dirname(os.path.abspath(path))
+        if os.path.basename(parent).startswith("skein-mon-"):
+            os.rmdir(parent)
+    except OSError:
+        pass
+
+
 def _skein_loader_finish(stop):
     _skein_loader_stopping[0] = True
     import json, os, sys
     path = os.environ.get("SKEIN_TOKEN_FILE", "")
     if stop.delete_token and path:
-        try:
-            os.remove(path)
-            parent = os.path.dirname(os.path.abspath(path))
-            if os.path.basename(parent).startswith("skein-mon-"):
-                os.rmdir(parent)
-        except OSError:
-            pass
+        _skein_loader_rm(path)
     event, code = _SKEIN_LOADER_STOPS[stop.reason]
     line = {"event": event, "reason": stop.reason,
             "action": _skein_loader_action(stop.reason, os.environ.get("SKEIN_ISSUE", ""))}
@@ -112,6 +122,9 @@ def _skein_loader_fetch():
                 except OSError:
                     pass
             if not private:
+                # The token is burnt: do not leave our readable copy behind.
+                if st.st_uid == uid:
+                    _skein_loader_rm(path, st)
                 raise _SkeinLoaderStop("token_file_insecure")
         token = os.read(fd, 65536).decode("utf-8").strip()
     except (OSError, UnicodeDecodeError):
