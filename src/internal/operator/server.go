@@ -34,11 +34,9 @@ func NewRouter(key string, ops Operations) http.Handler {
 
 // The timeouts of the operator's server. ReadTimeout bounds reading a
 // request, its body included, so a client without the key cannot hold the
-// connection with a slow body; serve lifts the read deadline once the body is
-// read, because net/http cancels the request context when a read deadline
-// passes while the handler still runs, and an account deletion must not be
-// cut by it. IdleTimeout bounds a kept-alive connection waiting for its next
-// request.
+// connection with a slow body; net/http lifts the read deadline once the body
+// is consumed, so it does not limit how long an operation runs. IdleTimeout
+// bounds a kept-alive connection waiting for its next request.
 const (
 	readHeaderTimeout = 10 * time.Second
 	readTimeout       = 30 * time.Second

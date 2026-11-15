@@ -1055,14 +1055,18 @@ func main() {
 	// below, not via defer) — same position the two original defers held.
 	defer runTeardownOnce()
 
-	// No ReadTimeout or WriteTimeout: the port serves MCP SSE streams and
-	// agent long-polls, and net/http cancels a running handler's context
-	// when a read deadline passes. IdleTimeout only bounds a kept-alive
-	// connection between requests.
+	// ReadTimeout bounds reading a request's headers and body only: net/http
+	// lifts the read deadline once the body is consumed (at once for a request
+	// without one), before a long-running response, so MCP SSE streams and
+	// agent long-polls are not cut by it. Request bodies here are small JSON;
+	// attachments go to S3 by presigned URL. No WriteTimeout: it would cut
+	// those streams. IdleTimeout bounds a kept-alive connection between
+	// requests.
 	srv := &http.Server{
 		Addr:              ":" + cfg.Port,
 		Handler:           router,
 		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
 		IdleTimeout:       120 * time.Second,
 	}
 	// sk-303.16 — cancel every open MCP standalone GET (SSE) stream's request
