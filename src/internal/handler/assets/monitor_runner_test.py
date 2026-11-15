@@ -100,6 +100,11 @@ class _FakeHandler(BaseHTTPRequestHandler):
             # from 401 token death. The runner must exit 0 with a closed line whose
             # status is 403 (so the agent can tell visibility-loss from revocation).
             self._json(403, {"error": "visibility_lost"})
+        elif mode == "redirect":
+            self.send_response(302)
+            self.send_header("Location", self.server.redirect_to + self.path)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
         elif mode == "dup":
             # Always return the SAME notification id: the runner's seen-set
             # must dedupe it so it is emitted exactly once across many polls.
@@ -133,9 +138,10 @@ class _FakeHandler(BaseHTTPRequestHandler):
 class RunnerHarness:
     """Starts a fake poll server + the runner subprocess, streaming stdout lines."""
 
-    def __init__(self, mode, poll_sec=1, exclude_session=None):
+    def __init__(self, mode, poll_sec=1, exclude_session=None, redirect_to=""):
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), _FakeHandler)
         self.server.mode = mode
+        self.server.redirect_to = redirect_to
         self.server.requests = []
         self.port = self.server.server_address[1]
         self.httpd_thread = threading.Thread(target=self.server.serve_forever, daemon=True)
@@ -1258,6 +1264,24 @@ class LoaderStopTest(StopLineAssertions, unittest.TestCase):
                 self.assertEqual(rc, 0)
                 self.assertTrue(os.path.exists(tok))
 
+    def test_redirect_is_not_followed(self):
+        # A 3xx from the script door must neither carry the token to the
+        # Location host nor run what that host serves.
+        elsewhere = LoaderServer(lambda h: h.send_body(200, b"pass\n"))
+        srv = LoaderServer(lambda h: (h.send_response(302),
+                                      h.send_header("Location", elsewhere.url() + h.path),
+                                      h.send_header("Content-Length", "0"),
+                                      h.end_headers()))
+        try:
+            rc, lines, err, tok = run_loader(srv.url())
+        finally:
+            srv.stop()
+            elsewhere.stop()
+        self.assert_single_stop_line(lines, "server_unreachable", "paused")
+        self.assertEqual(rc, 1)
+        self.assertEqual(srv.script_hits, 1)
+        self.assertEqual(elsewhere.script_hits, 0, "the loader followed the redirect")
+
     def test_internal_error_in_the_body(self):
         srv = LoaderServer(lambda h: h.send_body(200, b'raise RuntimeError("body is broken")\n'))
         try:
@@ -1655,6 +1679,29 @@ class RestartTest(unittest.TestCase):
         finally:
             runner.kill()
             srv.stop()
+
+class RedirectTest(unittest.TestCase):
+    """A 3xx from the poll door is not followed: the token never reaches the
+    Location host."""
+
+    def test_poll_redirect_is_not_followed(self):
+        elsewhere = ThreadingHTTPServer(("127.0.0.1", 0), _FakeHandler)
+        elsewhere.mode = "empty"
+        elsewhere.requests = []
+        threading.Thread(target=elsewhere.serve_forever, daemon=True).start()
+        h = RunnerHarness("redirect", redirect_to="http://127.0.0.1:%d" % elsewhere.server_address[1])
+        try:
+            h.read_event("monitor_started", timeout=8)
+            deadline = time.monotonic() + 20
+            while len(h.server.requests) < 2 and time.monotonic() < deadline:
+                time.sleep(0.05)
+            self.assertGreaterEqual(len(h.server.requests), 2, "the runner did not retry the redirected poll")
+            self.assertEqual(elsewhere.requests, [], "the runner followed the redirect")
+        finally:
+            h.close()
+            elsewhere.shutdown()
+            elsewhere.server_close()
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

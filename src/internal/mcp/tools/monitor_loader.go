@@ -14,9 +14,11 @@ import (
 // X-Skein-Api-Key header, verifies the HTTP status, and exec()s the body at
 // module level (the runner runs as __main__, exactly as before).
 //
-// Two guards keep an error body from ever being exec()'d: urllib.urlopen
+// Two guards keep an error body from ever being exec()'d: the urllib opener
 // raises HTTPError on any non-2xx response (so a 401/5xx never reaches exec),
 // and the explicit `assert resp.getcode() == 200` is a secondary check. The
+// opener follows no redirect, so a 3xx can neither carry the token to another
+// host nor have its code run. The
 // fetch carries an explicit 30s timeout so a hung connection cannot block the
 // bootstrap forever before the runner starts. The asset uses only double
 // quotes, so the shell-quoted bootstrap stays readable (shellSingleQuote

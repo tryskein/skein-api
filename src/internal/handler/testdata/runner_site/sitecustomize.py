@@ -23,7 +23,8 @@
 #   SKEIN_TEST_DNS_LOG=<path>      socket.getaddrinfo appends "<pid> <thread>"
 #                                  and then blocks forever (until this process
 #                                  is killed or orphaned).
-#   SKEIN_TEST_URLOPEN_TIMEOUT=1   urllib.request.urlopen raises TimeoutError.
+#   SKEIN_TEST_URLOPEN_TIMEOUT=1   every urllib.request opener (urlopen and
+#                                  build_opener alike) raises TimeoutError.
 #   SKEIN_TEST_SIGNAL_ON_IMPORT=<module>
 #                                  the first `import <module>` sends this
 #                                  process a real SIGTERM, before the import
@@ -126,7 +127,7 @@ if os.environ.get("SKEIN_TEST_SITE") == "1":
 
         def _timed_out(*args, **kwargs):
             raise TimeoutError("sitecustomize: urlopen timed out on purpose")
-        urllib.request.urlopen = _timed_out
+        urllib.request.OpenerDirector.open = _timed_out
 
     if os.environ.get("SKEIN_TEST_NO_FCNTL") == "1":
         import sys

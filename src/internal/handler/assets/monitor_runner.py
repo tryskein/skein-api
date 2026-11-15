@@ -95,13 +95,19 @@ REQUEST_WAIT_STEP_SEC = 0.05
 # in ({"url", "token", "timeout"}) → one JSON line out ({"status", "body"} on
 # 2xx, {"status", "retryAfter"} on an HTTP error, {"status": 0, "error"} on
 # anything else). The token travels over the pipe — never argv or env.
+# Redirects are not followed: urllib would resend X-Skein-Api-Key to any
+# host and scheme; a 3xx comes back as an HTTP error status instead.
 EXECUTOR_SRC = r"""
 import json, sys, urllib.error, urllib.request
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *args):
+        return None
+opener = urllib.request.build_opener(NoRedirect)
 for line in sys.stdin:
     req = json.loads(line)
     try:
         r = urllib.request.Request(req["url"], headers={"X-Skein-Api-Key": req["token"]})
-        with urllib.request.urlopen(r, timeout=req["timeout"]) as resp:
+        with opener.open(r, timeout=req["timeout"]) as resp:
             out = {"status": resp.status, "body": resp.read().decode("utf-8", "replace")}
     except urllib.error.HTTPError as exc:
         out = {"status": exc.code, "retryAfter": exc.headers.get("Retry-After") if exc.headers else None}

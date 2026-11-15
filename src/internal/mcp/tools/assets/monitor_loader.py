@@ -88,8 +88,13 @@ def _skein_loader_fetch():
     if not token:
         raise _SkeinLoaderStop("token_file_missing", delete_token=True)
     req = u.Request(base + "/agent/v1/monitor-script", headers={"X-Skein-Api-Key": token})
+
+    class NoRedirect(u.HTTPRedirectHandler):
+        # A redirect would carry the token to another host and run its code.
+        def redirect_request(self, *args):
+            return None
     try:
-        with u.urlopen(req, timeout=30) as resp:
+        with u.build_opener(NoRedirect).open(req, timeout=30) as resp:
             if resp.getcode() != 200:
                 raise _SkeinLoaderStop("server_unreachable")
             return resp.read().decode("utf-8")
