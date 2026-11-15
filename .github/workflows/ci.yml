@@ -27,7 +27,13 @@ permissions:
 
 env:
   SQLC_VERSION: "1.31.1"
+  # sha256 of sqlc_${SQLC_VERSION}_linux_amd64.tar.gz (the release asset's
+  # digest): bump both in the same commit.
+  SQLC_SHA256: "497ae4fcdfa64c5b0c311ffe4c2bd991e43991e82e5367792ed78bc2dca27354"
   MIGRATE_VERSION: "v4.20.1"
+  # sha256 of migrate.linux-amd64.tar.gz (sha256sum.txt of the release):
+  # bump both in the same commit.
+  MIGRATE_SHA256: "b1e13121d4178b7804a9fb29dca62d57b732390f7e5ae33f2cd65e9b192e1bd4"
   VACUUM_VERSION: "0.41.0"
   # sha256 of vacuum_${VACUUM_VERSION}_linux_x86_64.tar.gz (checksums.txt of
   # the release): bump both in the same commit.
@@ -74,8 +80,10 @@ jobs:
       - name: Install sqlc
         run: |
           mkdir -p "$RUNNER_TEMP/bin"
-          curl -fsSL "https://github.com/sqlc-dev/sqlc/releases/download/v${SQLC_VERSION}/sqlc_${SQLC_VERSION}_linux_amd64.tar.gz" \
-            | tar -xz -C "$RUNNER_TEMP/bin" sqlc
+          archive="$RUNNER_TEMP/sqlc_${SQLC_VERSION}_linux_amd64.tar.gz"
+          curl -fsSL -o "$archive" "https://github.com/sqlc-dev/sqlc/releases/download/v${SQLC_VERSION}/sqlc_${SQLC_VERSION}_linux_amd64.tar.gz"
+          printf '%s  %s\n' "$SQLC_SHA256" "$archive" | sha256sum --check
+          tar -xzf "$archive" -C "$RUNNER_TEMP/bin" sqlc
           echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
       - name: Regenerate and compare
         run: |
@@ -250,8 +258,10 @@ jobs:
       - name: Apply production migrations
         run: |
           mkdir -p "$RUNNER_TEMP/bin"
-          curl -fsSL "https://github.com/golang-migrate/migrate/releases/download/${MIGRATE_VERSION}/migrate.linux-amd64.tar.gz" \
-            | tar -xz -C "$RUNNER_TEMP/bin" migrate
+          archive="$RUNNER_TEMP/migrate.linux-amd64.tar.gz"
+          curl -fsSL -o "$archive" "https://github.com/golang-migrate/migrate/releases/download/${MIGRATE_VERSION}/migrate.linux-amd64.tar.gz"
+          printf '%s  %s\n' "$MIGRATE_SHA256" "$archive" | sha256sum --check
+          tar -xzf "$archive" -C "$RUNNER_TEMP/bin" migrate
           "$RUNNER_TEMP/bin/migrate" -path=src/migrations -database "$TEST_DATABASE_URL" up
       - name: Integration tests
         working-directory: src
