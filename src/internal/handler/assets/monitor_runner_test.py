@@ -1596,7 +1596,15 @@ class OneRunnerTest(StopLineAssertions, unittest.TestCase):
         try:
             first.wait_for(is_event("monitor_started"))
             before = (open(token).read(), os.stat(token).st_mtime_ns)
-            for path in (token, link, hard):
+            # A symlink is not opened at all (O_NOFOLLOW: the token file may
+            # not be swapped for a link to somewhere else).
+            with self.subTest(path="symlink"):
+                second = LiveRunner(srv.url(), link)
+                runners.append(second)
+                self.assertEqual(second.wait_exit(), 1)
+                self.assert_single_stop_line(second.lines, "token_file_missing", "closed")
+                self.assertTrue(os.path.islink(link), "the symlink was touched")
+            for path in (token, hard):
                 with self.subTest(path=os.path.basename(path)):
                     second = LiveRunner(srv.url(), path)
                     runners.append(second)
