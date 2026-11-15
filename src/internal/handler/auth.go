@@ -121,10 +121,10 @@ func NewAuthHandler(pool *pgxpool.Pool, bcryptCost int, authMode, breakGlassAdmi
 // ONLY the BFF-forwarded X-Skein-Client-Ip (the real client, which skein-web
 // resolves from its trusted proxy chain and stamps only when a trusted proxy is
 // configured — see sk-163 S9). There is deliberately NO RemoteAddr fallback:
-//   - On the normal BFF path, RemoteAddr is the BFF pod IP — keying the per-IP
-//     bucket on it would lump every login into one global bucket (a DoS vector).
-//   - chi's middleware.RealIP derives RemoteAddr from X-Forwarded-For / X-Real-IP,
-//     which a direct caller can spoof — an untrustworthy key.
+// RemoteAddr is the transport peer (the internal router does not rewrite it
+// from forwarding headers), which on the normal BFF path is the BFF pod IP —
+// keying the per-IP bucket on it would lump every login into one global bucket
+// (a DoS vector).
 //
 // So an absent/empty header → "" → the per-IP bucket is SKIPPED; the per-email
 // bucket still applies unconditionally.

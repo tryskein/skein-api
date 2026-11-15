@@ -60,9 +60,15 @@ func RequireInternalSecret(secret, challenge string) func(http.Handler) http.Han
 			}
 
 			if match != 1 {
+				// remote is the transport peer: the internal router does not
+				// rewrite RemoteAddr from forwarding headers, so it cannot be
+				// spoofed by a header. client_ip is the X-Skein-Client-Ip
+				// the caller claims; the caller failed the secret check, so
+				// it is an unverified claim, logged length-bounded.
 				slog.WarnContext(r.Context(), "internal secret check failed",
 					"path", loggablePath(r.URL.Path),
 					"remote", r.RemoteAddr,
+					"client_ip", loggableClientIP(r.Header.Get(auth.HeaderClientIP)),
 				)
 				// An empty challenge degrades to the plain 401 rather than
 				// emitting a malformed header: the pointer is a hint, never
@@ -99,6 +105,23 @@ func loggablePath(path string) string {
 		}
 	}
 	return strings.Join(segs, "/")
+}
+
+// maxLoggedClientIPLen bounds the X-Skein-Client-Ip value a log record
+// carries. The longest textual IP address (an IPv6 address with an embedded
+// IPv4 tail and a zone) fits well within it; anything longer is not an
+// address and only inflates the record.
+const maxLoggedClientIPLen = 64
+
+// loggableClientIP is the claimed client IP cut to maxLoggedClientIPLen bytes
+// (without splitting a UTF-8 sequence) so an oversized header cannot bloat
+// the log.
+func loggableClientIP(raw string) string {
+	v := strings.TrimSpace(raw)
+	if len(v) <= maxLoggedClientIPLen {
+		return v
+	}
+	return strings.ToValidUTF8(v[:maxLoggedClientIPLen], "")
 }
 
 func isTokenAlphabet(s string) bool {

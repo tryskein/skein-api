@@ -9,6 +9,7 @@ package handler
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -49,6 +50,52 @@ func TestRequireInternalSecret_RefusalLogsNoLinkToken(t *testing.T) {
 		if strings.Contains(buf.String(), token) {
 			t.Errorf("%s: the refusal log carries the link token: %s", path, buf.String())
 		}
+	}
+}
+
+// A refused request logs the transport peer as "remote" and the claimed
+// X-Skein-Client-Ip as "client_ip", the latter cut to 64 bytes so an
+// oversized header cannot bloat the record.
+func TestRequireInternalSecret_RefusalLogsPeerAndClientIP(t *testing.T) {
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	gate := RequireInternalSecret("the-right-internal-secret", "")(
+		http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }))
+
+	long := strings.Repeat("a", 200)
+	for _, tc := range []struct {
+		name, header, want string
+	}{
+		{"address", "2001:db8::1", "2001:db8::1"},
+		{"absent", "", ""},
+		{"oversized", long, strings.Repeat("a", 64)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			buf.Reset()
+			req := httptest.NewRequest(http.MethodGet, "/agent/v1/notifications/poll", nil)
+			req.RemoteAddr = "198.51.100.7:40123"
+			if tc.header != "" {
+				req.Header.Set(auth.HeaderClientIP, tc.header)
+			}
+			rec := httptest.NewRecorder()
+			gate.ServeHTTP(rec, req)
+			if rec.Code != http.StatusUnauthorized {
+				t.Fatalf("status %d, want 401", rec.Code)
+			}
+			var entry map[string]any
+			if err := json.Unmarshal(bytes.TrimSpace(buf.Bytes()), &entry); err != nil {
+				t.Fatalf("refusal log %q is not one JSON record: %v", buf.String(), err)
+			}
+			if got := entry["remote"]; got != "198.51.100.7:40123" {
+				t.Errorf("remote = %v, want 198.51.100.7:40123", got)
+			}
+			if got := entry["client_ip"]; got != tc.want {
+				t.Errorf("client_ip for header %q = %v, want %q", tc.header, got, tc.want)
+			}
+		})
 	}
 }
 

@@ -1452,7 +1452,11 @@ func buildRouter(
 ) (chi.Router, func()) {
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
-	r.Use(middleware.RealIP)
+	// No middleware.RealIP: every caller of this router is the BFF (or another
+	// holder of the internal secret), and RealIP would let any of them, and any
+	// client header the BFF forwards, rewrite RemoteAddr from True-Client-IP /
+	// X-Real-IP / X-Forwarded-For. RemoteAddr stays the transport peer; the
+	// real client address travels in X-Skein-Client-Ip.
 	// sk-255.9 — http_requests_total / http_request_duration_seconds.
 	// Registered BEFORE Recoverer on purpose: chi middleware wraps in
 	// registration order, so this sits OUTSIDE the recovery boundary and a
