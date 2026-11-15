@@ -95,4 +95,12 @@ USER appuser
 ENV PORT=5100
 EXPOSE 5100
 
+# Liveness for plain Docker / compose runs (Kubernetes ignores HEALTHCHECK and
+# uses its own probes). /healthz answers 200 whenever the process serves HTTP
+# and checks no dependency; readiness (/ready) is the orchestrator's business.
+# Shell form so PORT is read at run time, as the server reads it. The port
+# opens only after the in-process migrations, hence the start period.
+HEALTHCHECK --interval=30s --timeout=3s --start-period=60s --retries=3 \
+    CMD curl -fsS -o /dev/null "http://127.0.0.1:${PORT}/healthz" || exit 1
+
 ENTRYPOINT ["/app/server"]
