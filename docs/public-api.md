@@ -27,6 +27,9 @@ literal of that file.
   skein-api: any user of the instance with an API key can call the API.
 - No CORS headers are sent; browser requests from other origins are not
   supported.
+- Every response carries `Cache-Control: no-store` and
+  `X-Content-Type-Options: nosniff`: answers hold the key owner's data and must
+  not be kept by a cache.
 
 ## The OpenAPI document
 

@@ -96,7 +96,7 @@ func NewRouter(opts RouterOptions, routes []Route) http.Handler {
 	mux := chi.NewRouter()
 	// Outside the panic recovery, as on the internal router: a panicking
 	// operation is counted as the 500 the client received.
-	mux.Use(handler.PublicHTTPMetrics, recoverProblem)
+	mux.Use(handler.PublicHTTPMetrics, noStore, recoverProblem)
 	mux.NotFound(func(w http.ResponseWriter, _ *http.Request) {
 		WriteProblem(w, Problem{Code: errcode.RouteNotFound, Origin: OriginPath})
 	})
@@ -126,6 +126,19 @@ func NewRouter(opts RouterOptions, routes []Route) http.Handler {
 		mux.Method(rt.Method, rt.Path, routeHandler(opts, rt))
 	}
 	return mux
+}
+
+// noStore marks every response of the public API, problems and 404/405
+// included, as not to be stored by a shared or private cache and not to be
+// content-sniffed: the answers carry the data of the key's owner, and a cache
+// does not treat X-Skein-Api-Key as it treats Authorization.
+func noStore(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h := w.Header()
+		h.Set("Cache-Control", "no-store")
+		h.Set("X-Content-Type-Options", "nosniff")
+		next.ServeHTTP(w, r)
+	})
 }
 
 // routeHandler wraps the handler of rt: the operation runs under its

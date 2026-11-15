@@ -216,3 +216,25 @@ func TestRouter_SameCodeByOrigin(t *testing.T) {
 		t.Errorf("reference in the body: code %q, want issue_not_found", code)
 	}
 }
+
+// TestRouter_ResponsesAreNotStored asserts that every answer of the public
+// port — a routed operation, an unknown path and a refused method — carries
+// Cache-Control: no-store and X-Content-Type-Options: nosniff, so no cache
+// keeps the data of a key's owner.
+func TestRouter_ResponsesAreNotStored(t *testing.T) {
+	h := testRouter()
+	for _, tc := range []struct{ method, path string }{
+		{http.MethodGet, "/api/v1/things/x"},
+		{http.MethodGet, "/api/v1/unknown"},
+		{http.MethodDelete, "/api/v1/things/x"},
+	} {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest(tc.method, tc.path, nil))
+		if got := rec.Header().Get("Cache-Control"); got != "no-store" {
+			t.Errorf("%s %s: Cache-Control = %q, want no-store", tc.method, tc.path, got)
+		}
+		if got := rec.Header().Get("X-Content-Type-Options"); got != "nosniff" {
+			t.Errorf("%s %s: X-Content-Type-Options = %q, want nosniff", tc.method, tc.path, got)
+		}
+	}
+}
