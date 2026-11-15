@@ -5142,6 +5142,12 @@ RETURNING id, issue_id, author, author_user_id, author_type, author_kind, body, 
 			return fmt.Errorf("updating comment: %w", err)
 		}
 		dto.AuthorUserID = authorUUID
+		// The vector was built from the old body; clearing it in the same
+		// transaction keeps semantic search from matching the removed text
+		// and queues the row for the embedding worker.
+		if err := search.ResetEmbedding(ctx, tx, "comments", "id", commentID); err != nil {
+			return err
+		}
 
 		if _, err := WriteCommentEvent(ctx, tx, EventCommentEdited, commentID, issueID, projectID, actor,
 			map[string]any{"body": oldBody},

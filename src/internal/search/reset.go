@@ -8,10 +8,10 @@ import (
 )
 
 // ResetEmbedding clears the `embedding` column on a row identified by
-// (table, idCol, idVal). Called from the issue / project / component
-// stores whenever a text field that contributes to the embedding source
-// changes — the partial pending index then makes the row eligible for
-// the backfill worker on its next tick.
+// (table, idCol, idVal). Called from the issue / comment / project /
+// component stores whenever a text field that contributes to the
+// embedding source changes — the partial pending index then makes the
+// row eligible for the backfill worker on its next tick.
 //
 // Why a helper, not an in-line SET embedding=NULL?  Three reasons:
 //
@@ -19,8 +19,9 @@ import (
 //     column or move it out of the parent table, one edit covers every
 //     caller.
 //  2. Encodes the "which text fields imply a reset" decision in the
-//     caller (PatchIssue, UpdateProject, UpdateComponent) — those sites
-//     already know what changed; this helper is just the executor.
+//     caller (PatchIssue, UpdateComment, UpdateProject,
+//     UpdateComponent) — those sites already know what changed; this
+//     helper is just the executor.
 //  3. Lets us add an "embedding_pending_at" timestamp column later (for
 //     lag SLO metrics) without touching every call site.
 //
