@@ -722,3 +722,68 @@ RETURNING id`, userA, eid, evtType, projectID).Scan(&nid); err != nil {
 		t.Error("expected issue.mention in result")
 	}
 }
+
+// TestListInbox_MentionContextOmitsDeletedComment asserts that deleted text
+// never leaves the server through the inbox: a soft delete keeps the body in
+// the comments row, and the mention notification stays (mentions are never
+// retired), but its MentionContext must be empty once the comment is
+// deleted.
+func TestListInbox_MentionContextOmitsDeletedComment(t *testing.T) {
+	pool := newTestPool(t)
+	ctx := context.Background()
+
+	userA := seedTestUser(t, pool, "user")
+	userB := seedTestUser(t, pool, "user")
+	projectID := seedTestProject(t, pool, userA)
+	var userAName string
+	if err := pool.QueryRow(ctx, `SELECT username FROM users WHERE id = $1`, userA).Scan(&userAName); err != nil {
+		t.Fatalf("lookup userA username: %v", err)
+	}
+
+	issueID := "fpmdel-1"
+	seedTestIssue(t, pool, projectID, userB, issueID, 2)
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM issues WHERE id = $1`, issueID)
+	})
+
+	commentID := uuid.New()
+	if _, err := pool.Exec(ctx, `
+INSERT INTO comments (id, issue_id, author, author_user_id, author_type, body, created_at, updated_at, deleted_at)
+VALUES ($1, $2, 'tester', $3, 'human', $4, now(), now(), now())`,
+		commentID, issueID, userB, "@"+userAName+" the token is deleted-secret-value"); err != nil {
+		t.Fatalf("insert deleted comment: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM comments WHERE id = $1`, commentID)
+	})
+
+	var eid int64
+	if err := pool.QueryRow(ctx, `
+INSERT INTO events (occurred_at, type, entity_type, entity_id, project_id,
+                    actor, actor_user_id, actor_type, payload)
+VALUES (now(), 'comment.mention', 'comment', $1, $2, 'tester', $3, 'human', '{}'::jsonb)
+RETURNING id`, commentID.String(), projectID, userB).Scan(&eid); err != nil {
+		t.Fatalf("insert event: %v", err)
+	}
+	var nid int64
+	if err := pool.QueryRow(ctx, `
+INSERT INTO notifications (user_id, event_id, type, project_id, created_at, feed_channel)
+VALUES ($1, $2, 'comment.mention', $3, now(), true)
+RETURNING id`, userA, eid, projectID).Scan(&nid); err != nil {
+		t.Fatalf("insert notification: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM notifications WHERE id = $1`, nid)
+	})
+
+	res, err := NewStore(pool).ListInbox(ctx, ListInboxArgs{UserID: userA, Scope: "mentions", Limit: 50})
+	if err != nil {
+		t.Fatalf("ListInbox mentions: %v", err)
+	}
+	if len(res.Items) != 1 || res.Items[0].Type != "comment.mention" {
+		t.Fatalf("ListInbox mentions = %+v, want the one comment.mention", res.Items)
+	}
+	if got := res.Items[0].MentionContext; got != "" {
+		t.Errorf("MentionContext of a deleted comment = %q, want empty", got)
+	}
+}

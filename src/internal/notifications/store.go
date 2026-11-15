@@ -2687,10 +2687,12 @@ func (s *Store) hydrateMentionContext(
 		}
 	}
 
-	// Pass 1 — comment bodies.
+	// Pass 1 — comment bodies. A soft-deleted comment keeps its body in the
+	// row, but deleted text never leaves the server: its mention keeps an
+	// empty MentionContext, like the tombstone GetComment returns.
 	if len(commentIDs) > 0 {
 		rows, err := s.pool.Query(ctx,
-			`SELECT id, body FROM comments WHERE id = ANY($1)`, commentIDs)
+			`SELECT id, body FROM comments WHERE id = ANY($1) AND deleted_at IS NULL`, commentIDs)
 		if err == nil {
 			for rows.Next() {
 				var (
