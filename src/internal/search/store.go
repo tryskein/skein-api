@@ -1569,12 +1569,15 @@ func (s *Store) WriteEmbeddings(
 	return nil
 }
 
-// spaceIDByShort resolves a space short id; uuid.Nil when no space has it
-// (the filter then matches nothing — a space the caller does not see is
-// filtered out by visibility anyway).
-func (s *Store) spaceIDByShort(ctx context.Context, short string) (uuid.UUID, error) {
+// spaceIDByShort resolves a space short id among the spaces callerID sees
+// (authz.SpaceSeenExpr); uuid.Nil when no such space has it, so a space the
+// caller does not see is answered exactly like one that does not exist (the
+// filter then matches nothing).
+func (s *Store) spaceIDByShort(ctx context.Context, callerID uuid.UUID, short string) (uuid.UUID, error) {
 	var id uuid.UUID
-	err := s.pool.QueryRow(ctx, `SELECT id FROM spaces WHERE short_id = $1`, short).Scan(&id)
+	err := s.pool.QueryRow(ctx,
+		`SELECT sp.id FROM spaces sp WHERE sp.short_id = $1 AND `+authz.SpaceSeenExpr("sp", "$2"),
+		short, callerID).Scan(&id)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return uuid.Nil, nil
 	}

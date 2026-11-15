@@ -199,7 +199,7 @@ func (s *Service) Search(ctx context.Context, p Params) (*Result, error) {
 	// space; an unknown short id matches nothing.
 	var spaceFilter *uuid.UUID
 	if p.Space != "" {
-		sid, serr := s.store.spaceIDByShort(ctx, p.Space)
+		sid, serr := s.store.spaceIDByShort(ctx, p.CallerID, p.Space)
 		if serr != nil {
 			return nil, serr
 		}
