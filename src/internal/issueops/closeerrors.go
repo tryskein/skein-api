@@ -8,6 +8,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"skein-api/internal/authz"
 	"skein-api/internal/dependencies"
 	"skein-api/internal/issues"
 	"skein-api/internal/projects"
@@ -112,10 +113,11 @@ func ClassifyCloseError(ctx context.Context, pool *pgxpool.Pool, projectID uuid.
 	// the generic IsValidationError so it doesn't collapse into validation_error.
 	var standingErr *issues.ErrStandingHasOpenChildren
 	if errors.As(err, &standingErr) {
+		visible, unavailable := visibleOpenChildren(ctx, pool, standingErr.ChildIDs, tool, issueID)
 		return CloseErrorClassification{
 			Code:    ErrCodeStandingHasOpenChildren,
 			Message: standingErr.Error(),
-			Details: map[string]any{"id": issueID, "childIds": standingErr.ChildIDs},
+			Details: map[string]any{"id": issueID, "childIds": visible, "unavailableOpenChildren": unavailable},
 		}
 	}
 	if vErr, ok := issues.IsValidationError(err); ok {
@@ -286,4 +288,30 @@ func ClassifyCloseTargetError(err error, closeTarget string) *CloseErrorClassifi
 func MapCloseError(ctx context.Context, pool *pgxpool.Pool, projectID uuid.UUID, err error, tool, userID, issueID, closeTarget string) *Failure {
 	c := ClassifyCloseError(ctx, pool, projectID, err, tool, userID, issueID, closeTarget)
 	return Fail(c.Code, c.Message, c.Details)
+}
+
+// visibleOpenChildren splits the open children of a refused retire into the
+// ones the reader of ctx sees now, with the key's scope (authz.FromContext,
+// P-VIS), in their stored order, and the number of the others (sk-1007
+// US-3, D6): the refusal names only visible children and counts the rest.
+// It is read only on this refusal path. A failed read is fail-closed (K6):
+// no child is named, all are counted, and a warning is logged; the refusal
+// keeps its code.
+func visibleOpenChildren(ctx context.Context, pool *pgxpool.Pool, childIDs []string, tool, issueID string) ([]string, int) {
+	out := []string{}
+	visible, err := authz.VisibleIssueIDs(ctx, pool, authz.FromContext(ctx), childIDs)
+	if err != nil {
+		slog.WarnContext(ctx, logMessage(ctx, "error"),
+			"tool", tool,
+			"reason", "reading the visibility of open children failed; none named",
+			"issueId", issueID,
+			"error", err.Error())
+		return out, len(childIDs)
+	}
+	for _, id := range childIDs {
+		if _, ok := visible[id]; ok {
+			out = append(out, id)
+		}
+	}
+	return out, len(childIDs) - len(out)
 }

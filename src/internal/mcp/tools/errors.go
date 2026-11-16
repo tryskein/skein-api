@@ -294,6 +294,9 @@ const (
 	// deferred), in either hierarchy representation. Surfaced as the top-level
 	// envelope `error` (not buried under validation_error) with the offending
 	// child ids in `childIds` so the caller closes/retires the children first.
+	// sk-1007 US-3: `childIds` names only the children the caller sees now
+	// (with the key's scope); `unavailableOpenChildren` beside it, always
+	// present, counts the others.
 	// The block is standing-specific (normal epics stay closeable) and is NOT
 	// bypassed by force — it is a structural invariant (§11.4 / §11.9).
 	ErrCodeStandingHasOpenChildren = "standing_has_open_children"

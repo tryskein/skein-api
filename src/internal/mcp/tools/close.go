@@ -55,7 +55,8 @@ func RegisterClose(s *server.MCPServer, pool *pgxpool.Pool, issuesStore *issues.
 				"commit hashes to an already-closed issue without losing "+
 				"the original reason use `skein_commits_attach`.\n\n"+
 				"Retiring a standing task is rejected with "+
-				"`standing_has_open_children` (+ `childIds`) while any "+
+				"`standing_has_open_children` (+ `childIds`, the open children you can see, and "+
+				"`unavailableOpenChildren`, how many others) while any "+
 				"child is not closed; force does not bypass it.\n\n"+
 				"Close-time warnings ride on the response's TOP level in "+
 				"both modes, under the same names: `warning` (fires when "+

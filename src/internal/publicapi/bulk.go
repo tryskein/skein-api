@@ -188,7 +188,7 @@ func (a *issueWrites) bulkUpdateIssues(w http.ResponseWriter, r *http.Request) {
 // @Description
 // @Description force=true (the key needs manage) bypasses another holder's claim, the version and the pin in every row; a row of a project where the owner lacks force_unlock is refused force_unlock_forbidden. A repeat of a batch with force=true applies again: read the issues before repeating. No Idempotency-Key.
 // @Description
-// @Description A refused row carries error {code, message, details}: the code of the single closeIssue (locked_by_other, version_conflict with details.currentVersion, issue_not_found, …); for validation_error the case is in details.code — close_outcome_required, invalid_close_outcome, close_target_required, close_target_requires_outcome, close_target_not_allowed, close_target_self.
+// @Description A refused row carries error {code, message, details}: the code of the single closeIssue (locked_by_other, version_conflict with details.currentVersion, issue_not_found, standing_has_open_children with details.childIds — the open children the caller sees — and details.unavailableOpenChildren, how many others, …); for validation_error the case is in details.code — close_outcome_required, invalid_close_outcome, close_target_required, close_target_requires_outcome, close_target_not_allowed, close_target_self.
 // @Tags Issues
 // @Accept json
 // @Produce json

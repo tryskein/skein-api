@@ -37,7 +37,8 @@ func RegisterCloseMany(s *server.MCPServer, pool *pgxpool.Pool, issuesStore *iss
 				"row-level failure (version_conflict, locked_by_other, "+
 				"pinned_no_force, ...) the rest of the batch still runs. "+
 				"Inspect results[i].ok per row to find the failures and "+
-				"results[i].error.code to branch on the cause. "+
+				"results[i].error.code to branch on the cause "+
+				"(standing_has_open_children: details.childIds you can see + details.unavailableOpenChildren). "+
 				"Result rows preserve input order. "+
 				"A row returning serialization_retry rolled back its close without a version change; resend that row unchanged.\n\n"+
 				"Caps at 100 items per call (matches the REST bulk "+

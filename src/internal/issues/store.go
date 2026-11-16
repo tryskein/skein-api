@@ -374,7 +374,10 @@ var (
 // IsValidationError on both the MCP and REST boundaries; the MCP close mapper
 // promotes the code to the top-level envelope `error` (with the ids in
 // `childIds`) so agents branch on the specific cause and retire/close the
-// children first.
+// children first. ChildIDs is every open child, raw: the refusal's builders
+// (issueops/closeerrors.go#ClassifyCloseError) name only the children the
+// reader sees and count the others in unavailableOpenChildren (sk-1007
+// US-3).
 type ErrStandingHasOpenChildren struct {
 	ChildIDs []string
 	ve       *ValidationError
