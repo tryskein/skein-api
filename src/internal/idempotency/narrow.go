@@ -52,7 +52,9 @@ type member struct {
 //     has none) plus the stored ids that are not visible now — added beside
 //     childIds when the body had no such member; a body without childIds
 //     gets no number;
-//   - toId and id become the hidden marker when not visible.
+//   - toId and id become the hidden marker when not a visible id; a value
+//     that is not a string (a number, an object, a list) is hidden too, an
+//     empty string and null stay.
 //
 // Nothing else is added, nothing hidden by the first answer comes back
 // (the narrowing never widens a body), every other member keeps its place,
@@ -155,9 +157,18 @@ func narrowStored(ctx context.Context, q authz.RowsQuerier, scope authz.Scope, b
 		if at < 0 {
 			continue
 		}
+		if isNullRaw(raw) {
+			continue
+		}
 		var s string
-		if json.Unmarshal(raw, &s) == nil && s != "" && !seen(s) {
-			b, _ := json.Marshal(redact.HiddenMarker)
+		if json.Unmarshal(raw, &s) == nil && (s == "" || seen(s)) {
+			continue
+		}
+		// A hidden id, or a value that is not an id string at all (a
+		// number, an object, a list): nothing of it is known to be visible
+		// (fail-closed).
+		b, _ := json.Marshal(redact.HiddenMarker)
+		if !bytes.Equal(raw, b) {
 			members[at].raw = b
 			changed = true
 		}

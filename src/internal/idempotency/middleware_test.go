@@ -762,3 +762,26 @@ func TestIdempotency_RefusalRepeatTargetGone(t *testing.T) {
 		})
 	}
 }
+
+// TestIdempotency_RefusalRepeatNonStringReference — review fix (circle 1):
+// a stored toId that is not an id string (a number, an object, a list) names
+// nothing known to be visible, so the repeat gives "<hidden>" in its place;
+// an empty toId stays as stored.
+func TestIdempotency_RefusalRepeatNonStringReference(t *testing.T) {
+	rw := newRefusalWorld(t)
+	for i, v := range []string{`12`, `{"id":"X-1"}`, `["X-1"]`} {
+		m := `"code":"dependency_cycle","dependencyIndex":0,"toId":` + v + `,"type":"blocks"`
+		idem := fmt.Sprintf("%s-shape-%d", rw.w.idemKeys, i)
+		rw.store(t, idem, m)
+		_, vals := membersOf(t, rw.repeated(t, idem, m).Body.Bytes())
+		if vals["toId"] != "<hidden>" {
+			t.Errorf("toId %s: repeat gives %#v, want <hidden>", v, vals["toId"])
+		}
+	}
+	m := `"code":"dependency_cycle","dependencyIndex":0,"toId":"","type":"blocks"`
+	idem := rw.w.idemKeys + "-shape-empty"
+	first := rw.store(t, idem, m).Body.String()
+	if again := rw.repeated(t, idem, m).Body.String(); again != first {
+		t.Errorf("empty toId: repeat %s, want the stored %s", again, first)
+	}
+}
