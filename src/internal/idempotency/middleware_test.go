@@ -9,13 +9,20 @@ package idempotency_test
 // and 400 for a key the operation does not accept.
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
+	"reflect"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"skein-api/internal/apikeys"
 	"skein-api/internal/errcode"
@@ -421,5 +428,337 @@ SELECT response_version FROM api_idempotency WHERE api_key_id = $1 AND idempoten
 	}
 	if n := testsupport.CountEventsForProject(t, pool, w.project, "issue.closed"); n != 1 {
 		t.Errorf("%d issue.closed events, want 1", n)
+	}
+}
+
+// ----------------- sk-1007 US-6: a repeated refusal narrowed by visibility -----------------
+//
+// Reference — spec US-6 (D7), written before the code. A repeat of a stored
+// dependency_cycle or standing_has_open_children refusal does not run the
+// operation and keeps status and code; its body is the stored one narrowed
+// by visibility at the repeat: the path only when all of it is visible;
+// childIds only the visible ones and unavailableOpenChildren = the stored
+// number (0 when absent) + the stored ids hidden now; another reference
+// member (toId) of a hidden issue becomes "<hidden>"; nothing hidden by the
+// first answer comes back; a deleted issue, or one moved to a project the
+// caller does not see, is hidden. A failed re-check of the target answers
+// that check, never the stored body.
+//
+// The bodies are literals stored through the rig's refusing operation
+// (rig.refuse): what a builder of this version, or of an earlier one,
+// wrote.
+
+// refusalWorld: the key's owner sees P (target T, child P-1) and Q, a
+// project of another user he is a member of until a test takes him out.
+type refusalWorld struct {
+	rg      *rig
+	pool    *pgxpool.Pool
+	w       world
+	target  string
+	p1      string
+	q       uuid.UUID
+	qPrefix string
+	qOwner  uuid.UUID
+	n       int
+}
+
+func newRefusalWorld(t *testing.T) *refusalWorld {
+	t.Helper()
+	pool := testsupport.NewTestPool(t)
+	rw := &refusalWorld{rg: newRig(t, pool), pool: pool, w: seedWorld(t, pool, apikeys.LevelWrite)}
+	rw.target, rw.p1 = rw.w.issueA, rw.w.issueB
+	rw.qOwner, _ = testsupport.SeedUser(t, pool, "")
+	rw.q, rw.qPrefix = testsupport.SeedProject(t, pool, rw.qOwner, "idemq")
+	testsupport.AddProjectMember(t, pool, rw.q, rw.w.owner, "member")
+	return rw
+}
+
+func (rw *refusalWorld) qIssue(t *testing.T) string {
+	t.Helper()
+	rw.n++
+	return testsupport.SeedIssue(t, rw.pool, rw.q, rw.qOwner, rw.qPrefix+"-"+fmt.Sprint(rw.n), "q", "open", 2)
+}
+
+func (rw *refusalWorld) lose(t *testing.T) {
+	t.Helper()
+	exec(t, rw.pool, "leave Q", `DELETE FROM project_members WHERE project_id = $1 AND user_id = $2`, rw.q, rw.w.owner)
+}
+
+func (rw *refusalWorld) regain(t *testing.T) {
+	t.Helper()
+	testsupport.AddProjectMember(t, rw.pool, rw.q, rw.w.owner, "member")
+}
+
+// refuse sends the refusing operation on target with the idempotency key
+// idem and the problem members (after type, title, status) as its body.
+func (rw *refusalWorld) refuse(t *testing.T, target, idem, members string) *httptest.ResponseRecorder {
+	t.Helper()
+	problem := `{"type":"about:blank","title":"Refused","status":422,` + members + `}`
+	raw, err := json.Marshal(refuseBody{Problem: json.RawMessage(problem)})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	return rw.rg.do(t, call{path: "/api/v1/issues/" + target + "/refusals", key: rw.w.key, idemKey: idem, body: string(raw)})
+}
+
+// store answers the refusal once (it is kept) and returns the first answer.
+func (rw *refusalWorld) store(t *testing.T, idem, members string) *httptest.ResponseRecorder {
+	t.Helper()
+	first := rw.refuse(t, rw.target, idem, members)
+	if first.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("first answer %d %s, want 422", first.Code, first.Body.String())
+	}
+	return first
+}
+
+// repeated sends the same request again and asserts that the operation did
+// not run and nothing was written.
+func (rw *refusalWorld) repeated(t *testing.T, idem, members string) *httptest.ResponseRecorder {
+	t.Helper()
+	calls, notesBefore := rw.rg.calls.Load(), notes(t, rw.pool, rw.target)
+	rec := rw.refuse(t, rw.target, idem, members)
+	if n := rw.rg.calls.Load(); n != calls {
+		t.Errorf("the repeat ran the operation (%d calls, was %d)", n, calls)
+	}
+	if n := notes(t, rw.pool, rw.target); n != notesBefore {
+		t.Errorf("the repeat wrote %d notes", n-notesBefore)
+	}
+	return rec
+}
+
+// members reads a JSON object's top-level members in order.
+func membersOf(t *testing.T, body []byte) ([]string, map[string]any) {
+	t.Helper()
+	dec := json.NewDecoder(bytes.NewReader(body))
+	if tok, err := dec.Token(); err != nil || tok != json.Delim('{') {
+		t.Fatalf("not a JSON object: %s", body)
+	}
+	var keys []string
+	vals := map[string]any{}
+	for dec.More() {
+		tok, _ := dec.Token()
+		k := tok.(string)
+		var v any
+		if err := dec.Decode(&v); err != nil {
+			t.Fatalf("decode %s: %v", k, err)
+		}
+		keys = append(keys, k)
+		vals[k] = v
+	}
+	return keys, vals
+}
+
+// TestIdempotency_RefusalRepeatUnchangedAccess — sk-1007 No. 55: with access
+// unchanged a cycle with a visible path, an open-children refusal of
+// visible children and a refusal of another code naming a hidden id come
+// back byte for byte.
+func TestIdempotency_RefusalRepeatUnchangedAccess(t *testing.T) {
+	rw := newRefusalWorld(t)
+	hidden := rw.qIssue(t)
+	rw.lose(t) // hidden is out of reach throughout; the other code must not be narrowed
+	for i, m := range []string{
+		`"code":"dependency_cycle","path":["` + rw.target + `","` + rw.p1 + `","` + rw.target + `"]`,
+		`"code":"standing_has_open_children","id":"` + rw.target + `","childIds":["` + rw.p1 + `"],"unavailableOpenChildren":0`,
+		`"code":"parent_closed","id":"` + hidden + `","detail":"x"`,
+	} {
+		idem := fmt.Sprintf("%s-same-%d", rw.w.idemKeys, i)
+		first := rw.store(t, idem, m)
+		again := rw.repeated(t, idem, m)
+		if again.Code != first.Code || again.Body.String() != first.Body.String() {
+			t.Errorf("repeat of %s: %d %s, want the stored %d %s", m, again.Code, again.Body.String(), first.Code, first.Body.String())
+		}
+	}
+}
+
+// TestIdempotency_RefusalRepeatAfterLoss — sk-1007 No. 56: the examples of
+// the acceptance after access to the issues of Q is lost.
+func TestIdempotency_RefusalRepeatAfterLoss(t *testing.T) {
+	rw := newRefusalWorld(t)
+	q1, q2 := rw.qIssue(t), rw.qIssue(t)
+	cases := []struct {
+		name, members string
+		wantKeys      []string
+		want          map[string]any
+	}{
+		{"path through Q",
+			`"code":"dependency_cycle","path":["` + rw.target + `","` + q1 + `","` + rw.target + `"],"detail":"d"`,
+			[]string{"type", "title", "status", "code", "detail"}, map[string]any{}},
+		{"stored list and number",
+			`"code":"standing_has_open_children","id":"` + rw.target + `","childIds":["` + q1 + `"],"unavailableOpenChildren":1,"detail":"d"`,
+			[]string{"type", "title", "status", "code", "id", "childIds", "unavailableOpenChildren", "detail"},
+			map[string]any{"childIds": []any{}, "unavailableOpenChildren": float64(2)}},
+		{"earlier version without the number",
+			`"code":"standing_has_open_children","id":"` + rw.target + `","childIds":["` + q2 + `"],"detail":"d"`,
+			[]string{"type", "title", "status", "code", "id", "childIds", "unavailableOpenChildren", "detail"},
+			map[string]any{"childIds": []any{}, "unavailableOpenChildren": float64(1)}},
+		{"earlier version, all visible",
+			`"code":"standing_has_open_children","id":"` + rw.target + `","childIds":["` + rw.p1 + `"],"detail":"d"`,
+			[]string{"type", "title", "status", "code", "id", "childIds", "unavailableOpenChildren", "detail"},
+			map[string]any{"childIds": []any{rw.p1}, "unavailableOpenChildren": float64(0)}},
+	}
+	for i, c := range cases {
+		rw.store(t, fmt.Sprintf("%s-loss-%d", rw.w.idemKeys, i), c.members)
+	}
+	rw.lose(t)
+	for i, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			rec := rw.repeated(t, fmt.Sprintf("%s-loss-%d", rw.w.idemKeys, i), c.members)
+			wantProblem(t, rec, http.StatusUnprocessableEntity, codeOf(c.members))
+			keys, vals := membersOf(t, rec.Body.Bytes())
+			if !reflect.DeepEqual(keys, c.wantKeys) {
+				t.Errorf("members %v, want %v (order kept, path removed, the number beside childIds)", keys, c.wantKeys)
+			}
+			for k, v := range c.want {
+				if !reflect.DeepEqual(vals[k], v) {
+					t.Errorf("%s = %#v, want %#v", k, vals[k], v)
+				}
+			}
+			for _, id := range []string{q1, q2} {
+				if strings.Contains(rec.Body.String(), `"`+id+`"`) {
+					t.Errorf("the repeat names %s, hidden now: %s", id, rec.Body.String())
+				}
+			}
+		})
+	}
+}
+
+// codeOf reads the code of a members literal.
+func codeOf(members string) string {
+	var m struct {
+		Code string `json:"code"`
+	}
+	_ = json.Unmarshal([]byte("{"+members+"}"), &m)
+	return m.Code
+}
+
+// TestIdempotency_RefusalRepeatAfterAccessReturns — sk-1007 No. 57: what
+// the first answer hid does not come back when access returns.
+func TestIdempotency_RefusalRepeatAfterAccessReturns(t *testing.T) {
+	rw := newRefusalWorld(t)
+	rw.qIssue(t)
+	rw.lose(t)
+	stored := []string{
+		`"code":"dependency_cycle","detail":"d"`,
+		`"code":"standing_has_open_children","id":"` + rw.target + `","childIds":[],"unavailableOpenChildren":2`,
+	}
+	firsts := make([]string, len(stored))
+	for i, m := range stored {
+		firsts[i] = rw.store(t, fmt.Sprintf("%s-back-%d", rw.w.idemKeys, i), m).Body.String()
+	}
+	rw.regain(t)
+	for i, m := range stored {
+		rec := rw.repeated(t, fmt.Sprintf("%s-back-%d", rw.w.idemKeys, i), m)
+		if rec.Body.String() != firsts[i] {
+			t.Errorf("after access returned: %s, want the stored %s (never wider)", rec.Body.String(), firsts[i])
+		}
+	}
+}
+
+// TestIdempotency_RefusalRepeatOtherReferences — sk-1007 No. 58: toId of an
+// inline dependency refusal of a hidden issue is "<hidden>", a visible one
+// stays; a stored child deleted, or moved to a project the caller does not
+// see, is counted as hidden.
+func TestIdempotency_RefusalRepeatOtherReferences(t *testing.T) {
+	rw := newRefusalWorld(t)
+	h5 := rw.qIssue(t)
+	prefix := strings.TrimSuffix(rw.w.issueA, "-1")
+	deleted := testsupport.SeedIssue(t, rw.pool, rw.w.project, rw.w.owner, prefix+"-71", "gone", "open", 2)
+	moved := testsupport.SeedIssue(t, rw.pool, rw.w.project, rw.w.owner, prefix+"-72", "moved", "open", 2)
+	hiddenOwner, _ := testsupport.SeedUser(t, rw.pool, "")
+	hiddenProject, _ := testsupport.SeedProject(t, rw.pool, hiddenOwner, "idemh")
+	stored := map[string]string{
+		"hidden toId":  `"code":"dependency_cycle","dependencyIndex":0,"toId":"` + h5 + `","type":"blocks"`,
+		"visible toId": `"code":"dependency_cycle","dependencyIndex":0,"toId":"` + rw.p1 + `","type":"blocks"`,
+		"gone children": `"code":"standing_has_open_children","id":"` + rw.target + `","childIds":["` + deleted + `","` + moved + `","` + rw.p1 +
+			`"],"unavailableOpenChildren":0`,
+	}
+	firsts := map[string]string{}
+	for name, m := range stored {
+		firsts[name] = rw.store(t, rw.w.idemKeys+"-ref-"+name, m).Body.String()
+	}
+	rw.lose(t)
+	exec(t, rw.pool, "delete a child", `DELETE FROM issues WHERE id = $1`, deleted)
+	exec(t, rw.pool, "move a child away", `UPDATE issues SET project_id = $2 WHERE id = $1`, moved, hiddenProject)
+	t.Cleanup(func() {
+		_, _ = rw.pool.Exec(context.Background(), `DELETE FROM issues WHERE id = $1`, moved)
+	})
+
+	_, vals := membersOf(t, rw.repeated(t, rw.w.idemKeys+"-ref-hidden toId", stored["hidden toId"]).Body.Bytes())
+	if vals["toId"] != "<hidden>" {
+		t.Errorf("hidden toId = %v, want <hidden>", vals["toId"])
+	}
+	if rec := rw.repeated(t, rw.w.idemKeys+"-ref-visible toId", stored["visible toId"]); rec.Body.String() != firsts["visible toId"] {
+		t.Errorf("visible toId: %s, want the stored %s", rec.Body.String(), firsts["visible toId"])
+	}
+	rec := rw.repeated(t, rw.w.idemKeys+"-ref-gone children", stored["gone children"])
+	_, vals = membersOf(t, rec.Body.Bytes())
+	if !reflect.DeepEqual(vals["childIds"], []any{rw.p1}) || vals["unavailableOpenChildren"] != float64(2) {
+		t.Errorf("deleted and moved children: childIds %v, unavailableOpenChildren %v; want [%s] and 2",
+			vals["childIds"], vals["unavailableOpenChildren"], rw.p1)
+	}
+	for _, id := range []string{deleted, moved} {
+		if strings.Contains(rec.Body.String(), `"`+id+`"`) {
+			t.Errorf("the repeat names %s: %s", id, rec.Body.String())
+		}
+	}
+}
+
+// TestIdempotency_RefusalRepeatKeyScopeAtTheRepeat — sk-1007 No. 59: the
+// same key, its scope narrowed to P before the repeat; the child in Q, which
+// the owner still sees, is counted as unavailable.
+func TestIdempotency_RefusalRepeatKeyScopeAtTheRepeat(t *testing.T) {
+	rw := newRefusalWorld(t)
+	qc := rw.qIssue(t)
+	m := `"code":"standing_has_open_children","id":"` + rw.target + `","childIds":["` + rw.p1 + `","` + qc + `"],"unavailableOpenChildren":0`
+	idem := rw.w.idemKeys + "-scope"
+	rw.store(t, idem, m)
+	exec(t, rw.pool, "narrow the scope", `UPDATE api_keys SET scope_mode = 'projects' WHERE id = $1`, rw.w.keyID)
+	exec(t, rw.pool, "scope P", `INSERT INTO api_key_scope_projects (api_key_id, project_id) VALUES ($1, $2)`, rw.w.keyID, rw.w.project)
+	_, vals := membersOf(t, rw.repeated(t, idem, m).Body.Bytes())
+	if !reflect.DeepEqual(vals["childIds"], []any{rw.p1}) || vals["unavailableOpenChildren"] != float64(1) {
+		t.Errorf("childIds %v, unavailableOpenChildren %v; want [%s] and 1", vals["childIds"], vals["unavailableOpenChildren"], rw.p1)
+	}
+}
+
+// TestIdempotency_RefusalRepeatTargetGone — sk-1007 No. 60: when the target
+// is out of reach, or deleted, the repeat answers the re-check — the status
+// and code a repeat of another stored refusal on the same target answers —
+// and none of the stored body.
+func TestIdempotency_RefusalRepeatTargetGone(t *testing.T) {
+	for _, gone := range []string{"out of reach", "deleted"} {
+		t.Run(gone, func(t *testing.T) {
+			rw := newRefusalWorld(t)
+			target, child := rw.qIssue(t), rw.qIssue(t)
+			listed := `"code":"standing_has_open_children","id":"` + target + `","childIds":["` + child + `"],"unavailableOpenChildren":0,"path":["` + child + `"]`
+			other := `"code":"parent_closed","detail":"d"`
+			for name, m := range map[string]string{"listed": listed, "other": other} {
+				if rec := rw.refuse(t, target, rw.w.idemKeys+"-gone-"+name, m); rec.Code != http.StatusUnprocessableEntity {
+					t.Fatalf("store %s: %d %s", name, rec.Code, rec.Body.String())
+				}
+			}
+			if gone == "deleted" {
+				exec(t, rw.pool, "delete the target", `DELETE FROM issues WHERE id = $1`, target)
+			} else {
+				rw.lose(t)
+			}
+			calls := rw.rg.calls.Load()
+			listedRec := rw.refuse(t, target, rw.w.idemKeys+"-gone-listed", listed)
+			otherRec := rw.refuse(t, target, rw.w.idemKeys+"-gone-other", other)
+			if n := rw.rg.calls.Load(); n != calls {
+				t.Errorf("the repeats ran the operation %d times", n-calls)
+			}
+			if listedRec.Code != otherRec.Code || problemCode(t, listedRec) != problemCode(t, otherRec) {
+				t.Errorf("listed refusal repeat %d %s, other refusal repeat %d %s — want the same re-check answer",
+					listedRec.Code, listedRec.Body.String(), otherRec.Code, otherRec.Body.String())
+			}
+			if listedRec.Code == http.StatusUnprocessableEntity {
+				t.Errorf("the stored refusal was given out: %s", listedRec.Body.String())
+			}
+			for _, s := range []string{`"childIds"`, `"path"`, `"` + target + `"`, `"` + child + `"`} {
+				if strings.Contains(listedRec.Body.String(), s) {
+					t.Errorf("the answer carries %s: %s", s, listedRec.Body.String())
+				}
+			}
+		})
 	}
 }

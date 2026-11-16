@@ -40,6 +40,7 @@ const (
 	opUpdateNote  = "testUpdateNote"
 	opBulkNotes   = "testBulkNotes"
 	opCloseIssue  = "testCloseIssue"
+	opRefuse      = "testRefuse"
 	writeTimeout  = 30 * time.Second
 	notesPathTmpl = "/api/v1/issues/%s/notes"
 )
@@ -101,6 +102,7 @@ func newRig(t *testing.T, pool *pgxpool.Pool) *rig {
 	}, []publicapi.Route{
 		issueRoute(opAddNote, "/api/v1/issues/{issue}/notes", true, []authz.Action{authz.ActionWrite}, rg.addNote),
 		issueRoute(opCloseIssue, "/api/v1/issues/{issue}/close", true, []authz.Action{authz.ActionWrite}, rg.closeIssue),
+		issueRoute(opRefuse, "/api/v1/issues/{issue}/refusals", true, []authz.Action{authz.ActionWrite}, rg.refuse),
 		issueRoute(opManageNote, "/api/v1/issues/{issue}/managed-notes", false, []authz.Action{authz.ActionManageProject}, rg.addNote),
 		{
 			OperationID: opAnswerCode, Method: http.MethodPost, Path: "/api/v1/answers", Auth: publicapi.AuthKey,
@@ -195,6 +197,29 @@ func (rg *rig) closeIssue(w http.ResponseWriter, r *http.Request) {
 	publicapi.WriteJSON(w, r, http.StatusOK, map[string]any{
 		"id": res.State.ID, "version": res.State.Version, "status": res.State.Status,
 	})
+}
+
+// refuseBody makes the refusing test operation answer a stored-to-be body.
+type refuseBody struct {
+	// Problem is written as the 422 body, byte for byte.
+	Problem json.RawMessage `json:"problem"`
+}
+
+// refuse is the refusing test operation (sk-1007 US-6): it names the issue
+// of its path as its target and answers 422 with the problem of its body,
+// verbatim — the stand-in for a refusal body written by any builder or by
+// an earlier version, so the repeat's narrowing is checked on literal
+// bodies. It writes nothing.
+func (rg *rig) refuse(w http.ResponseWriter, r *http.Request) {
+	rg.calls.Add(1)
+	var body refuseBody
+	if !publicapi.DecodeBody(w, r, &body) {
+		return
+	}
+	idempotency.NoteTarget(r.Context(), publicapi.ObjectRef{Kind: publicapi.ObjectIssue, ID: chi.URLParam(r, "issue")})
+	w.Header().Set("Content-Type", publicapi.ProblemContentType)
+	w.WriteHeader(http.StatusUnprocessableEntity)
+	_, _ = w.Write(body.Problem)
 }
 
 // answerCode is the answering test operation: it answers the problem of its
