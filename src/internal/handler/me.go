@@ -472,6 +472,8 @@ func sortWatchingReasons(rs []string) []string {
 // include rows whose card is not shown (the subtree subscription's ancestor
 // in a project the caller lost); those are read through the inbox, read by
 // issue or read all.
+// A card's parentIdCurrent is its parent only when the caller sees the
+// parent now (issues.Store.SummariesForIDs, sk-1007 K9).
 //
 // Order: newest notification in the window first, then issue id; cards
 // without notifications last. Capped at notifications.WatchingFeedLimit
@@ -495,6 +497,8 @@ func sortWatchingReasons(rs []string) []string {
 // @Description Totals are uncapped: `subscriptionsTotal` (live subscriptions), `openTotal` + `closedTotal` (cards of both kinds by task state, always both), `closedAutoTotal` (closed cards without a manual subscription, historical ones included — what POST /api/v1/me/watching/unwatch {"state":"closed"} would take), `stateTotal` (cards matching the filter), `unreadTotal` (unread notifications over ALL cards in the window — equal to the header Watching badge; it does not follow the filter). `truncated` = the cards returned are fewer than `stateTotal`.
 // @Description
 // @Description Visibility: the notifications behind every count, `recentEvents`, `lastActivity` and the existence of a historical card are only the caller's notifications of no project or of a project the caller sees now, inside the API key's scope; a notification of any other project stays stored and is neither shown, counted nor marked. A card is returned only for a task the caller sees now (inside the key's scope), and the card counts (`subscriptionsTotal`, `openTotal`, `closedTotal`, `closedAutoTotal`, `stateTotal`) are over the returned cards only. `unreadTotal` counts the unread notifications of that set in the window, so it may include notifications whose card is not returned (a subtree subscription on an ancestor the caller no longer sees, with an event of a descendant he does see); they are read through the inbox, read by issue or read all.
+// @Description
+// @Description A card's `parentIdCurrent` is its canonical parent only when the caller sees that parent now (inside the API key's scope), the rule of the issue card and the lists; otherwise the key is absent.
 // @Description
 // @Description Read-only, no side effects.
 // @Tags Notifications

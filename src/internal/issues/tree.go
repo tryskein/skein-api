@@ -445,7 +445,7 @@ SELECT id, depth, parent_id, parent_depth, edge_type, path
 		uniqueIDs = append(uniqueIDs, id)
 	}
 
-	summaries, err := s.summariesForIDs(ctx, uniqueIDs, args.Caller)
+	summaries, err := s.summariesForIDs(ctx, uniqueIDs, args.Caller, parentCanonical)
 	if err != nil {
 		return nil, err
 	}
@@ -1155,7 +1155,13 @@ SELECT d.to_id,
 // Caller is the resolved user id used to compute the IAssigned flag —
 // nil callers get a constant FALSE so anonymous lookups (none exist
 // today, but the helper stays uniform with ListIssues).
-func (s *Store) summariesForIDs(ctx context.Context, ids []string, caller uuid.UUID) (map[string]IssueSummary, error) {
+//
+// parent picks the projection of ParentID: the tree's own walk keeps the
+// canonical parent (parentCanonical, parentIDCurrentExpr — the tree's
+// recursion through a hidden issue's stub stays as it is, sk-977.7.68);
+// a card handed to a reader (SummariesForIDs) gets it only when visible
+// (parentForReader, parentIDForReaderExpr — sk-1007 K9).
+func (s *Store) summariesForIDs(ctx context.Context, ids []string, caller uuid.UUID, parent parentProjection) (map[string]IssueSummary, error) {
 	if len(ids) == 0 {
 		return map[string]IssueSummary{}, nil
 	}
@@ -1172,9 +1178,13 @@ func (s *Store) summariesForIDs(ctx context.Context, ids []string, caller uuid.U
 		return nil, hErr
 	}
 	epicUnrestricted, epicCaller := h.unrestricted, h.visible
+	parentCol := parentIDCurrentExpr
+	if parent == parentForReader {
+		parentCol = parentIDForReaderExpr("$3", "$4")
+	}
 
 	sql := `
-SELECT i.id, i.project_id, ` + parentIDCurrentExpr + `, i.version, i.title,
+SELECT i.id, i.project_id, ` + parentCol + `, i.version, i.title,
        i.type, i.priority, i.status, i.pinned, i.assignee,
        i.created_by, uc.username, ua.id, ` + issueSummaryPersonCols + `,
        i.created_at, i.updated_at, i.row_seq,
@@ -1246,12 +1256,27 @@ SELECT i.id, i.project_id, ` + parentIDCurrentExpr + `, i.version, i.title,
 	return out, nil
 }
 
+// parentProjection selects how summariesForIDs projects ParentID.
+type parentProjection int
+
+const (
+	// parentCanonical is the canonical parent whatever its project
+	// (parentIDCurrentExpr) — the tree's internal walk only.
+	parentCanonical parentProjection = iota
+	// parentForReader is the canonical parent only when the reader sees it
+	// now (parentIDForReaderExpr), the rule of the issue card and the lists.
+	parentForReader
+)
+
 // SummariesForIDs is the exported wrapper around summariesForIDs used
 // by handlers that need to hydrate a list of issues into IssueSummary
 // rows (e.g. /me/watching in sk-39). Same wire shape as ListIssues —
 // reusing the helper keeps the projection consistent across surfaces.
+// ParentID follows the rule of the issue card and the lists: the canonical
+// parent only when the reader (authz.FromContext, with the key's scope)
+// sees it now, otherwise nil (sk-1007 K9).
 func (s *Store) SummariesForIDs(ctx context.Context, ids []string, caller uuid.UUID) (map[string]IssueSummary, error) {
-	return s.summariesForIDs(ctx, ids, caller)
+	return s.summariesForIDs(ctx, ids, caller, parentForReader)
 }
 
 // AllowedTreeTypes returns the closed set of dependency types accepted
