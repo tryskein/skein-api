@@ -64,6 +64,9 @@ import "github.com/google/uuid"
 //     16 MiB. Unknown JSON fields are ignored (additive evolution).
 //   - 401 `{"error":"invalid internal secret"}` — the service secret is
 //     missing or wrong.
+//   - 403 `{"error":"service_call_required"}` — the secret is right but the
+//     service-call marker `X-Skein-Service-Call` is absent, repeated, or not
+//     the single literal `1`; the handler does not run.
 //
 // # Batch budget
 //

@@ -85,6 +85,15 @@
 //     primary limiter is skein-web's (Redis); this one is the backstop.
 //   - 500 `internal_error` — the request could not be served.
 //
+// Two refusals come from the middleware before any route runs and carry only
+// `error`, no `message`:
+//
+//   - 401 `{"error":"invalid internal secret"}` — the service secret is
+//     missing or wrong.
+//   - 403 `{"error":"service_call_required"}` — the secret is right but the
+//     service-call marker `X-Skein-Service-Call` is absent, repeated, or not
+//     the single literal `1`.
+//
 // # Session epoch
 //
 // [AuthResponse] is the ONE body of every answer after which skein-web
