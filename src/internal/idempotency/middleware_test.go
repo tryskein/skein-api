@@ -674,7 +674,7 @@ func TestIdempotency_RefusalRepeatOtherReferences(t *testing.T) {
 	}
 	firsts := map[string]string{}
 	for name, m := range stored {
-		firsts[name] = rw.store(t, rw.w.idemKeys+"-ref-"+name, m).Body.String()
+		firsts[name] = rw.store(t, rw.w.idemKeys+"-ref-"+strings.ReplaceAll(name, " ", "-"), m).Body.String()
 	}
 	rw.lose(t)
 	exec(t, rw.pool, "delete a child", `DELETE FROM issues WHERE id = $1`, deleted)
@@ -683,14 +683,14 @@ func TestIdempotency_RefusalRepeatOtherReferences(t *testing.T) {
 		_, _ = rw.pool.Exec(context.Background(), `DELETE FROM issues WHERE id = $1`, moved)
 	})
 
-	_, vals := membersOf(t, rw.repeated(t, rw.w.idemKeys+"-ref-hidden toId", stored["hidden toId"]).Body.Bytes())
+	_, vals := membersOf(t, rw.repeated(t, rw.w.idemKeys+"-ref-hidden-toId", stored["hidden toId"]).Body.Bytes())
 	if vals["toId"] != "<hidden>" {
 		t.Errorf("hidden toId = %v, want <hidden>", vals["toId"])
 	}
-	if rec := rw.repeated(t, rw.w.idemKeys+"-ref-visible toId", stored["visible toId"]); rec.Body.String() != firsts["visible toId"] {
+	if rec := rw.repeated(t, rw.w.idemKeys+"-ref-visible-toId", stored["visible toId"]); rec.Body.String() != firsts["visible toId"] {
 		t.Errorf("visible toId: %s, want the stored %s", rec.Body.String(), firsts["visible toId"])
 	}
-	rec := rw.repeated(t, rw.w.idemKeys+"-ref-gone children", stored["gone children"])
+	rec := rw.repeated(t, rw.w.idemKeys+"-ref-gone-children", stored["gone children"])
 	_, vals = membersOf(t, rec.Body.Bytes())
 	if !reflect.DeepEqual(vals["childIds"], []any{rw.p1}) || vals["unavailableOpenChildren"] != float64(2) {
 		t.Errorf("deleted and moved children: childIds %v, unavailableOpenChildren %v; want [%s] and 2",
