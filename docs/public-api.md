@@ -244,6 +244,17 @@ operation answers 400 `idempotency_not_supported` to it, batches included.
   the body and the headers of the first answer: `ETag`, the `Location` of a
   creation (`internal/publicapi/routes.go#Route`, its `Location`),
   `Content-Type`, `Preference-Applied`.
+- **Stored refusals that name other issues** (`internal/idempotency/narrow.go`):
+  a repeated `dependency_cycle` or `standing_has_open_children` is not run
+  again and keeps its status and code, but its body is narrowed by what the
+  key's owner sees at the repeat, within the key's scope. `path` is kept only
+  when every issue on it is visible, otherwise it is removed; `childIds` keeps
+  only the visible children and `unavailableOpenChildren` is the stored number
+  (0 when absent) plus the stored children no longer visible — added next to
+  `childIds` when the stored body had none; `toId` and `id` of an issue that
+  is not visible become `<hidden>`. A deleted issue counts as not visible.
+  The repeat never adds anything else and never restores what the first
+  answer did not show, even after access returns.
 - **Still running.** A repeat while the first request runs is 409
   `idempotency_in_progress` (`retryable`); send it again later. The mark lives
   `SKEIN_PUBLIC_API_WRITE_TIMEOUT` plus 30 seconds

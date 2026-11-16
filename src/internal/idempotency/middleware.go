@@ -367,6 +367,10 @@ func namedResource(rec *recorder) (string, int) {
 // of the response, then the owner's role on the target by the effective
 // actions of the route in that mode. A failed check answers as for any
 // request, and the stored outcome is not given out.
+//
+// A stored dependency_cycle or standing_has_open_children refusal that
+// passes those checks is given out narrowed by the caller's visibility at
+// the repeat (narrowStored, sk-1007 US-6): the operation is not run again.
 func (m *Middleware) replay(w http.ResponseWriter, r *http.Request, rt publicapi.Route, s Stored) {
 	ctx := r.Context()
 	mode := publicapi.Mode{Force: s.Force}
@@ -431,6 +435,15 @@ func (m *Middleware) replay(w http.ResponseWriter, r *http.Request, rt publicapi
 			return
 		}
 		contentType = "application/json"
+	}
+	if !success {
+		// sk-1007 US-6: a stored cycle or open-children refusal names other
+		// issues; it is given out narrowed by what the caller sees now.
+		var err error
+		if body, err = narrowStored(ctx, m.pool, scope, body); err != nil {
+			publicapi.WriteInternalError(w, r, "narrowing a stored refusal", err)
+			return
+		}
 	}
 	if s.Version != nil {
 		publicapi.SetETag(w, int(*s.Version))
