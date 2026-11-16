@@ -1,6 +1,10 @@
 package tools
 
 import (
+	"context"
+	"encoding/json"
+	"reflect"
+	"strings"
 	"testing"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
@@ -364,5 +368,113 @@ func TestDepAdd_BareNumericIDRejected(t *testing.T) {
 	body := extractToolJSON(t, res)
 	if got := body["error"]; got != ErrCodeValidationError {
 		t.Fatalf("error = %v, want %s", got, ErrCodeValidationError)
+	}
+}
+
+// TestDepCycle_PathOnlyWhenEveryIssueIsVisible — sk-1007 No. 46. Reference —
+// spec US-4: on MCP (the session's principal, no key) the cycle refusal of
+// skein_dep_add (top level), skein_dep_add_many (the row's error details)
+// and skein_reparent carries its path only when the caller sees every issue
+// on it; otherwise there is no path and no id of the hidden issues. A
+// visible cycle gives the full path, inside the batch loop too.
+//
+// Fixture: P-2 → H-5 → H-9 → P-1 as blocks and as parent-child edges, H a
+// project of another owner; P-1 → P-2 closes P-1 → P-2 → H-5 → H-9 → P-1.
+func TestDepCycle_PathOnlyWhenEveryIssueIsVisible(t *testing.T) {
+	pool := newTestPool(t)
+	reader, _ := seedUser(t, pool, "user")
+	hOwner, _ := seedUser(t, pool, "user")
+	pidP, prefixP := seedProject(t, pool, reader, "dcp")
+	pidH, prefixH := seedProject(t, pool, hOwner, "dch")
+	p1 := seedIssue(t, pool, pidP, reader, prefixP+"-1", "p1", "open", 2)
+	p2 := seedIssue(t, pool, pidP, reader, prefixP+"-2", "p2", "open", 2)
+	h5 := seedIssue(t, pool, pidH, hOwner, prefixH+"-5", "h5", "open", 2)
+	h9 := seedIssue(t, pool, pidH, hOwner, prefixH+"-9", "h9", "open", 2)
+	for _, typ := range []string{"blocks", "parent-child"} {
+		for _, e := range [][2]string{{p2, h5}, {h5, h9}, {h9, p1}} {
+			if _, err := pool.Exec(context.Background(), `
+INSERT INTO dependencies (from_id, to_id, type, metadata, version, created_by, created_at)
+VALUES ($1, $2, $3, '{}'::jsonb, 1, $4, now())`, e[0], e[1], typ, hOwner); err != nil {
+				t.Fatalf("seed edge %s -> %s: %v", e[0], e[1], err)
+			}
+		}
+	}
+	wantPath := []any{p1, p2, h5, h9, p1}
+
+	depsStore := dependencies.NewStore(pool)
+	issuesStore := issues.NewStore(pool)
+	ctx := withCtxSession(t, reader, "user", "sess-cycle-vis")
+	call := func(h func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error), args map[string]any) map[string]any {
+		t.Helper()
+		req := mcpgo.CallToolRequest{}
+		req.Params.Arguments = args
+		res, err := h(ctx, req)
+		if err != nil {
+			t.Fatalf("handler: %v", err)
+		}
+		return extractToolJSON(t, res)
+	}
+	version := func() int {
+		t.Helper()
+		var v int
+		if err := pool.QueryRow(context.Background(), `SELECT version FROM issues WHERE id = $1`, p1).Scan(&v); err != nil {
+			t.Fatal(err)
+		}
+		return v
+	}
+	// refusal returns the cycle refusal's code and the object that carries
+	// its details, per tool.
+	refusals := []struct {
+		name string
+		run  func() (code any, details map[string]any, body map[string]any)
+	}{
+		{"skein_dep_add", func() (any, map[string]any, map[string]any) {
+			b := call(handleDepAdd(pool, depsStore, issuesStore), map[string]any{"fromId": p1, "toId": p2, "type": "blocks"})
+			return b["error"], b, b
+		}},
+		{"skein_dep_add_many", func() (any, map[string]any, map[string]any) {
+			b := call(handleDepAddMany(pool, depsStore, issuesStore), map[string]any{
+				"items": []any{map[string]any{"fromId": p1, "toId": p2, "type": "blocks"}}})
+			rows, _ := b["results"].([]any)
+			if len(rows) != 1 {
+				t.Fatalf("skein_dep_add_many results = %v, want one row", b["results"])
+			}
+			errObj, _ := rows[0].(map[string]any)["error"].(map[string]any)
+			details, _ := errObj["details"].(map[string]any)
+			return errObj["code"], details, b
+		}},
+		{"skein_reparent", func() (any, map[string]any, map[string]any) {
+			b := call(handleReparent(pool, depsStore, issuesStore),
+				map[string]any{"id": p1, "newParentId": p2, "expectedVersion": float64(version())})
+			return b["error"], b, b
+		}},
+	}
+
+	for _, r := range refusals {
+		code, details, body := r.run()
+		if code != ErrCodeDependencyCycle {
+			t.Fatalf("%s through hidden H: code %v, want %s (body %v)", r.name, code, ErrCodeDependencyCycle, body)
+		}
+		if v, ok := details["path"]; ok {
+			t.Errorf("%s through hidden H carries path = %v, want no key", r.name, v)
+		}
+		raw, _ := json.Marshal(body)
+		for _, id := range []string{h5, h9} {
+			if strings.Contains(string(raw), `"`+id+`"`) {
+				t.Errorf("%s through hidden H names %s: %s", r.name, id, raw)
+			}
+		}
+	}
+
+	addProjectMember(t, pool, pidH, reader)
+
+	for _, r := range refusals {
+		code, details, body := r.run()
+		if code != ErrCodeDependencyCycle {
+			t.Fatalf("%s through visible H: code %v, want %s (body %v)", r.name, code, ErrCodeDependencyCycle, body)
+		}
+		if got := details["path"]; !reflect.DeepEqual(got, wantPath) {
+			t.Errorf("%s through visible H: path %v, want %v", r.name, got, wantPath)
+		}
 	}
 }

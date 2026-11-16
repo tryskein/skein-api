@@ -10,7 +10,10 @@ package publicapi_test
 // exist or is outside the scope — 422 with the same code as MCP»).
 
 import (
+	"encoding/json"
 	"net/http"
+	"reflect"
+	"strings"
 	"testing"
 
 	"skein-api/internal/apikeys"
@@ -167,5 +170,128 @@ func TestDependencies_OriginOfAMissingIssue(t *testing.T) {
 	}
 	if got := edges(t, rg, w.key(w.owner, apikeys.LevelRead), inside); len(got) != 0 {
 		t.Errorf("refused writes left edges %v", got)
+	}
+}
+
+// TestDependencies_CyclePathFollowsTheKeyScope — sk-1007 No. 47. Reference —
+// spec US-4 and SC-004: on the public API (addDependency,
+// bulkAddDependencies, reparentIssue) and on their MCP twins called with the
+// same key, a cycle through an issue outside the key's scope — H, which the
+// key's owner sees — answers the code and status of a visible cycle without
+// a path and without any id of H; a key of scope all gives the full path.
+//
+// Fixture: P-2 → H-5 → H-9 → P-1 as blocks and as parent-child edges; the
+// requests add P-1 → P-2 or move P-1 under P-2, closing
+// P-1 → P-2 → H-5 → H-9 → P-1. A refusal writes nothing, so every surface
+// runs over the same graph.
+func TestDependencies_CyclePathFollowsTheKeyScope(t *testing.T) {
+	pool := testsupport.NewTestPool(t)
+	rg := newResourceRig(t, pool)
+	w := seedWriteWorld(t, pool)
+	h, hPrefix := seedProject(t, pool, w.owner, w.space, "wrh")
+	t.Cleanup(func() {
+		w.exec(`DELETE FROM dependencies WHERE from_id IN (SELECT id FROM issues WHERE project_id = $1)
+			OR to_id IN (SELECT id FROM issues WHERE project_id = $1)`, h)
+	})
+	p1, p2 := w.issue("p1"), w.issue("p2")
+	h5 := testsupport.SeedIssue(t, pool, h, w.owner, hPrefix+"-5", "h5", "open", 2)
+	h9 := testsupport.SeedIssue(t, pool, h, w.owner, hPrefix+"-9", "h9", "open", 2)
+	for _, typ := range []string{"blocks", "parent-child"} {
+		for _, e := range [][2]string{{p2, h5}, {h5, h9}, {h9, p1}} {
+			w.exec(`INSERT INTO dependencies (from_id, to_id, type, metadata, version, created_by, created_at)
+VALUES ($1, $2, $3, '{}'::jsonb, 1, $4, now())`, e[0], e[1], typ, w.owner)
+		}
+	}
+	wantPath := []any{p1, p2, h5, h9, p1}
+	keyP := projectsKey(t, pool, w.owner, apikeys.LevelWrite, w.project)
+	keyAll := projectsKey(t, pool, w.owner, apikeys.LevelWrite)
+
+	decode := func(t *testing.T, raw []byte) map[string]any {
+		t.Helper()
+		var m map[string]any
+		if err := json.Unmarshal(raw, &m); err != nil {
+			t.Fatalf("not a JSON object: %v (%s)", err, raw)
+		}
+		return m
+	}
+	// rowError is the error object of the only row of a batch answer.
+	rowError := func(t *testing.T, m map[string]any) (code any, details map[string]any) {
+		t.Helper()
+		rows, _ := m["results"].([]any)
+		if len(rows) != 1 {
+			t.Fatalf("batch results = %v, want one row", m["results"])
+		}
+		errObj, _ := rows[0].(map[string]any)["error"].(map[string]any)
+		details, _ = errObj["details"].(map[string]any)
+		return errObj["code"], details
+	}
+	// surface returns the status (0 on MCP), the code, the object that
+	// carries the path, and the raw answer.
+	type answer struct {
+		status  int
+		code    any
+		details map[string]any
+		raw     string
+	}
+	item := map[string]any{"fromId": p1, "toId": p2, "type": "blocks"}
+	surfaces := []struct {
+		name string
+		call func(t *testing.T, key string) answer
+	}{
+		{"addDependency", func(t *testing.T, key string) answer {
+			c := rg.rest(key, http.MethodPost, issuePath(p1, "/dependencies"), map[string]any{"toId": p2, "type": "blocks"}, nil)
+			m := decode(t, c.body)
+			return answer{c.status, m["code"], m, string(c.body)}
+		}},
+		{"bulkAddDependencies", func(t *testing.T, key string) answer {
+			c := rg.rest(key, http.MethodPost, "/api/v1/issues/dependencies/bulk-add", map[string]any{"items": []any{item}}, nil)
+			code, details := rowError(t, decode(t, c.body))
+			return answer{c.status, code, details, string(c.body)}
+		}},
+		{"reparentIssue", func(t *testing.T, key string) answer {
+			c := rg.rest(key, http.MethodPost, issuePath(p1, "/reparent"), map[string]any{"newParentId": p2}, ifMatch(w.version(p1)))
+			m := decode(t, c.body)
+			return answer{c.status, m["code"], m, string(c.body)}
+		}},
+		{"skein_dep_add", func(t *testing.T, key string) answer {
+			a := rg.tool(key, "skein_dep_add", item)
+			m := decode(t, []byte(a.text))
+			return answer{0, m["error"], m, a.text}
+		}},
+		{"skein_dep_add_many", func(t *testing.T, key string) answer {
+			a := rg.tool(key, "skein_dep_add_many", map[string]any{"items": []any{item}})
+			code, details := rowError(t, decode(t, []byte(a.text)))
+			return answer{0, code, details, a.text}
+		}},
+		{"skein_reparent", func(t *testing.T, key string) answer {
+			a := rg.tool(key, "skein_reparent", map[string]any{"id": p1, "newParentId": p2, "expectedVersion": w.version(p1)})
+			m := decode(t, []byte(a.text))
+			return answer{0, m["error"], m, a.text}
+		}},
+	}
+	for _, s := range surfaces {
+		t.Run(s.name, func(t *testing.T) {
+			scoped := s.call(t, keyP)
+			if scoped.code != "dependency_cycle" {
+				t.Fatalf("key projects=[P]: code %v, want dependency_cycle (%s)", scoped.code, scoped.raw)
+			}
+			if v, ok := scoped.details["path"]; ok {
+				t.Errorf("key projects=[P]: path = %v, want no key", v)
+			}
+			for _, id := range []string{h5, h9} {
+				if strings.Contains(scoped.raw, `"`+id+`"`) {
+					t.Errorf("key projects=[P] names %s: %s", id, scoped.raw)
+				}
+			}
+
+			all := s.call(t, keyAll)
+			if all.code != "dependency_cycle" || all.status != scoped.status {
+				t.Errorf("key all: code %v status %d, want dependency_cycle and the scoped key's status %d",
+					all.code, all.status, scoped.status)
+			}
+			if got := all.details["path"]; !reflect.DeepEqual(got, wantPath) {
+				t.Errorf("key all: path %v, want %v", got, wantPath)
+			}
+		})
 	}
 }

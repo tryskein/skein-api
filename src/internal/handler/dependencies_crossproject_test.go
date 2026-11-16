@@ -36,6 +36,7 @@ package handler
 
 import (
 	"net/http"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -44,6 +45,7 @@ import (
 
 	"skein-api/internal/dependencies"
 	"skein-api/internal/issues"
+	"skein-api/internal/testsupport"
 )
 
 // ---------------- harness ----------------
@@ -723,5 +725,86 @@ UPDATE issues SET status = 'closed', closed_at = now(), closed_reason = 'replace
 	}
 	if n := countDeps(t, pool, hidden); n != 1 {
 		t.Fatalf("edges of %s after the refusal = %d, want 1", hidden, n)
+	}
+}
+
+// ---------------- sk-1007 US-4: the cycle path for the reader ----------------
+
+// TestDeps_CyclePathOnlyWhenEveryIssueIsVisible — sk-1007 No. 45. Reference
+// — spec US-4: the cycle refusal (REST dep_cycle, link and move) carries its
+// path only when the reader sees every issue on it; otherwise there is no
+// path key and no id of the hidden issues, and the code and message are
+// those of a visible cycle.
+//
+// Fixture (the spec's example): P-2 → H-5 → H-9 → P-1 as blocks and as
+// parent-child edges, H a project of another owner. Adding P-1 blocks P-2,
+// or moving P-1 under P-2, closes P-1 → P-2 → H-5 → H-9 → P-1.
+func TestDeps_CyclePathOnlyWhenEveryIssueIsVisible(t *testing.T) {
+	pool := newIMTestPool(t)
+	reader, _ := seedIMUser(t, pool, "user")
+	hOwner, _ := seedIMUser(t, pool, "user")
+	pidP, prefixP := seedIMProject(t, pool, reader)
+	pidH, prefixH := seedIMProject(t, pool, hOwner)
+	h := newXPDepsHandler(t, pool)
+
+	p1, p2, h5, h9 := prefixP+"-1", prefixP+"-2", prefixH+"-5", prefixH+"-9"
+	seedCmtIssue(t, pool, pidP, reader, p1, "human")
+	seedCmtIssue(t, pool, pidP, reader, p2, "human")
+	seedCmtIssue(t, pool, pidH, hOwner, h5, "human")
+	seedCmtIssue(t, pool, pidH, hOwner, h9, "human")
+	for _, typ := range []string{"blocks", "parent-child"} {
+		seedDepRow(t, pool, p2, h5, typ, hOwner)
+		seedDepRow(t, pool, h5, h9, typ, hOwner)
+		seedDepRow(t, pool, h9, p1, typ, hOwner)
+	}
+	wantPath := []any{p1, p2, h5, h9, p1}
+
+	routes := []struct {
+		name string
+		call func() xpResponse
+	}{
+		{"link", func() xpResponse {
+			return xpCallFull(t, h.Create, xpRequest(t, http.MethodPost, "",
+				map[string]any{"toId": p2, "type": "blocks"}, reader, "user",
+				"projectID", pidP.String(), "issueID", p1))
+		}},
+		{"move", func() xpResponse {
+			return xpCallFull(t, h.Reparent, xpRequest(t, http.MethodPost, "",
+				map[string]any{"newParentId": p2, "expectedVersion": issueVersion(t, pool, p1)}, reader, "user",
+				"projectID", pidP.String(), "issueID", p1))
+		}},
+	}
+
+	hidden := map[string]xpResponse{}
+	for _, r := range routes {
+		res := r.call()
+		hidden[r.name] = res
+		if res.Status != http.StatusUnprocessableEntity || res.Body["error"] != "dep_cycle" {
+			t.Fatalf("%s through hidden H = %d %v, want 422 dep_cycle", r.name, res.Status, res.Body)
+		}
+		if v, ok := res.Body["path"]; ok {
+			t.Errorf("%s through hidden H carries path = %v, want no key", r.name, v)
+		}
+		for _, id := range []string{h5, h9} {
+			if strings.Contains(res.Raw, `"`+id+`"`) {
+				t.Errorf("%s through hidden H names %s: %s", r.name, id, res.Raw)
+			}
+		}
+	}
+
+	testsupport.AddProjectMember(t, pool, pidH, reader, "member")
+
+	for _, r := range routes {
+		res := r.call()
+		if res.Status != http.StatusUnprocessableEntity || res.Body["error"] != "dep_cycle" {
+			t.Fatalf("%s through visible H = %d %v, want 422 dep_cycle", r.name, res.Status, res.Body)
+		}
+		if got := res.Body["path"]; !reflect.DeepEqual(got, wantPath) {
+			t.Errorf("%s through visible H: path %v, want %v", r.name, got, wantPath)
+		}
+		if res.Body["message"] != hidden[r.name].Body["message"] {
+			t.Errorf("%s: message %q with a visible cycle, %q with a hidden one — want the same",
+				r.name, res.Body["message"], hidden[r.name].Body["message"])
+		}
 	}
 }
