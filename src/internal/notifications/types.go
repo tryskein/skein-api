@@ -424,9 +424,12 @@ type WatchingRow struct {
 // Watching card and were written inside the window.
 type WatchingListResponse struct {
 	Items []WatchingRow `json:"items"`
-	// UnreadTotal is the sum of unread notifications over ALL cards, inside
-	// the window — the header badge's number. Not capped by Items, not
-	// narrowed by State.
+	// UnreadTotal is the count of the caller's unread notifications inside
+	// the window, of his notification set (no project, or a project he sees
+	// now inside the key's scope) — the header badge's number (sk-1007
+	// INV-3). Not capped by Items, not narrowed by State, and not the sum
+	// over the cards shown: it also counts rows whose card is a task the
+	// caller does not see.
 	UnreadTotal int `json:"unreadTotal"`
 	// SubscriptionsTotal is how many live subscriptions the caller has,
 	// uncapped. Historical cards are not subscriptions and are not counted.
@@ -556,7 +559,8 @@ type WatchingBase struct {
 type WatchingFeedResult struct {
 	Rows []WatchingBase
 	// UnreadTotal counts every unread notification with a card inside the
-	// window, cap or no cap — the badge's number (INV-5).
+	// window, of the caller's notification set, cap or no cap — the badge's
+	// number (INV-5, sk-1007 INV-3).
 	UnreadTotal int
 	// SubscriptionsTotal counts every live subscription, cap or no cap.
 	SubscriptionsTotal int
