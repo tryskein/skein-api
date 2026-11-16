@@ -330,9 +330,10 @@ type InProgressRow struct {
 	StaleLock       bool       `json:"staleLock"`
 	// Redacted is true when this row belongs to a project the caller
 	// cannot see (war-room cross-project view). Under Soft redaction the
-	// Title, issue id, project prefix and projectId are stripped (the keys
-	// are absent) while spaceId and lockedBySession stay; under Hard
-	// redaction spaceId and lockedBySession are dropped too. The kept
+	// Title is blanked (the key stays, "title":"") and the issue id,
+	// project prefix and projectId are dropped (their keys are absent),
+	// while spaceId and lockedBySession stay; under Hard redaction spaceId
+	// and lockedBySession are dropped too. The kept
 	// "people + shape" fields (assignee, type, priority, status, locks,
 	// since) let the row stay visible while its identity is hidden.
 	Redacted bool `json:"redacted,omitempty"`
@@ -1597,7 +1598,10 @@ func (s *Store) InProgress(
 	//
 	// War-room (globalScope=true) with no projectFilter applies NO
 	// visibility clause — every in-progress issue is returned globally;
-	// rows of invisible projects are content-redacted after scanning.
+	// rows of invisible projects are redacted after scanning at `level`:
+	// the title is blanked and the issue id, project prefix and projectId
+	// are dropped; Soft keeps spaceId and lockedBySession, Hard drops them
+	// too (sk-1007 R-4a).
 	// A projectFilter still pins to one project regardless.
 	args := []any{}
 	visClause := ""
