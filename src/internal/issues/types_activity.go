@@ -126,8 +126,9 @@ type ActivityActor struct {
 // events the entity points to the parent issue (more useful UX than
 // linking to a transient comment id) while preserving the comment's
 // project context.
-// A Hard-redacted (external war-room) row drops ID / ProjectID /
-// ProjectIDPrefix entirely — hence the omitempty on the string ids and
+// A redacted row — Soft (a participant of the space) or Hard (external
+// war-room) — drops ID / ProjectID / ProjectIDPrefix entirely (for a dep
+// row the composite id goes whole) — hence the omitempty on the string ids and
 // the *uuid.UUID on ProjectID. Zeroing a uuid.UUID value would still
 // serialize "00000000-…" (a distinguishable value, not absence), so the
 // id MUST be a pointer that goes nil, not a zeroed array.
@@ -170,8 +171,8 @@ type ActivityEntry struct {
 	Actor      ActivityActor  `json:"actor"`
 	Entity     ActivityEntity `json:"entity"`
 	// SpaceID is the short id of the space of the event's project
-	// (sk-674.18 T030: the HOT ZONE feed rows); dropped by the hard
-	// redaction.
+	// (sk-674.18 T030: the HOT ZONE feed rows); kept by the soft
+	// redaction, dropped by the hard one.
 	SpaceID string  `json:"spaceId,omitempty"`
 	Field   *string `json:"field,omitempty"`
 	// Summary is omitempty so a redacted row (Summary stripped to "")
@@ -188,17 +189,18 @@ type ActivityEntry struct {
 	// from events.payload.changes[]. nil/omitted for every other event
 	// type.
 	Changes []ActivityChange `json:"changes,omitempty"`
-	// ProjectID is a pointer + omitempty so a Hard-redacted row drops it
-	// from the wire entirely (a zeroed uuid.UUID would still serialize
-	// "00000000-…"). Non-nil for every non-Hard-redacted row (the query
-	// requires project_id IS NOT NULL).
+	// ProjectID is a pointer + omitempty so a redacted row (Soft or Hard)
+	// drops it from the wire entirely (a zeroed uuid.UUID would still
+	// serialize "00000000-…"). Non-nil for every non-redacted row (the
+	// query requires project_id IS NOT NULL).
 	ProjectID *uuid.UUID `json:"projectId,omitempty"`
 	// Redacted is true when this row belongs to a project the caller
 	// cannot see (war-room cross-project view). Under Soft redaction the
-	// content (Title/Summary/diff) is stripped but identity survives;
-	// under Hard redaction the id, project prefix and both projectId
-	// fields are dropped too. Actor, time and type always remain so the
-	// activity is visible but its content is hidden.
+	// content (Title/Summary/diff), the entity id (a dep row's composite
+	// id whole), the project prefix and both projectId fields are
+	// stripped while spaceId stays; under Hard redaction spaceId is
+	// dropped too. Actor, time and type always remain so the activity is
+	// visible but neither its content nor its identity is.
 	Redacted bool `json:"redacted,omitempty"`
 }
 

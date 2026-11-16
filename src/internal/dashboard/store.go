@@ -305,15 +305,16 @@ type MatrixUserRow struct {
 // currently holds the lock.
 type InProgressRow struct {
 	// IssueID / ProjectPrefix / ProjectID are omitempty (and ProjectID is
-	// a pointer) so a Hard-redacted row drops them from the wire entirely
-	// — a zeroed uuid.UUID would still serialize "00000000-…". LockedBySession
-	// is likewise dropped on Hard (raw Mcp-Session-Id is a precise
-	// cross-project correlator with no UX value).
+	// a pointer) so a redacted row — Soft or Hard — drops them from the
+	// wire entirely: a zeroed uuid.UUID would still serialize
+	// "00000000-…". LockedBySession is dropped on Hard only (raw
+	// Mcp-Session-Id is a precise cross-project correlator with no UX
+	// value outside the space).
 	IssueID       string     `json:"issueId,omitempty"`
 	ProjectID     *uuid.UUID `json:"projectId,omitempty"`
 	ProjectPrefix string     `json:"projectPrefix,omitempty"`
 	// SpaceID is the short id of the space of the row's project (sk-674.18
-	// T030); dropped with the other identifiers by the hard redaction.
+	// T030); kept by the soft redaction, dropped by the hard one.
 	SpaceID         string     `json:"spaceId,omitempty"`
 	Title           string     `json:"title"`
 	Type            string     `json:"type"`
@@ -329,11 +330,11 @@ type InProgressRow struct {
 	StaleLock       bool       `json:"staleLock"`
 	// Redacted is true when this row belongs to a project the caller
 	// cannot see (war-room cross-project view). Under Soft redaction the
-	// Title is stripped but every identity field survives; under Hard
-	// redaction the issue id, project prefix, projectId and
-	// lockedBySession are dropped too. The kept "people + shape" fields
-	// (assignee, type, priority, status, locks, since) let the row stay
-	// visible while its identity is hidden.
+	// Title, issue id, project prefix and projectId are stripped (the keys
+	// are absent) while spaceId and lockedBySession stay; under Hard
+	// redaction spaceId and lockedBySession are dropped too. The kept
+	// "people + shape" fields (assignee, type, priority, status, locks,
+	// since) let the row stay visible while its identity is hidden.
 	Redacted bool `json:"redacted,omitempty"`
 }
 
@@ -1547,9 +1548,9 @@ SELECT actor,
 //     when no projectFilter is set. A projectFilter pins to one project
 //     in either mode.
 //   - level selects how invisible rows are redacted for a scoped
-//     caller: redact.Soft strips the Title but keeps identity;
-//     redact.Hard strips the issue id, project prefix, projectId and
-//     lockedBySession too; redact.None leaves rows untouched. Declared
+//     caller: redact.Soft strips the Title, issue id, project prefix and
+//     projectId and keeps spaceId and lockedBySession;
+//     redact.Hard strips spaceId and lockedBySession too; redact.None leaves rows untouched. Declared
 //     internal work is never redacted.
 //
 // "In progress" = status='in_progress' OR
@@ -1702,25 +1703,26 @@ SELECT i.id, i.project_id, p.id_prefix,
 }
 
 // redactInProgressRow strips a "now working" row whose project the caller
-// cannot see. The base strip (Title) runs for every level; a fail-closed
-// switch then decides the identity strip. Only redact.Soft keeps identity
-// (issue id, project prefix, projectId, lock session). redact.Hard — and
-// ANY other/unknown level (fail closed: over-redact rather than leak) —
-// additionally drops the issue id, project prefix, projectId and the raw
-// Mcp-Session-Id lock holder. Kept: assignee, type, priority, status,
-// timestamps, staleLock (the accepted "people + shape" exposure).
+// cannot see. The base strip (Title, plus the issue id, project prefix and
+// projectId — no identifier of an unseen project reaches the wire) runs
+// for every level; a fail-closed switch then decides the rest. Only
+// redact.Soft (a participant of the space) keeps the space id and the lock
+// holder session. redact.Hard — and ANY other/unknown level (fail closed:
+// over-redact rather than leak) — additionally drops the space id and the
+// raw Mcp-Session-Id lock holder. Kept on both: assignee, type, priority,
+// status, timestamps, staleLock (the accepted "people + shape" exposure).
 func redactInProgressRow(r *InProgressRow, level redact.Level) {
 	r.Title = ""
 	r.Redacted = true
+	r.IssueID = ""
+	r.ProjectPrefix = ""
+	r.ProjectID = nil
 
 	switch level {
 	case redact.Soft:
 		return
 	default:
-		r.IssueID = ""
-		r.ProjectPrefix = ""
 		r.SpaceID = ""
-		r.ProjectID = nil
 		r.LockedBySession = nil
 	}
 }

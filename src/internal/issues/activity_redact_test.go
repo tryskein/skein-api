@@ -72,13 +72,58 @@ func findActivity(t *testing.T, items []ActivityEntry, issueID string) ActivityE
 	return ActivityEntry{}
 }
 
+// findActivityByActorAt returns the one ActivityEntry by actor username at
+// the given occurrence time, or fails. A soft-redacted row carries no
+// entity id (sk-1007 R-4a), so its actor and time are the handle.
+func findActivityByActorAt(t *testing.T, items []ActivityEntry, username string, at time.Time) ActivityEntry {
+	t.Helper()
+	want := at.Truncate(time.Microsecond)
+	var found []ActivityEntry
+	for _, e := range items {
+		if e.Actor.Username == username && e.OccurredAt.Equal(want) {
+			found = append(found, e)
+		}
+	}
+	if len(found) != 1 {
+		t.Fatalf("want exactly one activity row by %q at %s, got %d (%+v)", username, want, len(found), found)
+	}
+	return found[0]
+}
+
+// assertSoftRedactedIdentity asserts a soft-redacted feed row of a project
+// the caller does not see (sk-1007 R-4a): the task and project identifiers
+// are gone — entity id, project prefix, both projectId fields — while the
+// space id and the actor stay.
+func assertSoftRedactedIdentity(t *testing.T, e ActivityEntry, wantActor string) {
+	t.Helper()
+	if e.Entity.ID != "" {
+		t.Errorf("soft-redacted entity.id must be blank, got %q", e.Entity.ID)
+	}
+	if e.Entity.ProjectIDPrefix != "" {
+		t.Errorf("soft-redacted entity.projectIdPrefix must be blank, got %q", e.Entity.ProjectIDPrefix)
+	}
+	if e.Entity.ProjectID != nil {
+		t.Errorf("soft-redacted entity.projectId must be nil, got %v", *e.Entity.ProjectID)
+	}
+	if e.ProjectID != nil {
+		t.Errorf("soft-redacted projectId must be nil, got %v", *e.ProjectID)
+	}
+	if e.SpaceID == "" {
+		t.Errorf("soft-redacted row must keep spaceId: %+v", e)
+	}
+	if e.Actor.Username != wantActor {
+		t.Errorf("soft-redacted row actor = %q, want %q", e.Actor.Username, wantActor)
+	}
+}
+
 // TestListUserActivity_RedactInvisible seeds an issue.created lifecycle
 // event in each of two projects — one the caller is a member of, one
 // foreign. With redactInvisible=true (war-room /dashboard/feed contract)
 // BOTH rows are returned, but the foreign-project row has its
-// Title/Summary stripped and Redacted=true, while identity fields
-// (entity id, project prefix, actor) survive. The member-project row is
-// full and not redacted.
+// Title/Summary stripped and Redacted=true, and carries no task or project
+// identifier (entity id, project prefix, projectId — sk-1007 R-4a) while
+// the space id and the actor survive. The member-project row is full and
+// not redacted.
 func TestListUserActivity_RedactInvisible(t *testing.T) {
 	pool := newTestPool(t)
 	ctx := context.Background()
@@ -98,7 +143,8 @@ func TestListUserActivity_RedactInvisible(t *testing.T) {
 	seedIssue(t, pool, memberPid, caller, memberID, "member issue title")
 	seedIssue(t, pool, foreignPid, foreignOwner, foreignID, "foreign issue title")
 	seedIssueEvent(t, pool, "issue.created", memberID, memberPid, callerUname, caller, now.Add(-1*time.Hour))
-	seedIssueEvent(t, pool, "issue.created", foreignID, foreignPid, foreignUname, foreignOwner, now.Add(-30*time.Minute))
+	foreignAt := now.Add(-30 * time.Minute)
+	seedIssueEvent(t, pool, "issue.created", foreignID, foreignPid, foreignUname, foreignOwner, foreignAt)
 
 	// Caller is a member of memberPid only.
 	visible := map[uuid.UUID]struct{}{memberPid: {}}
@@ -111,7 +157,7 @@ func TestListUserActivity_RedactInvisible(t *testing.T) {
 	}
 
 	member := findActivity(t, items, memberID)
-	foreign := findActivity(t, items, foreignID)
+	foreign := findActivityByActorAt(t, items, foreignUname, foreignAt)
 
 	// Member-project row: full content, not redacted.
 	if member.Redacted {
@@ -124,7 +170,8 @@ func TestListUserActivity_RedactInvisible(t *testing.T) {
 		t.Errorf("member-project row Summary should be populated, got empty")
 	}
 
-	// Foreign-project row: content stripped, identity kept.
+	// Foreign-project row: content and identifiers stripped, space id and
+	// actor kept.
 	if !foreign.Redacted {
 		t.Errorf("foreign-project row should be redacted: %+v", foreign)
 	}
@@ -134,15 +181,7 @@ func TestListUserActivity_RedactInvisible(t *testing.T) {
 	if foreign.Summary != "" {
 		t.Errorf("foreign-project row Summary should be stripped, got %q", foreign.Summary)
 	}
-	if foreign.Entity.ID != foreignID {
-		t.Errorf("foreign-project row entity id should survive, got %q want %q", foreign.Entity.ID, foreignID)
-	}
-	if foreign.Entity.ProjectIDPrefix != foreignPrefix {
-		t.Errorf("foreign-project row project prefix should survive, got %q want %q", foreign.Entity.ProjectIDPrefix, foreignPrefix)
-	}
-	if foreign.Actor.Username != foreignUname {
-		t.Errorf("foreign-project row actor should survive, got %q want %q", foreign.Actor.Username, foreignUname)
-	}
+	assertSoftRedactedIdentity(t, foreign, foreignUname)
 }
 
 // TestListUserActivity_RedactInvisible_Admin asserts that the unrestricted
@@ -289,8 +328,9 @@ func TestListUserActivity_RedactInvisible_StripsDiffFields(t *testing.T) {
 	seedIssue(t, pool, foreignPid, foreignOwner, foreignID, "foreign issue title")
 	seedDiffEvent(t, pool, "issue.status_changed", memberID, memberPid, callerUname, caller,
 		"status", `"open"`, `"in_progress"`, now.Add(-1*time.Hour))
+	foreignAt := now.Add(-30 * time.Minute)
 	seedDiffEvent(t, pool, "issue.status_changed", foreignID, foreignPid, foreignUname, foreignOwner,
-		"status", `"open"`, `"in_progress"`, now.Add(-30*time.Minute))
+		"status", `"open"`, `"in_progress"`, foreignAt)
 
 	visible := map[uuid.UUID]struct{}{memberPid: {}}
 	// The foreign project is in the caller's reach (sk-674.18 T030: a project
@@ -302,7 +342,7 @@ func TestListUserActivity_RedactInvisible_StripsDiffFields(t *testing.T) {
 	}
 
 	member := findActivity(t, items, memberID)
-	foreign := findActivity(t, items, foreignID)
+	foreign := findActivityByActorAt(t, items, foreignUname, foreignAt)
 
 	// Member-project row: diff fields populated (proves the seed actually
 	// carries a diff, so the foreign-row assertions below are meaningful).
@@ -335,6 +375,7 @@ func TestListUserActivity_RedactInvisible_StripsDiffFields(t *testing.T) {
 		t.Errorf("foreign-project row title/summary must be stripped: title=%q summary=%q",
 			foreign.Entity.Title, foreign.Summary)
 	}
+	assertSoftRedactedIdentity(t, foreign, foreignUname)
 }
 
 // seedReparentEvent writes an issue.reparented events row whose old_data

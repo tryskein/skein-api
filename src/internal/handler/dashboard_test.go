@@ -473,10 +473,12 @@ func TestDashboard_InProgress_ProjectFilter_Errors(t *testing.T) {
 }
 
 // TestDashboard_Feed_RedactsInvisible — the war-room feed returns
-// activity from EVERY project (global) but REDACTS the content of rows
-// whose project the caller can't see: the foreign row is present with its
-// id + project prefix, but title/summary are stripped and redacted=true.
-// The caller's own-project row comes through full.
+// activity from EVERY project (global) but REDACTS the rows whose project
+// the caller can't see: the foreign row is present with redacted=true, its
+// title/summary stripped and no key of its task or project identifiers
+// (entity.id, entity.projectIdPrefix — sk-1007 R-4a); its issue id
+// appears nowhere in the row. The caller's own-project row comes through
+// full.
 func TestDashboard_Feed_RedactsInvisible(t *testing.T) {
 	pool := newDashboardTestPool(t)
 	defer pool.Close()
@@ -502,50 +504,64 @@ func TestDashboard_Feed_RedactsInvisible(t *testing.T) {
 		t.Fatalf("expected 200, got %d body=%s", res.StatusCode, string(body))
 	}
 	var got struct {
-		Items []struct {
-			Type     string `json:"type"`
-			Summary  string `json:"summary"`
-			Redacted bool   `json:"redacted"`
-			Entity   struct {
-				ID              string `json:"id"`
-				Title           string `json:"title"`
-				ProjectIDPrefix string `json:"projectIdPrefix"`
-			} `json:"entity"`
-		} `json:"items"`
+		Items []json.RawMessage `json:"items"`
 	}
 	if err := json.Unmarshal(body, &got); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	var foundMine, foundTheirs bool
-	for _, it := range got.Items {
-		switch it.Entity.ID {
-		case mineFV:
+	type feedRow struct {
+		Summary  string `json:"summary"`
+		Redacted bool   `json:"redacted"`
+		Actor    struct {
+			Username string `json:"username"`
+		} `json:"actor"`
+		Entity map[string]json.RawMessage `json:"entity"`
+	}
+	var foundMine bool
+	var theirsRows []json.RawMessage
+	for _, raw := range got.Items {
+		var it feedRow
+		if err := json.Unmarshal(raw, &it); err != nil {
+			t.Fatalf("decode row: %v", err)
+		}
+		var entityID string
+		if v, ok := it.Entity["id"]; ok {
+			_ = json.Unmarshal(v, &entityID)
+		}
+		if entityID == mineFV {
 			foundMine = true
 			if it.Redacted {
-				t.Fatalf("own-project row must not be redacted: %+v", it)
+				t.Fatalf("own-project row must not be redacted: %s", raw)
 			}
-			if it.Entity.Title == "" {
-				t.Fatalf("own-project row must keep its title: %+v", it)
+			if _, ok := it.Entity["title"]; !ok {
+				t.Fatalf("own-project row must keep its title: %s", raw)
 			}
-		case theirsFV:
-			foundTheirs = true
-			// Present but content-redacted: id + project prefix survive,
-			// title + summary stripped, redacted flag set.
-			if !it.Redacted {
-				t.Fatalf("foreign-project row must be redacted: %+v", it)
+		}
+		if it.Actor.Username != otherUname {
+			continue
+		}
+		theirsRows = append(theirsRows, raw)
+		// Present but redacted: title + summary stripped, no key of the
+		// task or project identifiers, redacted flag set.
+		if !it.Redacted {
+			t.Fatalf("foreign-project row must be redacted: %s", raw)
+		}
+		if _, ok := it.Entity["title"]; ok || it.Summary != "" {
+			t.Fatalf("foreign-project row must have title+summary stripped: %s", raw)
+		}
+		for _, key := range []string{"id", "projectIdPrefix"} {
+			if _, ok := it.Entity[key]; ok {
+				t.Fatalf("foreign-project row must carry no entity.%s key: %s", key, raw)
 			}
-			if it.Entity.Title != "" || it.Summary != "" {
-				t.Fatalf("foreign-project row must have title+summary stripped: %+v", it)
-			}
-			if it.Entity.ProjectIDPrefix == "" {
-				t.Fatalf("foreign-project row must keep its project prefix: %+v", it)
-			}
+		}
+		if strings.Contains(string(raw), theirsFV) {
+			t.Fatalf("foreign-project row must not name its issue %s: %s", theirsFV, raw)
 		}
 	}
 	if !foundMine {
 		t.Fatalf("expected own-project issue %s in feed", mineFV)
 	}
-	if !foundTheirs {
-		t.Fatalf("expected foreign-project issue %s present (redacted) in feed", theirsFV)
+	if len(theirsRows) != 1 {
+		t.Fatalf("expected exactly one foreign-project row (redacted) by %s in feed, got %d", otherUname, len(theirsRows))
 	}
 }

@@ -8328,9 +8328,10 @@ func (s *Store) ListProjectActivity(
 //   - level selects how invisible rows are redacted. For a non-admin
 //     caller, every returned row whose project is not in `visible` is
 //     passed through redactActivityEntry at the given level:
-//     redact.Soft strips the human-readable Title/Summary/diff but keeps
-//     the identity (id, project prefix, projectId); redact.Hard strips
-//     those identifiers too. redact.None leaves rows untouched (used for
+//     redact.Soft strips the human-readable Title/Summary/diff and the
+//     task/project identifiers (entity id — a link's composite id whole —,
+//     project prefix, both projectId fields) and keeps spaceId;
+//     redact.Hard strips spaceId too. redact.None leaves rows untouched (used for
 //     the scoped /me/activity feed, where no invisible row can appear).
 //     Admins are never redacted.
 //
@@ -8437,11 +8438,8 @@ func (s *Store) ListUserActivity(
 // the caller cannot see (war-room cross-project view).
 //
 // The base strip (content: title, summary, per-field diff) runs for every
-// level. Then a fail-closed switch decides the identity strip: only
-// redact.Soft is spared — it keeps the id, project prefix and both
-// projectId fields. redact.Hard, and ANY other/unknown level (fail
-// closed: a forgotten or future level must over-redact, never leak),
-// additionally drops every stable project/task identifier:
+// level, and so does the identity strip — every stable project/task
+// identifier goes absent from the wire:
 //
 //   - Entity.ID — for issue rows the issue id; for comment rows the
 //     PARENT issue id; for dep rows the composite "fromID::toID::depType"
@@ -8450,6 +8448,12 @@ func (s *Store) ListUserActivity(
 //     ProjectID (both projectId fields go absent from the wire).
 //   - project.* rows carry the project NAME in Title, already blanked by
 //     the base content strip above.
+//
+// A fail-closed switch then decides what else goes: only redact.Soft (a
+// participant of the space reading another project of it) keeps the
+// space id. redact.Hard, and ANY other/unknown level (fail closed: a
+// forgotten or future level must over-redact, never leak), drops the
+// space id too.
 func redactActivityEntry(e *ActivityEntry, level redact.Level) {
 	// Base content strip — every redaction level.
 	e.Entity.Title = ""
@@ -8460,16 +8464,19 @@ func redactActivityEntry(e *ActivityEntry, level redact.Level) {
 	e.Changes = nil
 	e.Redacted = true
 
+	// Identity strip — every redaction level: no stable project/task
+	// identifier of an unseen project reaches the wire.
+	e.Entity.ID = ""
+	e.Entity.ProjectIDPrefix = ""
+	e.Entity.ProjectID = nil
+	e.ProjectID = nil
+
 	switch level {
 	case redact.Soft:
-		// Soft keeps identity: id, project prefix, projectId survive.
+		// Soft keeps the space id (and actor, type, time).
 		return
 	default:
-		// Hard + fail-closed: strip every stable project/task identifier.
-		e.Entity.ID = ""
-		e.Entity.ProjectIDPrefix = ""
-		e.Entity.ProjectID = nil
-		e.ProjectID = nil
+		// Hard + fail-closed: the space id goes too.
 		e.SpaceID = ""
 	}
 }

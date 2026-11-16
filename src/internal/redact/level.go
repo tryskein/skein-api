@@ -29,9 +29,14 @@ const (
 	None Level = iota
 
 	// Soft strips human-readable CONTENT (title, summary, per-field diff)
-	// but KEEPS every stable identifier (issue id, project prefix, both
-	// projectId fields). This is the unchanged internal war-room contract:
-	// a non-member sees that work happened and where, but not what it is.
+	// AND every stable identifier of the unseen project (issue id — a
+	// composite dependency id whole —, project prefix, both projectId
+	// fields): their keys are absent from the wire, as under Hard. It
+	// KEEPS the space id and the lock holder session, with actor, type,
+	// time, assignee, status and the other "people + shape" fields. This
+	// is the internal war-room contract: a participant of the space sees
+	// that work happened and in which space, but neither what it is nor
+	// which task or project it is.
 	Soft
 
 	// Hard strips content AND every stable project/task identifier: issue

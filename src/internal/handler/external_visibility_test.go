@@ -601,24 +601,35 @@ func TestExternalDashboard_InProgress_ExternalOwnProjectsOnly(t *testing.T) {
 		t.Errorf("external in-progress carries a row of the non-member project B (assignee %q): %v", ownerBName, bRow)
 	}
 
-	// Internal ownerA (member of A, NOT B): global war-room shows B's row
-	// SOFT-redacted — content stripped but issue id KEPT (unchanged).
+	// Internal ownerA (member of A, NOT B, a participant of B's space): the
+	// war-room shows B's row SOFT-redacted — no key of the task or project
+	// identifiers (sk-1007 R-4a), the space id kept. Found by its kept
+	// assignee, since the issue id is gone.
 	intItems := fetch(ownerA, false)
 	var intB map[string]json.RawMessage
 	for _, it := range intItems {
-		if str(it, "issueId") == bID {
+		if boolv(it, "redacted") && str(it, "assignee") == ownerBName {
+			if intB != nil {
+				t.Fatalf("internal in-progress carries more than one redacted row assigned to %q", ownerBName)
+			}
 			intB = it
-			break
 		}
 	}
 	if intB == nil {
-		t.Fatalf("internal in-progress should include non-member issue %q (war-room global)", bID)
+		t.Fatalf("internal in-progress should include the redacted row of the non-member project B (assignee %q)", ownerBName)
 	}
-	if !boolv(intB, "redacted") {
-		t.Errorf("internal war-room row %q should be redacted (non-member project)", bID)
+	for _, key := range []string{"issueId", "projectId", "projectPrefix"} {
+		if _, present := intB[key]; present {
+			t.Errorf("internal SOFT-redacted row must carry no %q key: %v", key, intB)
+		}
 	}
-	if _, present := intB["projectId"]; !present {
-		t.Errorf("internal SOFT-redacted row must KEEP projectId (identity preserved): %v", intB)
+	if str(intB, "spaceId") == "" {
+		t.Errorf("internal SOFT-redacted row must keep spaceId: %v", intB)
+	}
+	for key, raw := range intB {
+		if strings.Contains(string(raw), bID) {
+			t.Errorf("internal SOFT-redacted row names issue %q in %q: %s", bID, key, raw)
+		}
 	}
 }
 
@@ -655,6 +666,7 @@ func TestExternalDashboard_Feed_ExternalOwnProjectsOnly(t *testing.T) {
 		Actor    struct{ Username string } `json:"actor"`
 		Redacted bool                      `json:"redacted"`
 		Raw      map[string]json.RawMessage
+		Body     []byte `json:"-"`
 	}
 	fetch := func(userID uuid.UUID, external bool) map[string]rawRow {
 		t.Helper()
@@ -677,6 +689,7 @@ func TestExternalDashboard_Feed_ExternalOwnProjectsOnly(t *testing.T) {
 			if err := json.Unmarshal(item, &r.Raw); err != nil {
 				t.Fatalf("decode feed item raw: %v", err)
 			}
+			r.Body = item
 			byActor[r.Actor.Username] = r
 		}
 		return byActor
@@ -714,8 +727,9 @@ func TestExternalDashboard_Feed_ExternalOwnProjectsOnly(t *testing.T) {
 		t.Errorf("external feed carries a row of the non-member project B (actor %q): %v", ownerBName, bRow.Raw)
 	}
 
-	// Internal ownerA (member of A, NOT B): global war-room shows B's row
-	// SOFT-redacted — content stripped but projectId + prefix KEPT.
+	// Internal ownerA (member of A, NOT B, a participant of B's space): the
+	// war-room shows B's row SOFT-redacted — no key of the task or project
+	// identifiers (sk-1007 R-4a), the space id and the actor kept.
 	intern := fetch(ownerA, false)
 	intB, ok := intern[ownerBName]
 	if !ok {
@@ -724,11 +738,23 @@ func TestExternalDashboard_Feed_ExternalOwnProjectsOnly(t *testing.T) {
 	if !intB.Redacted {
 		t.Errorf("internal war-room project B row should be redacted (ownerA not a member of B)")
 	}
-	if _, present := intB.Raw["projectId"]; !present {
-		t.Errorf("internal SOFT-redacted row must KEEP top-level projectId (identity preserved): %v", intB.Raw)
+	if _, present := intB.Raw["projectId"]; present {
+		t.Errorf("internal SOFT-redacted row must carry no top-level projectId key: %v", intB.Raw)
 	}
-	if pfx, present := entityField(intB, "projectIdPrefix"); !present || pfx == "" {
-		t.Errorf("internal SOFT-redacted row must KEEP entity.projectIdPrefix, got %q present=%v", pfx, present)
+	for _, key := range []string{"id", "projectId", "projectIdPrefix"} {
+		if v, present := entityField(intB, key); present {
+			t.Errorf("internal SOFT-redacted row must carry no entity.%s key, got %q", key, v)
+		}
+	}
+	var spaceID string
+	if raw, present := intB.Raw["spaceId"]; present {
+		_ = json.Unmarshal(raw, &spaceID)
+	}
+	if spaceID == "" {
+		t.Errorf("internal SOFT-redacted row must keep spaceId: %v", intB.Raw)
+	}
+	if strings.Contains(string(intB.Body), bID) {
+		t.Errorf("internal SOFT-redacted row names issue %q: %s", bID, intB.Body)
 	}
 }
 

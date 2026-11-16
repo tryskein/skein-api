@@ -52,8 +52,10 @@ import (
 //
 //   - unrestricted (declared internal work, authz) → redact.None;
 //   - external → redact.Hard (content AND every stable id);
-//   - any other caller → redact.Soft (content only — unchanged internal
-//     war-room). An admin is such a caller: its reach is the access
+//   - any other caller → redact.Soft (content and the task/project
+//     identifiers — issue id, project prefix, projectId — go; the space
+//     id, actor and lock holder stay: the internal war-room, sk-1007
+//     R-4a). An admin is such a caller: its reach is the access
 //     relation's (sk-674.18 T010), so a project the relation shows it is
 //     never redacted, and nothing here reads the role.
 //
@@ -234,8 +236,10 @@ func (h *DashboardHandler) Scoring(w http.ResponseWriter, r *http.Request) {
 // Scope: the caller's HOT ZONE reach (US-13, sk-674.18 T030). Unlike
 // /me/activity (which CUTS rows to the visible projects), this surface also
 // returns the rows of the projects of the caller's own non-personal spaces
-// he does not see, REDACTED (redact.Soft: content stripped, identity kept —
-// INV-28 (2)); an external caller has no such projects; nothing of another
+// he does not see, REDACTED (redact.Soft: content stripped, and the keys
+// projectId, entity.id — a link's composite id whole —, entity.projectId and
+// entity.projectIdPrefix absent; spaceId, actor, type and time kept —
+// INV-28 (2), sk-1007 R-4a); an external caller has no such projects; nothing of another
 // space or another "Personal" is returned. `?space=` narrows the reach.
 //
 // The frontend blurs the row and disables the link for redacted rows. The
@@ -289,8 +293,9 @@ func (h *DashboardHandler) Feed(w http.ResponseWriter, r *http.Request) {
 	//
 	// sk-163.18 — an EXTERNAL caller now sees the global feed too, but every
 	// inaccessible-project row is HARD-redacted (id/prefix/projectId dropped,
-	// not just the title). Internal non-admins keep the unchanged SOFT
-	// war-room; admins see everything unredacted.
+	// not just the title). Internal non-admins get the SOFT war-room
+	// (content and task/project identifiers dropped, spaceId kept);
+	// unrestricted work sees everything unredacted.
 	level := feedRedactLevel(unrestricted, c.IsExternal)
 	items, next, err := h.issuesStore.ListUserActivity(
 		ctx, c.UserID, visible, unrestricted, nil, cursor, limit, hz.Reach, level)
@@ -308,7 +313,8 @@ func (h *DashboardHandler) Feed(w http.ResponseWriter, r *http.Request) {
 // Scope: the caller's HOT ZONE reach (US-13, sk-674.18 T030): the
 // in-progress issues of the projects he sees, in full, and of the projects
 // of his own non-personal spaces he does not see, with the title redacted
-// (redacted=true, identity kept — INV-28 (2)); nothing of another space or
+// (redacted=true; the keys issueId, projectPrefix and projectId absent,
+// spaceId and lockedBySession kept — INV-28 (2), sk-1007 R-4a); nothing of another space or
 // another "Personal". Optional space=<shortId> narrows the reach, project=<uuid>
 // to one project (visibility-checked at the handler).
 //
@@ -328,7 +334,7 @@ func (h *DashboardHandler) Feed(w http.ResponseWriter, r *http.Request) {
 // SignalR delivers the trigger; this endpoint serves the truth.
 //
 // @Summary In-progress work snapshot
-// @Description Lists issues currently in progress (status='in_progress' OR locked_by IS NOT NULL, excluding closed) across every project, ordered by the most recent of locked_at/started_at/accepted_at/updated_at, most recent first. Algorithm: resolves the caller's visible-project set, builds ONE visibility predicate on issues.project_id (project filter pins to one project; otherwise the caller's HOT ZONE reach — rows of contributing projects are content-redacted after the fact), then a single query joins issues to projects and to users (case-insensitive assignee lookup). Scope (US-13, sk-674.18 T030): the caller's HOT ZONE reach — the projects he sees, in full, plus the projects of his own non-personal spaces he does not see, which contribute to every aggregate and appear only anonymized in row surfaces (INV-28); an external caller (no spaces) gets his own projects only; an instance admin gets every non-personal space and his own "Personal"; projects of other spaces and other people's "Personal" spaces contribute nothing — no row, no number (INV-23). `space=<shortId>` narrows the reach to one space and never widens it; `user=` is a filter, never a widening. A row of a project the caller cannot see (a contributing project) has its title redacted (redacted=true, identity fields kept). The optional `project` filter is the opt-in narrowing to one project, gated by the same visibility check as every other /projects/{id}/* endpoint — a project the caller cannot see returns 404 with no distinction from a nonexistent id.
+// @Description Lists issues currently in progress (status='in_progress' OR locked_by IS NOT NULL, excluding closed) across every project, ordered by the most recent of locked_at/started_at/accepted_at/updated_at, most recent first. Algorithm: resolves the caller's visible-project set, builds ONE visibility predicate on issues.project_id (project filter pins to one project; otherwise the caller's HOT ZONE reach — rows of contributing projects are content-redacted after the fact), then a single query joins issues to projects and to users (case-insensitive assignee lookup). Scope (US-13, sk-674.18 T030): the caller's HOT ZONE reach — the projects he sees, in full, plus the projects of his own non-personal spaces he does not see, which contribute to every aggregate and appear only anonymized in row surfaces (INV-28); an external caller (no spaces) gets his own projects only; an instance admin gets every non-personal space and his own "Personal"; projects of other spaces and other people's "Personal" spaces contribute nothing — no row, no number (INV-23). `space=<shortId>` narrows the reach to one space and never widens it; `user=` is a filter, never a widening. A row of a project the caller cannot see (a contributing project) is redacted: redacted=true, the title is blanked and the keys issueId, projectPrefix and projectId are absent (no identifier of a project the caller cannot see); spaceId, lockedBySession, assignee, status, type, priority, the timestamps and staleLock stay. For an external caller (whose reach holds his own projects only) the same strip also drops spaceId and lockedBySession. The optional `project` filter is the opt-in narrowing to one project, gated by the same visibility check as every other /projects/{id}/* endpoint — a project the caller cannot see returns 404 with no distinction from a nonexistent id.
 // @Tags Dashboard
 // @Produce json
 // @Security ApiKeyAuth
