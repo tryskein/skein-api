@@ -192,7 +192,7 @@ func mapDepErr(w http.ResponseWriter, err error) bool {
 	if errors.As(err, &cycle) {
 		writeProblem(w, http.StatusUnprocessableEntity, "dep_cycle",
 			"adding this dependency would create a cycle",
-			map[string]any{"path": cycle.Path})
+			cycle.AddPath(nil))
 		return true
 	}
 	return false
@@ -437,7 +437,7 @@ type reparentRequest struct {
 //   - 422 — business errors: reparent_self, reparent_cross_project,
 //     target_not_found (new parent missing OR its project invisible — one
 //     indistinguishable answer), version_conflict (currentVersion
-//     echoed), dep_cycle (path echoed), serialization_retry /
+//     echoed), dep_cycle (path echoed only when the caller sees every issue on it, sk-1007 D3), serialization_retry /
 //     dependency_target_not_visible_yet (retryable), parent_already_set.
 //     Not lock-gated — a lock held by another session does not block.
 //   - 500 — store / DB fault, or a post-commit re-fetch failure.

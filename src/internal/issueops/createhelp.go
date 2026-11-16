@@ -201,7 +201,7 @@ func MapInlineDepError(ctx context.Context, depFail *issues.ErrInlineDepFailed, 
 	}
 	var cycle *dependencies.ErrDepCycle
 	if errors.As(inner, &cycle) {
-		base["path"] = cycle.Path
+		base = cycle.AddPath(base)
 		return Fail(ErrCodeDependencyCycle,
 			"dependencies["+strconv.Itoa(depFail.Index)+"]: would create a cycle",
 			base)

@@ -60,7 +60,7 @@ func RegisterReparent(s *server.MCPServer, pool *pgxpool.Pool, depsStore *depend
 				"re-read with skein_show and retry. The new parent must be "+
 				"in the SAME project (`reparent_cross_project` otherwise) "+
 				"and must not already be a descendant of the issue "+
-				"(`dependency_cycle`). An issue cannot be its own parent "+
+				"(`dependency_cycle`; its `path` only if you see every issue on it). An issue cannot be its own parent "+
 				"(`reparent_self`).\n\n"+
 				"NOT lock-gated: reparent moves a graph edge (like "+
 				"skein_dep_add / skein_dep_remove), so a lock held by "+

@@ -162,7 +162,7 @@ func MapReparentError(ctx context.Context, err error, userID uuid.UUID, id, newP
 	if errors.As(err, &cycle) {
 		return Fail(ErrCodeDependencyCycle,
 			"this move would create a cycle (new parent is a descendant of the issue)",
-			map[string]any{"path": cycle.Path})
+			cycle.AddPath(nil))
 	}
 	slog.ErrorContext(ctx, logMessage(ctx, "error"),
 		"tool", "skein_reparent",

@@ -4,17 +4,40 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"slices"
 
 	"github.com/jackc/pgx/v5"
+
+	"skein-api/internal/authz"
 )
 
 // ErrDepCycle is returned by the cycle-detection helpers when inserting
 // (from -> to) of the requested type would close a directed cycle inside
 // the same type-class. Path lists the issue IDs along the closing cycle,
 // in walk order, useful for UI error feedback ("X → Y → Z → X").
+//
+// Path is given only when the reader of the request context sees every
+// issue on it now, with the key's scope (sk-1007 US-4, D3, K7); otherwise
+// it is empty and the refusal says only that a cycle exists. A context
+// without a principal (and not declared internal work) sees nothing, so
+// its Path is empty (fail-closed). Builders of the refusal put the path on
+// the wire through AddPath.
 type ErrDepCycle struct {
 	Path []string
+}
+
+// AddPath sets details["path"] to the cycle's path when there is one and
+// returns details (a new map when details is nil). Without a path the key
+// is absent — never null or an empty list (sk-1007 INV-5).
+func (e *ErrDepCycle) AddPath(details map[string]any) map[string]any {
+	if details == nil {
+		details = map[string]any{}
+	}
+	if len(e.Path) > 0 {
+		details["path"] = e.Path
+	}
+	return details
 }
 
 func (e *ErrDepCycle) Error() string {
@@ -121,7 +144,7 @@ func checkCycleForTypes(ctx context.Context, tx pgx.Tx, fromID, toID string, typ
 	if fromID == toID {
 		// dep_no_self CHECK in DDL would catch this on INSERT, but we
 		// short-circuit with a clearer error and avoid the round-trip.
-		return &ErrDepCycle{Path: []string{fromID}}
+		return &ErrDepCycle{Path: pathForReader(ctx, tx, []string{fromID})}
 	}
 
 	var hit int
@@ -138,7 +161,27 @@ SELECT 1 FROM reach WHERE id = $3::text LIMIT 1`, toID, types, fromID).Scan(&hit
 	if err != nil {
 		return err
 	}
-	return &ErrDepCycle{Path: path}
+	return &ErrDepCycle{Path: pathForReader(ctx, tx, path)}
+}
+
+// pathForReader returns path when the reader of ctx (authz.FromContext,
+// with the key's scope) sees every issue on it now, and nil otherwise
+// (sk-1007 D3: all or nothing). It reads visibility only for a cycle that
+// was found, in the caller's transaction. A failed read withholds the path
+// (fail-closed) and is logged; the refusal itself is unchanged.
+func pathForReader(ctx context.Context, tx pgx.Tx, path []string) []string {
+	visible, err := authz.VisibleIssueIDs(ctx, tx, authz.FromContext(ctx), path)
+	if err != nil {
+		slog.WarnContext(ctx, "cycle path withheld: reading its visibility failed",
+			"pathLength", len(path), "error", err.Error())
+		return nil
+	}
+	for _, id := range path {
+		if _, ok := visible[id]; !ok {
+			return nil
+		}
+	}
+	return path
 }
 
 // cyclePath returns the cycle the edge (from -> to) would close, in the

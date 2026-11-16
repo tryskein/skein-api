@@ -1429,7 +1429,7 @@ func ClassifyDepStoreError(err error, fromID, toID, depType string) *DepStoreErr
 		return &DepStoreErrorClass{
 			Code:    ErrCodeDependencyCycle,
 			Message: "adding this dependency would create a cycle",
-			Details: map[string]any{"path": cycle.Path},
+			Details: cycle.AddPath(nil),
 		}
 	}
 	return nil

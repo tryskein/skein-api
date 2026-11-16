@@ -225,7 +225,7 @@ func (a *issueWrites) bulkCloseIssues(w http.ResponseWriter, r *http.Request) {
 // bulkAddDependencies adds several edges, each row on its own.
 //
 // @Summary Add several dependencies
-// @Description Adds each edge — from, to, type and optionally a gate — on its own, the same batch as the MCP tool skein_dep_add_many: a row's refusal (an end missing or outside the key's scope — issue_not_found as MCP, dependency_already_exists, dependency_cycle, …) does not stop the others; the answer is 207 with each row's result (the edge) or error and a summary. Edges have no version. A refusal of the whole request — the key right, the format, 0 or more than 100 rows — is answered with its own status and no row runs. A repeat is safe: an existing edge answers dependency_already_exists. No Idempotency-Key.
+// @Description Adds each edge — from, to, type and optionally a gate — on its own, the same batch as the MCP tool skein_dep_add_many: a row's refusal (an end missing or outside the key's scope — issue_not_found as MCP, dependency_already_exists, dependency_cycle — its path only when the caller sees every issue on it, …) does not stop the others; the answer is 207 with each row's result (the edge) or error and a summary. Edges have no version. A refusal of the whole request — the key right, the format, 0 or more than 100 rows — is answered with its own status and no row runs. A repeat is safe: an existing edge answers dependency_already_exists. No Idempotency-Key.
 // @Tags Issues
 // @Accept json
 // @Produce json

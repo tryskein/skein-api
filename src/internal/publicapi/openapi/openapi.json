@@ -6613,7 +6613,7 @@
         },
         "/api/v1/issues/dependencies/bulk-add": {
             "post": {
-                "description": "Adds each edge — from, to, type and optionally a gate — on its own, the same batch as the MCP tool skein_dep_add_many: a row's refusal (an end missing or outside the key's scope — issue_not_found as MCP, dependency_already_exists, dependency_cycle, …) does not stop the others; the answer is 207 with each row's result (the edge) or error and a summary. Edges have no version. A refusal of the whole request — the key right, the format, 0 or more than 100 rows — is answered with its own status and no row runs. A repeat is safe: an existing edge answers dependency_already_exists. No Idempotency-Key.",
+                "description": "Adds each edge — from, to, type and optionally a gate — on its own, the same batch as the MCP tool skein_dep_add_many: a row's refusal (an end missing or outside the key's scope — issue_not_found as MCP, dependency_already_exists, dependency_cycle — its path only when the caller sees every issue on it, …) does not stop the others; the answer is 207 with each row's result (the edge) or error and a summary. Edges have no version. A refusal of the whole request — the key right, the format, 0 or more than 100 rows — is answered with its own status and no row runs. A repeat is safe: an existing edge answers dependency_already_exists. No Idempotency-Key.",
                 "operationId": "bulkAddDependencies",
                 "requestBody": {
                     "content": {
@@ -8823,7 +8823,7 @@
                                 }
                             }
                         },
-                        "description": "toId does not exist or is out of reach (code issue_not_found, as MCP); an invalid type or gate (code validation_error); a cycle (dependency_cycle); the edge exists (dependency_already_exists); a second parent (parent_already_set); a nested standing task (nested_standing_forbidden) or a standing blocker target (blocker_target_standing); the target is not visible yet (dependency_target_not_visible_yet, retryable); a serialization race (serialization_retry, retryable)"
+                        "description": "toId does not exist or is out of reach (code issue_not_found, as MCP); an invalid type or gate (code validation_error); a cycle (dependency_cycle — its path only when the caller sees every issue on it); the edge exists (dependency_already_exists); a second parent (parent_already_set); a nested standing task (nested_standing_forbidden) or a standing blocker target (blocker_target_standing); the target is not visible yet (dependency_target_not_visible_yet, retryable); a serialization race (serialization_retry, retryable)"
                     },
                     "429": {
                         "content": {
@@ -9947,7 +9947,7 @@
                                 }
                             }
                         },
-                        "description": "The new parent out of reach (code issue_not_found, as skein_reparent answers it), closed (parent_closed), in another project (reparent_cross_project), the issue itself (reparent_self), a cycle (dependency_cycle); a serialization race (serialization_retry)"
+                        "description": "The new parent out of reach (code issue_not_found, as skein_reparent answers it), closed (parent_closed), in another project (reparent_cross_project), the issue itself (reparent_self), a cycle (dependency_cycle — its path only when the caller sees every issue on it); a serialization race (serialization_retry)"
                     },
                     "428": {
                         "content": {
@@ -13228,7 +13228,7 @@
                                 }
                             }
                         },
-                        "description": "Similar issues exist (code duplicate_suspected, with duplicates); a value is invalid (code validation_error); the parent, a dependency target or duplicateOf does not exist or is out of reach (code parent_not_found, issue_not_found, validation_error — as MCP); parent closed or in another project (parent_closed, parent_wrong_project); id taken (id_taken); components of another project (components_wrong_project); assignee may not work here (assignee_not_allowed); a cycle (dependency_cycle); a serialization race (serialization_retry, retryable); the Idempotency-Key reused with another request (idempotency_key_reused)"
+                        "description": "Similar issues exist (code duplicate_suspected, with duplicates); a value is invalid (code validation_error); the parent, a dependency target or duplicateOf does not exist or is out of reach (code parent_not_found, issue_not_found, validation_error — as MCP); parent closed or in another project (parent_closed, parent_wrong_project); id taken (id_taken); components of another project (components_wrong_project); assignee may not work here (assignee_not_allowed); a cycle (dependency_cycle — its path only when the caller sees every issue on it); a serialization race (serialization_retry, retryable); the Idempotency-Key reused with another request (idempotency_key_reused)"
                     },
                     "429": {
                         "content": {

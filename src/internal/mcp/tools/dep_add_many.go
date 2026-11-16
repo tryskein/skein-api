@@ -40,7 +40,7 @@ func RegisterDepAddMany(s *server.MCPServer, pool *pgxpool.Pool, depsStore *depe
 				"validation_error, issue_not_found (also for a target of "+
 				"another space or of a project you cannot see), "+
 				"dependency_already_exists, "+
-				"dependency_cycle, parent_already_set, serialization_retry "+
+				"dependency_cycle (its `path` only if you see every issue on it), parent_already_set, serialization_retry "+
 				"(retryable), dependency_target_not_visible_yet "+
 				"(retryable), batch_deadline_exceeded / request_cancelled "+
 				"(the row did not report a commit — resend it; an edge "+

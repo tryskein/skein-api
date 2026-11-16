@@ -53,7 +53,7 @@ type addDependencyBody struct {
 // @Failure 404 {object} ProblemDocument "No such issue of the path within reach (code issue_not_found)"
 // @Failure 413 {object} ProblemDocument "Body over 1 MiB (code payload_too_large)"
 // @Failure 415 {object} ProblemDocument "Body is not application/json (code unsupported_media_type)"
-// @Failure 422 {object} ProblemDocument "toId does not exist or is out of reach (code issue_not_found, as MCP); an invalid type or gate (code validation_error); a cycle (dependency_cycle); the edge exists (dependency_already_exists); a second parent (parent_already_set); a nested standing task (nested_standing_forbidden) or a standing blocker target (blocker_target_standing); the target is not visible yet (dependency_target_not_visible_yet, retryable); a serialization race (serialization_retry, retryable)"
+// @Failure 422 {object} ProblemDocument "toId does not exist or is out of reach (code issue_not_found, as MCP); an invalid type or gate (code validation_error); a cycle (dependency_cycle — its path only when the caller sees every issue on it); the edge exists (dependency_already_exists); a second parent (parent_already_set); a nested standing task (nested_standing_forbidden) or a standing blocker target (blocker_target_standing); the target is not visible yet (dependency_target_not_visible_yet, retryable); a serialization race (serialization_retry, retryable)"
 // @Failure 429 {object} ProblemDocument "Rate limited (code rate_limited, Retry-After)"
 // @Failure 500 {object} ProblemDocument "Internal error (code internal_error)"
 // @Failure 503 {object} ProblemDocument "The database is unavailable (code database_unavailable)"

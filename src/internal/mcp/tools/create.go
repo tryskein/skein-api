@@ -104,7 +104,7 @@ func RegisterCreate(s *server.MCPServer, pool *pgxpool.Pool, issuesStore *issues
 				"edge (cycle, target invisible, target missing, "+
 				"duplicate edge) rolls back the entire create and "+
 				"returns a validation_error / dependency_* code naming "+
-				"the failing index. Cross-project edges are allowed; "+
+				"the failing index (a cycle's `path` only if you see every issue on it). Cross-project edges are allowed; "+
 				"the caller must already see both projects. The new "+
 				"issue is on the FROM side of each edge.\n\n"+
 				assigneeDefaultNote+"\n\n"+
