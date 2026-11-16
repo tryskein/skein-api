@@ -247,3 +247,27 @@ func TestEventRefs_CollectsTheRegistryFieldsOnly(t *testing.T) {
 		t.Errorf("project ids = %v, want %v", projects, wantP)
 	}
 }
+
+// TestEventRefs_MalformedLinkIDIsHidden — review fix (circle 1): a composite
+// link id of a dependency event that is not exactly "from::to::type" (fewer
+// or more parts) names no known id, so the whole value becomes "<hidden>"
+// and nothing of it is collected (fail-closed, the registry's rule for a
+// field of an unexpected shape).
+func TestEventRefs_MalformedLinkIDIsHidden(t *testing.T) {
+	for _, entity := range []string{"APP-12::SEC-7", "APP-12::OPS-4::blocks::SEC-7", "SEC-7"} {
+		t.Run(entity, func(t *testing.T) {
+			row := redact.EventRow{Type: "dependency.created", EntityID: entity}
+			refs := redact.NewEventRefs()
+			redact.CollectEventRefs(row, refs)
+			if ids := refs.IssueIDs(); len(ids) != 0 {
+				t.Errorf("collected %v from a malformed link id, want nothing", ids)
+			}
+			if !redact.ApplyEventRefs(&row, vis) {
+				t.Errorf("ApplyEventRefs reported no change")
+			}
+			if row.EntityID != "<hidden>" {
+				t.Errorf("entity_id = %q, want <hidden>", row.EntityID)
+			}
+		})
+	}
+}

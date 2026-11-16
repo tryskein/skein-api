@@ -141,7 +141,7 @@ var depEnds = [2]struct{ id, project string }{
 func CollectEventRefs(row EventRow, refs *EventRefs) {
 	switch row.Type {
 	case "dependency.created", "dependency.deleted":
-		if parts := strings.SplitN(row.EntityID, "::", 3); len(parts) == 3 {
+		if parts, ok := linkParts(row.EntityID); ok {
 			refs.addIssue(parts[0])
 			refs.addIssue(parts[1])
 		}
@@ -179,13 +179,18 @@ func ApplyEventRefs(row *EventRow, v EventVisibility) bool {
 	changed := false
 	switch row.Type {
 	case "dependency.created", "dependency.deleted":
-		if parts := strings.SplitN(row.EntityID, "::", 3); len(parts) == 3 {
+		if parts, ok := linkParts(row.EntityID); ok {
 			p0, c0 := hideID(parts[0], v)
 			p1, c1 := hideID(parts[1], v)
 			if c0 || c1 {
 				row.EntityID = p0 + "::" + p1 + "::" + parts[2]
 				changed = true
 			}
+		} else if row.EntityID != HiddenMarker {
+			// Not the composite "from::to::type": no part of it is a known
+			// id, so none can be shown as visible (fail-closed).
+			row.EntityID = HiddenMarker
+			changed = true
 		}
 		for _, data := range []*[]byte{&row.OldData, &row.NewData} {
 			changed = editObject(data, func(obj map[string]json.RawMessage) bool {
@@ -230,6 +235,13 @@ func ApplyEventRefs(row *EventRow, v EventVisibility) bool {
 		changed = c1 || c2 || c3
 	}
 	return changed
+}
+
+// linkParts splits the composite "from::to::type" of a dependency event;
+// ok is false for any other shape (fewer or more parts).
+func linkParts(entityID string) ([]string, bool) {
+	parts := strings.Split(entityID, "::")
+	return parts, len(parts) == 3
 }
 
 // hideID returns the marker for a hidden non-empty id.
