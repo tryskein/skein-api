@@ -500,7 +500,7 @@ SELECT id, depth, parent_id, parent_depth, edge_type, path
 			summaries[id] = IssueSummary{
 				ID:           sum.ID,
 				ProjectID:    sum.ProjectID,
-				Title:        "<hidden>",
+				Title:        redact.HiddenMarker,
 				Type:         "",
 				Status:       "",
 				ComponentIDs: []uuid.UUID{},
