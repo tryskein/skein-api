@@ -533,8 +533,13 @@ func TestDashboard_Feed_RedactsInvisible(t *testing.T) {
 			if it.Redacted {
 				t.Fatalf("own-project row must not be redacted: %s", raw)
 			}
-			if _, ok := it.Entity["title"]; !ok {
-				t.Fatalf("own-project row must keep its title: %s", raw)
+			// seedDashboardIssue writes the issue's id as its title.
+			var title string
+			if v, ok := it.Entity["title"]; ok {
+				_ = json.Unmarshal(v, &title)
+			}
+			if title != mineFV {
+				t.Fatalf("own-project row must keep its title %q, got %q: %s", mineFV, title, raw)
 			}
 		}
 		if it.Actor.Username != otherUname {
