@@ -416,3 +416,93 @@ func TestActivityRefs_StatementsDoNotGrowWithRows(t *testing.T) {
 		})
 	}
 }
+
+// TestActivityRefs_SoftRowOfHiddenProjectCarriesNoIdentifiers — row No. 36
+// (sk-1007 R-4a, K10, SC-002). Reference — the spec, R-4a: on the war-room
+// feed of a participant of the space, a row of a project he does not see
+// stays, its content goes, and no key of the task or project identifiers
+// is on the wire — projectId, entity.id (a link's composite id whole),
+// entity.projectId, entity.projectIdPrefix — nor any id, the prefix or the
+// UUID of the project anywhere in the row; what the soft level keeps today
+// stays: spaceId, actor, type, time, redacted:true. spaceId is the
+// discriminator against a soft level merged into the hard one.
+func TestActivityRefs_SoftRowOfHiddenProjectCarriesNoIdentifiers(t *testing.T) {
+	pool := newTestPool(t)
+	c := newRefsCorpus(t, pool)
+	store := NewStore(pool)
+
+	var hSpace string
+	if err := pool.QueryRow(context.Background(),
+		`SELECT s.short_id FROM projects p JOIN spaces s ON s.id = p.space_id WHERE p.id = $1`,
+		c.h).Scan(&hSpace); err != nil {
+		t.Fatalf("read the space of H: %v", err)
+	}
+
+	// Two rows of H: an event of a task of H and a link whose composite id
+	// names a task of H and a task of P.
+	owner := c.owner.String()
+	seed := func(ev refEvent) int64 { return seedRefEvent(t, pool, c.owner, c.ownerName, ev) }
+	hCreated := seed(refEvent{
+		typ: "issue.created", entityType: "issue", entityID: c.hEnd, projectID: c.h,
+		newData: map[string]any{"id": c.hEnd, "projectId": c.h.String(), "parentId": nil, "title": "hidden title 5"},
+	})
+	hLink := seed(linkEvent(owner, c.hEnd, c.pIDs["1"], c.h, &c.p))
+	wantType := map[int64]string{hCreated: "issue.created", hLink: "dependency.created"}
+
+	reach := c.visible()
+	reach[c.h] = struct{}{}
+	items, _, err := store.ListUserActivity(c.readerCtx(), c.reader, c.visible(), false, nil, nil, 100, reach, redact.Soft)
+	if err != nil {
+		t.Fatalf("ListUserActivity: %v", err)
+	}
+
+	var hRows []ActivityEntry
+	for _, e := range items {
+		if _, ok := wantType[e.ID]; ok {
+			hRows = append(hRows, e)
+		}
+	}
+	if len(hRows) != len(wantType) {
+		t.Fatalf("want the %d rows of H on the war-room feed, got %d", len(wantType), len(hRows))
+	}
+	for _, e := range hRows {
+		label := fmt.Sprintf("row %d of H", e.ID)
+		b, err := json.Marshal(e)
+		if err != nil {
+			t.Fatalf("%s: marshal: %v", label, err)
+		}
+		var row map[string]any
+		if err := json.Unmarshal(b, &row); err != nil {
+			t.Fatalf("%s: decode: %v", label, err)
+		}
+		if _, ok := row["projectId"]; ok {
+			t.Errorf("%s: key projectId is on the wire: %s", label, b)
+		}
+		entity := asObject(t, label+" entity", row["entity"])
+		for _, key := range []string{"id", "projectId", "projectIdPrefix"} {
+			if _, ok := entity[key]; ok {
+				t.Errorf("%s: key entity.%s is on the wire: %s", label, key, b)
+			}
+		}
+		if strings.Contains(string(b), c.pIDs["1"]+"::") || strings.Contains(string(b), "::"+c.pIDs["1"]) {
+			t.Errorf("%s: a piece of the composite link id is on the wire: %s", label, b)
+		}
+		if row["redacted"] != true {
+			t.Errorf("%s: redacted = %#v, want true", label, row["redacted"])
+		}
+		if row["spaceId"] != hSpace {
+			t.Errorf("%s: spaceId = %#v, want %q", label, row["spaceId"], hSpace)
+		}
+		if row["type"] != wantType[e.ID] {
+			t.Errorf("%s: type = %#v, want %q", label, row["type"], wantType[e.ID])
+		}
+		if at, ok := row["occurredAt"].(string); !ok || at == "" {
+			t.Errorf("%s: occurredAt = %#v, want the event time", label, row["occurredAt"])
+		}
+		actor := asObject(t, label+" actor", row["actor"])
+		if actor["username"] != c.ownerName {
+			t.Errorf("%s: actor.username = %#v, want %q", label, actor["username"], c.ownerName)
+		}
+	}
+	c.assertNoHiddenLeak(t, "war-room rows of H", hRows)
+}

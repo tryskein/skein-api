@@ -704,9 +704,10 @@ func TestInProgress_StaleLock(t *testing.T) {
 // TestInProgress_RedactInvisible seeds two projects — A (caller is a
 // member → in `visible`) and B (NOT in visible). Each gets one
 // in-progress issue. With redactInvisible=true the B-project row is
-// returned but content-redacted (Title="" + Redacted=true) while its
-// identity fields survive; the A-project row is full. The admin
-// sub-check asserts an admin caller sees both rows full.
+// returned but redacted (Title="" + Redacted=true) with no issue id,
+// project prefix or projectId (sk-1007 R-4a) while its type and space id
+// survive; the A-project row is full. The admin sub-check asserts an
+// admin caller sees both rows full.
 func TestInProgress_RedactInvisible(t *testing.T) {
 	pool := newTestPool(t)
 	ctx := context.Background()
@@ -739,18 +740,26 @@ func TestInProgress_RedactInvisible(t *testing.T) {
 		t.Fatalf("InProgress: %v", err)
 	}
 
-	seen := map[string]InProgressRow{}
+	// The B row carries no issue id any more: it is the one redacted row of
+	// the reach (projB holds only idB), found by Redacted and Type.
+	var rowA InProgressRow
+	var okA bool
+	var redactedRows []InProgressRow
 	for _, r := range res.Items {
-		seen[r.IssueID] = r
+		if r.IssueID == idA {
+			rowA, okA = r, true
+		}
+		if r.Redacted && r.Type == "task" {
+			redactedRows = append(redactedRows, r)
+		}
 	}
-	rowA, okA := seen[idA]
-	rowB, okB := seen[idB]
 	if !okA {
-		t.Fatalf("expected member-project row %s in result, got %v", idA, seen)
+		t.Fatalf("expected member-project row %s in result, got %+v", idA, res.Items)
 	}
-	if !okB {
-		t.Fatalf("expected (redacted) invisible-project row %s in result, got %v", idB, seen)
+	if len(redactedRows) != 1 {
+		t.Fatalf("expected exactly one (redacted) invisible-project row, got %d: %+v", len(redactedRows), res.Items)
 	}
+	rowB := redactedRows[0]
 
 	// A-project row: full content, not redacted.
 	if rowA.Redacted {
@@ -761,16 +770,17 @@ func TestInProgress_RedactInvisible(t *testing.T) {
 		t.Errorf("member-project row Title = %q, want %q", rowA.Title, idA)
 	}
 
-	// B-project row: Title stripped, Redacted=true, identity fields kept.
-	if !rowB.Redacted {
-		t.Errorf("invisible-project row should be redacted: %+v", rowB)
-	}
+	// B-project row: Title and identifiers stripped, type and space id kept.
 	if rowB.Title != "" {
 		t.Errorf("invisible-project row Title should be stripped, got %q", rowB.Title)
 	}
-	if rowB.IssueID == "" || rowB.ProjectPrefix == "" || rowB.Type == "" {
-		t.Errorf("invisible-project row should keep identity fields, got id=%q prefix=%q type=%q",
-			rowB.IssueID, rowB.ProjectPrefix, rowB.Type)
+	if rowB.IssueID != "" || rowB.ProjectPrefix != "" || rowB.ProjectID != nil {
+		t.Errorf("invisible-project row must carry no identifier, got id=%q prefix=%q projectId=%v",
+			rowB.IssueID, rowB.ProjectPrefix, rowB.ProjectID)
+	}
+	if rowB.Type != "task" || rowB.SpaceID == "" {
+		t.Errorf("invisible-project row must keep type and space id, got type=%q spaceId=%q",
+			rowB.Type, rowB.SpaceID)
 	}
 
 	// Admin sub-check: an admin caller with redactInvisible=true sees both
@@ -1324,5 +1334,101 @@ func TestInProgress_HardRedact_AirtightLeak(t *testing.T) {
 	}
 	if strings.Contains(js, "\"issueId\"") {
 		t.Errorf("Hard-redacted in-progress must not carry issueId: %s", js)
+	}
+}
+
+// TestInProgress_SoftRedact_DropsIdentifiers — sk-1007 R-4a, the "now
+// working" row of a project the reader does not see, read at redact.Soft
+// (a participant of the space, not an external reader). Reference, from
+// the spec: the row stays, its content goes, and no key of the task or
+// project identifiers — issueId, projectPrefix, projectId — is on the
+// wire, nor the id, prefix or UUID of the project anywhere in the row;
+// what the soft level keeps today stays: spaceId, lockedBySession,
+// assignee, status, type, priority, staleLock. spaceId and lockedBySession
+// are the discriminators against a soft level merged into the hard one.
+func TestInProgress_SoftRedact_DropsIdentifiers(t *testing.T) {
+	pool := newTestPool(t)
+	ctx := context.Background()
+	store := New(pool)
+
+	foreignOwner, foreignUname := seedUser(t, pool)
+	foreignProj := seedProject(t, pool, foreignOwner)
+
+	var foreignPrefix, spaceShort string
+	if err := pool.QueryRow(ctx, `
+SELECT p.id_prefix, s.short_id FROM projects p JOIN spaces s ON s.id = p.space_id WHERE p.id = $1`,
+		foreignProj).Scan(&foreignPrefix, &spaceShort); err != nil {
+		t.Fatalf("read project prefix and space: %v", err)
+	}
+
+	hiddenID := foreignPrefix + "-HIDDEN-1"
+	assignee := foreignUname
+	seedIssueRow(t, pool, foreignProj, hiddenID, "human", foreignOwner, &assignee)
+	lockSession := "mcp-session-soft-" + uuid.Must(uuid.NewRandom()).String()[:8]
+	if _, err := pool.Exec(ctx,
+		`UPDATE issues SET status='in_progress', started_at=now(), locked_by=$2, locked_at=now() WHERE id=$1`,
+		hiddenID, lockSession); err != nil {
+		t.Fatalf("set in_progress: %v", err)
+	}
+
+	// The reader sees nothing; the project is in the reach (a project of his
+	// own space he does not see), so its row comes back soft-redacted.
+	res, err := store.InProgress(ctx, map[uuid.UUID]struct{}{}, false /*unrestricted*/, nil, 200,
+		map[uuid.UUID]struct{}{foreignProj: {}} /*reach*/, redact.Soft)
+	if err != nil {
+		t.Fatalf("InProgress: %v", err)
+	}
+	var rows []map[string]json.RawMessage
+	for _, r := range res.Items {
+		if r.Assignee == nil || *r.Assignee != foreignUname {
+			continue
+		}
+		blob, err := json.Marshal(r)
+		if err != nil {
+			t.Fatalf("marshal row: %v", err)
+		}
+		var m map[string]json.RawMessage
+		if err := json.Unmarshal(blob, &m); err != nil {
+			t.Fatalf("decode row: %v", err)
+		}
+		rows = append(rows, m)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("want exactly one row assigned to %q, got %d", foreignUname, len(rows))
+	}
+	row := rows[0]
+
+	for _, key := range []string{"issueId", "projectPrefix", "projectId", "title"} {
+		if v, present := row[key]; present {
+			t.Errorf("soft-redacted row must carry no %q key, got %s", key, v)
+		}
+	}
+	for key, v := range row {
+		for _, secret := range []string{hiddenID, foreignPrefix, foreignProj.String()} {
+			if strings.Contains(string(v), secret) {
+				t.Errorf("soft-redacted row carries %q in %q: %s", secret, key, v)
+			}
+		}
+	}
+
+	want := map[string]string{
+		"redacted":        `true`,
+		"spaceId":         `"` + spaceShort + `"`,
+		"lockedBySession": `"` + lockSession + `"`,
+		"assignee":        `"` + foreignUname + `"`,
+		"status":          `"in_progress"`,
+		"type":            `"task"`,
+		"priority":        `2`,
+		"staleLock":       `false`,
+	}
+	for key, lit := range want {
+		got, present := row[key]
+		if !present {
+			t.Errorf("soft-redacted row lost %q", key)
+			continue
+		}
+		if string(got) != lit {
+			t.Errorf("soft-redacted row %q = %s, want %s", key, got, lit)
+		}
 	}
 }
