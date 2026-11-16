@@ -241,6 +241,17 @@ func (h *DashboardHandler) Scoring(w http.ResponseWriter, r *http.Request) {
 // The frontend blurs the row and disables the link for redacted rows. The
 // frontend renders the initial page and then prepends SignalR-pushed
 // envelopes into the same ticker.
+//
+// References in event data (sk-1007 US-2, R-1…R-4): in a row of a project
+// the caller sees (a redacted row of a project the caller does not see
+// keeps the level of its redaction), a task id the event names that the
+// caller does not see now (the other end of a link — also inside the composite entity id
+// "from::to::type" — the parent at creation, the parents of a move) is the
+// literal "<hidden>", the project field of a hidden end or of a hidden
+// project is null with the key kept, lists keep their length, and the
+// summary carries the marker; the row stays and visible references, titles
+// and texts are unchanged. Visibility (with the API key's scope) is read
+// once per page (issues.Store's scanActivityRows).
 func (h *DashboardHandler) Feed(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	c, ok := caller(r)

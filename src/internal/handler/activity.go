@@ -120,6 +120,16 @@ func writeActivityResult(w http.ResponseWriter, items []issues.ActivityEntry, ne
 // Visibility: same gate as every other /projects/{id}/* endpoint —
 // EnsureProjectVisible returns 404 (not 403) for non-members so we
 // don't leak project existence.
+//
+// References in event data (sk-1007 US-2, R-1…R-4): in a row of a project
+// the caller sees, a task id the event names that the caller does not see
+// now (the other end of a link — also inside the composite entity id
+// "from::to::type" — the parent at creation, the parents of a move) is the
+// literal "<hidden>", the project field of a hidden end or of a hidden
+// project is null with the key kept, lists keep their length, and the
+// summary carries the marker; the row stays and visible references, titles
+// and texts are unchanged. Visibility (with the API key's scope) is read
+// once per page (issues.Store's scanActivityRows).
 func (h *ActivityHandler) ListProjectActivity(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	c, ok := caller(r)
@@ -176,6 +186,16 @@ func (h *ActivityHandler) ListProjectActivity(w http.ResponseWriter, r *http.Req
 // resolve the issue and confirm it belongs to projectID — a cross-
 // project URL pretends the issue doesn't exist (matches IssuesHandler.Get
 // at handler/issues.go:610).
+//
+// References in event data (sk-1007 US-2, R-1…R-4): in a row of a project
+// the caller sees, a task id the event names that the caller does not see
+// now (the other end of a link — also inside the composite entity id
+// "from::to::type" — the parent at creation, the parents of a move) is the
+// literal "<hidden>", the project field of a hidden end or of a hidden
+// project is null with the key kept, lists keep their length, and the
+// summary carries the marker; the row stays and visible references, titles
+// and texts are unchanged. Visibility (with the API key's scope) is read
+// once per page (issues.Store's scanActivityRows).
 func (h *ActivityHandler) ListIssueActivity(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	c, ok := caller(r)
@@ -246,6 +266,16 @@ func (h *ActivityHandler) ListIssueActivity(w http.ResponseWriter, r *http.Reque
 // filter; that is what the second return value of VisibleProjectIDs
 // means. An empty visible set returns `{items:[], nextCursor:null}` —
 // same shape as a populated empty page.
+//
+// References in event data (sk-1007 US-2, R-1…R-4): in a row of a project
+// the caller sees, a task id the event names that the caller does not see
+// now (the other end of a link — also inside the composite entity id
+// "from::to::type" — the parent at creation, the parents of a move) is the
+// literal "<hidden>", the project field of a hidden end or of a hidden
+// project is null with the key kept, lists keep their length, and the
+// summary carries the marker; the row stays and visible references, titles
+// and texts are unchanged. Visibility (with the API key's scope) is read
+// once per page (issues.Store's scanActivityRows).
 func (h *ActivityHandler) ListMyActivity(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	c, ok := caller(r)

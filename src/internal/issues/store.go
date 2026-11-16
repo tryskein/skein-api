@@ -1,6 +1,7 @@
 package issues
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -8056,38 +8057,93 @@ func decodeActivityChanges(payload []byte) []ActivityChange {
 // fetchedLimit is the caller's "limit + 1" sentinel value used to
 // detect whether another page exists; the returned items slice is
 // trimmed to limit and nextCursor is non-nil iff there is more.
-func scanActivityRows(rows pgx.Rows, limit int) ([]ActivityEntry, *int64, error) {
-	out := make([]ActivityEntry, 0, limit)
+//
+// Two passes (sk-1007 US-2, R-4, K4): the raw rows are scanned first, the
+// reference fields of the page's event data (the other end of a link, the
+// parent at creation, the parents of a move) are redacted by what the
+// reader of ctx sees now — notifications.RedactEventRefs with
+// authz.FromContext, so the key's scope narrows it and visibility is read
+// once per page — and only then are the entries built: the entity, the
+// old/new values and the summary come from the edited columns. Every feed
+// (project, issue, /me, war-room) goes through here, so one rule holds.
+func scanActivityRows(ctx context.Context, q authz.RowsQuerier, rows pgx.Rows, limit int) ([]ActivityEntry, *int64, error) {
+	type activityRaw struct {
+		id                                int64
+		occurredAt                        time.Time
+		eventType, actorName              string
+		actorUserID                       *uuid.UUID
+		actorType                         string
+		entityType, entityID              string
+		projectID                         *uuid.UUID
+		field                             *string
+		payload                           []byte
+		oldData, newData                  []byte
+		issueTitle                        *string
+		commentIssueID, commentIssueTitle *string
+		projectName, projectIDPrefix      *string
+		commentProjectPrefix              *string
+		actorStatus                       *person.Status
+		spaceShort                        *string
+	}
+	var raws []activityRaw
 	for rows.Next() {
-		var (
-			id                                int64
-			occurredAt                        time.Time
-			eventType, actorName              string
-			actorUserID                       *uuid.UUID
-			actorType                         string
-			entityType, entityID              string
-			projectID                         *uuid.UUID
-			field                             *string
-			payload                           []byte
-			oldData, newData                  []byte
-			issueTitle                        *string
-			commentIssueID, commentIssueTitle *string
-			projectName, projectIDPrefix      *string
-			commentProjectPrefix              *string
-			actorStatus                       *person.Status
-			spaceShort                        *string
-		)
+		var r activityRaw
 		if err := rows.Scan(
-			&id, &occurredAt, &eventType, &actorName, &actorUserID, &actorType, &actorStatus,
-			&entityType, &entityID, &projectID, &field, &payload,
-			&oldData, &newData,
-			&issueTitle,
-			&commentIssueID, &commentIssueTitle,
-			&projectName, &projectIDPrefix,
-			&commentProjectPrefix, &spaceShort,
+			&r.id, &r.occurredAt, &r.eventType, &r.actorName, &r.actorUserID, &r.actorType, &r.actorStatus,
+			&r.entityType, &r.entityID, &r.projectID, &r.field, &r.payload,
+			&r.oldData, &r.newData,
+			&r.issueTitle,
+			&r.commentIssueID, &r.commentIssueTitle,
+			&r.projectName, &r.projectIDPrefix,
+			&r.commentProjectPrefix, &r.spaceShort,
 		); err != nil {
 			return nil, nil, fmt.Errorf("scanning activity row: %w", err)
 		}
+		// The JSON columns outlive the scan: keep private copies.
+		r.payload = bytes.Clone(r.payload)
+		r.oldData = bytes.Clone(r.oldData)
+		r.newData = bytes.Clone(r.newData)
+		raws = append(raws, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, nil, err
+	}
+	rows.Close()
+
+	events := make([]redact.EventRow, len(raws))
+	for i := range raws {
+		events[i] = redact.EventRow{
+			Type:     raws[i].eventType,
+			EntityID: raws[i].entityID,
+			OldData:  raws[i].oldData,
+			NewData:  raws[i].newData,
+			Payload:  raws[i].payload,
+		}
+	}
+	if err := notifications.RedactEventRefs(ctx, q, authz.FromContext(ctx), events); err != nil {
+		return nil, nil, fmt.Errorf("redacting activity rows: %w", err)
+	}
+
+	out := make([]ActivityEntry, 0, limit)
+	for i, r := range raws {
+		var (
+			id                                = r.id
+			occurredAt                        = r.occurredAt
+			eventType, actorName              = r.eventType, r.actorName
+			actorUserID                       = r.actorUserID
+			actorType                         = r.actorType
+			entityType, entityID              = r.entityType, events[i].EntityID
+			projectID                         = r.projectID
+			field                             = r.field
+			payload                           = events[i].Payload
+			oldData, newData                  = events[i].OldData, events[i].NewData
+			issueTitle                        = r.issueTitle
+			commentIssueID, commentIssueTitle = r.commentIssueID, r.commentIssueTitle
+			projectName, projectIDPrefix      = r.projectName, r.projectIDPrefix
+			commentProjectPrefix              = r.commentProjectPrefix
+			actorStatus                       = r.actorStatus
+			spaceShort                        = r.spaceShort
+		)
 		var entry ActivityEntry
 		entry.ID = id
 		entry.OccurredAt = occurredAt.UTC()
@@ -8186,9 +8242,6 @@ func scanActivityRows(rows pgx.Rows, limit int) ([]ActivityEntry, *int64, error)
 
 		out = append(out, entry)
 	}
-	if err := rows.Err(); err != nil {
-		return nil, nil, err
-	}
 
 	var nextCursor *int64
 	if len(out) > limit {
@@ -8255,7 +8308,7 @@ func (s *Store) ListProjectActivity(
 	}
 	defer rows.Close()
 
-	return scanActivityRows(rows, limit)
+	return scanActivityRows(ctx, s.pool, rows, limit)
 }
 
 // ListUserActivity returns activity across projects, newest first.
@@ -8354,7 +8407,7 @@ func (s *Store) ListUserActivity(
 	}
 	defer rows.Close()
 
-	items, next, err := scanActivityRows(rows, limit)
+	items, next, err := scanActivityRows(ctx, s.pool, rows, limit)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -8486,5 +8539,5 @@ func (s *Store) ListIssueActivity(
 	}
 	defer rows.Close()
 
-	return scanActivityRows(rows, limit)
+	return scanActivityRows(ctx, s.pool, rows, limit)
 }
