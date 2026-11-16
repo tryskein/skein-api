@@ -766,7 +766,10 @@ func TestIdempotency_RefusalRepeatTargetGone(t *testing.T) {
 // TestIdempotency_RefusalRepeatNonStringReference — review fix (circle 1):
 // a stored toId that is not an id string (a number, an object, a list) names
 // nothing known to be visible, so the repeat gives "<hidden>" in its place;
-// an empty toId stays as stored.
+// an empty toId stays as stored. The same rule for the lists (narrowStored,
+// US-6): a path that is not a list of ids names nothing known to be visible
+// and is removed, a null path stays; childIds that are not a list of ids are
+// shown as an empty list beside the stored number, null childIds stay.
 func TestIdempotency_RefusalRepeatNonStringReference(t *testing.T) {
 	rw := newRefusalWorld(t)
 	for i, v := range []string{`12`, `{"id":"X-1"}`, `["X-1"]`} {
@@ -783,5 +786,38 @@ func TestIdempotency_RefusalRepeatNonStringReference(t *testing.T) {
 	first := rw.store(t, idem, m).Body.String()
 	if again := rw.repeated(t, idem, m).Body.String(); again != first {
 		t.Errorf("empty toId: repeat %s, want the stored %s", again, first)
+	}
+
+	for i, v := range []string{`"x"`, `12`} {
+		m := `"code":"dependency_cycle","path":` + v + `,"detail":"d"`
+		idem := fmt.Sprintf("%s-shape-path-%d", rw.w.idemKeys, i)
+		rw.store(t, idem, m)
+		keys, _ := membersOf(t, rw.repeated(t, idem, m).Body.Bytes())
+		if want := []string{"type", "title", "status", "code", "detail"}; !reflect.DeepEqual(keys, want) {
+			t.Errorf("path %s: repeat members %v, want %v (path removed)", v, keys, want)
+		}
+	}
+	for name, m := range map[string]string{
+		"null path":     `"code":"dependency_cycle","path":null,"detail":"d"`,
+		"null childIds": `"code":"standing_has_open_children","id":"` + rw.target + `","childIds":null,"unavailableOpenChildren":1`,
+	} {
+		idem := rw.w.idemKeys + "-shape-" + strings.ReplaceAll(name, " ", "-")
+		first := rw.store(t, idem, m).Body.String()
+		if again := rw.repeated(t, idem, m).Body.String(); again != first {
+			t.Errorf("%s: repeat %s, want the stored %s", name, again, first)
+		}
+	}
+	for i, v := range []string{`"x"`, `{"id":"X-1"}`} {
+		m := `"code":"standing_has_open_children","id":"` + rw.target + `","childIds":` + v + `,"unavailableOpenChildren":1`
+		idem := fmt.Sprintf("%s-shape-children-%d", rw.w.idemKeys, i)
+		rw.store(t, idem, m)
+		keys, vals := membersOf(t, rw.repeated(t, idem, m).Body.Bytes())
+		if want := []string{"type", "title", "status", "code", "id", "childIds", "unavailableOpenChildren"}; !reflect.DeepEqual(keys, want) {
+			t.Errorf("childIds %s: repeat members %v, want %v", v, keys, want)
+		}
+		if !reflect.DeepEqual(vals["childIds"], []any{}) || vals["unavailableOpenChildren"] != float64(1) {
+			t.Errorf("childIds %s: repeat gives childIds %#v, unavailableOpenChildren %#v; want [] and the stored 1",
+				v, vals["childIds"], vals["unavailableOpenChildren"])
+		}
 	}
 }
