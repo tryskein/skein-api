@@ -13,7 +13,9 @@ package notifications_test
 //   - totals: subscriptions_total = live subscriptions; open/closed_total =
 //     cards of both kinds by task state; closed_auto_total = closed cards
 //     without a manual subscription, historical included; unread_total =
-//     sum over every card = badge;
+//     the count of the unread rows of the reader's notification set in the
+//     window (sk-1007 D1: rows of no project or of a project he sees now) —
+//     the badge's count;
 //   - order: latest notification, then id; cards without notifications last;
 //   - the in-card timeline: the last 5 within 7 days (R10).
 //
@@ -86,6 +88,11 @@ type notif struct {
 	age      time.Duration
 	read     bool
 	archived bool
+	// project is the project of the event and of the row; zero = the env's
+	// project. noProject writes the row with no project (the event keeps
+	// the env's project).
+	project   uuid.UUID
+	noProject bool
 }
 
 // seed writes an event on n.issueID and the reader's notification row.
@@ -96,12 +103,20 @@ func (e *wrEnv) seed(t *testing.T, n notif) int64 {
 	if ntype == "" {
 		ntype = "issue.status_changed"
 	}
+	project := e.project
+	if n.project != uuid.Nil {
+		project = n.project
+	}
+	var rowProject *uuid.UUID
+	if !n.noProject {
+		rowProject = &project
+	}
 	var eid int64
 	if err := e.pool.QueryRow(ctx, `
 INSERT INTO events (occurred_at, type, entity_type, entity_id, project_id,
                     actor, actor_user_id, actor_type, payload)
 VALUES (now() - $5::interval, $1, 'issue', $2, $3, 'tester', $4, 'human', '{}'::jsonb)
-RETURNING id`, ntype, n.issueID, e.project, e.owner, n.age).Scan(&eid); err != nil {
+RETURNING id`, ntype, n.issueID, project, e.owner, n.age).Scan(&eid); err != nil {
 		t.Fatalf("seed event: %v", err)
 	}
 	var card *string
@@ -114,7 +129,7 @@ INSERT INTO notifications (user_id, event_id, type, project_id, feed_channel,
                            card_issue_id, card_resolved, created_at, read_at, archived_at)
 VALUES ($1, $2, $3, $4, true, $5, true, now() - $6::interval,
         CASE WHEN $7 THEN now() END, CASE WHEN $8 THEN now() END)
-RETURNING id`, e.reader, eid, ntype, e.project, card, n.age, n.read, n.archived).Scan(&id); err != nil {
+RETURNING id`, e.reader, eid, ntype, rowProject, card, n.age, n.read, n.archived).Scan(&id); err != nil {
 		t.Fatalf("seed notification: %v", err)
 	}
 	return id
@@ -490,5 +505,215 @@ func TestWatchingRead_HistoricalCardLifecycle(t *testing.T) {
 				t.Errorf("opt-outs after removing a historical card = %d, want 0 (R3)", n)
 			}
 		})
+	}
+}
+
+// ----------------- sk-1007 US-1: the column over the notification set -----------------
+//
+// sk-1007 D1 / K3: every number of the column, the timeline and whether a
+// historical card exists come from the reader's notification set — his rows
+// of no project or of a project he sees now. The expected numbers below are
+// literals of the corpus each test describes (spec US-1, INV-3).
+
+// wrProject is a second project of a wrEnv: the owner's, the reader a member
+// (visibility members, so removing the membership hides it).
+type wrProject struct {
+	id     uuid.UUID
+	prefix string
+	n      int
+}
+
+func (e *wrEnv) otherProject(t *testing.T, name string) *wrProject {
+	t.Helper()
+	id, prefix := testsupport.SeedProject(t, e.pool, e.owner, name)
+	testsupport.AddProjectMember(t, e.pool, id, e.reader, "member")
+	return &wrProject{id: id, prefix: prefix}
+}
+
+func (e *wrEnv) issueIn(t *testing.T, q *wrProject, status string) string {
+	t.Helper()
+	q.n++
+	return testsupport.SeedIssue(t, e.pool, q.id, e.owner, q.prefix+"-"+strconv.Itoa(q.n), "watching read", status, 2)
+}
+
+// loseAccess removes the reader from q: q is a project he does not see now.
+func (e *wrEnv) loseAccess(t *testing.T, q *wrProject) {
+	t.Helper()
+	if _, err := e.pool.Exec(context.Background(),
+		`DELETE FROM project_members WHERE project_id = $1 AND user_id = $2`, q.id, e.reader); err != nil {
+		t.Fatalf("remove the reader from %s: %v", q.prefix, err)
+	}
+}
+
+func (e *wrEnv) createdAt(t *testing.T, id int64) time.Time {
+	t.Helper()
+	var at time.Time
+	if err := e.pool.QueryRow(context.Background(), `SELECT created_at FROM notifications WHERE id = $1`, id).Scan(&at); err != nil {
+		t.Fatalf("read created_at of %d: %v", id, err)
+	}
+	return at
+}
+
+// timeline returns the notification ids of the card's in-card timeline, in
+// the order it gives them.
+func (e *wrEnv) timeline(t *testing.T, card string) []int64 {
+	t.Helper()
+	recent, err := e.store.HydrateWatchingRecentEvents(context.Background(), e.reader, []string{card})
+	if err != nil {
+		t.Fatalf("HydrateWatchingRecentEvents: %v", err)
+	}
+	out := []int64{}
+	for _, n := range recent[card] {
+		out = append(out, n.ID)
+	}
+	return out
+}
+
+// TestWatchingRead_WindowIsTheNotificationSet — sk-1007 No. 6, US-1
+// "Current". A (project P) is watched with its subtree; its descendant B
+// lies in Q and the fan-out carded B's events to A, one of them newer than
+// every row of P. While the reader sees Q its rows count; after he is
+// removed from Q, A's unread count, UnreadTotal, A's last activity and A's
+// timeline hold the rows of P only.
+//
+//	P on A: unread 2h, read 3h        Q (B) on A: unread 1h, unread 4h
+func TestWatchingRead_WindowIsTheNotificationSet(t *testing.T) {
+	e := newWREnv(t)
+	q := e.otherProject(t, "wrq")
+	a := e.issue(t, "open")
+	b := e.issueIn(t, q, "open")
+	testsupport.SeedDep(t, e.pool, b, a, "parent-child", e.owner)
+	e.sub(t, a, "subtree", "manual")
+
+	pUnread := e.seed(t, notif{issueID: a, card: a, age: 2 * time.Hour})
+	pRead := e.seed(t, notif{issueID: a, card: a, age: 3 * time.Hour, read: true})
+	qNewest := e.seed(t, notif{issueID: b, card: a, project: q.id, age: time.Hour})
+	qOlder := e.seed(t, notif{issueID: b, card: a, project: q.id, age: 4 * time.Hour})
+
+	// Positive control: Q is visible, its rows are on the card.
+	before := e.feed(t, notifications.WatchingStateAll)
+	card := cardByID(t, before.Rows, a)
+	if card.UnreadEventsCount != 3 || before.UnreadTotal != 3 {
+		t.Fatalf("with access to Q: card unread %d, unreadTotal %d; want 3 and 3 (P 1 + Q 2) — the fixture proves nothing",
+			card.UnreadEventsCount, before.UnreadTotal)
+	}
+	if card.LastActivity == nil || !card.LastActivity.Equal(e.createdAt(t, qNewest)) {
+		t.Fatalf("with access to Q: last activity %v, want the newest row of Q", card.LastActivity)
+	}
+	if got, want := e.timeline(t, a), []int64{qNewest, pUnread, pRead, qOlder}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("with access to Q: timeline %v, want %v", got, want)
+	}
+
+	e.loseAccess(t, q)
+
+	after := e.feed(t, notifications.WatchingStateAll)
+	card = cardByID(t, after.Rows, a)
+	if card.UnreadEventsCount != 1 {
+		t.Errorf("card %s unread = %d, want 1 (the unread row of P only)", a, card.UnreadEventsCount)
+	}
+	if after.UnreadTotal != 1 {
+		t.Errorf("unreadTotal = %d, want 1 (the unread row of P only)", after.UnreadTotal)
+	}
+	if card.LastActivity == nil || !card.LastActivity.Equal(e.createdAt(t, pUnread)) {
+		t.Errorf("card %s last activity = %v, want the time of the latest row of P (%v)",
+			a, card.LastActivity, e.createdAt(t, pUnread))
+	}
+	if got, want := e.timeline(t, a), []int64{pUnread, pRead}; !reflect.DeepEqual(got, want) {
+		t.Errorf("card %s timeline = %v, want %v (no row of Q)", a, got, want)
+	}
+}
+
+// TestWatchingRead_HistoricalCardNeedsARowOfTheSet — sk-1007 No. 7, US-1
+// "existence of a historical card". P-5 is a closed task of P the reader
+// sees, without a subscription; the only rows carded to it are of Q. While
+// Q is visible P-5 is a historical card; after the reader is removed from Q
+// there is no card and no total counts one.
+func TestWatchingRead_HistoricalCardNeedsARowOfTheSet(t *testing.T) {
+	e := newWREnv(t)
+	q := e.otherProject(t, "wrq")
+	p5 := e.issue(t, "closed")
+	qi := e.issueIn(t, q, "open")
+	e.seed(t, notif{issueID: qi, card: p5, project: q.id, age: time.Hour})
+
+	before := e.feed(t, notifications.WatchingStateAll)
+	if got := cardIDs(before.Rows); !reflect.DeepEqual(got, []string{p5}) ||
+		before.ClosedTotal != 1 || before.ClosedAutoTotal != 1 || before.StateTotal != 1 || before.OpenTotal != 0 {
+		t.Fatalf("with access to Q: cards %v, closed %d closedAuto %d state %d open %d; want [%s], 1, 1, 1, 0 — the fixture proves nothing",
+			got, before.ClosedTotal, before.ClosedAutoTotal, before.StateTotal, before.OpenTotal, p5)
+	}
+
+	e.loseAccess(t, q)
+
+	for _, state := range []notifications.WatchingState{notifications.WatchingStateAll, notifications.WatchingStateClosed} {
+		after := e.feed(t, state)
+		if len(after.Rows) != 0 {
+			t.Errorf("%s: cards %v, want none — no row of the set carries P-5", state, cardIDs(after.Rows))
+		}
+		if after.StateTotal != 0 || after.OpenTotal != 0 || after.ClosedTotal != 0 ||
+			after.ClosedAutoTotal != 0 || after.UnreadTotal != 0 {
+			t.Errorf("%s: state %d open %d closed %d closedAuto %d unread %d; want all 0",
+				state, after.StateTotal, after.OpenTotal, after.ClosedTotal, after.ClosedAutoTotal, after.UnreadTotal)
+		}
+	}
+}
+
+// TestWatchingRead_UnreadTotalCountsRowsOfAHiddenCard — sk-1007 No. 8,
+// INV-3, SC-001, K3 "ancestor in a project the reader cannot see". H-1
+// (project H) is watched with its subtree; an event of its descendant P-9
+// (project P, visible) is carded to H-1. After the reader is removed from
+// H there is no card H-1 and no subscription is counted, but the row of P
+// is in the reader's set: UnreadTotal counts it and equals the badge.
+func TestWatchingRead_UnreadTotalCountsRowsOfAHiddenCard(t *testing.T) {
+	e := newWREnv(t)
+	h := e.otherProject(t, "wrh")
+	h1 := e.issueIn(t, h, "open")
+	p9 := e.issue(t, "open")
+	testsupport.SeedDep(t, e.pool, p9, h1, "parent-child", e.owner)
+	e.sub(t, h1, "subtree", "manual")
+	e.seed(t, notif{issueID: p9, card: h1, age: time.Hour})
+
+	before := e.feed(t, notifications.WatchingStateAll)
+	if got := cardIDs(before.Rows); !reflect.DeepEqual(got, []string{h1}) || before.SubscriptionsTotal != 1 || before.UnreadTotal != 1 {
+		t.Fatalf("with access to H: cards %v, subscriptions %d, unreadTotal %d; want [%s], 1, 1 — the fixture proves nothing",
+			got, before.SubscriptionsTotal, before.UnreadTotal, h1)
+	}
+
+	e.loseAccess(t, h)
+
+	after := e.feed(t, notifications.WatchingStateAll)
+	if len(after.Rows) != 0 {
+		t.Errorf("cards = %v, want none — H-1 is a task the reader does not see", cardIDs(after.Rows))
+	}
+	if after.SubscriptionsTotal != 0 || after.OpenTotal != 0 || after.StateTotal != 0 {
+		t.Errorf("subscriptions %d open %d state %d, want 0 — the card of H-1 is not shown",
+			after.SubscriptionsTotal, after.OpenTotal, after.StateTotal)
+	}
+	if after.UnreadTotal != 1 {
+		t.Errorf("unreadTotal = %d, want 1 — the unread row of P-9 is in the reader's set", after.UnreadTotal)
+	}
+	if badge := e.badge(t); after.UnreadTotal != badge {
+		t.Errorf("unreadTotal %d != badge %d (INV-3)", after.UnreadTotal, badge)
+	}
+}
+
+// TestWatchingRead_RowWithoutProjectCounts — sk-1007 No. 9, US-1 "a row of
+// no project" (Unchanged): on a visible card, an unread row of no project
+// counts in the card, in UnreadTotal and in the badge, beside a row of P.
+func TestWatchingRead_RowWithoutProjectCounts(t *testing.T) {
+	e := newWREnv(t)
+	a := e.issue(t, "open")
+	e.sub(t, a, "issue", "manual")
+	e.seed(t, notif{issueID: a, card: a, age: time.Hour, noProject: true})
+	e.seed(t, notif{issueID: a, card: a, age: 2 * time.Hour})
+
+	res := e.feed(t, notifications.WatchingStateAll)
+	if got := cardByID(t, res.Rows, a).UnreadEventsCount; got != 2 {
+		t.Errorf("card %s unread = %d, want 2 (the row of no project and the row of P)", a, got)
+	}
+	if res.UnreadTotal != 2 {
+		t.Errorf("unreadTotal = %d, want 2", res.UnreadTotal)
+	}
+	if badge := e.badge(t); badge != 2 {
+		t.Errorf("badge = %d, want 2", badge)
 	}
 }
