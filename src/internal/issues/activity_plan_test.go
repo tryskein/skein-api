@@ -8,6 +8,12 @@ package issues
 // contract, observed on the server: after repeated reads of the feed, the
 // one connection they ran on holds no named prepared statement over a
 // project array (uuid[]) that a generic plan could take over.
+//
+// sk-1007 (review of T011/T012): the page names a task and a project of
+// another owner's project (a dependency.created with a foreign toProjectId,
+// an issue.created with a foreign parent), so every read also runs the
+// reference redaction — authz.VisibleIssueIDs and authz.VisibleAmong, both
+// binding the visible set as a project array — under the same contract.
 
 import (
 	"context"
@@ -17,7 +23,10 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"skein-api/internal/auth"
+	"skein-api/internal/authz"
 	"skein-api/internal/redact"
+	"skein-api/internal/testsupport"
 )
 
 func TestListUserActivity_LeavesNoNamedPreparedStatement(t *testing.T) {
@@ -28,7 +37,20 @@ func TestListUserActivity_LeavesNoNamedPreparedStatement(t *testing.T) {
 	ctx := context.Background()
 	shared := newTestPool(t)
 	owner := seedUser(t, shared)
-	pid, _ := seedProject(t, shared, owner)
+	pid, pPre := seedProject(t, shared, owner)
+	stranger := seedUser(t, shared)
+	foreign, fPre := seedProject(t, shared, stranger)
+	from := testsupport.SeedIssue(t, shared, pid, owner, pPre+"-1", "source", "open", 2)
+	to := testsupport.SeedIssue(t, shared, foreign, stranger, fPre+"-1", "foreign", "open", 2)
+	ownerName := usernameOf(t, shared, owner)
+	link := seedRefEvent(t, shared, owner, ownerName, linkEvent(owner.String(), from, to, pid, &foreign))
+	seedRefEvent(t, shared, owner, ownerName, refEvent{
+		typ: "issue.created", entityType: "issue", entityID: from, projectID: pid,
+		newData: map[string]any{"id": from, "projectId": pid.String(), "parentId": to},
+	})
+	readerCtx := func() context.Context {
+		return authz.WithRequestCache(auth.WithUserRole(auth.WithUserID(ctx, owner), "user"))
+	}
 
 	cfg, err := pgxpool.ParseConfig(url)
 	if err != nil {
@@ -54,8 +76,18 @@ func TestListUserActivity_LeavesNoNamedPreparedStatement(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			before := named(t)
 			for range 7 { // past the five custom executions after which a generic plan may take over
-				if _, _, err := store.ListUserActivity(ctx, owner, set, false, nil, nil, 20, reach, redact.None); err != nil {
+				items, _, err := store.ListUserActivity(readerCtx(), owner, set, false, nil, nil, 20, reach, redact.None)
+				if err != nil {
 					t.Fatalf("ListUserActivity: %v", err)
+				}
+				redacted := false
+				for _, e := range items {
+					if e.ID == link && e.Entity.ID == from+"::"+hiddenMarker+"::blocks" {
+						redacted = true
+					}
+				}
+				if len(items) != 2 || !redacted {
+					t.Fatalf("the page (%d rows) does not carry the redacted link — the redaction reads did not run", len(items))
 				}
 			}
 			if after := named(t); after != before {

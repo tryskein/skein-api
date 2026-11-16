@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 )
 
 // SQL fragments over the access relation (migration 000066).
@@ -131,7 +132,11 @@ func VisibleAmong(ctx context.Context, q RowsQuerier, s Scope, projectIDs []uuid
 	if err != nil {
 		return nil, err
 	}
-	rows, err := q.Query(ctx, visibleAmongSQL, projectIDs, unrestricted, visible)
+	// Both arrays (the ids checked and the scope's visible set) are planned
+	// with their values on every call, never as a cached generic plan blind
+	// to their size: no named prepared statement over a project array stays
+	// on the connection (the trap of dashboard.reachPlanned; sk-674.18).
+	rows, err := q.Query(ctx, visibleAmongSQL, pgx.QueryExecModeDescribeExec, projectIDs, unrestricted, visible)
 	if err != nil {
 		return nil, fmt.Errorf("checking visibility of %d projects: %w", len(projectIDs), err)
 	}

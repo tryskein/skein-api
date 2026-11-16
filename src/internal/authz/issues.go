@@ -3,6 +3,8 @@ package authz
 import (
 	"context"
 	"fmt"
+
+	"github.com/jackc/pgx/v5"
 )
 
 // VisibleIssueIDs returns which of ids are issues the scope sees now: the
@@ -29,10 +31,14 @@ func VisibleIssueIDs(ctx context.Context, q RowsQuerier, s Scope, ids []string) 
 	if !unrestricted && len(visible) == 0 {
 		return out, nil
 	}
+	// The scope's visible set is a project array: planned with its value on
+	// every call, never as a cached generic plan blind to its size — no named
+	// prepared statement over it stays on the connection (the trap of
+	// dashboard.reachPlanned; sk-674.18).
 	rows, err := q.Query(ctx, `
 SELECT i.id FROM issues i
  WHERE i.id = ANY($1::text[]) AND `+ProjectVisibleExpr("i", "$2", "$3"),
-		ids, unrestricted, visible)
+		pgx.QueryExecModeDescribeExec, ids, unrestricted, visible)
 	if err != nil {
 		return nil, fmt.Errorf("checking visibility of issues: %w", err)
 	}
