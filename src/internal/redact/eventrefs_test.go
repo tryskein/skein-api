@@ -106,6 +106,51 @@ func TestEventRefs_Apply(t *testing.T) {
 			payl:    `{"oldParentIds":["APP-12","<hidden>","<hidden>"],"newParentId":"<hidden>"}`,
 		},
 		{
+			name: "No. 20 dependency.created, hidden toId with no toProjectId",
+			in: redact.EventRow{Type: "dependency.created", EntityID: "APP-12::SEC-7::blocks",
+				NewData: []byte(`{"fromId":"APP-12","toId":"SEC-7","type":"blocks","fromProjectId":"` + app + `"}`)},
+			entity:  "APP-12::<hidden>::blocks",
+			newData: `{"fromId":"APP-12","toId":"<hidden>","type":"blocks","fromProjectId":"` + app + `"}`,
+		},
+		{
+			name: "No. 20 dependency.created, hidden toId with a null toProjectId",
+			in: redact.EventRow{Type: "dependency.created", EntityID: "APP-12::SEC-7::blocks",
+				NewData: []byte(`{"fromId":"APP-12","toId":"SEC-7","type":"blocks","fromProjectId":"` + app + `","toProjectId":null}`)},
+			entity:  "APP-12::<hidden>::blocks",
+			newData: `{"fromId":"APP-12","toId":"<hidden>","type":"blocks","fromProjectId":"` + app + `","toProjectId":null}`,
+		},
+		{
+			name: "No. 20 dependency.created, toId a number: not an id, hidden",
+			in: redact.EventRow{Type: "dependency.created", EntityID: "APP-12::SEC-7::blocks",
+				NewData: []byte(`{"fromId":"APP-12","toId":7,"type":"blocks","fromProjectId":"` + app + `","toProjectId":"` + app + `"}`)},
+			entity:  "APP-12::<hidden>::blocks",
+			newData: `{"fromId":"APP-12","toId":"<hidden>","type":"blocks","fromProjectId":"` + app + `","toProjectId":null}`,
+		},
+		{
+			name: "No. 20 dependency.created, fromId an object: not an id, hidden",
+			in: redact.EventRow{Type: "dependency.created", EntityID: "SEC-7::APP-13::blocks",
+				NewData: []byte(`{"fromId":{"id":"SEC-7"},"toId":"APP-13","type":"blocks","fromProjectId":"` + app + `","toProjectId":"` + app + `"}`)},
+			entity:  "<hidden>::APP-13::blocks",
+			newData: `{"fromId":"<hidden>","toId":"APP-13","type":"blocks","fromProjectId":null,"toProjectId":"` + app + `"}`,
+		},
+		{
+			name:    "No. 21 issue.created, parentId a number: not an id, hidden",
+			in:      redact.EventRow{Type: "issue.created", EntityID: "APP-14", NewData: []byte(`{"id":"APP-14","parentId":7,"title":"child"}`)},
+			entity:  "APP-14",
+			newData: `{"id":"APP-14","parentId":"<hidden>","title":"child"}`,
+		},
+		{
+			name: "No. 22 issue.reparented, parent lists stored as a single id",
+			in: redact.EventRow{Type: "issue.reparented", EntityID: "APP-14",
+				OldData: []byte(`{"parentIds":"SEC-7"}`),
+				NewData: []byte(`{"parentId":"APP-12"}`),
+				Payload: []byte(`{"oldParentIds":"SEC-7","newParentId":"APP-12"}`)},
+			entity:  "APP-14",
+			oldData: `{"parentIds":"<hidden>"}`,
+			newData: `{"parentId":"APP-12"}`,
+			payl:    `{"oldParentIds":"<hidden>","newParentId":"APP-12"}`,
+		},
+		{
 			name: "No. 22 issue.reparented, a visible new parent stays",
 			in: redact.EventRow{Type: "issue.reparented", EntityID: "APP-14",
 				OldData: []byte(`{"parentIds":["SEC-7"]}`),
@@ -133,7 +178,8 @@ func TestEventRefs_Apply(t *testing.T) {
 }
 
 // TestEventRefs_UntouchedRowsKeepTheirBytes — No. 23, R-3, INV-2: a row
-// whose references are all visible (a cross-project link included), user
+// whose references are all visible (a cross-project link included, and one
+// whose recorded project is null), user
 // text naming a hidden id, and a type outside the registry come back with
 // the same bytes — key order and spacing included.
 func TestEventRefs_UntouchedRowsKeepTheirBytes(t *testing.T) {
@@ -141,6 +187,8 @@ func TestEventRefs_UntouchedRowsKeepTheirBytes(t *testing.T) {
 	for _, row := range []redact.EventRow{
 		{Type: "dependency.created", EntityID: "APP-12::OPS-4::blocks",
 			NewData: []byte(`{ "toProjectId": "` + ops + `",  "fromId":"APP-12", "toId":"OPS-4","type":"blocks", "fromProjectId":"` + app + `" }`)},
+		{Type: "dependency.created", EntityID: "APP-12::OPS-4::blocks",
+			NewData: []byte(`{ "toProjectId": null,  "fromId":"APP-12", "toId":"OPS-4","type":"blocks", "fromProjectId":"` + app + `" }`)},
 		{Type: "issue.created", EntityID: "APP-15",
 			NewData: []byte(`{"title": "follow-up of SEC-7",  "parentId": "APP-12", "description":"see SEC-7"}`)},
 		{Type: "issue.updated", EntityID: "APP-12",
