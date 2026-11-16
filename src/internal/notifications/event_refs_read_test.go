@@ -363,6 +363,18 @@ func TestEventRefs_NotificationSurfacesRedactHiddenReferences(t *testing.T) {
 			t.Fatalf("timeline rows of events %v, want %v", sortedIDs(events), want)
 		}
 		c.assertNoHiddenLeak(t, "watching timeline", got)
+		// The timeline row carries the short id of its project's space, as
+		// every feed row does.
+		var pSpace string
+		if err := c.pool.QueryRow(context.Background(),
+			`SELECT s.short_id FROM projects p JOIN spaces s ON s.id = p.space_id WHERE p.id = $1`, c.p).Scan(&pSpace); err != nil {
+			t.Fatalf("read the space of P: %v", err)
+		}
+		for _, n := range got[c.p1] {
+			if n.SpaceID != pSpace {
+				t.Errorf("timeline row %d: spaceId = %q, want %q", n.ID, n.SpaceID, pSpace)
+			}
+		}
 	})
 
 	t.Run("monitor poll", func(t *testing.T) {
@@ -381,6 +393,32 @@ func TestEventRefs_NotificationSurfacesRedactHiddenReferences(t *testing.T) {
 			}
 			c.checkRow(t, "poll row of "+tc.scope, tc.event, res.Items[0])
 			c.assertNoHiddenLeak(t, "poll of "+tc.scope, res.Items)
+		}
+	})
+
+	t.Run("inbox keeps the actor's marks", func(t *testing.T) {
+		// A link to a hidden task made by a person outside P (no member of
+		// it, no participant of its space): after the redaction and the
+		// hydration the row still marks the actor departed (person.Status).
+		departed, departedName := testsupport.SeedUser(t, c.pool, "user")
+		reader, _ := testsupport.SeedUser(t, c.pool, "user")
+		testsupport.AddProjectMember(t, c.pool, c.p, reader, "member")
+		cleanupNotifications(t, c.pool, reader)
+		event := seedRefEvent(t, c.pool, departed, departedName, linkEvent(departed, c.p2, c.hEnd, c.p, c.h))
+		notify(t, c.pool, reader, event, "dependency.created", c.p, c.p2)
+		res, err := store.ListInbox(userCtx(reader), notifications.ListInboxArgs{UserID: reader, Scope: "all", Limit: 50})
+		if err != nil {
+			t.Fatalf("ListInbox: %v", err)
+		}
+		if len(res.Items) != 1 {
+			t.Fatalf("inbox of %d rows, want the one row of event %d", len(res.Items), event)
+		}
+		n := res.Items[0]
+		if want := c.p2 + "::" + hiddenMarker + "::blocks"; n.Entity.ID != want {
+			t.Errorf("entity.id = %q, want %q", n.Entity.ID, want)
+		}
+		if n.Actor.Username != departedName || !n.Actor.Status.Departed {
+			t.Errorf("actor %q departed=%v, want %q marked departed", n.Actor.Username, n.Actor.Status.Departed, departedName)
 		}
 	})
 }
