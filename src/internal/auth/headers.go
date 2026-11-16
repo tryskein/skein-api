@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"net/http"
 	"strings"
 
 	"github.com/google/uuid"
@@ -110,6 +111,43 @@ const SurfaceInternal = "internal"
 // internal request to public. Absence ("") → false → public → fail-closed.
 func SurfaceIsInternal(headerVal string) bool {
 	return strings.EqualFold(strings.TrimSpace(headerVal), SurfaceInternal)
+}
+
+// Service-call marker contract. Service routes of the internal API — the
+// routes only skein-web (BFF) calls on its own behalf, never a browser
+// request it forwards — execute only when the request carries the marker,
+// in addition to the channel secret ([HeaderInternalSecret]). A request to
+// a service route without the marker is refused with 403 and the body
+// `{"error":"service_call_required"}` ([CodeServiceCallRequired]).
+//
+// The marker value is not a secret. It is trusted only because the internal
+// API already requires the channel secret, and because the BFF strips every
+// client-supplied X-Skein-* header from the browser proxy and never stamps
+// the marker there: only its own calls carry it.
+//
+// HeaderServiceCall and ServiceCallMarker must match the constants
+// SkeinHeaders.ServiceCall and SkeinHeaders.ServiceCallMarker in skein-web.
+const (
+	// HeaderServiceCall carries the service-call marker.
+	HeaderServiceCall = "X-Skein-Service-Call"
+	// ServiceCallMarker is the only value of HeaderServiceCall that asserts
+	// a service call. Any other value, including the empty one, is the same
+	// as an absent header.
+	ServiceCallMarker = "1"
+	// CodeServiceCallRequired is the `error` of the 403 a service route
+	// answers to a request without the marker.
+	CodeServiceCallRequired = "service_call_required"
+)
+
+// HasServiceCallMarker reports whether the request headers carry the
+// service-call marker: HeaderServiceCall has exactly one value and that value
+// is byte for byte ServiceCallMarker. Unlike [SurfaceIsInternal], nothing is
+// trimmed and case is not folded: " 1", "1 ", "01", "true", an empty value,
+// an absent header and several values (repeated header lines) are all "no
+// marker".
+func HasServiceCallMarker(h http.Header) bool {
+	values := h.Values(HeaderServiceCall)
+	return len(values) == 1 && values[0] == ServiceCallMarker
 }
 
 // ctxKey is an unexported named type so context values inserted by this
