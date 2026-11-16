@@ -1398,10 +1398,13 @@ SELECT p.id_prefix, s.short_id FROM projects p JOIN spaces s ON s.id = p.space_i
 	}
 	row := rows[0]
 
-	for _, key := range []string{"issueId", "projectPrefix", "projectId", "title"} {
+	for _, key := range []string{"issueId", "projectPrefix", "projectId"} {
 		if v, present := row[key]; present {
 			t.Errorf("soft-redacted row must carry no %q key, got %s", key, v)
 		}
+	}
+	if v := string(row["title"]); v != `""` {
+		t.Errorf("soft-redacted row title = %s, want the content stripped (\"\")", v)
 	}
 	for key, v := range row {
 		for _, secret := range []string{hiddenID, foreignPrefix, foreignProj.String()} {
