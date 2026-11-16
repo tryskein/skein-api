@@ -110,6 +110,17 @@ type agentPollResponse struct {
 // @Description  Only events at least MonitorPollSafetyLag old are returned,
 // @Description  bounding the bigserial commit-order skip race.
 // @Description
+// @Description  References in event data (sk-1007 US-2) follow the token
+// @Description  owner's visibility now: a task id an event names that the
+// @Description  owner does not see (the other end of a link, also inside the
+// @Description  composite `entity.id` "from::to::type"; the parent at
+// @Description  creation; the parents of a move) is the literal "<hidden>",
+// @Description  the project field of a hidden end or of a hidden project is
+// @Description  null with the key kept, lists keep their length, and
+// @Description  `summary` carries the marker. Visible references are
+// @Description  unchanged. Visibility is read once per page; a page that
+// @Description  names no other task or project sends no extra statement.
+// @Description
 // @Description  Visibility is re-checked fail-closed on every poll: if the
 // @Description  token owner has lost visibility of the scoped project
 // @Description  (removed from members and not an org-admin; archival does NOT

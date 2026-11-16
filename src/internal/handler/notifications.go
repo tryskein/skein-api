@@ -343,6 +343,8 @@ func (h *NotificationsHandler) ListProjectWatchers(w http.ResponseWriter, r *htt
 // @Description
 // @Description Retention: rows are kept NOTIFICATIONS_RETENTION_DAYS days (90 by default). A background sweep, at least once an hour, deletes a row that is not a mention and is older than that window, read or unread, archived or not — EXCEPT a row whose web push is still owed (push queued or being delivered): it is kept, and returned by this endpoint like any other row, until the delivery is over. A mention row is never deleted, whatever its age.
 // @Description
+// @Description References in event data (sk-1007 US-2): a row's own project is one the caller sees, but its event may name another task or project — the other end of a link (`entity.id` "from::to::type", `fromId`, `toId`, `fromProjectId`, `toProjectId` in `oldValue` / `newValue`), the parent named at creation (`newValue.parentId`), the parents of a move (`oldValue.parentIds`, `newValue.parentId`). Each such task id the caller does not see now (no access, outside the API key's scope, or deleted) is the literal `"<hidden>"` — also inside the composite link id — and the project field of a hidden end or of a hidden project is `null`, the key kept; lists keep their length. The row stays and `summary` is built with the marker in place of the hidden reference; visible references, titles and texts are unchanged. Visibility is read once per page, not per row.
+// @Description
 // @Description Side effects: none. Reading the inbox does NOT mark anything read — that is POST /api/v1/notifications/read.
 // @Tags Notifications
 // @Produce json

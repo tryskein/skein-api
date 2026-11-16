@@ -1,6 +1,7 @@
 package notifications
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -19,6 +20,7 @@ import (
 	"skein-api/internal/authz"
 	"skein-api/internal/hierarchy"
 	"skein-api/internal/person"
+	"skein-api/internal/redact"
 	"skein-api/internal/signals"
 	"skein-api/internal/spaces"
 	"skein-api/internal/status"
@@ -408,65 +410,59 @@ SELECT n.id, n.type, n.created_at, n.read_at, n.archived_at,
 	// snippets in a second SELECT pass.
 	var mentionItems []mentionMeta
 
+	// Two passes (sk-1007 K4): scan the raw rows, redact the page's event
+	// references with the caller's scope (with the key's), then hydrate.
 	items := make([]NotificationDTO, 0, args.Limit)
+	raws := make([]notifRaw, 0, args.Limit)
 	for rows.Next() {
 		var (
-			n                                 NotificationDTO
-			actorName                         string
-			actorUserID                       *uuid.UUID
-			actorType                         string
-			entityType, entityID              string
-			projectID                         *uuid.UUID
-			issueTitle, projectIDPrefix       *string
-			fieldName                         *string
-			oldData, newData, payload         []byte
-			commentIssueID, commentIssueTitle *string
-			commentProjectPrefix              *string
-			spaceShort                        *string
-			actorStatus                       *person.Status
+			n          NotificationDTO
+			r          notifRaw
+			spaceShort *string
 		)
 		if err := rows.Scan(
 			&n.ID, &n.Type, &n.CreatedAt, &n.ReadAt, &n.ArchivedAt,
-			&actorName, &actorUserID, &actorType,
-			&entityType, &entityID, &projectID,
-			&issueTitle, &projectIDPrefix,
-			&fieldName, &oldData, &newData, &payload,
-			&commentIssueID, &commentIssueTitle, &commentProjectPrefix,
-			&spaceShort, &actorStatus,
+			&r.actorName, &r.actorUserID, &r.actorType,
+			&r.entityType, &r.entityID, &r.projectID,
+			&r.issueTitle, &r.projectIDPrefix,
+			&r.fieldName, &r.oldData, &r.newData, &r.payload,
+			&r.commentIssueID, &r.commentIssueTitle, &r.commentProjectPrefix,
+			&spaceShort, &r.actorStatus,
 		); err != nil {
 			return nil, fmt.Errorf("scanning notification row: %w", err)
 		}
-
-		hydrateNotificationDTO(&n,
-			actorName, actorUserID, actorType,
-			entityType, entityID, projectID,
-			issueTitle, projectIDPrefix,
-			fieldName, oldData, newData, payload,
-			commentIssueID, commentIssueTitle, commentProjectPrefix)
+		r.own(n.Type)
 		if spaceShort != nil {
 			n.SpaceID = *spaceShort
-		}
-		if actorStatus != nil {
-			n.Actor.Status = *actorStatus
 		}
 
 		// sk-38 — register mention rows for second-pass snippet hydration.
 		// Use the ORIGINAL event entity_type/entity_id (not n.Entity, which
-		// has been re-pointed to the parent issue for comment events).
+		// has been re-pointed to the parent issue for comment events). The
+		// index is the row's position in items, which the redaction pass
+		// keeps.
 		if n.Type == "comment.mention" || n.Type == "issue.mention" {
 			mentionItems = append(mentionItems, mentionMeta{
 				idx:          len(items),
 				evtType:      n.Type,
-				eventEntType: entityType,
-				eventEntID:   entityID,
-				payload:      append([]byte(nil), payload...),
+				eventEntType: r.entityType,
+				eventEntID:   r.entityID,
+				payload:      append([]byte(nil), r.payload...),
 			})
 		}
 
 		items = append(items, n)
+		raws = append(raws, r)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
+	}
+	rows.Close()
+	if err := redactNotifRaws(ctx, s.pool, authz.ScopeFor(ctx, args.UserID), raws); err != nil {
+		return nil, fmt.Errorf("listing notifications: %w", err)
+	}
+	for i := range items {
+		raws[i].hydrate(&items[i])
 	}
 
 	// sk-38 — hydrate MentionContext for mention-typed rows. Resolves the
@@ -492,6 +488,72 @@ SELECT n.id, n.type, n.created_at, n.read_at, n.archived_at,
 		res.NextCursor = &c
 	}
 	return res, nil
+}
+
+// notifRaw is the raw columns of one notification row that
+// hydrateNotificationDTO reads, held between the scan and the hydration so
+// the page's event references are redacted first (two-pass scan, sk-1007
+// K4): the entity, the summary and the old/new values are then built from
+// the edited columns, on every surface the same way.
+type notifRaw struct {
+	eventType                                               string
+	actorName                                               string
+	actorUserID                                             *uuid.UUID
+	actorType                                               string
+	actorStatus                                             *person.Status
+	entityType, entityID                                    string
+	projectID                                               *uuid.UUID
+	issueTitle, projectIDPrefix                             *string
+	fieldName                                               *string
+	oldData, newData, payload                               []byte
+	commentIssueID, commentIssueTitle, commentProjectPrefix *string
+}
+
+// own records the row's event type (a notification's type is its event's)
+// and takes private copies of the JSON columns, which outlive the scan.
+func (r *notifRaw) own(eventType string) {
+	r.eventType = eventType
+	r.oldData = bytes.Clone(r.oldData)
+	r.newData = bytes.Clone(r.newData)
+	r.payload = bytes.Clone(r.payload)
+}
+
+// hydrate builds the wire fields of n from the (redacted) raw columns.
+func (r *notifRaw) hydrate(n *NotificationDTO) {
+	hydrateNotificationDTO(n,
+		r.actorName, r.actorUserID, r.actorType,
+		r.entityType, r.entityID, r.projectID,
+		r.issueTitle, r.projectIDPrefix,
+		r.fieldName, r.oldData, r.newData, r.payload,
+		r.commentIssueID, r.commentIssueTitle, r.commentProjectPrefix)
+	if r.actorStatus != nil {
+		n.Actor.Status = *r.actorStatus
+	}
+}
+
+// redactNotifRaws runs RedactEventRefs over a scanned page and writes the
+// edited columns back into raws.
+func redactNotifRaws(ctx context.Context, q authz.RowsQuerier, scope authz.Scope, raws []notifRaw) error {
+	rows := make([]redact.EventRow, len(raws))
+	for i := range raws {
+		rows[i] = redact.EventRow{
+			Type:     raws[i].eventType,
+			EntityID: raws[i].entityID,
+			OldData:  raws[i].oldData,
+			NewData:  raws[i].newData,
+			Payload:  raws[i].payload,
+		}
+	}
+	if err := RedactEventRefs(ctx, q, scope, rows); err != nil {
+		return err
+	}
+	for i := range raws {
+		raws[i].entityID = rows[i].EntityID
+		raws[i].oldData = rows[i].OldData
+		raws[i].newData = rows[i].NewData
+		raws[i].payload = rows[i].Payload
+	}
+	return nil
 }
 
 // hydrateNotificationDTO fills the actor / entity / field / summary
@@ -1037,21 +1099,17 @@ func (s *Store) PollForMonitor(ctx context.Context, p PollParams) (PollResult, e
 	}
 	defer rows.Close()
 
+	// Two passes (sk-1007 K4): scan the raw rows, redact the page's event
+	// references with the credential owner's scope, then hydrate. The poll
+	// statement itself is unchanged; a page that names no reference reads
+	// nothing more.
 	items := make([]NotificationDTO, 0, limit)
+	raws := make([]notifRaw, 0, limit)
 	for rows.Next() {
 		var (
-			n                                 NotificationDTO
-			actorName                         string
-			actorUserID                       *uuid.UUID
-			actorType                         string
-			actorSessionID                    *string
-			entityType, entityID              string
-			projectID                         *uuid.UUID
-			issueTitle, projectIDPrefix       *string
-			fieldName                         *string
-			oldData, newData, payload         []byte
-			commentIssueID, commentIssueTitle *string
-			commentProjectPrefix              *string
+			n              NotificationDTO
+			r              notifRaw
+			actorSessionID *string
 			// sk-242.1 monitor-only locals — projected solely by PollForMonitor
 			// (not shared with the human ListInbox Scan).
 			commentBody      *string
@@ -1066,16 +1124,17 @@ func (s *Store) PollForMonitor(ctx context.Context, p PollParams) (PollResult, e
 		// (sk-242.1); human Scan paths do not select them.
 		if err := rows.Scan(
 			&n.ID, &n.Type, &n.CreatedAt,
-			&actorName, &actorUserID, &actorType,
-			&entityType, &entityID, &projectID,
+			&r.actorName, &r.actorUserID, &r.actorType,
+			&r.entityType, &r.entityID, &r.projectID,
 			&actorSessionID,
-			&issueTitle, &projectIDPrefix,
-			&fieldName, &oldData, &newData, &payload,
-			&commentIssueID, &commentIssueTitle, &commentProjectPrefix,
+			&r.issueTitle, &r.projectIDPrefix,
+			&r.fieldName, &r.oldData, &r.newData, &r.payload,
+			&r.commentIssueID, &r.commentIssueTitle, &r.commentProjectPrefix,
 			&commentBody, &commentDeletedAt,
 		); err != nil {
 			return PollResult{}, fmt.Errorf("scanning monitor notification row: %w", err)
 		}
+		r.own(n.Type)
 
 		// Reader-side echo marker (INV-2, US-2): expose the event's
 		// actor_session_id ONLY when non-empty. A NULL or empty string means
@@ -1087,20 +1146,14 @@ func (s *Store) PollForMonitor(ctx context.Context, p PollParams) (PollResult, e
 			n.ActorSessionID = actorSessionID
 		}
 
-		hydrateNotificationDTO(&n,
-			actorName, actorUserID, actorType,
-			entityType, entityID, projectID,
-			issueTitle, projectIDPrefix,
-			fieldName, oldData, newData, payload,
-			commentIssueID, commentIssueTitle, commentProjectPrefix)
-
 		// sk-242.1 US-1/2 — monitor-only comment enrichment (INV-5: only here).
 		// commentId authority = event entity_id when parseable (FR-007), NOT
 		// join success. Preview/truncated ONLY from live comments.body
 		// (FR-001 / INV-3); soft-delete → text absent (INV-4); Entity still
-		// re-points comment→issue (INV-9).
-		if entityType == "comment" {
-			if parsed, err := uuid.Parse(entityID); err == nil {
+		// re-points comment→issue (INV-9). A comment event names no other
+		// task, so its entity_id is not touched by the redaction.
+		if r.entityType == "comment" {
+			if parsed, err := uuid.Parse(r.entityID); err == nil {
 				cid := parsed.String()
 				n.CommentID = &cid
 			}
@@ -1123,7 +1176,7 @@ func (s *Store) PollForMonitor(ctx context.Context, p PollParams) (PollResult, e
 				slog.WarnContext(ctx, "monitor poll: comment event without live comment row",
 					"eventId", n.ID,
 					"commentId", *n.CommentID,
-					"projectId", projectID,
+					"projectId", r.projectID,
 				)
 			}
 			// Unparseable entity_id: CommentID/BodyPreview/Truncated all nil
@@ -1131,9 +1184,17 @@ func (s *Store) PollForMonitor(ctx context.Context, p PollParams) (PollResult, e
 		}
 
 		items = append(items, n)
+		raws = append(raws, r)
 	}
 	if err := rows.Err(); err != nil {
 		return PollResult{}, fmt.Errorf("iterating monitor notification rows: %w", err)
+	}
+	rows.Close()
+	if err := redactNotifRaws(ctx, s.pool, authz.ScopeFor(ctx, p.UserID), raws); err != nil {
+		return PollResult{}, fmt.Errorf("polling monitor notifications: %w", err)
+	}
+	for i := range items {
+		raws[i].hydrate(&items[i])
 	}
 
 	// Cursor = last emitted (created_at, id) tuple in sort order. On an
@@ -2603,54 +2664,55 @@ SELECT w.card_issue_id, w.id, w.type, w.created_at, w.read_at,
 	}
 	defer rows.Close()
 
-	out := make(map[string][]NotificationDTO, len(cardIssueIDs))
+	// Two passes (sk-1007 K4): scan the raw rows of every card, redact
+	// their event references with the caller's scope (with the key's) once
+	// for all cards, then hydrate.
+	type cardRow struct {
+		card string
+		n    NotificationDTO
+	}
+	var page []cardRow
+	var raws []notifRaw
 	for rows.Next() {
 		var (
-			cardIssueID                       string
-			n                                 NotificationDTO
-			actorName                         string
-			actorUserID                       *uuid.UUID
-			actorType                         string
-			entityType, entityID              string
-			projectID                         *uuid.UUID
-			issueTitle, projectIDPrefix       *string
-			fieldName                         *string
-			oldData, newData, payload         []byte
-			commentIssueID, commentIssueTitle *string
-			commentProjectPrefix              *string
-			spaceShort                        *string
+			cr         cardRow
+			r          notifRaw
+			spaceShort *string
 		)
 		if err := rows.Scan(
-			&cardIssueID,
-			&n.ID, &n.Type, &n.CreatedAt, &n.ReadAt,
-			&actorName, &actorUserID, &actorType,
-			&entityType, &entityID, &projectID,
-			&issueTitle, &projectIDPrefix,
-			&fieldName, &oldData, &newData, &payload,
-			&commentIssueID, &commentIssueTitle, &commentProjectPrefix,
+			&cr.card,
+			&cr.n.ID, &cr.n.Type, &cr.n.CreatedAt, &cr.n.ReadAt,
+			&r.actorName, &r.actorUserID, &r.actorType,
+			&r.entityType, &r.entityID, &r.projectID,
+			&r.issueTitle, &r.projectIDPrefix,
+			&r.fieldName, &r.oldData, &r.newData, &r.payload,
+			&r.commentIssueID, &r.commentIssueTitle, &r.commentProjectPrefix,
 			&spaceShort,
 		); err != nil {
 			return nil, fmt.Errorf("scanning recent event: %w", err)
 		}
-
-		// Same actor / entity / field / summary hydration as the inbox
-		// paths — routed through the shared helper so the issue-vs-comment
-		// re-pointing cannot drift between this projection and ListInbox.
-		hydrateNotificationDTO(&n,
-			actorName, actorUserID, actorType,
-			entityType, entityID, projectID,
-			issueTitle, projectIDPrefix,
-			fieldName, oldData, newData, payload,
-			commentIssueID, commentIssueTitle, commentProjectPrefix,
-		)
+		r.own(cr.n.Type)
 		if spaceShort != nil {
-			n.SpaceID = *spaceShort
+			cr.n.SpaceID = *spaceShort
 		}
-
-		out[cardIssueID] = append(out[cardIssueID], n)
+		page = append(page, cr)
+		raws = append(raws, r)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
+	}
+	rows.Close()
+	if err := redactNotifRaws(ctx, s.pool, authz.ScopeFor(ctx, userID), raws); err != nil {
+		return nil, fmt.Errorf("loading watching recent events: %w", err)
+	}
+
+	out := make(map[string][]NotificationDTO, len(cardIssueIDs))
+	for i := range page {
+		// Same actor / entity / field / summary hydration as the inbox
+		// paths — routed through the shared helper so the issue-vs-comment
+		// re-pointing cannot drift between this projection and ListInbox.
+		raws[i].hydrate(&page[i].n)
+		out[page[i].card] = append(out[page[i].card], page[i].n)
 	}
 	return out, nil
 }

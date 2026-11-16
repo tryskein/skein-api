@@ -120,7 +120,12 @@ func RegisterNotifications(s *server.MCPServer, pool *pgxpool.Pool, notifStore *
 				"when you need the whole of a long old value, open the issue's "+
 				"activity in the web UI. The row's `summary` "+
 				"also has the entity reference removed where the row already "+
-				"names the entity, so the same id is not carried twice.",
+				"names the entity, so the same id is not carried twice.\n\n"+
+				"Other tasks an event names (the other end of a link, also in "+
+				"the composite entity id \"from::to::type\"; the parent at "+
+				"creation; the parents of a move) appear only as you see them "+
+				"now: a task you cannot see is the literal \"<hidden>\", the "+
+				"project of a hidden end is null, the row itself stays.",
 		),
 		mcpgo.WithString(actionParam,
 			mcpgo.Required(),
