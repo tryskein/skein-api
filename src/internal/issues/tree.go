@@ -927,36 +927,10 @@ func checkTreeHorizon(ctx context.Context, args IssueTreeArgs) error {
 	return nil
 }
 
-// visibleIssueIDs returns which of ids are issues of projects the scope
-// sees.
+// visibleIssueIDs returns which of ids are issues the scope sees — the one
+// definition, authz.VisibleIssueIDs.
 func (s *Store) visibleIssueIDs(ctx context.Context, ids []string, scope authz.Scope) (map[string]struct{}, error) {
-	out := make(map[string]struct{}, len(ids))
-	if len(ids) == 0 {
-		return out, nil
-	}
-	unrestricted, caller, hErr := scope.Bind(ctx, s.pool)
-	if hErr != nil {
-		return nil, hErr
-	}
-	rows, err := s.pool.Query(ctx, `
-SELECT i.id FROM issues i
- WHERE i.id = ANY($1::text[]) AND `+authz.ProjectVisibleExpr("i", "$2", "$3"),
-		ids, unrestricted, caller)
-	if err != nil {
-		return nil, fmt.Errorf("checking visibility of parents: %w", err)
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			return nil, fmt.Errorf("scanning visible parent: %w", err)
-		}
-		out[id] = struct{}{}
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("reading visible parents: %w", err)
-	}
-	return out, nil
+	return authz.VisibleIssueIDs(ctx, s.pool, scope, ids)
 }
 
 // treeBlockers is what treeBlockersFor knows about one issue: its blockers
