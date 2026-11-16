@@ -2,11 +2,16 @@ package tools
 
 import (
 	"context"
+	"os"
 	"regexp"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"unicode/utf8"
 
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 
 	"skein-api/internal/issues"
@@ -778,6 +783,146 @@ func assertSC006StampsAreUTC(t *testing.T, raw string) {
 				"stamp, so this run would fail the budget on its ENVIRONMENT rather "+
 				"than on the response. Fix the database session's time zone — do NOT "+
 				"raise sc006BudgetChars:\n%s", m[0], m[1], sc006BudgetChars, raw)
+		}
+	}
+}
+
+// argTracer records every statement pgx sends with its arguments while on.
+type argTracer struct {
+	mu   sync.Mutex
+	on   bool
+	args [][]any
+}
+
+func (tr *argTracer) TraceQueryStart(ctx context.Context, _ *pgx.Conn, d pgx.TraceQueryStartData) context.Context {
+	tr.mu.Lock()
+	defer tr.mu.Unlock()
+	if tr.on {
+		tr.args = append(tr.args, d.Args)
+	}
+	return ctx
+}
+
+func (tr *argTracer) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {}
+
+// childReads runs fn with the tracer on and counts the statements one of
+// whose arguments is a list of issue ids naming one of children — the form
+// of a visibility read of the children (authz.VisibleIssueIDs).
+func (tr *argTracer) childReads(fn func(), children []string) int {
+	tr.mu.Lock()
+	tr.on, tr.args = true, nil
+	tr.mu.Unlock()
+	fn()
+	tr.mu.Lock()
+	defer tr.mu.Unlock()
+	tr.on = false
+	n := 0
+	for _, args := range tr.args {
+		for _, a := range args {
+			ids, ok := a.([]string)
+			if ok && slices.ContainsFunc(ids, func(id string) bool { return slices.Contains(children, id) }) {
+				n++
+				break
+			}
+		}
+	}
+	return n
+}
+
+// TestClose_ChildVisibilityReadOnlyOnTheListedRefusal — sk-1007 No. 64. The
+// NF bound of the spec: the refusal of a standing close reads visibility
+// only on its own path. With a principal in the context no statement
+// carries the children's ids for (a) a close of an ordinary task with an
+// open child, (b) a close of a standing task whose children are all closed,
+// (c) the refusal on a path without a list (skein_update to closed); the
+// listed refusal of skein_close sends exactly one (control).
+func TestClose_ChildVisibilityReadOnlyOnTheListedRefusal(t *testing.T) {
+	url := os.Getenv(testDatabaseURL)
+	if url == "" {
+		t.Skipf("set %s to run DB-backed tests", testDatabaseURL)
+	}
+	cfg, err := pgxpool.ParseConfig(url)
+	if err != nil {
+		t.Fatalf("parse %s: %v", testDatabaseURL, err)
+	}
+	tr := &argTracer{}
+	cfg.ConnConfig.Tracer = tr
+	pool, err := pgxpool.NewWithConfig(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	t.Cleanup(pool.Close)
+
+	userID, _ := seedUser(t, pool, "user")
+	pid, prefix := seedProject(t, pool, userID, "clvis")
+	n := 0
+	issue := func(status string) string {
+		n++
+		return seedIssue(t, pool, pid, userID, prefix+"-"+itoa(n), "vis", status, 2)
+	}
+	childOf := func(parent, status string) string {
+		c := issue(status)
+		if _, err := pool.Exec(context.Background(), `
+INSERT INTO dependencies (from_id, to_id, type, metadata, version, created_by, created_at)
+VALUES ($1, $2, 'parent-child', '{}'::jsonb, 1, $3, now())`, c, parent, userID); err != nil {
+			t.Fatalf("seed child edge: %v", err)
+		}
+		return c
+	}
+	version := func(id string) int {
+		var v int
+		if err := pool.QueryRow(context.Background(), `SELECT version FROM issues WHERE id = $1`, id).Scan(&v); err != nil {
+			t.Fatal(err)
+		}
+		return v
+	}
+	store := issues.NewStore(pool)
+	ctx := withCtxSession(t, userID, "user", "sess-close-vis")
+	run := func(h func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error), args map[string]any) *mcpgo.CallToolResult {
+		req := mcpgo.CallToolRequest{}
+		req.Params.Arguments = args
+		res, err := h(ctx, req)
+		if err != nil {
+			t.Fatalf("handler: %v", err)
+		}
+		return res
+	}
+	closeArgs := func(id string) map[string]any {
+		return map[string]any{"id": id, "expectedVersion": version(id), "reason": "done", "closeOutcome": "done"}
+	}
+
+	ordinary := issue("open")
+	ordinaryChild := childOf(ordinary, "open")
+	retired := issue("standing")
+	retiredChild := childOf(retired, "closed")
+	blocked := issue("standing")
+	blockedChild := childOf(blocked, "open")
+
+	for _, c := range []struct {
+		name     string
+		children []string
+		call     func() *mcpgo.CallToolResult
+		wantErr  bool
+		want     int
+	}{
+		{"(a) close of an ordinary task with an open child", []string{ordinaryChild},
+			func() *mcpgo.CallToolResult { return run(handleClose(pool, store), closeArgs(ordinary)) }, false, 0},
+		{"(b) close of a standing task whose children are closed", []string{retiredChild},
+			func() *mcpgo.CallToolResult { return run(handleClose(pool, store), closeArgs(retired)) }, false, 0},
+		{"(c) skein_update to closed with an open child", []string{blockedChild},
+			func() *mcpgo.CallToolResult {
+				return run(handleUpdate(pool, store), map[string]any{"id": blocked, "expectedVersion": version(blocked), "status": "closed", "closeOutcome": "done"})
+			}, true, 0},
+		{"control: skein_close with an open child", []string{blockedChild},
+			func() *mcpgo.CallToolResult { return run(handleClose(pool, store), closeArgs(blocked)) }, true, 1},
+	} {
+		var res *mcpgo.CallToolResult
+		got := tr.childReads(func() { res = c.call() }, c.children)
+		if res.IsError != c.wantErr {
+			t.Fatalf("%s: isError %v, want %v: %+v", c.name, res.IsError, c.wantErr, extractToolJSON(t, res))
+		}
+		if got != c.want {
+			t.Errorf("%s: %d statements carried the children's ids, want %d", c.name, got, c.want)
 		}
 	}
 }

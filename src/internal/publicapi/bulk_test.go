@@ -214,3 +214,48 @@ func TestBulk_Batches(t *testing.T) {
 		}
 	})
 }
+
+// TestStanding_BatchRowNamesOnlyVisibleChildren — sk-1007 No. 51:
+// bulkCloseIssues and skein_close_many carry in the refused row's details
+// what No. 50 carries (standingFixture in issues_write_test.go).
+func TestStanding_BatchRowNamesOnlyVisibleChildren(t *testing.T) {
+	pool := testsupport.NewTestPool(t)
+	rg := newResourceRig(t, pool)
+	f := seedStandingFixture(t, pool)
+	items := func() []any {
+		out := []any{}
+		for _, c := range f.cases() {
+			out = append(out, map[string]any{"id": c.id, "expectedVersion": f.w.version(c.id), "reason": "retire", "closeOutcome": "done"})
+		}
+		return out
+	}
+	byID := func(t *testing.T, raw map[string]any) map[string]map[string]any {
+		t.Helper()
+		out := map[string]map[string]any{}
+		list, _ := raw["results"].([]any)
+		for _, it := range list {
+			m, _ := it.(map[string]any)
+			id, _ := m["id"].(string)
+			e, _ := m["error"].(map[string]any)
+			out[id] = e
+		}
+		return out
+	}
+	rest := rg.rest(f.key, http.MethodPost, "/api/v1/issues/bulk-close", map[string]any{"items": items()}, nil)
+	wantOK(t, "bulkCloseIssues", rest, http.StatusMultiStatus)
+	mcp := rg.tool(f.key, "skein_close_many", map[string]any{"items": items()})
+	for name, a := range map[string]struct {
+		rows map[string]map[string]any
+		raw  string
+	}{
+		"bulkCloseIssues":  {byID(t, rest.json(t)), string(rest.body)},
+		"skein_close_many": {byID(t, mcp.json(t)), mcp.text},
+	} {
+		for _, c := range f.cases() {
+			e := a.rows[c.id]
+			details, _ := e["details"].(map[string]any)
+			f.checkListed(t, name+" row "+c.id, e["code"], details, a.raw, c.children, c.unavailable)
+			f.stillStanding(t, c.id)
+		}
+	}
+}

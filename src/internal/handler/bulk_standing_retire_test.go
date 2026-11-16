@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/go-chi/chi/v5"
@@ -181,4 +183,62 @@ func TestBulk_StandingAllChildrenClosed_Retires(t *testing.T) {
 			t.Fatalf("parent status = %q, want closed (childless retire allowed)", got)
 		}
 	})
+}
+
+// TestStanding_RESTUIPathsCarryNoList — sk-1007 No. 53. Reference — spec
+// US-3 "the paths without a list" (Unchanged): the REST UI close and archive
+// (bulk) and the transition to closed answer standing_has_open_children
+// with neither childIds nor unavailableOpenChildren nor the id of the child,
+// here a child in a project the caller cannot see. Read on the raw body:
+// bulkResponse would swallow extra keys.
+func TestStanding_RESTUIPathsCarryNoList(t *testing.T) {
+	env := newListEnv(t)
+	other, _ := seedListUser(t, env.pool, "user")
+	hiddenPID, hiddenPrefix := seedListProject(t, env.pool, other, "lhh")
+	parent := env.prefix + "-1"
+	child := hiddenPrefix + "-1"
+	seedListIssue(t, env.pool, env.projectID, env.owner, parent, "human", env.ownerName, nil)
+	seedListIssue(t, env.pool, hiddenPID, other, child, "human", "", nil)
+	treeSeedDep(t, env.pool, child, parent, "parent-child", other)
+	setIssueStanding(t, env, parent)
+
+	answers := map[string]string{}
+	bh := NewBulkHandler(env.pool, issues.NewStore(env.pool))
+	for _, action := range []string{BulkActionClose, BulkActionArchive} {
+		raw, err := json.Marshal(map[string]any{"ids": []string{parent}, "action": action})
+		if err != nil {
+			t.Fatal(err)
+		}
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/projects/"+env.projectID.String()+"/issues/bulk", bytes.NewReader(raw))
+		req.Header.Set("Content-Type", "application/json")
+		rctx := chi.NewRouteContext()
+		rctx.URLParams.Add("projectID", env.projectID.String())
+		ctx := context.WithValue(req.Context(), chi.RouteCtxKey, rctx)
+		req = req.WithContext(auth.WithUserRole(auth.WithUserID(ctx, env.owner), "user"))
+		rec := httptest.NewRecorder()
+		bh.Bulk(rec, req)
+		answers["bulk "+action] = rec.Body.String()
+	}
+	var version int
+	if err := env.pool.QueryRow(t.Context(), `SELECT version FROM issues WHERE id = $1`, parent).Scan(&version); err != nil {
+		t.Fatal(err)
+	}
+	tr := xpCallFull(t, env.handler.UpdateStatus, xpRequest(t, http.MethodPost, strconv.Itoa(version),
+		map[string]any{"status": "closed", "reason": "retire"}, env.owner, "user",
+		"projectID", env.projectID.String(), "issueID", parent))
+	answers["transition to closed"] = tr.Raw
+
+	for name, raw := range answers {
+		if !strings.Contains(raw, "standing_has_open_children") {
+			t.Errorf("%s: %s, want the standing_has_open_children refusal", name, raw)
+		}
+		for _, key := range []string{`"childIds"`, `"unavailableOpenChildren"`, `"` + child + `"`} {
+			if strings.Contains(raw, key) {
+				t.Errorf("%s carries %s: %s", name, key, raw)
+			}
+		}
+	}
+	if got := issueStatus(t, env, parent); got != "standing" {
+		t.Errorf("parent status = %q, want standing", got)
+	}
 }

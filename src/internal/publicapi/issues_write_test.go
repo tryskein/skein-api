@@ -13,6 +13,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -877,4 +878,178 @@ func TestIssuesWrite_NullBody(t *testing.T) {
 			}
 		})
 	}
+}
+
+// ----------------- sk-1007 US-3: the open children of a refused retire -----------------
+//
+// Reference — spec US-3 (D6, SC-004), written before the code: on the paths
+// that list the open children (MCP skein_close at the top level, MCP
+// skein_close_many in the row's details, public closeIssue in the problem's
+// extensions, public bulkCloseIssues in the row's details) `childIds` holds
+// exactly the children the caller sees now, with the key's scope, and
+// `unavailableOpenChildren` beside it, always present, counts the other
+// open ones; no field names a hidden child. The paths without a list keep
+// their answer: no list, no number, no child id. The retire does not
+// happen.
+
+// standingFixture: the owner's key is scoped to P. Q is the owner's too
+// (visible to him, outside the key); R lies in a space of another user. The
+// standing tasks of P:
+//
+//	mixed        open children cP (P), cQ (Q), cR (R), and a CLOSED child in R
+//	hiddenOnly   open children in Q and R only
+//	visibleOnly  one open child in P
+type standingFixture struct {
+	w                              *writeWorld
+	key                            string
+	mixed, hiddenOnly, visibleOnly string
+	cP, cVisible                   string
+	hidden                         []string // every child id of Q and R
+}
+
+func seedStandingFixture(t *testing.T, pool *pgxpool.Pool) *standingFixture {
+	t.Helper()
+	w := seedWriteWorld(t, pool)
+	q, qPrefix := seedProject(t, pool, w.owner, w.space, "wrq")
+	rSpace, _ := seedOwnSpace(t, pool, w.other)
+	r, rPrefix := seedProject(t, pool, w.other, rSpace, "wrr")
+	f := &standingFixture{w: w, key: projectsKey(t, pool, w.owner, apikeys.LevelWrite, w.project)}
+	n := 0
+	child := func(project uuid.UUID, prefix string, creator uuid.UUID, status, parent string, hidden bool) string {
+		n++
+		id := testsupport.SeedIssue(t, pool, project, creator, prefix+"-"+strconv.Itoa(700+n), "child", status, 2)
+		w.exec(`INSERT INTO dependencies (from_id, to_id, type, metadata, version, created_by, created_at)
+VALUES ($1, $2, 'parent-child', '{}'::jsonb, 1, $3, now())`, id, parent, w.owner)
+		if hidden {
+			f.hidden = append(f.hidden, id)
+		}
+		return id
+	}
+	standing := func() string {
+		id := w.issue("standing")
+		w.exec(`UPDATE issues SET status = 'standing' WHERE id = $1`, id)
+		return id
+	}
+	f.mixed, f.hiddenOnly, f.visibleOnly = standing(), standing(), standing()
+	f.cP = child(w.project, w.prefix, w.owner, "open", f.mixed, false)
+	child(q, qPrefix, w.owner, "open", f.mixed, true)
+	child(r, rPrefix, w.other, "open", f.mixed, true)
+	child(r, rPrefix, w.other, "closed", f.mixed, true)
+	child(q, qPrefix, w.owner, "open", f.hiddenOnly, true)
+	child(r, rPrefix, w.other, "open", f.hiddenOnly, true)
+	f.cVisible = child(w.project, w.prefix, w.owner, "open", f.visibleOnly, false)
+	t.Cleanup(func() {
+		for _, p := range []uuid.UUID{q, r} {
+			_, _ = pool.Exec(context.Background(), `DELETE FROM dependencies WHERE from_id IN (SELECT id FROM issues WHERE project_id = $1)`, p)
+		}
+	})
+	return f
+}
+
+// cases are the three standing tasks with the expected list and number.
+func (f *standingFixture) cases() []struct {
+	id          string
+	children    []any
+	unavailable float64
+} {
+	return []struct {
+		id          string
+		children    []any
+		unavailable float64
+	}{
+		{f.mixed, []any{f.cP}, 2},
+		{f.hiddenOnly, []any{}, 2},
+		{f.visibleOnly, []any{f.cVisible}, 0},
+	}
+}
+
+// checkListed asserts the listed refusal carried in obj (raw is the whole
+// answer).
+func (f *standingFixture) checkListed(t *testing.T, where string, code any, obj map[string]any, raw string, children []any, unavailable float64) {
+	t.Helper()
+	if code != "standing_has_open_children" {
+		t.Errorf("%s: code %v, want standing_has_open_children (%s)", where, code, raw)
+		return
+	}
+	if got, ok := obj["childIds"]; !ok || !reflect.DeepEqual(got, children) {
+		t.Errorf("%s: childIds %v (present %v), want %v", where, got, ok, children)
+	}
+	if got, ok := obj["unavailableOpenChildren"]; !ok || got != unavailable {
+		t.Errorf("%s: unavailableOpenChildren %v (present %v), want %v", where, got, ok, unavailable)
+	}
+	f.checkNoHidden(t, where, raw)
+}
+
+func (f *standingFixture) checkNoHidden(t *testing.T, where, raw string) {
+	t.Helper()
+	for _, id := range f.hidden {
+		if strings.Contains(raw, `"`+id+`"`) {
+			t.Errorf("%s names the hidden child %s: %s", where, id, raw)
+		}
+	}
+}
+
+func (f *standingFixture) stillStanding(t *testing.T, id string) {
+	t.Helper()
+	var st string
+	if err := f.w.pool.QueryRow(context.Background(), `SELECT status FROM issues WHERE id = $1`, id).Scan(&st); err != nil {
+		t.Fatal(err)
+	}
+	if st != "standing" {
+		t.Errorf("%s is %s after the refusal, want standing", id, st)
+	}
+}
+
+// TestStanding_ListedRefusalNamesOnlyVisibleChildren — sk-1007 No. 50:
+// closeIssue (problem extensions) and skein_close (top level) by the key.
+func TestStanding_ListedRefusalNamesOnlyVisibleChildren(t *testing.T) {
+	pool := testsupport.NewTestPool(t)
+	rg := newResourceRig(t, pool)
+	f := seedStandingFixture(t, pool)
+	w := f.w
+	for _, c := range f.cases() {
+		rest := rg.rest(f.key, http.MethodPost, issuePath(c.id, "/close"),
+			map[string]any{"reason": "retire", "closeOutcome": "done"}, ifMatch(w.version(c.id)))
+		if rest.status != http.StatusUnprocessableEntity {
+			t.Errorf("closeIssue %s: %d %s, want 422", c.id, rest.status, rest.body)
+		}
+		m := rest.json(t)
+		f.checkListed(t, "closeIssue "+c.id, m["code"], m, string(rest.body), c.children, c.unavailable)
+
+		a := rg.tool(f.key, "skein_close", map[string]any{"id": c.id, "expectedVersion": w.version(c.id), "reason": "retire", "closeOutcome": "done"})
+		f.checkListed(t, "skein_close "+c.id, a.code, a.json(t), a.text, c.children, c.unavailable)
+		f.stillStanding(t, c.id)
+	}
+}
+
+// TestStanding_UnlistedPathsUnchanged — sk-1007 No. 52: updateIssue with
+// status closed, skein_update, bulkUpdateIssues and skein_update_many keep
+// their refusal: no list, no number, no child id.
+func TestStanding_UnlistedPathsUnchanged(t *testing.T) {
+	pool := testsupport.NewTestPool(t)
+	rg := newResourceRig(t, pool)
+	f := seedStandingFixture(t, pool)
+	w := f.w
+	s := f.mixed
+	item := func() map[string]any {
+		return map[string]any{"id": s, "expectedVersion": w.version(s), "status": "closed", "closeOutcome": "done"}
+	}
+	answers := map[string]string{}
+	r := rg.rest(f.key, http.MethodPatch, issuePath(s, ""), map[string]any{"status": "closed", "closeOutcome": "done"}, ifMatch(w.version(s)))
+	answers["updateIssue"] = string(r.body)
+	answers["skein_update"] = rg.tool(f.key, "skein_update", item()).text
+	answers["bulkUpdateIssues"] = string(rg.rest(f.key, http.MethodPost, "/api/v1/issues/bulk-update", map[string]any{"items": []any{item()}}, nil).body)
+	answers["skein_update_many"] = rg.tool(f.key, "skein_update_many", map[string]any{"items": []any{item()}}).text
+	for name, raw := range answers {
+		if !strings.Contains(raw, "standing_has_open_children") {
+			t.Errorf("%s: %s, want the standing_has_open_children refusal", name, raw)
+		}
+		for _, key := range []string{`"childIds"`, `"unavailableOpenChildren"`, `"` + f.cP + `"`} {
+			if strings.Contains(raw, key) {
+				t.Errorf("%s carries %s: %s", name, key, raw)
+			}
+		}
+		f.checkNoHidden(t, name, raw)
+	}
+	f.stillStanding(t, s)
 }
