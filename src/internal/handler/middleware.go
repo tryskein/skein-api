@@ -87,10 +87,41 @@ func RequireInternalSecret(secret, challenge string) func(http.Handler) http.Han
 	}
 }
 
+// RequireServiceCall refuses every request that does not carry the
+// service-call marker (auth.HasServiceCallMarker: exactly one
+// X-Skein-Service-Call value, byte-equal to "1") with 403
+// {"error":"service_call_required"}; the wrapped handler does not run.
+//
+// It guards the group of service routes of the internal API — routes only
+// skein-web's own calls may reach, never a browser request it proxies. It is
+// mounted inside the RequireInternalSecret boundary, so a caller without the
+// secret still gets 401 on every path and cannot learn which routes are
+// service routes; only the secret holder (skein-web) ever sees this 403.
+//
+// The refusal is logged at Warn: an outdated skein-web that does not send the
+// marker shows up here. The record carries the masked path and the transport
+// peer only — no secret, no X-Skein-Client-Ip claim, no body.
+func RequireServiceCall(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !auth.HasServiceCallMarker(r.Header) {
+			slog.WarnContext(r.Context(), "service-call marker missing",
+				"code", auth.CodeServiceCallRequired,
+				"path", loggablePath(r.URL.Path),
+				"remote", r.RemoteAddr,
+			)
+			writeJSON(w, http.StatusForbidden, map[string]string{
+				"error": auth.CodeServiceCallRequired,
+			})
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 // loggablePath is a request path safe for the log (K-11:
 // a raw link token is stored nowhere) — every log record written before the
-// handler (RequireInternalSecret, ParseUserHeaders, RequireSessionEpoch,
-// RequireAdmin) uses it. The gates refuse before any route
+// handler (RequireInternalSecret, RequireServiceCall, ParseUserHeaders,
+// RequireSessionEpoch, RequireAdmin) uses it. The gates refuse before any route
 // is matched, so they cannot log the route pattern; instead every segment that
 // could be a secret — 20 or more characters of the base64url alphabet that
 // are not a UUID (a link token is 43) — is replaced by "{redacted}". Ids,
