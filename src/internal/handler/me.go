@@ -604,6 +604,8 @@ func (h *MeHandler) GetWatching(w http.ResponseWriter, r *http.Request) {
 // @Description
 // @Description Effect on the header: the Watching badge drops by exactly the card's unread notifications inside the window; notifications of other cards, mentions and other users' rows are not touched.
 // @Description
+// @Description Visibility: only the caller's notifications of no project or of a project the caller sees now, inside the API key's scope, are marked and counted in `marked`; a notification of any other project carded to `issueId` (an event of a descendant in a project the caller lost) stays unread and unchanged, and is read again when access returns.
+// @Description
 // @Description Idempotent and never an error for a card: a card that is somebody else's, does not exist or has nothing unread answers 200 with `marked` = 0. Side effect: when something was marked, the caller's personal signal `watching` is published after the commit (live update of the caller's other tabs).
 // @Tags Notifications
 // @Produce json

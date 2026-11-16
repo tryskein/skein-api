@@ -91,7 +91,10 @@ func RegisterNotifications(s *server.MCPServer, pool *pgxpool.Pool, notifStore *
 				"{\"marked\": N}), mark_read_all for the "+
 				"whole backlog (optionally scoped to one project). archive moves "+
 				"one row out of the inbox into the archive view; read it back "+
-				"with inbox + scope=\"archived\". Read-only actions: inbox.\n\n"+
+				"with inbox + scope=\"archived\". The mark actions and archive "+
+				"touch and count only rows of projects you can access now (rows of no "+
+				"project included); another row answers as if it did not exist. "+
+				"Read-only actions: inbox.\n\n"+
 				"Retention: notifications are kept NOTIFICATIONS_RETENTION_DAYS "+
 				"days (90 by default). A background sweep, at least once an "+
 				"hour, deletes a row that is not a mention and is older than "+

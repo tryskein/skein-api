@@ -294,7 +294,7 @@ func (a *issueWrites) listNotifications(w http.ResponseWriter, r *http.Request) 
 // markNotificationRead marks one notification read.
 //
 // @Summary Mark a notification read
-// @Description Marks the notification of the path read — the same operation as the MCP tool skein_notifications, action mark_read. A notification that is not the caller's, missing or outside the key's scope is 404 notification_not_found (MCP answers validation_error). Side effects: the notification's read time; no event.
+// @Description Marks the notification of the path read — the same operation as the MCP tool skein_notifications, action mark_read. A notification that is not the caller's, missing, outside the key's scope or of a project the caller does not see now is 404 notification_not_found (MCP answers validation_error) and is not changed. Side effects: the notification's read time; no event.
 // @Tags Me
 // @Accept json
 // @Produce json
@@ -329,7 +329,7 @@ func (a *issueWrites) markNotificationRead(w http.ResponseWriter, r *http.Reques
 // markAllNotificationsRead marks every unread notification read.
 //
 // @Summary Mark all notifications read
-// @Description Marks every unread, unarchived notification of the caller read, optionally of one project — the same operation as the MCP tool skein_notifications, action mark_read_all. A key of a narrower scope marks only the notifications inside its scope: the others stay unread. Answers how many were marked. Side effects: the notifications' read time; no event.
+// @Description Marks every unread, unarchived notification of the caller read, optionally of one project — the same operation as the MCP tool skein_notifications, action mark_read_all. Only notifications of no project or of a project the caller sees now, inside the key's scope, are marked: the others stay unread and are not counted. Answers how many were marked. Side effects: the notifications' read time; no event.
 // @Tags Me
 // @Accept json
 // @Produce json
@@ -366,7 +366,7 @@ func (a *issueWrites) markAllNotificationsRead(w http.ResponseWriter, r *http.Re
 // archiveNotification archives one notification.
 //
 // @Summary Archive a notification
-// @Description Moves the notification of the path into the archive — the same operation as the MCP tool skein_notifications, action archive. A notification that is not the caller's, missing or outside the key's scope is 404 notification_not_found (MCP answers validation_error). Side effects: the notification's archive time; no event.
+// @Description Moves the notification of the path into the archive — the same operation as the MCP tool skein_notifications, action archive. A notification that is not the caller's, missing, outside the key's scope or of a project the caller does not see now is 404 notification_not_found (MCP answers validation_error) and is not changed. Side effects: the notification's archive time; no event.
 // @Tags Me
 // @Accept json
 // @Produce json
@@ -402,7 +402,7 @@ func (a *issueWrites) archiveNotification(w http.ResponseWriter, r *http.Request
 // markIssueNotificationsRead marks the notifications of an issue read.
 //
 // @Summary Mark the notifications of an issue read
-// @Description Marks read every notification of the caller tied to the issue of the path, those of its comments included — the same operation as the MCP tool skein_notifications, action mark_read_issue. Answers how many were marked; 0 is an answer. An issue that does not exist or is out of reach is 404 issue_not_found (MCP answers 0). Side effects: the notifications' read time; no event.
+// @Description Marks read every notification of the caller tied to the issue of the path, those of its comments included — the same operation as the MCP tool skein_notifications, action mark_read_issue. Only notifications of no project or of a project the caller sees now, inside the key's scope, are marked and counted. Answers how many were marked; 0 is an answer. An issue that does not exist or is out of reach is 404 issue_not_found (MCP answers 0). Side effects: the notifications' read time; no event.
 // @Tags Me
 // @Accept json
 // @Produce json
@@ -438,7 +438,7 @@ func (a *issueWrites) markIssueNotificationsRead(w http.ResponseWriter, r *http.
 // markWatchingCardRead reads a Watching card.
 //
 // @Summary Read a Watching card
-// @Description Marks read every unread notification carded to the issue of the path in the caller's Watching — with a subtree subscription, the descendants' events included — the same operation as the MCP tool skein_notifications, action mark_read_card. A key of a narrower scope marks only the events of issues inside its scope. A card that is not the caller's or has nothing unread answers marked 0; an issue that does not exist or is out of reach is 404 issue_not_found (MCP answers 0). Side effects: the notifications' read time; no event.
+// @Description Marks read every unread notification carded to the issue of the path in the caller's Watching — with a subtree subscription, the descendants' events included — the same operation as the MCP tool skein_notifications, action mark_read_card. Only notifications of no project or of a project the caller sees now, inside the key's scope, are marked and counted: a descendant's event of any other project stays unread. A card that is not the caller's or has nothing unread answers marked 0; an issue that does not exist or is out of reach is 404 issue_not_found (MCP answers 0). Side effects: the notifications' read time; no event.
 // @Tags Me
 // @Accept json
 // @Produce json

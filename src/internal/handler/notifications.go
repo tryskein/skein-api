@@ -460,16 +460,31 @@ func (h *NotificationsHandler) CountNotifications(w http.ResponseWriter, r *http
 }
 
 // MarkRead handles POST /api/v1/notifications/{id}/read.
+//
+// Only the caller's notification set is changed (sk-1007 D1): his rows of no
+// project or of a project he sees now, inside the key's scope. A row of any
+// other project answers 404 notification_not_found, exactly like a row that
+// does not exist, and is left unchanged.
 func (h *NotificationsHandler) MarkRead(w http.ResponseWriter, r *http.Request) {
 	h.runIDMutator(w, r, "mark_read")
 }
 
 // MarkUnread handles POST /api/v1/notifications/{id}/unread.
+//
+// Only the caller's notification set is changed (sk-1007 D1): his rows of no
+// project or of a project he sees now, inside the key's scope. A row of any
+// other project answers 404 notification_not_found, exactly like a row that
+// does not exist, and is left unchanged.
 func (h *NotificationsHandler) MarkUnread(w http.ResponseWriter, r *http.Request) {
 	h.runIDMutator(w, r, "mark_unread")
 }
 
 // Archive handles POST /api/v1/notifications/{id}/archive.
+//
+// Only the caller's notification set is changed (sk-1007 D1): his rows of no
+// project or of a project he sees now, inside the key's scope. A row of any
+// other project answers 404 notification_not_found, exactly like a row that
+// does not exist, and is left unchanged.
 func (h *NotificationsHandler) Archive(w http.ResponseWriter, r *http.Request) {
 	h.runIDMutator(w, r, "archive")
 }
@@ -530,6 +545,13 @@ type markAllReadResponse struct {
 	Updated int64 `json:"updated"`
 }
 
+// MarkAllRead marks read the caller's unread, non-archived feed rows,
+// optionally of one project.
+//
+// Only the caller's notification set is marked (sk-1007 D1): his rows of no
+// project or of a project he sees now, inside the key's scope; `updated` is
+// the number of rows of that set marked. Rows of any other project are left
+// unchanged and not counted.
 func (h *NotificationsHandler) MarkAllRead(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	c, ok := caller(r)
@@ -586,6 +608,13 @@ type markReadByEntityRequest struct {
 	EntityID   string `json:"entityId"`
 }
 
+// MarkReadByEntity marks read the caller's unread feed rows about one
+// entity (an issue also covers the comments on it).
+//
+// Only the caller's notification set is marked (sk-1007 D1): his rows of no
+// project or of a project he sees now, inside the key's scope; `updated` is
+// the number of rows of that set marked. Rows of any other project are left
+// unchanged and not counted.
 func (h *NotificationsHandler) MarkReadByEntity(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	c, ok := caller(r)

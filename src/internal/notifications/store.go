@@ -1197,13 +1197,16 @@ SELECT
 // something no surface can ever show back.
 func (s *Store) MarkRead(ctx context.Context, notificationID int64, userID uuid.UUID) error {
 	args := []any{userID, notificationID}
-	keyed := keyScopeOn(ctx, userID, "n.project_id", &args)
+	inSet, err := s.notificationSetOn(ctx, userID, "n.project_id", &args)
+	if err != nil {
+		return fmt.Errorf("mark read: %w", err)
+	}
 	n, err := s.updateOwnerRows(ctx, userID, `
 UPDATE notifications n
    SET read_at = COALESCE(n.read_at, now())
   FROM notifications o
  WHERE n.id = $2 AND n.user_id = $1 AND n.feed_channel AND o.id = n.id
-   AND `+keyed+`
+   AND `+inSet+`
 RETURNING n.type, o.read_at IS NULL AS changed`, args[1:]...)
 	if err != nil {
 		return fmt.Errorf("mark read: %w", err)
@@ -1218,13 +1221,16 @@ RETURNING n.type, o.read_at IS NULL AS changed`, args[1:]...)
 // for why a push-only row must not be addressable.
 func (s *Store) MarkUnread(ctx context.Context, notificationID int64, userID uuid.UUID) error {
 	args := []any{userID, notificationID}
-	keyed := keyScopeOn(ctx, userID, "n.project_id", &args)
+	inSet, err := s.notificationSetOn(ctx, userID, "n.project_id", &args)
+	if err != nil {
+		return fmt.Errorf("mark unread: %w", err)
+	}
 	n, err := s.updateOwnerRows(ctx, userID, `
 UPDATE notifications n
    SET read_at = NULL
   FROM notifications o
  WHERE n.id = $2 AND n.user_id = $1 AND n.feed_channel AND o.id = n.id
-   AND `+keyed+`
+   AND `+inSet+`
 RETURNING n.type, o.read_at IS NOT NULL AS changed`, args[1:]...)
 	if err != nil {
 		return fmt.Errorf("mark unread: %w", err)
@@ -1240,14 +1246,17 @@ RETURNING n.type, o.read_at IS NOT NULL AS changed`, args[1:]...)
 // the timestamp. Feed rows only — see MarkRead.
 func (s *Store) Archive(ctx context.Context, notificationID int64, userID uuid.UUID) error {
 	args := []any{userID, notificationID}
-	keyed := keyScopeOn(ctx, userID, "n.project_id", &args)
+	inSet, err := s.notificationSetOn(ctx, userID, "n.project_id", &args)
+	if err != nil {
+		return fmt.Errorf("archive notification: %w", err)
+	}
 	n, err := s.updateOwnerRows(ctx, userID, `
 UPDATE notifications n
    SET archived_at = COALESCE(n.archived_at, now()),
        read_at     = COALESCE(n.read_at, now())
   FROM notifications o
  WHERE n.id = $2 AND n.user_id = $1 AND n.feed_channel AND o.id = n.id
-   AND `+keyed+`
+   AND `+inSet+`
 RETURNING n.type, (o.archived_at IS NULL OR o.read_at IS NULL) AS changed`, args[1:]...)
 	if err != nil {
 		return fmt.Errorf("archive notification: %w", err)
@@ -1286,7 +1295,11 @@ func (s *Store) MarkAllRead(ctx context.Context, args MarkAllReadArgs) (int64, e
 		params = append(params, *args.ProjectID)
 		clauses = append(clauses, fmt.Sprintf("project_id = $%d", len(params)))
 	}
-	clauses = append(clauses, keyScopeOn(ctx, args.UserID, "project_id", &params))
+	inSet, err := s.notificationSetOn(ctx, args.UserID, "project_id", &params)
+	if err != nil {
+		return 0, fmt.Errorf("mark all read: %w", err)
+	}
+	clauses = append(clauses, inSet)
 	sql := "UPDATE notifications SET read_at = now() WHERE " + joinAnd(clauses) + " RETURNING type, true AS changed"
 	n, err := s.updateOwnerRows(ctx, args.UserID, sql, params[1:]...)
 	if err != nil {
@@ -1315,7 +1328,10 @@ func (s *Store) MarkReadByEntity(
 
 	if entityType == "issue" {
 		args := []any{userID, entityID}
-		keyed := keyScopeOn(ctx, userID, "project_id", &args)
+		inSet, err := s.notificationSetOn(ctx, userID, "project_id", &args)
+		if err != nil {
+			return 0, fmt.Errorf("mark read by entity: %w", err)
+		}
 		// Cover the issue itself + every comment on the issue. Two
 		// branches unioned via OR (cleaner than two UPDATEs) — the
 		// notifications.event_id IN (...) sub-select short-circuits on
@@ -1327,7 +1343,7 @@ UPDATE notifications
    AND feed_channel
    AND read_at IS NULL
    AND archived_at IS NULL
-   AND ` + keyed + `
+   AND ` + inSet + `
    AND event_id IN (
        SELECT e.id
          FROM events e
@@ -1348,7 +1364,10 @@ RETURNING type, true AS changed`
 
 	// Generic path: match the entity directly by (type, id).
 	args := []any{userID, entityType, entityID}
-	keyed := keyScopeOn(ctx, userID, "project_id", &args)
+	inSet, err := s.notificationSetOn(ctx, userID, "project_id", &args)
+	if err != nil {
+		return 0, fmt.Errorf("mark read by entity: %w", err)
+	}
 	sql := `
 UPDATE notifications
    SET read_at = now()
@@ -1356,7 +1375,7 @@ UPDATE notifications
    AND feed_channel
    AND read_at IS NULL
    AND archived_at IS NULL
-   AND ` + keyed + `
+   AND ` + inSet + `
    AND event_id IN (
        SELECT id FROM events
         WHERE entity_type = $2
@@ -1395,7 +1414,10 @@ func (s *Store) MarkReadCard(ctx context.Context, userID uuid.UUID, cardIssueID 
 	// A card with its subtree carries events of descendants that may lie in
 	// other projects: a key reads only those inside its scope.
 	args := []any{userID, cardIssueID}
-	keyed := keyScopeOn(ctx, userID, "project_id", &args)
+	inSet, err := s.notificationSetOn(ctx, userID, "project_id", &args)
+	if err != nil {
+		return MarkCardReadResult{}, fmt.Errorf("mark read card: %w", err)
+	}
 	sql := `
 UPDATE notifications
    SET read_at = now()
@@ -1403,7 +1425,7 @@ UPDATE notifications
    AND card_issue_id = $2
    AND read_at IS NULL
    AND archived_at IS NULL
-   AND ` + keyed + `
+   AND ` + inSet + `
 RETURNING type, true AS changed`
 	n, err := s.updateOwnerRows(ctx, userID, sql, args[1:]...)
 	if err != nil {
@@ -1438,17 +1460,6 @@ func (s *Store) notificationSetOn(ctx context.Context, userID uuid.UUID, col str
 // array (see notificationSetOn).
 func notificationSetExpr(col, visiblePh string) string {
 	return `(` + col + ` IS NULL OR ` + col + ` = ANY(` + visiblePh + `::uuid[]))`
-}
-
-// keyScopeOn renders the condition of the caller's key scope over the
-// project column col of the caller's notification rows (sk-878.3.1 D-3,
-// US-3 "write acceptance"): a write by a key changes only notifications
-// inside its scope; a row of no project belongs to no project and is not
-// filtered. args are the statement's arguments with $1 = userID first; the
-// scope's value, if any, is appended. Without a key the condition is true.
-func keyScopeOn(ctx context.Context, userID uuid.UUID, col string, args *[]any) string {
-	return "(" + col + " IS NULL OR " +
-		authz.ScopeFor(ctx, userID).KeyLimit().Expr(col, authz.Placeholders(args)) + ")"
 }
 
 // updateOwnerRows runs one autocommit UPDATE over the caller's notification
