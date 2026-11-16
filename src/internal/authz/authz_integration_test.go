@@ -20,7 +20,9 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 
+	"skein-api/internal/apikeys"
 	"skein-api/internal/auth"
 	"skein-api/internal/authz"
 	"skein-api/internal/testsupport"
@@ -201,4 +203,153 @@ SELECT EXISTS (SELECT 1 FROM issues i WHERE i.id = $3 AND `+authz.ProjectVisible
 			t.Errorf("unknown user: %+v, want inactive, nothing allowed, visible absent", stranger)
 		}
 	})
+}
+
+// visibleIssueCorpus is the input of the P-VIS table (sk-1007 T003): the
+// marker issue of every corpus project, an id that never existed and the id
+// of an issue that was seeded and deleted. Both foreign ids carry the prefix
+// of A.space, a project most readers see, so only the missing row can keep
+// them out of the answer.
+func visibleIssueCorpus(t *testing.T, pool *pgxpool.Pool, f *testsupport.Tenancy) (ids []string, never, deleted string) {
+	t.Helper()
+	never = f.ASpace.IDPrefix + "-424242"
+	deleted = testsupport.SeedIssue(t, pool, f.ASpace.ID, f.ASpace.OwnerID, f.ASpace.IDPrefix+"-2", "deleted", "open", 2)
+	if _, err := pool.Exec(context.Background(), `DELETE FROM issues WHERE id = $1`, deleted); err != nil {
+		t.Fatalf("delete %s: %v", deleted, err)
+	}
+	for _, p := range f.Projects() {
+		ids = append(ids, p.IssueID)
+	}
+	return append(ids, never, deleted), never, deleted
+}
+
+// issueIDsOf is the expected answer: the marker issues of the projects whose
+// legend key is in keep.
+func issueIDsOf(f *testsupport.Tenancy, keep func(testsupport.TenancyProject) bool) []string {
+	out := []string{}
+	for _, p := range f.Projects() {
+		if keep(p) {
+			out = append(out, p.IssueID)
+		}
+	}
+	slices.Sort(out)
+	return out
+}
+
+func sortedKeys(m map[string]struct{}) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	slices.Sort(out)
+	return out
+}
+
+// Matrix row 1 (sk-1007 ИНВ-1, R-5, K1): every reader of the corpus gets
+// exactly the marker issues of the projects it sees by the legend (f.Sees);
+// an admin sees what the relation gives him — not the Personal of others; a
+// deleted or never-existing id is never returned.
+func TestVisibleIssueIDs_PerReader(t *testing.T) {
+	pool := testsupport.NewTestPool(t)
+	f := testsupport.SeedTenancy(t, pool)
+	ids, never, deleted := visibleIssueCorpus(t, pool, f)
+
+	for _, a := range testsupport.TenancyActors {
+		t.Run(string(a), func(t *testing.T) {
+			ctx := callerCtx(f, t, a)
+			got, err := authz.VisibleIssueIDs(ctx, pool, authz.FromContext(ctx), ids)
+			if err != nil {
+				t.Fatalf("VisibleIssueIDs: %v", err)
+			}
+			want := issueIDsOf(f, func(p testsupport.TenancyProject) bool { return f.Sees(a, p) })
+			if g := sortedKeys(got); !slices.Equal(g, want) {
+				t.Errorf("visible %v, want %v", g, want)
+			}
+			for _, id := range []string{never, deleted} {
+				if _, ok := got[id]; ok {
+					t.Errorf("%s is visible, want an issue without a row never visible", id)
+				}
+			}
+		})
+	}
+}
+
+// Matrix row 2 (sk-1007 ИНВ-1, edge «узкая область ключа»): the key's scope
+// narrows the reader's relation. uAB with a projects key on A.members sees
+// only that issue; with a spaces key on B only the issues of B's projects; a
+// key id without a grant sees nothing; scope "all" is the relation itself.
+func TestVisibleIssueIDs_KeyScope(t *testing.T) {
+	pool := testsupport.NewTestPool(t)
+	f := testsupport.SeedTenancy(t, pool)
+	ids, _, _ := visibleIssueCorpus(t, pool, f)
+	u := f.User(t, testsupport.ActorBoth)
+
+	keyCtx := func(g *apikeys.Grant) context.Context {
+		ctx := auth.WithUserRole(auth.WithUserID(context.Background(), u.ID), u.Role)
+		ctx = auth.WithAPIKeyID(ctx, uuid.New())
+		if g != nil {
+			ctx = auth.WithKeyGrant(ctx, *g)
+		}
+		return authz.WithRequestCache(ctx)
+	}
+	grant := func(sc apikeys.Scope) *apikeys.Grant {
+		return &apikeys.Grant{Level: apikeys.LevelManage, Scope: sc}
+	}
+	keys := func(k ...string) func(testsupport.TenancyProject) bool {
+		return func(p testsupport.TenancyProject) bool { return slices.Contains(k, p.Key()) }
+	}
+
+	cases := []struct {
+		name  string
+		grant *apikeys.Grant
+		keep  func(testsupport.TenancyProject) bool
+	}{
+		{"projects A.members", grant(apikeys.Scope{Mode: apikeys.ScopeProjects, Projects: []uuid.UUID{f.AMembers.ID}}), keys("A.members")},
+		{"spaces B", grant(apikeys.Scope{Mode: apikeys.ScopeSpaces, Spaces: []uuid.UUID{f.SpaceB}}), keys("B.space", "B.members")},
+		{"key without a grant", nil, keys()},
+		{"all", grant(apikeys.Scope{Mode: apikeys.ScopeAll}), func(p testsupport.TenancyProject) bool {
+			return f.Sees(testsupport.ActorBoth, p)
+		}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			ctx := keyCtx(c.grant)
+			got, err := authz.VisibleIssueIDs(ctx, pool, authz.FromContext(ctx), ids)
+			if err != nil {
+				t.Fatalf("VisibleIssueIDs: %v", err)
+			}
+			if g, want := sortedKeys(got), issueIDsOf(f, c.keep); !slices.Equal(g, want) {
+				t.Errorf("visible %v, want %v", g, want)
+			}
+		})
+	}
+}
+
+// Matrix row 3 (sk-1007 K1, K7): fail-closed. A context without a principal
+// and without WithUnrestricted sees none of the existing issues; declared
+// internal work sees every existing one and still not the deleted or the
+// never-existing id.
+func TestVisibleIssueIDs_FailClosed(t *testing.T) {
+	pool := testsupport.NewTestPool(t)
+	f := testsupport.SeedTenancy(t, pool)
+	ids, _, _ := visibleIssueCorpus(t, pool, f)
+
+	undeclared := context.Background()
+	got, err := authz.VisibleIssueIDs(undeclared, pool, authz.FromContext(undeclared), ids)
+	if err != nil {
+		t.Fatalf("undeclared: %v", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("undeclared context sees %v, want nothing", sortedKeys(got))
+	}
+
+	internal := authz.WithUnrestricted(context.Background())
+	got, err = authz.VisibleIssueIDs(internal, pool, authz.FromContext(internal), ids)
+	if err != nil {
+		t.Fatalf("unrestricted: %v", err)
+	}
+	all := issueIDsOf(f, func(testsupport.TenancyProject) bool { return true })
+	if g := sortedKeys(got); !slices.Equal(g, all) {
+		t.Errorf("unrestricted sees %v, want every existing issue %v", g, all)
+	}
 }
