@@ -1412,6 +1412,34 @@ RETURNING type, true AS changed`
 	return MarkCardReadResult{Marked: int(n)}, nil
 }
 
+// notificationSetOn renders the caller's notification set (sk-1007 D1,
+// INV-3) over the project column col of his notification rows: a row of no
+// project, or of a project in the caller's visible set — the access
+// relation narrowed by the request's key scope (authz Scope.Bind). It is
+// the condition of the Watching badge (WatchingBadgeCountExpr), and every
+// reader and writer of the caller's rows that applies it works with the
+// rows the badge counts: a row of a project the caller does not see now, or
+// outside the key's scope, stays in the table and is neither shown, counted
+// nor changed (INV-11).
+//
+// The set is read once, before the statement (once per request under
+// authz.WithRequestCache), and bound as a uuid array appended to args, so
+// the relation never enters the statement's plan.
+func (s *Store) notificationSetOn(ctx context.Context, userID uuid.UUID, col string, args *[]any) (string, error) {
+	_, visible, err := authz.ScopeFor(ctx, userID).Bind(ctx, s.pool)
+	if err != nil {
+		return "", fmt.Errorf("binding notification set: %w", err)
+	}
+	return notificationSetExpr(col, authz.Placeholders(args)(visible)), nil
+}
+
+// notificationSetExpr is the row condition of the caller's notification set
+// over the project column col, the visible set bound at visiblePh as a uuid
+// array (see notificationSetOn).
+func notificationSetExpr(col, visiblePh string) string {
+	return `(` + col + ` IS NULL OR ` + col + ` = ANY(` + visiblePh + `::uuid[]))`
+}
+
 // keyScopeOn renders the condition of the caller's key scope over the
 // project column col of the caller's notification rows (sk-878.3.1 D-3,
 // US-3 "write acceptance"): a write by a key changes only notifications
@@ -1989,10 +2017,13 @@ const WatchingRecentTopN = 5
 //   - the badge (WatchingBadgeSQL / CountWatchingUnread) — the unread ones;
 //   - the column's per-card counts (ListWatchingFeed) — unread and last
 //     notification time per card, and the historical cards;
-//   - the badge equals the column's unreadTotal (INV-5) because both count
-//     the same rows: every row the badge counts lands on exactly one card
-//     (its card_issue_id), and the column has a card for every card id it
-//     finds.
+//   - the badge equals the column's unreadTotal (INV-5, sk-1007 INV-3)
+//     because unreadTotal is not a sum over the shown cards but the count of
+//     the same rows: the unread rows of the caller's notification set
+//     (notificationSetOn) in the window. A row whose card is a task the
+//     caller does not see (the ancestor of a subtree subscription in a
+//     project he lost) is counted there and by the badge, though its card
+//     is not shown.
 //
 // The window is the store's (WithWatchingWindow). A notification is in the
 // window when created_at >= now() - window; reading it does not extend it.
@@ -2008,9 +2039,11 @@ const WatchingRecentTopN = 5
 //
 // visible is the SQL boolean of that condition on n.project_id, in the
 // form the composing statement can afford: the point form for the badge's
-// single statement (watchingVisibleNow), the bound visible set for the
-// header counts; the column (ListWatchingFeed) checks its cards instead
-// (WatchingBadgeCountExpr) — one rule, the access relation.
+// own statement (watchingVisibleNow), and the caller's notification set
+// (notificationSetExpr, sk-1007 D1) for the header counts
+// (WatchingBadgeCountExpr) and the column (ListWatchingFeed). The badge and
+// the column's UnreadTotal both count the unread rows of that one set in the
+// window, so they are equal for any reader and any key scope (INV-3).
 func watchingInWindowPredicate(user, win, visible string) string {
 	return `n.user_id = ` + user + `
        AND n.card_issue_id IS NOT NULL
@@ -2025,14 +2058,6 @@ func watchingInWindowPredicate(user, win, visible string) string {
 // stays one and the relation never enters its plan.
 var watchingVisibleNow = "(n.project_id IS NULL OR " + authz.RecipientVisibleExpr("$1::uuid", "n.project_id") + ")"
 
-// watchingVisible is the visibility condition over n.project_id with the
-// caller's visible set bound at visiblePh as a uuid array (authz Scope.Bind
-// — read once, before the statement, so the relation never enters a
-// Watching plan).
-func watchingVisible(visiblePh string) string {
-	return `(n.project_id IS NULL OR n.project_id = ANY(` + visiblePh + `::uuid[]))`
-}
-
 // WatchingBadgeCountExpr is the Watching badge as a scalar subquery over
 // the placeholders the composing statement already bound: userPh the
 // caller's user id, windowPh the Watching window (an interval — the store's
@@ -2045,7 +2070,7 @@ func watchingVisible(visiblePh string) string {
 // Scope.Bind) — the same rows WatchingBadgeSQL counts (INV-5).
 func WatchingBadgeCountExpr(userPh, windowPh, visiblePh string) string {
 	return `(SELECT count(*) FROM notifications n WHERE ` +
-		watchingInWindowPredicate(userPh, windowPh, watchingVisible(visiblePh)) + ` AND n.read_at IS NULL)`
+		watchingInWindowPredicate(userPh, windowPh, notificationSetExpr("n.project_id", visiblePh)) + ` AND n.read_at IS NULL)`
 }
 
 // WatchingBadgeSQL is the statement behind the header's Watching badge
@@ -2107,16 +2132,25 @@ func (s *Store) CountWatchingUnread(ctx context.Context, userID uuid.UUID) (int,
 // Order: LastActivity descending, then task id; cards without
 // notifications last. Capped at WatchingFeedLimit.
 //
+// The notifications behind the cards are the caller's notification set
+// (notificationSetOn, sk-1007 D1): rows of no project or of a project the
+// caller sees now, inside the key's scope. A row outside it adds nothing to
+// any card, total or historical card. A card is shown only for a task the
+// caller sees now, inside the key's scope (INV-11).
+//
 // Totals, uncapped:
 //
-//   - SubscriptionsTotal — live subscriptions;
-//   - OpenTotal / ClosedTotal — cards of BOTH kinds by the state of the
-//     card's task (closed = status 'closed', every other status is open);
+//   - SubscriptionsTotal — live subscriptions on shown cards;
+//   - OpenTotal / ClosedTotal — shown cards of BOTH kinds by the state of
+//     the card's task (closed = status 'closed', every other status is open);
 //   - ClosedAutoTotal — closed cards without a manual subscription,
 //     historical ones included: what «stop watching closed» would take;
-//   - UnreadTotal — the unread notifications over every card, equal to the
-//     badge (INV-5) whatever the filter and the cap;
-//   - StateTotal — cards matching state; Truncated = StateTotal > rows.
+//   - UnreadTotal — the count of the unread rows of the set in the window,
+//     equal to the badge (INV-3) whatever the filter and the cap. It is not
+//     the sum over the shown cards: it also counts the rows carded to a task
+//     the caller does not see (a subtree subscription's ancestor in a
+//     project he lost), whose card is not shown;
+//   - StateTotal — shown cards matching state; Truncated = StateTotal > rows.
 //
 // state narrows the CARDS of both kinds by the state of their task.
 //
@@ -2135,11 +2169,15 @@ func (s *Store) ListWatchingFeed(ctx context.Context, userID uuid.UUID, state Wa
 	// view of the relation (D-3): a card outside it is a card of a project
 	// he does not see. Without a key the condition is the literal true.
 	keyed := authz.ScopeFor(ctx, userID).KeyLimit().Expr("i.project_id", authz.Placeholders(&args))
-	// The window too: a card with its subtree collects events of descendants
-	// in other projects; a key counts only those inside its scope, so the
-	// card's unread count, its last activity and UnreadTotal match the badge
-	// and what reading the card marks.
-	windowKeyed := keyScopeOn(ctx, userID, "n.project_id", &args)
+	// The window rows are the caller's notification set (sk-1007 D1): a card
+	// with its subtree collects events of descendants in other projects, and
+	// only those of a project he sees now, inside the key's scope, count —
+	// for the card's unread count, its last activity, whether a historical
+	// card exists, and UnreadTotal.
+	inSet, err := s.notificationSetOn(ctx, userID, "n.project_id", &args)
+	if err != nil {
+		return WatchingFeedResult{}, fmt.Errorf("listing watching feed: %w", err)
+	}
 	sql := `
 WITH subs AS (
     SELECT iw.issue_id, iw.reasons, iw.since
@@ -2151,7 +2189,7 @@ win AS (
            count(*) FILTER (WHERE n.read_at IS NULL)::int AS unread_count,
            max(n.created_at)                              AS last_at
       FROM notifications n
-     WHERE ` + watchingInWindowPredicate("$1", "$4", windowKeyed) + `
+     WHERE ` + watchingInWindowPredicate("$1", "$4", inSet) + `
      GROUP BY n.card_issue_id
 ),
 cards AS (
@@ -2166,10 +2204,10 @@ cards AS (
       FROM subs s
       FULL JOIN win w ON w.card_issue_id = s.issue_id
       JOIN issues i ON i.id = COALESCE(s.issue_id, w.card_issue_id)
-     -- sk-674.18 T029 (INV-11): a card of a project the caller no longer
-     -- sees is no card (its subscription stays stored, unshown) — the point
-     -- form per card; the window rows need no check of their own: they reach
-     -- the totals only through a visible card.
+     -- sk-674.18 T029 (INV-11): a card of a task the caller does not see
+     -- now is no card (its subscription stays stored, unshown) — the point
+     -- form per card, narrowed by the key's scope. The card counts below are
+     -- over the shown cards only.
      WHERE ` + authz.RecipientVisibleExpr("$1::uuid", "i.project_id") + `
        AND ` + keyed + `
 ),
@@ -2179,7 +2217,10 @@ totals AS (
            count(*) FILTER (WHERE is_closed)::int     AS closed_total,
            count(*) FILTER (WHERE is_closed
                               AND NOT (subscribed AND 'manual' = ANY(reasons)))::int AS closed_auto_total,
-           COALESCE(sum(unread_count), 0)::int        AS unread_total
+           -- sk-1007 INV-3: the unread rows of the window — the badge's
+           -- count — not the sum over the shown cards, which would drop the
+           -- rows carded to a task the caller does not see.
+           (SELECT COALESCE(sum(w.unread_count), 0) FROM win w)::int AS unread_total
       FROM cards
 ),
 picked AS (
@@ -2481,10 +2522,11 @@ SELECT count(*)::int FROM hist`
 // given Watching cards, keyed by card issue id (sk-622.21, US-5, R10): per
 // card, the caller's notifications carrying that card, read or unread, not
 // archived, written within WatchingRecentWindow (7 days), newest first, at
-// most WatchingRecentTopN (5). The timeline shows exactly what the caller
-// was notified about on the card, so card, counter and badge are views of
-// one set; the activity of a subtree's descendants is on the card the
-// fan-out gave it (the ancestor's).
+// most WatchingRecentTopN (5), of the caller's notification set only
+// (notificationSetOn, sk-1007 D1). The timeline shows exactly what the
+// caller was notified about on the card, so card, counter and badge are
+// views of one set; the activity of a subtree's descendants is on the card
+// the fan-out gave it (the ancestor's).
 //
 // The 7-day / 5-row bound is the timeline's own (R10) and is not the
 // Watching window: the window decides which cards exist and what they
@@ -2503,6 +2545,14 @@ func (s *Store) HydrateWatchingRecentEvents(
 	if len(cardIssueIDs) == 0 {
 		return map[string][]NotificationDTO{}, nil
 	}
+	args := []any{userID, cardIssueIDs, WatchingRecentTopN, WatchingRecentWindow}
+	// The timeline shows only the caller's notification set (sk-1007 D1): a
+	// descendant's row of a project he does not see now, or outside the
+	// key's scope, is not on the card.
+	inSet, err := s.notificationSetOn(ctx, userID, "n.project_id", &args)
+	if err != nil {
+		return nil, fmt.Errorf("loading watching recent events: %w", err)
+	}
 	sql := `
 WITH windowed AS (
     SELECT n.id, n.type, n.created_at, n.read_at, n.event_id, n.card_issue_id,
@@ -2513,6 +2563,7 @@ WITH windowed AS (
        AND n.card_issue_id = ANY($2::text[])
        AND n.archived_at IS NULL
        AND n.created_at >= now() - ($4::interval)
+       AND ` + inSet + `
 )
 SELECT w.card_issue_id, w.id, w.type, w.created_at, w.read_at,
        e.actor, e.actor_user_id, e.actor_type,
@@ -2535,7 +2586,7 @@ SELECT w.card_issue_id, w.id, w.type, w.created_at, w.read_at,
  WHERE w.rn <= $3
  ORDER BY w.card_issue_id, w.created_at DESC, w.id DESC`
 
-	rows, err := s.pool.Query(ctx, sql, userID, cardIssueIDs, WatchingRecentTopN, WatchingRecentWindow)
+	rows, err := s.pool.Query(ctx, sql, args...)
 	if err != nil {
 		return nil, fmt.Errorf("loading watching recent events: %w", err)
 	}
