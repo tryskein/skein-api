@@ -10,6 +10,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"skein-api/internal/auth"
 )
 
 // seedParentChildDep inserts one parent-child dep row directly so the
@@ -133,6 +135,14 @@ func seedIssues(t *testing.T, pool *pgxpool.Pool, pid, uid uuid.UUID, prefix str
 	return ids
 }
 
+// readerCtx is the request context of user uid — the principal the cycle
+// check reads visibility for (sk-1007 US-4, K7). The tests below seed uid as
+// the owner of the fixture's project, so he sees every issue of a path and
+// gets it in full; a context without a principal would get no path.
+func readerCtx(uid uuid.UUID) context.Context {
+	return auth.WithUserRole(auth.WithUserID(context.Background(), uid), "user")
+}
+
 // cycleCheckers are the two public entry points over the shared walk; every
 // property below holds for both type-classes.
 var cycleCheckers = []struct {
@@ -187,7 +197,7 @@ func TestCheckCycle_TransitiveDAG_BoundedResources(t *testing.T) {
 						`SET LOCAL work_mem = '1MB'; SET LOCAL temp_file_limit = '1MB'`); err != nil {
 						t.Fatalf("pin resource limits: %v", err)
 					}
-					return c.check(context.Background(), tx, from, to)
+					return c.check(readerCtx(uid), tx, from, to)
 				})
 			}
 
@@ -232,7 +242,7 @@ func TestCheckCycle_LongerThan64_Detected(t *testing.T) {
 
 			last, first := ids[chain-1], ids[0]
 			err := pgx.BeginTxFunc(context.Background(), pool, pgx.TxOptions{IsoLevel: pgx.Serializable}, func(tx pgx.Tx) error {
-				return c.check(context.Background(), tx, last, first)
+				return c.check(readerCtx(uid), tx, last, first)
 			})
 			ce, ok := IsCycle(err)
 			if !ok {
@@ -266,7 +276,7 @@ func TestCheckCycle_CycleAlreadyInData(t *testing.T) {
 
 			run := func(from, to string) error {
 				return pgx.BeginTxFunc(context.Background(), pool, pgx.TxOptions{IsoLevel: pgx.Serializable}, func(tx pgx.Tx) error {
-					return c.check(context.Background(), tx, from, to)
+					return c.check(readerCtx(uid), tx, from, to)
 				})
 			}
 
