@@ -90,6 +90,13 @@ Those three variables are required; the full list is in `docs/env-reference.md`.
 - **Route list**: `buildRouter` in `src/cmd/api/main.go` is the authoritative
   list of routes of the internal port; `ProductRoutes` in
   `src/internal/publicapi/routes.go` is the one list of the public API.
+- **Service routes**: a route of the internal API (`/ui/v1`, transitional
+  `/api/v1`) that does not need a user is registered only in the service group
+  (`mountServiceGroup` in `src/cmd/api/main.go`), which requires the marker
+  `X-Skein-Service-Call: 1` and answers 403 `service_call_required` without
+  it. Its path lies under `auth/` (except `GET auth/me`), `hub/` or
+  `internal/` — the paths skein-web refuses to proxy for a browser; a route
+  that needs another path extends that class in skein-web first.
 - **Theme mirrors**: `internal/themes/schema.go#TokenSchema` mirrors
   `TOKEN_SECTIONS` in skein-frontend `src/lib/themeTokens.ts`;
   `internal/themes/roles.go#RetiredRoles` mirrors `LEGACY_TO_NEW` in

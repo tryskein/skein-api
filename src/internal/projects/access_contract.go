@@ -46,9 +46,10 @@ import "github.com/google/uuid"
 //
 // # Authorization
 //
-// Service secret ONLY: the route sits under RequireInternalSecret
-// (`X-Skein-Internal-Secret`) and outside the ParseUserHeaders group, like
-// `/api/v1/auth/oidc/provision`. User trust-headers are neither required nor
+// Service call only: the route sits in the service group of the internal API —
+// RequireInternalSecret (`X-Skein-Internal-Secret`), then RequireServiceCall
+// (`X-Skein-Service-Call: 1`, else 403 `service_call_required`) — and outside
+// the ParseUserHeaders group, like `/ui/v1/auth/oidc/provision`. User trust-headers are neither required nor
 // read; whose access is checked is named in the body, not by the caller.
 //
 // # Responses

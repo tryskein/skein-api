@@ -2,9 +2,10 @@ package handler
 
 // accounts.go — the public account routes skein-web's BFF calls for a
 // visitor without a session (sk-674.18 K-17; contract accounts/contract.go).
-// They are mounted outside the /api/v1 user group: the service secret is the
-// whole authorization and no user trust-header is read. The client address
-// for the rate limits is X-Skein-Client-Ip (loginClientIP).
+// They are mounted in the service group of the internal API, outside the user
+// group: the service secret and the service-call marker are the whole
+// authorization and no user trust-header is read. The client address for the
+// rate limits is X-Skein-Client-Ip (loginClientIP).
 
 import (
 	"context"
@@ -83,16 +84,17 @@ func writeAccountsError(w http.ResponseWriter, r *http.Request, route string, er
 // @Description
 // @Description Side effects: the user.created event; personal signals to the users whose issues' assignee text now names the new account. Of two concurrent signups of one email exactly one succeeds, the other gets 422 email_taken (E-25), never a 500.
 // @Description
-// @Description Authorization: the service secret X-Skein-Internal-Secret only; no user headers are read. Accepted risk: username_taken discloses that a username exists on the instance, mitigated by the captcha and the rate limit.
+// @Description Authorization: the service secret X-Skein-Internal-Secret and the service-call marker X-Skein-Service-Call: 1 (without it 403 service_call_required); no user headers are read. Accepted risk: username_taken discloses that a username exists on the instance, mitigated by the captcha and the rate limit.
 // @Tags Auth
 // @Accept json
 // @Produce json
-// @Security InternalSecretAuth
+// @Security InternalSecretAuth && ServiceCallMarker
 // @Param X-Skein-Client-Ip header string false "The real client address stamped by skein-web; keys the per-IP limit (skipped when absent)"
 // @Param body body accounts.SignupRequest true "Registration form"
 // @Success 200 {object} accounts.AuthResponse "Account created; log the user in with this body"
 // @Failure 400 {object} map[string]any "invalid_request"
 // @Failure 401 {object} map[string]any "Service secret missing or wrong"
+// @Failure 403 {object} map[string]any "service_call_required: the service-call marker X-Skein-Service-Call: 1 is missing or has another value"
 // @Failure 422 {object} accounts.UsernameTakenError "signup_disabled, captcha_failed, terms_required, username_invalid, password_weak, password_pwned, email_taken; username_taken carries suggestions"
 // @Failure 429 {object} map[string]any "rate_limited"
 // @Failure 500 {object} map[string]any "internal_error"
@@ -123,15 +125,16 @@ func (h *AccountsHandler) Signup(w http.ResponseWriter, r *http.Request) {
 // @Description
 // @Description Algorithm: registration closed → 422 signup_disabled; no or malformed email → 400 invalid_request; the api-side rate limit per email and client IP → 429 rate_limited. The stem is the local part lower-cased, every character outside [a-z0-9_-] replaced by '-', cut to 30 characters; the candidates are the stem, stem2, stem-<first domain label>, stem<its initial>, stem3…stem9, then stem10…stem99; a candidate is offered only if it obeys the username rule, is not of the deleted-account pseudonym shape, belongs to no account and is not reserved by a deleted one. A suggestion reserves nothing.
 // @Description
-// @Description Side effects: none. Authorization: the service secret only. Accepted risk: the answer discloses which usernames are taken, mitigated by the rate limit.
+// @Description Side effects: none. Authorization: the service secret and the service-call marker. Accepted risk: the answer discloses which usernames are taken, mitigated by the rate limit.
 // @Tags Auth
 // @Produce json
-// @Security InternalSecretAuth
+// @Security InternalSecretAuth && ServiceCallMarker
 // @Param email query string true "The email typed in the form"
 // @Param X-Skein-Client-Ip header string false "The real client address stamped by skein-web"
 // @Success 200 {object} accounts.UsernameSuggestionsResponse "Free usernames, best first"
 // @Failure 400 {object} map[string]any "invalid_request"
 // @Failure 401 {object} map[string]any "Service secret missing or wrong"
+// @Failure 403 {object} map[string]any "service_call_required: the service-call marker X-Skein-Service-Call: 1 is missing or has another value"
 // @Failure 422 {object} map[string]any "signup_disabled"
 // @Failure 429 {object} map[string]any "rate_limited"
 // @Failure 500 {object} map[string]any "internal_error"
@@ -152,16 +155,17 @@ func (h *AccountsHandler) UsernameSuggestions(w http.ResponseWriter, r *http.Req
 // @Description
 // @Description Algorithm: SKEIN_AUTH_MODE=keycloak → 422 password_login_disabled; SKEIN_EMAIL_ENABLED=false → 422 email_disabled; body not one JSON value, email missing or not of email shape, language not ru|en → 400 invalid_request; the api-side rate limit per email and per client IP (X-Skein-Client-Ip) → 429 rate_limited — none of these depends on the email's account. Then, in one transaction: the active (not deleted, not blocked) account with the email is looked up; the email is queued only if that account may log in with a password (local mode: every account; hybrid: an external account or the break-glass admin). Queueing retires the account's earlier reset links and unsent reset emails (the newest link is the only live one; it lives 1 hour from the delivery attempt).
 // @Description
-// @Description Side effects: a password_reset email in the outgoing queue, in the language of the request. Authorization: the service secret only; no user headers are read.
+// @Description Side effects: a password_reset email in the outgoing queue, in the language of the request. Authorization: the service secret and the service-call marker; no user headers are read.
 // @Tags Auth
 // @Accept json
 // @Produce json
-// @Security InternalSecretAuth
+// @Security InternalSecretAuth && ServiceCallMarker
 // @Param X-Skein-Client-Ip header string false "The real client address stamped by skein-web"
 // @Param body body accounts.PasswordResetRequest true "The email and the email language"
 // @Success 204 "Accepted (neutral)"
 // @Failure 400 {object} map[string]any "invalid_request"
 // @Failure 401 {object} map[string]any "Service secret missing or wrong"
+// @Failure 403 {object} map[string]any "service_call_required: the service-call marker X-Skein-Service-Call: 1 is missing or has another value"
 // @Failure 422 {object} map[string]any "password_login_disabled, email_disabled"
 // @Failure 429 {object} map[string]any "rate_limited"
 // @Failure 500 {object} map[string]any "internal_error"
@@ -195,13 +199,14 @@ func (h *AccountsHandler) PasswordReset(w http.ResponseWriter, r *http.Request) 
 // @Tags Auth
 // @Accept json
 // @Produce json
-// @Security InternalSecretAuth
+// @Security InternalSecretAuth && ServiceCallMarker
 // @Param token path string true "The token from the reset link"
 // @Param X-Skein-Client-Ip header string false "The real client address stamped by skein-web"
 // @Param body body accounts.PasswordResetCompleteRequest true "The new password"
 // @Success 200 {object} accounts.AuthResponse "Password set; sessionEpoch is the NEW epoch"
 // @Failure 400 {object} map[string]any "invalid_request"
 // @Failure 401 {object} map[string]any "Service secret missing or wrong"
+// @Failure 403 {object} map[string]any "service_call_required: the service-call marker X-Skein-Service-Call: 1 is missing or has another value"
 // @Failure 422 {object} map[string]any "password_login_disabled, email_disabled, token_invalid, password_weak, password_pwned"
 // @Failure 429 {object} map[string]any "rate_limited"
 // @Failure 500 {object} map[string]any "internal_error"
@@ -234,11 +239,12 @@ func (h *AccountsHandler) PasswordResetComplete(w http.ResponseWriter, r *http.R
 // @Description Side effects: every other confirmation link of the user stops working, unsent confirmation emails are cancelled; the `inbox` signal is published after the commit.
 // @Tags Auth
 // @Produce json
-// @Security InternalSecretAuth
+// @Security InternalSecretAuth && ServiceCallMarker
 // @Param token path string true "The token from the confirmation link"
 // @Param X-Skein-Client-Ip header string false "The real client address stamped by skein-web"
 // @Success 204 "Email confirmed"
 // @Failure 401 {object} map[string]any "Service secret missing or wrong"
+// @Failure 403 {object} map[string]any "service_call_required: the service-call marker X-Skein-Service-Call: 1 is missing or has another value"
 // @Failure 422 {object} map[string]any "email_disabled, token_invalid"
 // @Failure 429 {object} map[string]any "rate_limited"
 // @Failure 500 {object} map[string]any "internal_error"

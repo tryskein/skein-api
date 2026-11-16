@@ -449,7 +449,12 @@ func publicAPIServer(cfg *config.Config, pool *pgxpool.Pool, deps publicapi.Deps
 // @securityDefinitions.apikey InternalSecretAuth
 // @in header
 // @name X-Skein-Internal-Secret
-// @description Service secret shared by skein-web and skein-api. Service-only endpoints (POST /ui/v1/hub/project-access, GET /ui/v1/internal/instance-config) are authorized by it alone, with no user headers.
+// @description Service secret shared by skein-web and skein-api. Every request to the internal API (/ui/v1 and the transitional /api/v1) must carry it; without it the answer is 401 on any path. The service routes (no user headers; called by skein-web's own calls only) also require ServiceCallMarker.
+//
+// @securityDefinitions.apikey ServiceCallMarker
+// @in header
+// @name X-Skein-Service-Call
+// @description Service-call marker, exactly one value equal to "1" (no other value, no repeated header). Required, on top of InternalSecretAuth, by every service route of the internal API: OIDC provision, hub project access, instance config, signup, username suggestions, password reset, email confirmation, the invitation link, login and logout. skein-web sets it on its own calls only and strips X-Skein-* from the browser requests it proxies. Without it a service route answers 403 service_call_required. The value is not a secret.
 func main() {
 	cfg, err := config.Load()
 	if err != nil {
@@ -1402,18 +1407,22 @@ func buildSearchStack(pool *pgxpool.Pool, cfg *config.Config) (*search.Service, 
 // either prefix — matched route or not, any method — goes through
 // RequireInternalSecret first: every request from the BFF must present the
 // shared secret. Direct ingress from outside the cluster has no way to hold
-// this secret, so this is the channel-auth boundary. The user group then adds:
-//  1. ParseUserHeaders — best-effort decode of X-Skein-User-* headers into
-//     the request context. Auth bootstrap routes (/auth/login,
-//     /auth/logout) intentionally do not require a user; user-bound routes
-//     compose RequireUser on top.
-//  2. RequireSessionEpoch — a request that carries a user is refused with
+// this secret, so this is the channel-auth boundary.
+//
+// Inside it the routes fall into two groups:
+//   - the service group (mountServiceGroup): the routes only skein-web's own
+//     calls reach — OIDC provision, hub access, instance config, the account
+//     routes of a visitor, login and logout. RequireServiceCall refuses a
+//     request without the service-call marker X-Skein-Service-Call: 1 with
+//     403 service_call_required. skein-web strips X-Skein-* from the browser
+//     requests it proxies, so a browser cannot reach these routes. No user
+//     headers are read.
+//   - the user group (mountUserAPI), which adds:
+//     1. ParseUserHeaders — best-effort decode of X-Skein-User-* headers into
+//     the request context; user-bound routes compose RequireUser on top.
+//     2. RequireSessionEpoch — a request that carries a user is refused with
 //     401 session_revoked when the session's epoch is not the user's
 //     current one or the user is deactivated or deleted (K-16).
-//
-// The service routes outside the user group (OIDC provision, hub access,
-// instance config, the account routes of a visitor) are authorized by the
-// secret alone.
 func buildRouter(
 	pool *pgxpool.Pool,
 	cfg *config.Config,
@@ -2132,13 +2141,10 @@ func buildRouter(
 		})
 
 		r.Route("/auth", func(r chi.Router) {
-			// Login and logout do not require a user header — login is
-			// the path that *establishes* one, and logout is a no-op
-			// placeholder until R5 token revocation lands.
-			r.Post("/login", authH.Login)
-			r.Post("/logout", authH.Logout)
 			// /me operates on behalf of an already-authenticated user
 			// (cookie issued by skein-web), so it gates on RequireUser.
+			// Login and logout need no user and are service routes: they
+			// are registered in the service group by mountInternalAPI.
 			r.With(handler.RequireUser).Get("/me", authH.Me)
 		})
 
@@ -2315,44 +2321,52 @@ func buildRouter(
 		// request_cancelled: the failure is the cancellation's, not ours.
 		r.Use(handler.AnswerCancelledInternal)
 
-		// R5.1 — OIDC provision endpoint. Outside the user group because
-		// that group applies ParseUserHeaders to every request, and the
-		// provision call has no user yet (it's the call that establishes
-		// one). The channel secret, checked for the whole prefix, is
-		// sufficient: only the skein-web BFF holds the secret, and the BFF is
-		// the only legitimate caller. The handler itself short-circuits with 410 oidc_disabled
-		// when the provisioner is nil (defensive — wiring always sets it).
-		r.Post("/auth/oidc/provision", authH.OIDCProvision)
+		// The service routes: only skein-web's own calls reach them, never a
+		// browser request it proxies. They need no user and read no user
+		// headers, so they sit outside the user group.
+		//
+		// Placement rule: a route of the internal API that does not need a
+		// user is registered here, in the service group, and nowhere else.
+		// Its path lies under auth/ (except GET auth/me), hub/ or internal/ —
+		// the paths skein-web refuses to proxy for a browser; a route that
+		// needs another path extends that class in skein-web first.
+		mountServiceGroup(r, func(r chi.Router) {
+			// R5.1 — OIDC provision: the call that establishes a user, so
+			// there is none yet. The handler short-circuits with 410
+			// oidc_disabled when the provisioner is nil (defensive — wiring
+			// always sets it).
+			r.Post("/auth/oidc/provision", authH.OIDCProvision)
 
-		// sk-622.21 T006 — service-only batch project access check for
-		// skein-web's SignalR hub (contract: projects/access_contract.go).
-		// Outside the user group for the same reason as the provision route:
-		// this call is made by the BFF for many users at once, not for one
-		// logged-in user — whose access is checked is named in the body.
-		// The channel secret is the whole authorization.
-		r.Post("/hub/project-access", hubAccessH.ProjectAccess)
+			// sk-622.21 T006 — batch project access check for skein-web's
+			// SignalR hub (contract: projects/access_contract.go), made for
+			// many users at once; whose access is checked is named in the
+			// body.
+			r.Post("/hub/project-access", hubAccessH.ProjectAccess)
 
-		// sk-674.18 T012 — installation settings for skein-web (contract:
-		// accounts/contract.go#InstanceConfig). Service-only, outside the
-		// user group like the two routes above: skein-web calls it at startup
-		// with no user at all, and the channel secret is the whole
-		// authorization.
-		r.Get("/internal/instance-config", instanceConfigH.Get)
+			// sk-674.18 T012 — installation settings for skein-web
+			// (contract: accounts/contract.go#InstanceConfig), read at
+			// startup with no user at all.
+			r.Get("/internal/instance-config", instanceConfigH.Get)
 
-		// sk-674.18 T038 — the public account routes of a visitor without a
-		// session (contract: accounts/contract.go). Outside the user group
-		// like the routes above: there is no user, the channel secret is the
-		// whole authorization, the client address comes in X-Skein-Client-Ip.
-		r.Post("/auth/signup", accountsH.Signup)
-		r.Get("/auth/username-suggestions", accountsH.UsernameSuggestions)
-		// T039 — password reset and email confirmation by link.
-		r.Post("/auth/password-reset", accountsH.PasswordReset)
-		r.Post("/auth/password-reset/{token}", accountsH.PasswordResetComplete)
-		r.Post("/auth/confirm-email/{token}", accountsH.ConfirmEmail)
-		// T040 — the invitation link without a session: its view and signup
-		// by invitation.
-		r.Get("/auth/invitations/{token}", accountsH.InvitationPreview)
-		r.Post("/auth/invitations/{token}/signup", accountsH.InvitationSignup)
+			// sk-674.18 T038 — the public account routes of a visitor
+			// without a session (contract: accounts/contract.go); the client
+			// address comes in X-Skein-Client-Ip.
+			r.Post("/auth/signup", accountsH.Signup)
+			r.Get("/auth/username-suggestions", accountsH.UsernameSuggestions)
+			// T039 — password reset and email confirmation by link.
+			r.Post("/auth/password-reset", accountsH.PasswordReset)
+			r.Post("/auth/password-reset/{token}", accountsH.PasswordResetComplete)
+			r.Post("/auth/confirm-email/{token}", accountsH.ConfirmEmail)
+			// T040 — the invitation link without a session: its view and
+			// signup by invitation.
+			r.Get("/auth/invitations/{token}", accountsH.InvitationPreview)
+			r.Post("/auth/invitations/{token}/signup", accountsH.InvitationSignup)
+
+			// Password login is the call that establishes a user; logout is
+			// a no-op placeholder until R5 token revocation lands.
+			r.Post("/auth/login", authH.Login)
+			r.Post("/auth/logout", authH.Logout)
+		})
 
 		r.Group(mountUserAPI)
 	}
@@ -2367,6 +2381,19 @@ func buildRouter(
 	r.Route(transitionalInternalAPIPrefix, mountInternalAPI)
 
 	return r, drainMCPStreams
+}
+
+// mountServiceGroup registers the service routes of the internal API: routes
+// adds them to a group of r guarded by handler.RequireServiceCall, so every
+// route registered through it — including one added later — answers 403
+// service_call_required to a request without the service-call marker, with
+// no per-route step. r is a prefix router already behind
+// RequireInternalSecret, so a caller without the secret is refused 401 first.
+func mountServiceGroup(r chi.Router, routes func(chi.Router)) {
+	r.Group(func(r chi.Router) {
+		r.Use(handler.RequireServiceCall)
+		routes(r)
+	})
 }
 
 const (

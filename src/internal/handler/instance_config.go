@@ -46,12 +46,13 @@ func nonEmpty(s string) *string {
 // @Description
 // @Description Algorithm: no database access; the body is built from this process's configuration once at startup and returned as is. Every key is always present; null means "not configured" (no captcha, no prefix minimum, no terms or privacy link).
 // @Description
-// @Description Authorization: the service secret header X-Skein-Internal-Secret only. No user identity is required or read; user trust-headers alone are a 401. Side effects: none, a pure read.
+// @Description Authorization: the service secret header X-Skein-Internal-Secret and the service-call marker X-Skein-Service-Call: 1 (without it 403 service_call_required). No user identity is required or read; user trust-headers alone are a 401. Side effects: none, a pure read.
 // @Tags Internal
 // @Produce json
-// @Security InternalSecretAuth
+// @Security InternalSecretAuth && ServiceCallMarker
 // @Success 200 {object} accounts.InstanceConfig "The installation settings"
 // @Failure 401 {object} map[string]any "Service secret missing or wrong"
+// @Failure 403 {object} map[string]any "service_call_required: the service-call marker X-Skein-Service-Call: 1 is missing or has another value"
 // @Router /ui/v1/internal/instance-config [get]
 func (h *InstanceConfigHandler) Get(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, h.body)

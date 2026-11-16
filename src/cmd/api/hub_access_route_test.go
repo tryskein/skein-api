@@ -7,7 +7,10 @@ package main
 // service secret — 401 without it, 400 on bad syntax — and is outside the user
 // group: a call with the secret and no user headers is served (the user group
 // would demand a user), and user headers neither replace the secret nor
-// change whose access is answered.
+// change whose access is answered. The route is a service route (sk-998 US-2):
+// every call that holds the secret also carries the service-call marker
+// X-Skein-Service-Call: 1, as skein-web's own calls do; the calls without the
+// secret do not.
 
 import (
 	"bytes"
@@ -60,7 +63,10 @@ func TestHubAccessRoute_ServiceSecretOnly(t *testing.T) {
 		t.Errorf("admin user headers without the secret: status %d, want 401; body %s", rec.Code, rec.Body.String())
 	}
 
-	secret := map[string]string{auth.HeaderInternalSecret: wiringInternalSecret}
+	secret := map[string]string{
+		auth.HeaderInternalSecret: wiringInternalSecret,
+		"X-Skein-Service-Call":    "1",
+	}
 
 	// Secret, broken syntax → 400.
 	if rec := s.hubAccess(`{"users":`, secret); rec.Code != http.StatusBadRequest {
@@ -84,7 +90,10 @@ func TestHubAccessRoute_ServiceSecretOnly(t *testing.T) {
 	}
 
 	// Secret plus an admin's user headers: the answer is still the outsider's.
-	headers := map[string]string{auth.HeaderInternalSecret: wiringInternalSecret}
+	headers := map[string]string{
+		auth.HeaderInternalSecret: wiringInternalSecret,
+		"X-Skein-Service-Call":    "1",
+	}
 	for k, v := range adminHeaders {
 		headers[k] = v
 	}

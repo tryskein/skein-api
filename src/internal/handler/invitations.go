@@ -369,13 +369,15 @@ func (h *InvitationsHandler) DeclineByToken(w http.ResponseWriter, r *http.Reque
 // @Description
 // @Description Algorithm: the api-side rate limit per link and per client IP (X-Skein-Client-Ip) → 429 rate_limited. Every state is a 200, in this order: space_deleted → invalid (unknown, expired, revoked, used) → valid with the space, the inviter's username, the invited email and hasAccount (an account, not deleted, has the email). The fields after status are null unless valid: a dead link reveals nothing.
 // @Description
-// @Description Side effects: none — opening the link without a session confirms nothing and accepts nothing. Authorization: the service secret only.
+// @Description Side effects: none — opening the link without a session confirms nothing and accepts nothing. Authorization: the service secret and the service-call marker.
 // @Tags Auth
 // @Produce json
+// @Security InternalSecretAuth && ServiceCallMarker
 // @Param token path string true "The link token"
 // @Param X-Skein-Client-Ip header string false "The real client address stamped by skein-web"
 // @Success 200 {object} accounts.InvitationPreview "The link's state"
 // @Failure 401 {object} map[string]any "Service secret missing or wrong"
+// @Failure 403 {object} map[string]any "service_call_required: the service-call marker X-Skein-Service-Call: 1 is missing or has another value"
 // @Failure 429 {object} map[string]any "rate_limited"
 // @Failure 500 {object} map[string]any "internal_error"
 // @Router /ui/v1/auth/invitations/{token} [get]
@@ -399,12 +401,14 @@ func (h *AccountsHandler) InvitationPreview(w http.ResponseWriter, r *http.Reque
 // @Tags Auth
 // @Accept json
 // @Produce json
+// @Security InternalSecretAuth && ServiceCallMarker
 // @Param token path string true "The link token"
 // @Param X-Skein-Client-Ip header string false "The real client address stamped by skein-web"
 // @Param body body accounts.InvitationSignupRequest true "Username, password, consent, Turnstile token"
 // @Success 200 {object} accounts.InvitationSignupResponse "The authentication response (sessionEpoch) and the space joined"
 // @Failure 400 {object} map[string]any "invalid_request"
 // @Failure 401 {object} map[string]any "Service secret missing or wrong"
+// @Failure 403 {object} map[string]any "service_call_required: the service-call marker X-Skein-Service-Call: 1 is missing or has another value"
 // @Failure 422 {object} map[string]any "signup_disabled, captcha_failed, space_deleted, invitation_invalid, terms_required, username_invalid, password_weak, password_pwned, email_taken, username_taken (suggestions)"
 // @Failure 429 {object} map[string]any "rate_limited"
 // @Failure 500 {object} map[string]any "internal_error"

@@ -35,8 +35,9 @@ func NewHubAccessHandler(pool *pgxpool.Pool) *HubAccessHandler {
 
 // ProjectAccess handles POST /api/v1/hub/project-access.
 //
-// Route wiring: RequireInternalSecret ONLY, outside the /api/v1 group that
-// applies ParseUserHeaders — like /api/v1/auth/oidc/provision. The caller is
+// Route wiring: the service group of the internal API (RequireInternalSecret,
+// then RequireServiceCall), outside the user group that applies
+// ParseUserHeaders — like /ui/v1/auth/oidc/provision. The caller is
 // skein-web acting for many users at once, not one logged-in user; whose
 // access is checked is named in the body, and user trust-headers are neither
 // required nor read.
@@ -50,15 +51,16 @@ func NewHubAccessHandler(pool *pgxpool.Pool) *HubAccessHandler {
 // @Description
 // @Description allVisible=true (the /activity "all projects visible to me" mode) adds visibleProjectIds — the user's whole visible set, ordered by id — for EVERY entry that asked, the internal admin included (contract version 2, projects/access_contract.go); [] for an inactive or unknown user. internalAdmin is the role only (active, role admin, not external): it grants nothing by itself, and skein-web must not derive a subscription from it. Absent fields: projectIds absent = nothing to check; visibleProjectIds absent = not asked.
 // @Description
-// @Description Authorization: the service secret header X-Skein-Internal-Secret only; user headers are ignored. Unknown JSON fields are ignored. Body limit 16 MiB; the batch budget is 4,000 entries per call (a maximal entry with 50 projects is about 2 KB), larger batches are split by the caller. Exactly one JSON value per body: trailing data is a 400. Side effects: none, a pure read.
+// @Description Authorization: the service secret header X-Skein-Internal-Secret and the service-call marker X-Skein-Service-Call: 1 (without it 403 service_call_required); user headers are ignored. Unknown JSON fields are ignored. Body limit 16 MiB; the batch budget is 4,000 entries per call (a maximal entry with 50 projects is about 2 KB), larger batches are split by the caller. Exactly one JSON value per body: trailing data is a 400. Side effects: none, a pure read.
 // @Tags Hub
 // @Accept json
 // @Produce json
-// @Security InternalSecretAuth
+// @Security InternalSecretAuth && ServiceCallMarker
 // @Param body body projects.ProjectAccessRequest true "Users and the projects to check for each"
 // @Success 200 {object} projects.ProjectAccessResponse "One result per request entry, in request order"
 // @Failure 400 {object} map[string]any "invalid_request: body is not JSON of the documented shape, users is missing, a userId is missing, or an id is not a UUID; also an oversized body"
 // @Failure 401 {object} map[string]any "Service secret missing or wrong"
+// @Failure 403 {object} map[string]any "service_call_required: the service-call marker X-Skein-Service-Call: 1 is missing or has another value"
 // @Failure 500 {object} map[string]any "internal_error: database failure"
 // @Router /ui/v1/hub/project-access [post]
 func (h *HubAccessHandler) ProjectAccess(w http.ResponseWriter, r *http.Request) {

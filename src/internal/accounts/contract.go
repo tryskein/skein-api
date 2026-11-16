@@ -11,12 +11,14 @@
 // # Callers and authorization
 //
 // Every route of this contract is called by skein-web (the BFF) and only by
-// it: the service secret `X-Skein-Internal-Secret` is the whole
-// authorization (RequireInternalSecret, outside the ParseUserHeaders group,
-// like `/api/v1/auth/oidc/provision`). No route reads the user trust-headers
+// it: the service secret `X-Skein-Internal-Secret` and the service-call
+// marker `X-Skein-Service-Call: 1` are the whole authorization (the service
+// group of the internal API: RequireInternalSecret, then RequireServiceCall,
+// outside the ParseUserHeaders group, like `/ui/v1/auth/oidc/provision`). No route reads the user trust-headers
 // `X-Skein-User-*`: there is no logged-in user yet, or the request must not
 // depend on one. A wrong or missing secret is answered
-// 401 `{"error":"invalid internal secret"}` by the middleware.
+// 401 `{"error":"invalid internal secret"}` by the middleware; a missing
+// marker or one of another value, 403 `{"error":"service_call_required"}`.
 //
 // The public routes additionally take `X-Skein-Client-Ip` — the real client
 // address, which skein-web stamps after stripping any client-supplied

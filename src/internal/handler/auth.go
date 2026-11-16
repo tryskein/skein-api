@@ -185,16 +185,14 @@ type userResponse struct {
 //
 // Internal endpoint — does NOT issue a browser session cookie.
 //
-// This handler is mounted at POST /api/v1/auth/login on skein-api and only
-// verifies credentials, returning the user JSON on success. The browser
-// cookie session (skein.sid) is established by the BFF route POST
-// /api/auth/login on skein-web (see AuthController in skein-web), which
-// internally calls this endpoint and then runs SignInAsync to issue the
-// encrypted session cookie. Hitting /api/v1/auth/login directly through
-// skein-web's ApiProxyMiddleware succeeds with 200 + user JSON but does
-// NOT set a Set-Cookie header — testers must use /api/auth/login (no v1)
-// for cookie-based auth, or migrate to API-key auth (R2.1) for service-
-// to-service callers.
+// This handler is mounted at POST /ui/v1/auth/login on skein-api, in the
+// service group of the internal API, and only verifies credentials, returning
+// the user JSON on success. The browser cookie session (skein.sid) is
+// established by the BFF route POST /api/auth/login on skein-web (see
+// AuthController in skein-web), which calls this endpoint with the
+// service-call marker and then runs SignInAsync to issue the encrypted
+// session cookie. A browser request proxied by skein-web carries no marker
+// and never reaches this handler.
 //
 // Algorithm:
 //  1. Decode {email, password}; reject malformed/oversized JSON with 400.
@@ -213,6 +211,30 @@ type userResponse struct {
 //
 // Logging: success logs userId + username; failure logs WARN without email
 // (to avoid PII in logs).
+//
+// @Summary Verify a password login (service only, for skein-web)
+// @Description Business meaning: the password step of skein-web's login (POST /api/auth/login on skein-web). skein-api checks the email and password and returns the authentication response; skein-web then issues the browser session cookie. No cookie is set here.
+// @Description
+// @Description Algorithm: body not one JSON object of {email, password} (unknown fields refused), or over the body limit → 400 "invalid JSON"; email or password empty → 400; the per-pod limiter per email and per client IP (X-Skein-Client-Ip) → 429 rate_limited; SKEIN_AUTH_MODE=keycloak and the email is not the break-glass admin → 410 login_disabled. Then the account is looked up by the lower-cased email and the password verified with bcrypt; an unknown email, an account without a password, a deactivated account, a wrong password, an account class the auth mode closes the password channel to, or a credential changed after it was verified all answer the same 422 "invalid credentials", with equal timing.
+// @Description
+// @Description Side effects: on success last_login_at is stamped in the same transaction that reads the authentication response with the current session epoch; a failure counts against the per-pod limiter.
+// @Description
+// @Description Authorization: the service secret and the service-call marker; no user headers are read.
+// @Tags Auth
+// @Accept json
+// @Produce json
+// @Security InternalSecretAuth && ServiceCallMarker
+// @Param X-Skein-Client-Ip header string false "The real client address stamped by skein-web; keys the per-IP limit"
+// @Param body body object true "JSON object {email, password}; unknown fields are refused"
+// @Success 200 {object} accounts.AuthResponse "Credentials verified"
+// @Failure 400 {object} map[string]any "invalid JSON; email and password are required"
+// @Failure 401 {object} map[string]any "Service secret missing or wrong"
+// @Failure 403 {object} map[string]any "service_call_required: the service-call marker X-Skein-Service-Call: 1 is missing or has another value"
+// @Failure 410 {object} map[string]any "login_disabled: password login is off in keycloak mode"
+// @Failure 422 {object} map[string]any "invalid credentials"
+// @Failure 429 {object} map[string]any "rate_limited"
+// @Failure 500 {object} map[string]any "internal error"
+// @Router /ui/v1/auth/login [post]
 func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
@@ -452,6 +474,19 @@ SELECT password_hash, deactivated_at IS NULL AND deleted_at IS NULL FROM users W
 // 204s — session lifecycle is owned by skein-web (the BFF), which clears
 // its cookie when this returns. We keep the endpoint here so the BFF
 // integration shape stays stable across the auth slices.
+//
+// @Summary Log out (service only, placeholder)
+// @Description Business meaning: none yet — a placeholder for token revocation. The session is owned by skein-web, which clears its own cookie; no caller relies on this route today.
+// @Description
+// @Description Algorithm: always 204 with no body; the body of the request is not read. Side effects: none.
+// @Description
+// @Description Authorization: the service secret and the service-call marker; no user headers are read.
+// @Tags Auth
+// @Security InternalSecretAuth && ServiceCallMarker
+// @Success 204 "Nothing to do"
+// @Failure 401 {object} map[string]any "Service secret missing or wrong"
+// @Failure 403 {object} map[string]any "service_call_required: the service-call marker X-Skein-Service-Call: 1 is missing or has another value"
+// @Router /ui/v1/auth/logout [post]
 func (h *AuthHandler) Logout(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -562,10 +597,11 @@ const oidcProvisionMaxBytes = 4 * 1024 // 4 KiB
 //     SKEIN_BOOTSTRAP_ADMIN_EMAIL) and return the user JSON.
 //  3. Not matched + auto-provision off → 403 user_not_provisioned.
 //
-// Route wiring: RequireInternalSecret ONLY. We deliberately do NOT compose
-// ParseUserHeaders / RequireUser because the caller has no user yet —
-// this is the very call that establishes one. The internal-secret check
-// is sufficient: only skein-web BFF holds the secret.
+// Route wiring: the service group of the internal API (RequireInternalSecret,
+// then RequireServiceCall). We deliberately do NOT compose ParseUserHeaders /
+// RequireUser because the caller has no user yet — this is the very call that
+// establishes one. Only skein-web's own calls hold the secret and send the
+// service-call marker.
 //
 // Error mapping (see R5.1 plan §8.5.10):
 //   - bad JSON / wrong shape   → 400 invalid_request
@@ -575,6 +611,29 @@ const oidcProvisionMaxBytes = 4 * 1024 // 4 KiB
 //   - username clash exhausted → 409 username_conflict
 //   - DB / unknown             → 500 internal_error
 //   - happy path               → 200 with {id,email,username,role}
+//
+// @Summary Provision the user of an SSO login (service only, for skein-web)
+// @Description Business meaning: skein-web has validated an SSO identity (trust-headers of the auth proxy or native OIDC) and asks skein-api for the matching account, creating it when auto-provisioning is on; skein-web then holds the session for that account. Called when an SSO session is created and when its TTL is refreshed.
+// @Description
+// @Description Algorithm: the provisioner not wired → 410 oidc_disabled; body not one JSON object of {sub, email, username, name} (unknown fields refused) or over 4 KiB → 400 invalid_request; email or username empty → 422 missing_claims (name and sub are optional). An account matched by sub is updated (last_login_at, email, name); otherwise, with SKEIN_AUTO_PROVISION=true, an account is created (role user, or admin for SKEIN_BOOTSTRAP_ADMIN_EMAIL). No match and auto-provisioning off, or the email of a deleted account → 403 user_not_provisioned; a match on an external local account → 403 external_account_conflict; every username candidate taken → 409 username_conflict.
+// @Description
+// @Description Side effects: the account row is created or updated. The 200 body is the authentication response with the current session epoch.
+// @Description
+// @Description Authorization: the service secret and the service-call marker; no user headers are read.
+// @Tags Auth
+// @Accept json
+// @Produce json
+// @Security InternalSecretAuth && ServiceCallMarker
+// @Param body body object true "JSON object {sub, email, username, name}; unknown fields are refused"
+// @Success 200 {object} accounts.AuthResponse "The provisioned account"
+// @Failure 400 {object} map[string]any "invalid_request"
+// @Failure 401 {object} map[string]any "Service secret missing or wrong"
+// @Failure 403 {object} map[string]any "service_call_required: the service-call marker X-Skein-Service-Call: 1 is missing or has another value; user_not_provisioned; external_account_conflict"
+// @Failure 409 {object} map[string]any "username_conflict"
+// @Failure 410 {object} map[string]any "oidc_disabled"
+// @Failure 422 {object} map[string]any "missing_claims"
+// @Failure 500 {object} map[string]any "internal_error"
+// @Router /ui/v1/auth/oidc/provision [post]
 func (h *AuthHandler) OIDCProvision(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 

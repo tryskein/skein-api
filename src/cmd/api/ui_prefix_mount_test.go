@@ -86,7 +86,12 @@ func (s *wiringStack) serve(method, path string, body []byte, headers map[string
 func TestUIPrefix_MountPointsAnswerAlikeUnderBothPrefixes(t *testing.T) {
 	s := newPrefixStack(t)
 
-	secret := map[string]string{auth.HeaderInternalSecret: wiringInternalSecret}
+	// The service routes are reached by skein-web's own calls: the secret and
+	// the service-call marker X-Skein-Service-Call: 1 (sk-998 US-2).
+	service := map[string]string{
+		auth.HeaderInternalSecret: wiringInternalSecret,
+		"X-Skein-Service-Call":    "1",
+	}
 	user := map[string]string{
 		auth.HeaderInternalSecret: wiringInternalSecret,
 		auth.HeaderUserID:         s.owner.String(),
@@ -110,14 +115,14 @@ func TestUIPrefix_MountPointsAnswerAlikeUnderBothPrefixes(t *testing.T) {
 	}{
 		// The user group: the caller's header counts.
 		{"user group", http.MethodGet, "/me/notification-counts", nil, user, http.StatusOK},
-		// Service routes outside the group: the channel secret alone.
-		{"internal/instance-config", http.MethodGet, "/internal/instance-config", nil, secret, http.StatusOK},
-		{"hub/project-access", http.MethodPost, "/hub/project-access", access, secret, http.StatusOK},
+		// Service routes outside the group: the secret and the marker.
+		{"internal/instance-config", http.MethodGet, "/internal/instance-config", nil, service, http.StatusOK},
+		{"hub/project-access", http.MethodPost, "/hub/project-access", access, service, http.StatusOK},
 		// No OIDC provisioner is wired: the route answers 410 oidc_disabled.
-		{"auth/oidc/provision", http.MethodPost, "/auth/oidc/provision", []byte(`{}`), secret, http.StatusGone},
+		{"auth/oidc/provision", http.MethodPost, "/auth/oidc/provision", []byte(`{}`), service, http.StatusGone},
 		// The account routes of a visitor; registration is closed by
 		// default: 422 signup_disabled.
-		{"auth account routes", http.MethodGet, "/auth/username-suggestions?email=prefix-mount@example.test", nil, secret, http.StatusUnprocessableEntity},
+		{"auth account routes", http.MethodGet, "/auth/username-suggestions?email=prefix-mount@example.test", nil, service, http.StatusUnprocessableEntity},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
