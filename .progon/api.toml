@@ -1,0 +1,65 @@
+schema = 1
+root = ".."
+
+[defaults]
+adapter = "go"
+image = "golang:1.27"
+prepare_image = true
+network = "grant"
+workdir = "src"
+cpu = 2
+memory_mib = 2048
+
+[defaults.env]
+CGO_ENABLED = "0"
+GOFLAGS = "-buildvcs=false"
+
+# Go tests without a database: DB-backed tests skip without TEST_DATABASE_URL.
+[kind.unit]
+[kind.unit.options]
+flags = ["-count=1"]
+
+# Store, handler and MCP tests against a migrated Postgres (pg_trgm + vector).
+# One shared database: packages must run serially (-p 1).
+[kind.integ]
+memory_mib = 3072
+timeout_seconds = 3600
+test_timeout_seconds = 900
+prepare = [
+  "go install -tags postgres github.com/golang-migrate/migrate/v4/cmd/migrate@v4.20.1",
+  "\"$(go env GOPATH)/bin/migrate\" -path migrations -database \"$TEST_DATABASE_URL\" up",
+]
+[kind.integ.env]
+TEST_DATABASE_URL = "postgres://skein:test@pg:5432/skein?sslmode=disable"
+[kind.integ.options]
+parallel = 1
+flags = ["-count=1"]
+[[kind.integ.fixture]]
+name = "pg"
+image = "pgvector/pgvector:pg18"
+pull = true
+cpu = 1
+memory_mib = 2048
+tmpfs = ["/var/lib/postgresql/data"]
+ready = ["pg_isready", "-U", "skein", "-d", "skein", "-h", "127.0.0.1"]
+init = [
+  ["psql", "-v", "ON_ERROR_STOP=1", "-U", "skein", "-d", "skein", "-c", "CREATE EXTENSION IF NOT EXISTS pg_trgm; CREATE EXTENSION IF NOT EXISTS vector;"],
+]
+[kind.integ.fixture.env]
+POSTGRES_USER = "skein"
+POSTGRES_PASSWORD = "test"
+POSTGRES_DB = "skein"
+PGDATA = "/var/lib/postgresql/data/pgdata"
+POSTGRES_INITDB_ARGS = "--locale-provider=builtin --builtin-locale=C.UTF-8 --lc-collate=C.UTF-8 --lc-ctype=C.UTF-8"
+
+# Mutation testing with gomutants (needs Go 1.26+). One worker at a time:
+# the packages are not safe to mutate in parallel.
+[kind.mutation]
+adapter = "gomutants"
+cpu = 4
+memory_mib = 4096
+timeout_seconds = 7200
+[kind.mutation.env]
+GOFLAGS = "-buildvcs=false -p=1"
+[kind.mutation.options]
+workers = 1

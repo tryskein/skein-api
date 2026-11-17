@@ -142,6 +142,22 @@ Python runner tests (from the repository root):
 (cd src && find . -name '*_test.py' | sort | while IFS= read -r f; do python3 "$f" || exit 1; done)
 ```
 
+### Running on the test VMs (progon)
+
+The profile is `.progon/api.toml`; run from the repository root:
+
+| Kind | Command | Narrowed run |
+|---|---|---|
+| unit | `progon api unit` | `progon api unit ./internal/<pkg>/ -run '<regexp>'` |
+| integ | `progon api integ` | `progon api integ ./internal/<pkg>/ -run '<regexp>'` |
+| mutation | `progon api mutation ./internal/<pkg>/` | the package patterns are the targets; `--since <ref>` limits it to changed lines |
+
+`integ` starts a `pgvector/pgvector:pg18` fixture with `pg_trgm` and `vector`,
+applies `src/migrations` with golang-migrate and runs the packages serially
+(`-p 1`, set in the profile). `mutation` runs gomutants with one worker and
+`GOFLAGS=-p=1`; a full run takes hours, so name packages or use `--since`.
+Python runner tests are not part of the profile; run them as described above.
+
 ### Project specifics
 
 - Unit and integration are one suite; `TEST_DATABASE_URL` separates them, not
