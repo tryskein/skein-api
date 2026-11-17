@@ -245,7 +245,7 @@ func sortedKeys(m map[string]struct{}) []string {
 	return out
 }
 
-// Matrix row 1 (sk-1007 ИНВ-1, R-5, K1): every reader of the corpus gets
+// Matrix row 1 (sk-1007 INV-1, R-5, K1): every reader of the corpus gets
 // exactly the marker issues of the projects it sees by the legend (f.Sees);
 // an admin sees what the relation gives him — not the Personal of others; a
 // deleted or never-existing id is never returned.
@@ -274,7 +274,7 @@ func TestVisibleIssueIDs_PerReader(t *testing.T) {
 	}
 }
 
-// Matrix row 2 (sk-1007 ИНВ-1, edge «узкая область ключа»): the key's scope
+// Matrix row 2 (sk-1007 INV-1, edge "narrow key scope"): the key's scope
 // narrows the reader's relation. uAB with a projects key on A.members sees
 // only that issue; with a spaces key on B only the issues of B's projects; a
 // key id without a grant sees nothing; scope "all" is the relation itself.
