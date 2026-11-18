@@ -628,8 +628,11 @@ rows present, `auth.Bootstrap` is a no-op regardless of what is set here.
   to the host itself, a private, shared (CGNAT), link-local, multicast or
   reserved address is refused, and redirects of a push service are not
   followed. Through a proxy the proxy address itself is not checked (it is the
-  operator's choice), but the endpoint's host is resolved by skein-api first
-  and refused the same way.
+  operator's choice); the endpoint's host is resolved by skein-api, refused
+  the same way, and the proxy is asked to `CONNECT` to the vetted IP address
+  (TLS still verifies the push service's name), so the proxy's own name
+  resolution does not choose the destination. A proxy that is shared with
+  other workloads should still restrict where it connects.
 
 #### `SKEIN_APP_BASE_URL`
 
