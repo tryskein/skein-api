@@ -373,7 +373,9 @@ SELECT n.id, n.type, n.created_at, n.read_at, n.archived_at,
        e.field, e.old_data, e.new_data, e.payload,
        ci.id   AS comment_issue_id,
        ci.title AS comment_issue_title,
-       cpr.id_prefix AS comment_project_prefix` + notifRowExtraCols + `
+       cpr.id_prefix AS comment_project_prefix,
+       c.body        AS comment_body,
+       c.deleted_at  AS comment_deleted_at` + notifRowExtraCols + `
   FROM notifications n
   JOIN events e ON e.id = n.event_id
   LEFT JOIN issues i  ON e.entity_type = 'issue' AND i.id = e.entity_id
@@ -427,6 +429,7 @@ SELECT n.id, n.type, n.created_at, n.read_at, n.archived_at,
 			&r.issueTitle, &r.projectIDPrefix,
 			&r.fieldName, &r.oldData, &r.newData, &r.payload,
 			&r.commentIssueID, &r.commentIssueTitle, &r.commentProjectPrefix,
+			&r.commentBody, &r.commentDeletedAt,
 			&spaceShort, &r.actorStatus,
 		); err != nil {
 			return nil, fmt.Errorf("scanning notification row: %w", err)
@@ -507,6 +510,16 @@ type notifRaw struct {
 	fieldName                                               *string
 	oldData, newData, payload                               []byte
 	commentIssueID, commentIssueTitle, commentProjectPrefix *string
+	// commentBody / commentDeletedAt are the joined comment's current text
+	// and deletion stamp (comment events only): the old/new values of a
+	// comment event show THIS text, never the copy the event kept
+	// (sk-1024, the rule of the activity feed).
+	commentBody      *string
+	commentDeletedAt *time.Time
+	// previewOnly marks a task-monitor row: its comment text travels only
+	// as the bounded bodyPreview (INV-1 of sk-242.1), so the body key is
+	// dropped from the old/new values instead of being filled.
+	previewOnly bool
 }
 
 // own records the row's event type (a notification's type is its event's)
@@ -526,9 +539,36 @@ func (r *notifRaw) hydrate(n *NotificationDTO) {
 		r.issueTitle, r.projectIDPrefix,
 		r.fieldName, r.oldData, r.newData, r.payload,
 		r.commentIssueID, r.commentIssueTitle, r.commentProjectPrefix)
+	if r.entityType == "comment" {
+		if r.previewOnly {
+			n.OldValue = dropCommentBody(n.OldValue)
+			n.NewValue = dropCommentBody(n.NewValue)
+		} else {
+			n.OldValue = redact.CurrentCommentBody(n.OldValue, r.commentBody, r.commentDeletedAt, false)
+			n.NewValue = redact.CurrentCommentBody(n.NewValue, r.commentBody, r.commentDeletedAt,
+				r.eventType == "comment.created")
+		}
+	}
 	if r.actorStatus != nil {
 		n.Actor.Status = *r.actorStatus
 	}
+}
+
+// dropCommentBody removes the "body" key a comment event's old/new value
+// kept; an object left empty becomes absent.
+func dropCommentBody(v any) any {
+	m, ok := v.(map[string]any)
+	if !ok {
+		return v
+	}
+	if _, has := m["body"]; !has {
+		return v
+	}
+	delete(m, "body")
+	if len(m) == 0 {
+		return nil
+	}
+	return m
 }
 
 // redactNotifRaws runs RedactEventRefs over a scanned page and writes the
@@ -1135,6 +1175,7 @@ func (s *Store) PollForMonitor(ctx context.Context, p PollParams) (PollResult, e
 			return PollResult{}, fmt.Errorf("scanning monitor notification row: %w", err)
 		}
 		r.own(n.Type)
+		r.previewOnly = true
 
 		// Reader-side echo marker (INV-2, US-2): expose the event's
 		// actor_session_id ONLY when non-empty. A NULL or empty string means
@@ -2644,7 +2685,9 @@ SELECT w.card_issue_id, w.id, w.type, w.created_at, w.read_at,
        e.field, e.old_data, e.new_data, e.payload,
        ci.id    AS comment_issue_id,
        ci.title AS comment_issue_title,
-       cpr.id_prefix AS comment_project_prefix` + notifSpaceCol + `
+       cpr.id_prefix AS comment_project_prefix,
+       c.body        AS comment_body,
+       c.deleted_at  AS comment_deleted_at` + notifSpaceCol + `
   FROM windowed w
   JOIN events e ON e.id = w.event_id
   LEFT JOIN issues i  ON e.entity_type = 'issue' AND i.id = e.entity_id
@@ -2687,6 +2730,7 @@ SELECT w.card_issue_id, w.id, w.type, w.created_at, w.read_at,
 			&r.issueTitle, &r.projectIDPrefix,
 			&r.fieldName, &r.oldData, &r.newData, &r.payload,
 			&r.commentIssueID, &r.commentIssueTitle, &r.commentProjectPrefix,
+			&r.commentBody, &r.commentDeletedAt,
 			&spaceShort,
 		); err != nil {
 			return nil, fmt.Errorf("scanning recent event: %w", err)

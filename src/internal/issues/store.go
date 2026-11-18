@@ -8037,38 +8037,8 @@ func decodeJSONValue(b []byte) any {
 }
 
 // CommentDeletedBody is the text an activity row carries in place of the
-// body of a comment that has been deleted (or whose row is gone). The row
-// also carries "deleted": true, so a client tells the marker from a comment
-// that happens to say the same words.
-const CommentDeletedBody = "comment deleted"
-
-// currentCommentBody replaces the "body" key of a comment event's decoded
-// old/new value with the comment's current text: body is the live
-// comments.body, deletedAt its deleted_at. A deleted comment, or one whose
-// row no longer exists (body nil), gets CommentDeletedBody and
-// "deleted": true. A value without a "body" key is returned unchanged
-// unless always is set (the new value of comment.created, which shows the
-// comment's text whether or not the event kept a copy); then a missing
-// object is started empty.
-func currentCommentBody(v any, body *string, deletedAt *time.Time, always bool) any {
-	m, ok := v.(map[string]any)
-	if !ok {
-		if !always || v != nil {
-			return v
-		}
-		m = map[string]any{}
-	}
-	if _, has := m["body"]; !has && !always {
-		return v
-	}
-	if body == nil || deletedAt != nil {
-		m["body"] = CommentDeletedBody
-		m["deleted"] = true
-		return m
-	}
-	m["body"] = *body
-	return m
-}
+// body of a deleted comment (redact.CommentDeletedBody).
+const CommentDeletedBody = redact.CommentDeletedBody
 
 // decodeActivityChanges lifts the per-field diff out of an issue.updated
 // event's payload (events.payload.changes[]). Returns nil for any other
@@ -8211,8 +8181,8 @@ func scanActivityRows(ctx context.Context, q authz.RowsQuerier, rows pgx.Rows, l
 			// the event was written. The feed never serves that copy: the
 			// text comes from the comment row itself, so an edit shows the
 			// current version and a deletion shows the marker.
-			entry.OldValue = currentCommentBody(entry.OldValue, r.commentBody, r.commentDeletedAt, false)
-			entry.NewValue = currentCommentBody(entry.NewValue, r.commentBody, r.commentDeletedAt,
+			entry.OldValue = redact.CurrentCommentBody(entry.OldValue, r.commentBody, r.commentDeletedAt, false)
+			entry.NewValue = redact.CurrentCommentBody(entry.NewValue, r.commentBody, r.commentDeletedAt,
 				eventType == EventCommentCreated)
 		}
 		// project_id is NOT NULL for every activity row (the WHERE

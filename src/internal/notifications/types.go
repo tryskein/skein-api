@@ -182,6 +182,14 @@ type NotificationDTO struct {
 	// are its before and after, and either may be absent when the event
 	// has no such side (a creation has no old value). Their JSON type
 	// follows the field, so they are not always strings.
+	//
+	// Comment events are the exception (sk-1024): their "body" is never the
+	// copy stored in the event. On inbox and Watching rows it is the
+	// comment's current text (comment.created always carries it in
+	// NewValue); for a deleted comment, or one whose row is gone, it is
+	// "comment deleted" and the object also carries "deleted": true. On a
+	// task-monitor row there is no body at all: the text travels only as
+	// BodyPreview.
 	Field    *string `json:"field,omitempty"`
 	OldValue any     `json:"oldValue,omitempty"`
 	NewValue any     `json:"newValue,omitempty"`
