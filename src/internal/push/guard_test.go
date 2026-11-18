@@ -18,6 +18,7 @@ import (
 	"net/http/httptest"
 	"net/netip"
 	"net/url"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -391,5 +392,32 @@ func TestPortOf(t *testing.T) {
 		if err != nil || int(got) != want {
 			t.Errorf("portOf(%s) = %d, %v; want %d", raw, got, err, want)
 		}
+	}
+}
+
+// A proxy whose answer to CONNECT has an endless head is cut off at
+// maxConnectResponseBytes instead of being read without bound.
+func TestPushClient_ProxyAnswerHeadIsBounded(t *testing.T) {
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, rw, err := w.(http.Hijacker).Hijack()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		_, _ = rw.WriteString("HTTP/1.1 200 Connection established\r\n")
+		filler := "X-Filler: " + strings.Repeat("a", 1000) + "\r\n"
+		for i := 0; i < 64; i++ {
+			if _, err := rw.WriteString(filler); err != nil {
+				return
+			}
+		}
+		_ = rw.Flush()
+	}))
+	defer proxy.Close()
+	c := newPushClientWith(checkPublicAddr, func(*http.Request) (*url.URL, error) {
+		return url.Parse(proxy.URL)
+	}, staticLookup(map[string][]string{"push.example": {"8.8.8.8"}}))
+	if _, err := c.Get("http://push.example/x"); err == nil {
+		t.Fatal("a 64 KiB CONNECT answer head was accepted")
 	}
 }

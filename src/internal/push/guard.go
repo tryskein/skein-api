@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/netip"
@@ -260,6 +261,10 @@ func connectVia(ctx context.Context, dial func(context.Context, string) (net.Con
 	} else {
 		_ = conn.SetDeadline(time.Now().Add(pushSendTimeout))
 	}
+	// A cancelled delivery interrupts the CONNECT exchange at once instead of
+	// waiting for the deadline.
+	stop := context.AfterFunc(ctx, func() { _ = conn.SetDeadline(time.Unix(1, 0)) })
+	defer stop()
 	authority := target.String()
 	connect := &http.Request{
 		Method: http.MethodConnect,
@@ -276,13 +281,16 @@ func connectVia(ctx context.Context, dial func(context.Context, string) (net.Con
 		conn.Close()
 		return nil, fmt.Errorf("sending CONNECT to the push proxy: %w", err)
 	}
-	br := bufio.NewReader(conn)
+	// The answer's head is read through a bounded reader: a proxy cannot
+	// make it unbounded. Its body is never read — a 2xx answer to CONNECT
+	// has none (the tunnel follows), and on a refusal the connection is
+	// dropped anyway.
+	br := bufio.NewReader(io.LimitReader(conn, maxConnectResponseBytes))
 	resp, err := http.ReadResponse(br, connect)
 	if err != nil {
 		conn.Close()
 		return nil, fmt.Errorf("reading the push proxy's CONNECT answer: %w", err)
 	}
-	resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		conn.Close()
 		return nil, fmt.Errorf("push proxy refused CONNECT %s: %s", authority, resp.Status)
@@ -291,9 +299,17 @@ func connectVia(ctx context.Context, dial func(context.Context, string) (net.Con
 		conn.Close()
 		return nil, errors.New("push proxy sent data before the tunnel was used")
 	}
+	if !stop() {
+		// The delivery was cancelled while the tunnel was being set up.
+		conn.Close()
+		return nil, ctx.Err()
+	}
 	_ = conn.SetDeadline(time.Time{})
 	return conn, nil
 }
+
+// maxConnectResponseBytes bounds the head of a proxy's answer to CONNECT.
+const maxConnectResponseBytes = 16 << 10
 
 // proxyAddr is the host:port of proxy p (the default port of its scheme
 // when none is given).
