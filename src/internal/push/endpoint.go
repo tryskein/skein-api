@@ -3,7 +3,7 @@ package push
 import (
 	"errors"
 	"fmt"
-	"net"
+	"net/netip"
 	"net/url"
 	"strings"
 )
@@ -26,15 +26,14 @@ var ErrInvalidEndpoint = errors.New("invalid push endpoint")
 //   - scheme must be https;
 //   - host must be non-empty;
 //   - the hostname "localhost" is rejected outright;
-//   - an IP-literal host is rejected when it is loopback / private (RFC 1918,
-//     ULA) / link-local / unspecified.
+//   - an IP-literal host is rejected when it is not a public unicast address
+//     (blockedAddr: loopback, private, shared, link-local, multicast,
+//     reserved, and IPv6 forms embedding such an IPv4 address).
 //
-// NOTE (DNS rebinding): this validates the URL/host as written, NOT the IP a
-// public DNS name resolves to at send-time. A hostname that resolves to a
-// private address (or flips after validation) is not blocked here. Fully
-// closing that gap requires resolving + pinning the address in a custom
-// net.Dialer.Control on the send-path HTTP client and re-checking each dialed
-// IP — out of scope for this change; can be hardened later.
+// This checks the URL as written. A DNS name is not resolved here: the send
+// path checks the address actually dialed and follows no redirects
+// (newPushClient), which also covers a name that resolves, or is later
+// rebound, to an internal address.
 func ValidateEndpoint(raw string) error {
 	u, err := url.Parse(strings.TrimSpace(raw))
 	if err != nil {
@@ -55,11 +54,8 @@ func ValidateEndpoint(raw string) error {
 	// IP-literal hosts: block anything that targets the local host or a
 	// private/internal network. DNS names fall through (they're the normal
 	// case for real push services).
-	if ip := net.ParseIP(host); ip != nil {
-		if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() ||
-			ip.IsLinkLocalMulticast() || ip.IsUnspecified() {
-			return fmt.Errorf("%w: host must not be a loopback/private/link-local address", ErrInvalidEndpoint)
-		}
+	if ip, err := netip.ParseAddr(host); err == nil && blockedAddr(ip) {
+		return fmt.Errorf("%w: host must be a public address", ErrInvalidEndpoint)
 	}
 
 	return nil

@@ -78,7 +78,7 @@ func TestSend_GonePrunesSubscription(t *testing.T) {
 			// The httptest server is loopback http — the real ValidateEndpoint
 			// (correctly) rejects that, so relax the guard to exercise the
 			// status-handling path we're actually testing here.
-			s.validate = func(string) error { return nil }
+			relaxForLoopback(s)
 			sub := testSubscription(srv.URL)
 
 			err := s.Send(context.Background(), sub, []byte(`{"hello":"world"}`))
@@ -103,7 +103,7 @@ func TestSend_GonePruneErrorStillReturnsErrGone(t *testing.T) {
 
 	pr := &fakePruner{returnErr: errors.New("db down")}
 	s := NewSender(pr, realVAPIDPublic, realVAPIDPrivate, "mailto:test@skein.local")
-	s.validate = func(string) error { return nil }
+	relaxForLoopback(s)
 
 	err := s.Send(context.Background(), testSubscription(srv.URL), []byte(`{}`))
 	if !errors.Is(err, ErrGone) {
@@ -122,7 +122,7 @@ func TestSend_Success(t *testing.T) {
 
 	pr := &fakePruner{}
 	s := NewSender(pr, realVAPIDPublic, realVAPIDPrivate, "mailto:test@skein.local")
-	s.validate = func(string) error { return nil }
+	relaxForLoopback(s)
 
 	if err := s.Send(context.Background(), testSubscription(srv.URL), []byte(`{}`)); err != nil {
 		t.Fatalf("expected nil on 2xx, got %v", err)
@@ -140,7 +140,7 @@ func TestSend_NonGoneErrorDoesNotPrune(t *testing.T) {
 
 	pr := &fakePruner{}
 	s := NewSender(pr, realVAPIDPublic, realVAPIDPrivate, "mailto:test@skein.local")
-	s.validate = func(string) error { return nil }
+	relaxForLoopback(s)
 
 	err := s.Send(context.Background(), testSubscription(srv.URL), []byte(`{}`))
 	if err == nil {
@@ -237,7 +237,7 @@ func TestSend_VAPIDSubjectIsSentVerbatim(t *testing.T) {
 			defer srv.Close()
 
 			s := NewSender(&fakePruner{}, realVAPIDPublic, realVAPIDPrivate, subject)
-			s.validate = func(string) error { return nil }
+			relaxForLoopback(s)
 			if err := s.Send(context.Background(), testSubscription(srv.URL), []byte(`{}`)); err != nil {
 				t.Fatalf("Send: %v", err)
 			}
@@ -262,7 +262,7 @@ func TestSend_ForbiddenIsNotGoneAndKeepsTheSubscription(t *testing.T) {
 
 	pr := &fakePruner{}
 	s := NewSender(pr, realVAPIDPublic, realVAPIDPrivate, "mailto:test@skein.local")
-	s.validate = func(string) error { return nil }
+	relaxForLoopback(s)
 
 	err := s.Send(context.Background(), testSubscription(srv.URL), []byte(`{}`))
 	if !errors.Is(err, ErrForbidden) {
@@ -309,7 +309,7 @@ func TestSend_StatusErrorCarriesHostAndBoundedBody(t *testing.T) {
 			defer srv.Close()
 
 			s := NewSender(&fakePruner{}, realVAPIDPublic, realVAPIDPrivate, "mailto:test@skein.local")
-			s.validate = func(string) error { return nil }
+			relaxForLoopback(s)
 			sub := testSubscription(srv.URL + "/push/v1/secret-subscription-token")
 
 			err := s.Send(context.Background(), sub, []byte(`{}`))
@@ -386,7 +386,7 @@ func TestSend_ResponseBodyNeverCarriesTheSubscriptionSecret(t *testing.T) {
 			endpoint = srv.URL + "/3/device/" + sk627Token
 
 			s := NewSender(&fakePruner{}, realVAPIDPublic, realVAPIDPrivate, "mailto:test@skein.local")
-			s.validate = func(string) error { return nil }
+			relaxForLoopback(s)
 			err := s.Send(context.Background(), testSubscription(endpoint), []byte(`{}`))
 			var se *StatusError
 			if !errors.As(err, &se) {
@@ -433,7 +433,7 @@ func TestSend_StatusErrorBodyHonoursItsBound(t *testing.T) {
 			defer srv.Close()
 
 			s := NewSender(&fakePruner{}, realVAPIDPublic, realVAPIDPrivate, "mailto:test@skein.local")
-			s.validate = func(string) error { return nil }
+			relaxForLoopback(s)
 			var se *StatusError
 			if err := s.Send(context.Background(), testSubscription(srv.URL), []byte(`{}`)); !errors.As(err, &se) {
 				t.Fatalf("Send = %v, want a *StatusError", err)
@@ -465,7 +465,7 @@ func TestSend_BodyReadFailureIsReportedNotCut(t *testing.T) {
 	defer srv.Close()
 
 	s := NewSender(&fakePruner{}, realVAPIDPublic, realVAPIDPrivate, "mailto:test@skein.local")
-	s.validate = func(string) error { return nil }
+	relaxForLoopback(s)
 	var se *StatusError
 	if err := s.Send(context.Background(), testSubscription(srv.URL), []byte(`{}`)); !errors.As(err, &se) {
 		t.Fatalf("Send = %v, want a *StatusError", err)

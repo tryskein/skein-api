@@ -27,6 +27,11 @@ func TestValidateEndpoint(t *testing.T) {
 		{"empty host rejected", "https:///push", true},
 		{"empty string rejected", "", true},
 		{"public ip allowed", "https://8.8.8.8/push", false},
+		{"CGNAT 100.64.x rejected", "https://100.64.0.1/push", true},
+		{"0.x rejected", "https://0.1.2.3/push", true},
+		{"IPv4-mapped loopback rejected", "https://[::ffff:127.0.0.1]/push", true},
+		{"NAT64 of link-local rejected", "https://[64:ff9b::a9fe:a9fe]/push", true},
+		{"multicast rejected", "https://224.0.0.1/push", true},
 	}
 
 	for _, tc := range cases {

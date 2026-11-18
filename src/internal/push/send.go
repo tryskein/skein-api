@@ -118,7 +118,9 @@ type Sender struct {
 	vapidPrivate string
 	vapidSubject string
 	// httpClient is the bounded client handed to webpush-go so a hung push
-	// service cannot stall the dispatcher. Shared + goroutine-safe.
+	// service cannot stall the dispatcher. It refuses non-public addresses
+	// at connect time and follows no redirects (newPushClient). Shared +
+	// goroutine-safe.
 	httpClient *http.Client
 	// validate is the send-time endpoint guard. Defaults to ValidateEndpoint;
 	// it is a field (not a direct call) only so tests can relax it to reach a
@@ -142,7 +144,7 @@ func NewSender(store pruner, vapidPublic, vapidPrivate, vapidSubject string) *Se
 		vapidPublic:  vapidPublic,
 		vapidPrivate: vapidPrivate,
 		vapidSubject: strings.TrimPrefix(vapidSubject, "mailto:"),
-		httpClient:   &http.Client{Timeout: pushSendTimeout},
+		httpClient:   newPushClient(checkPublicAddr),
 		validate:     ValidateEndpoint,
 	}
 }

@@ -618,6 +618,19 @@ rows present, `auth.Bootstrap` is a no-op regardless of what is set here.
 - **Careful:** validated **only when push is enabled** (at least one VAPID key
   set); a malformed value then aborts startup.
 
+#### `HTTPS_PROXY` / `HTTP_PROXY` / `NO_PROXY` (web push delivery)
+
+- **Purpose:** the standard proxy variables; web-push deliveries to the push
+  services go through the proxy they name, as `net/http` reads them.
+- **Required:** no · **Default:** none — deliveries connect directly.
+- **Careful:** a direct delivery connects only to public unicast addresses:
+  the address actually dialed is checked, so an endpoint whose name resolves
+  to the host itself, a private, shared (CGNAT), link-local, multicast or
+  reserved address is refused, and redirects of a push service are not
+  followed. Through a proxy the proxy address itself is not checked (it is the
+  operator's choice), but the endpoint's host is resolved by skein-api first
+  and refused the same way.
+
 #### `SKEIN_APP_BASE_URL`
 
 - **Purpose:** public address of the web UI. It is used for two things: the
