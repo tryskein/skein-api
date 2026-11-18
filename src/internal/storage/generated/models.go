@@ -378,6 +378,7 @@ type OutgoingEmail struct {
 	DeadlineAt    pgtype.Timestamptz `json:"deadline_at"`
 	CreatedAt     pgtype.Timestamptz `json:"created_at"`
 	FinalizedAt   pgtype.Timestamptz `json:"finalized_at"`
+	ApiKeyID      pgtype.UUID        `json:"api_key_id"`
 }
 
 type Project struct {

@@ -17,6 +17,7 @@ import (
 	"skein-api/internal/apikeys"
 	"skein-api/internal/auth"
 	"skein-api/internal/authz"
+	"skein-api/internal/mail"
 )
 
 // apiKeyCreateMaxAttempts caps the prefix-collision retry loop in Create and
@@ -34,6 +35,9 @@ type APIKeysSettings struct {
 	// PublicAPIURL is the external address of the public API; empty when
 	// not configured.
 	PublicAPIURL string
+	// KeyCreatedNotifier queues the owner's email about a new or reissued
+	// key in the creating transaction; nil (mail off) sends none.
+	KeyCreatedNotifier apikeys.CreatedNotifier
 }
 
 // APIKeysHandler implements the /ui/v1/me/api-keys/* endpoints: the
@@ -58,7 +62,7 @@ type APIKeysHandler struct {
 func NewAPIKeysHandler(pool *pgxpool.Pool, bcryptCost int, settings APIKeysSettings) *APIKeysHandler {
 	return &APIKeysHandler{
 		pool:       pool,
-		store:      apikeys.New(pool),
+		store:      apikeys.New(pool).WithCreatedNotifier(settings.KeyCreatedNotifier),
 		bcryptCost: bcryptCost,
 		settings:   settings,
 	}
@@ -211,6 +215,31 @@ type createAPIKeyRequest struct {
 	Scope *apiKeyScopeInput `json:"scope"`
 	// ExpiresAt — end of the lifetime, RFC 3339; after now and within the maximum lifetime. Omitted: the default lifetime of GET /settings from now.
 	ExpiresAt *time.Time `json:"expiresAt"`
+	// Language of the owner's email about the new key: the interface language, ru or en. Omitted: en.
+	Language *string `json:"language" enums:"ru,en"`
+}
+
+// reissueAPIKeyRequest is the optional JSON body for POST
+// /me/api-keys/{id}/reissue.
+type reissueAPIKeyRequest struct {
+	// Language of the owner's email about the new key: the interface language, ru or en. Omitted (or no body): en.
+	Language *string `json:"language" enums:"ru,en"`
+}
+
+// apiKeyNoticeLanguage resolves the language of the new-key email: the
+// requested one, en when omitted. A value other than ru or en answers 400
+// validation_error (details.field = language) and returns false.
+func apiKeyNoticeLanguage(w http.ResponseWriter, lang *string) (string, bool) {
+	if lang == nil {
+		return mail.LangEN, true
+	}
+	switch *lang {
+	case mail.LangRU, mail.LangEN:
+		return *lang, true
+	}
+	writeProblem(w, http.StatusBadRequest, "validation_error", "language must be ru or en",
+		map[string]any{"details": map[string]any{"field": "language"}})
+	return "", false
 }
 
 // narrowAPIKeyRequest is the JSON body for PATCH /me/api-keys/{id}: the new
@@ -252,14 +281,14 @@ type apiKeysSettingsView struct {
 // @Description
 // @Description Algorithm: decode the body; label, permissions and scope are required, expiresAt is optional. A body without permissions and scope is the shape of a page loaded before keys had grants: 400 validation_error with details.staleClient = true, and no key is created. Then the grant is checked — at least one permission (a level or admin), admin only with scope all and only for an instance admin, the scope members visible to the caller (scope projects are given by UUID, scope spaces by short id; a malformed, unknown or unreachable member answers 422 invalid_grant scope_unavailable), and an expiresAt, when given, after now and no later than now + the maximum lifetime of GET /settings. Without expiresAt the key lives the default lifetime of GET /settings. A fresh secret is generated (crypto/rand), bcrypt-hashed and stored with the grant; only its hash and non-secret prefix are kept.
 // @Description
-// @Description Side effects: one api_keys row and its scope rows. The secret appears only in this response.
+// @Description Side effects: one api_keys row and its scope rows. The secret appears only in this response. When the instance sends mail (SKEIN_EMAIL_ENABLED), an email to the owner's account address — "a new API key was created", with the key's label and creation time and a link to the API keys page — is queued in the same transaction, in the requested language (en when omitted); a deleted or deactivated account, or one without an address, gets none. The email is delivered later by the mail worker; a delivery failure does not affect the key.
 // @Tags Me
 // @Accept json
 // @Produce json
 // @Security ApiKeyAuth
 // @Param body body createAPIKeyRequest true "Label, permissions, scope and optional expiry of the new key"
 // @Success 201 {object} createAPIKeyResponse "The new key with its secret (plainKey), shown once"
-// @Failure 400 {object} map[string]any "invalid_body — malformed JSON or an unknown field; label_required / label_too_long; validation_error — a required field is missing (details.field), an unknown level or scope mode, or the stale page shape (details.staleClient = true). Nothing is created."
+// @Failure 400 {object} map[string]any "invalid_body — malformed JSON or an unknown field; label_required / label_too_long; validation_error — a required field is missing (details.field), an unknown level or scope mode, a language other than ru or en (details.field = language), or the stale page shape (details.staleClient = true). Nothing is created."
 // @Failure 401 {object} map[string]any "unauthenticated — no signed-in user"
 // @Failure 422 {object} map[string]any "invalid_grant — the grant breaks a rule; details.rule is no_permission, admin_requires_scope_all, admin_not_available, invalid_scope, scope_unavailable or expiry_out_of_range. Nothing is created."
 // @Failure 500 {object} map[string]any "internal_error — the key could not be generated or stored"
@@ -304,6 +333,10 @@ func (h *APIKeysHandler) Create(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	lang, ok := apiKeyNoticeLanguage(w, req.Language)
+	if !ok {
+		return
+	}
 	if !h.resolveScopeSpaces(w, r, userID, &grant, req.Scope.Spaces) {
 		return
 	}
@@ -326,7 +359,7 @@ func (h *APIKeysHandler) Create(w http.ResponseWriter, r *http.Request) {
 			writeProblem(w, http.StatusInternalServerError, "internal_error", "failed to generate key", nil)
 			return
 		}
-		created, err = h.store.Create(ctx, apikeys.NewKey{UserID: userID, Label: label, Prefix: prefix, Hash: hash, Grant: grant}, h.settings.TTL)
+		created, err = h.store.Create(ctx, apikeys.NewKey{UserID: userID, Label: label, Prefix: prefix, Hash: hash, Grant: grant, Lang: lang}, h.settings.TTL)
 		if !isPrefixCollision(err) {
 			break
 		}
@@ -486,13 +519,15 @@ func (h *APIKeysHandler) Narrow(w http.ResponseWriter, r *http.Request) {
 // @Description
 // @Description The old key is not changed: it keeps working until its own expiry or until it is revoked. A revoked key is not reissued; an expired one may be, and stays expired.
 // @Description
-// @Description Side effects: one new api_keys row (reissuedFromId = the old key) and its scope rows.
+// @Description Side effects: one new api_keys row (reissuedFromId = the old key) and its scope rows; with mail on, the owner's email about the new key, as on create (language from the optional body, en without it).
 // @Tags Me
+// @Accept json
 // @Produce json
 // @Security ApiKeyAuth
 // @Param id path string true "Key id (UUID) of the key to reissue"
+// @Param body body reissueAPIKeyRequest false "Optional: the language of the owner's email about the new key"
 // @Success 201 {object} createAPIKeyResponse "The new key with its secret (plainKey), shown once"
-// @Failure 400 {object} map[string]any "invalid_id — the id is not a UUID"
+// @Failure 400 {object} map[string]any "invalid_id — the id is not a UUID; invalid_body — a body that is not JSON; validation_error — a language other than ru or en (details.field = language). Nothing is created."
 // @Failure 401 {object} map[string]any "unauthenticated — no signed-in user"
 // @Failure 404 {object} map[string]any "not_found — no such key of the caller"
 // @Failure 422 {object} map[string]any "key_revoked — a revoked key is not reissued; nothing is created"
@@ -510,6 +545,16 @@ func (h *APIKeysHandler) Reissue(w http.ResponseWriter, r *http.Request) {
 		writeProblem(w, http.StatusBadRequest, "invalid_id", err.Error(), nil)
 		return
 	}
+	// The body is optional: a client that sends none gets the email in en.
+	var req reissueAPIKeyRequest
+	if err := decodeOptionalJSON(r, &req); err != nil {
+		writeProblem(w, http.StatusBadRequest, "invalid_body", err.Error(), nil)
+		return
+	}
+	lang, ok := apiKeyNoticeLanguage(w, req.Language)
+	if !ok {
+		return
+	}
 	var (
 		plain   string
 		created apikeys.Created
@@ -522,7 +567,7 @@ func (h *APIKeysHandler) Reissue(w http.ResponseWriter, r *http.Request) {
 			writeProblem(w, http.StatusInternalServerError, "internal_error", "failed to generate key", nil)
 			return
 		}
-		created, err = h.store.Reissue(ctx, userID, id, prefix, hash, h.settings.TTL)
+		created, err = h.store.Reissue(ctx, userID, id, prefix, hash, h.settings.TTL, lang)
 		if !isPrefixCollision(err) {
 			break
 		}

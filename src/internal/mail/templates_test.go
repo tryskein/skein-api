@@ -85,7 +85,7 @@ func TestRender_UserTextIsLimitedToOneShortLine(t *testing.T) {
 // in both, and a language without templates is refused, not defaulted.
 func TestRender_TemplateChosenByLanguageKey(t *testing.T) {
 	d := mail.Data{Link: "https://skein.example.com/x/tok", InviterName: "A", SpaceName: "S", ExpiresAt: "z"}
-	for _, kind := range []mail.Kind{mail.KindEmailConfirm, mail.KindPasswordReset, mail.KindSpaceInvite} {
+	for _, kind := range []mail.Kind{mail.KindEmailConfirm, mail.KindPasswordReset, mail.KindSpaceInvite, mail.KindAPIKeyCreated} {
 		for _, lang := range []string{mail.LangRU, mail.LangEN} {
 			got, err := mail.Render(kind, lang, d)
 			if err != nil {
@@ -106,5 +106,41 @@ func TestRender_TemplateChosenByLanguageKey(t *testing.T) {
 	}
 	if _, err := mail.Render(mail.KindPasswordReset, "de", d); !errors.Is(err, mail.ErrInvalidMessage) {
 		t.Errorf("Render in an unknown language: err = %v, want ErrInvalidMessage", err)
+	}
+}
+
+// sk-977.7.49: the API key notice names the key and the time it was
+// created; the key's name is user text — it reaches the email as text, cut
+// to one short line, and never the subject.
+func TestRender_APIKeyNoticeNamesTheKeyAsText(t *testing.T) {
+	hostile := `<a href="https://evil.example/phish">ci</a>` + "\r\nBcc: x@example.org"
+	for _, lang := range []string{mail.LangRU, mail.LangEN} {
+		t.Run(lang, func(t *testing.T) {
+			control, err := mail.Render(mail.KindAPIKeyCreated, lang, mail.Data{
+				Link: "https://skein.example.com/settings/api-keys", KeyName: "ci", CreatedAt: "2026-11-18 21:00 UTC"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, err := mail.Render(mail.KindAPIKeyCreated, lang, mail.Data{
+				Link: "https://skein.example.com/settings/api-keys", KeyName: hostile, CreatedAt: "2026-11-18 21:00 UTC"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if a, b := tags(control.HTML), tags(got.HTML); strings.Join(a, " ") != strings.Join(b, " ") {
+				t.Errorf("the key name changed the document's elements:\nharmless: %v\nhostile:  %v", a, b)
+			}
+			shown := `<a href="https://evil.example/phish">ci</a> Bcc: x@example.org`
+			for part, body := range map[string]string{"text": got.Text, "html": html.UnescapeString(got.HTML)} {
+				if !strings.Contains(body, shown) {
+					t.Errorf("%s part does not show the key name as one line of text", part)
+				}
+				if !strings.Contains(body, "2026-11-18 21:00 UTC") {
+					t.Errorf("%s part does not show the creation time", part)
+				}
+			}
+			if strings.Contains(got.Subject, "evil.example") {
+				t.Errorf("the key name reached the subject: %q", got.Subject)
+			}
+		})
 	}
 }

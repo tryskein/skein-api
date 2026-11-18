@@ -34,7 +34,30 @@ const touchThrottle = 1 * time.Minute
 // Store wraps the pgxpool with the queries we run from the api-keys
 // handler and middleware. Build once at startup; reuse across requests.
 type Store struct {
-	pool *pgxpool.Pool
+	pool     *pgxpool.Pool
+	notifier CreatedNotifier
+}
+
+// CreatedNotifier queues the owner's notice about a new key (sk-977.7.49)
+// inside the transaction that inserts the key, so the notice exists exactly
+// when the key does. lang is the language of the notice (ru or en).
+type CreatedNotifier interface {
+	KeyCreatedInTx(ctx context.Context, tx pgx.Tx, userID, keyID uuid.UUID, lang string) error
+}
+
+// WithCreatedNotifier returns s with n called by Create and Reissue for
+// every new key; nil (the default) queues nothing.
+func (s *Store) WithCreatedNotifier(n CreatedNotifier) *Store {
+	s.notifier = n
+	return s
+}
+
+// notifyCreated runs the notifier, when one is set, in tx.
+func (s *Store) notifyCreated(ctx context.Context, tx pgx.Tx, userID, keyID uuid.UUID, lang string) error {
+	if s.notifier == nil {
+		return nil
+	}
+	return s.notifier.KeyCreatedInTx(ctx, tx, userID, keyID, lang)
 }
 
 // New returns a Store bound to pool. Caller owns pool lifetime.
@@ -90,6 +113,8 @@ type NewKey struct {
 	Prefix string
 	Hash   string
 	Grant  Grant
+	// Lang is the language of the owner's notice about the key (ru or en).
+	Lang string
 }
 
 // Created is the server-side part of a new key row.
@@ -101,7 +126,8 @@ type Created struct {
 
 // Create inserts a new API key with its grant and scope members. Caller is
 // responsible for generating (plain, prefix, hash) via
-// internal/auth.GenerateAPIKey before calling.
+// internal/auth.GenerateAPIKey before calling. With a CreatedNotifier
+// set, the owner's notice in k.Lang is queued in the same transaction.
 //
 // The grant must pass Grant.Validate. The lifetime follows policy: the
 // requested expiry must be after now and no later than now + policy.Max;
@@ -135,7 +161,10 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 			levelColumn(g.Level), g.Admin, string(g.Scope.Mode), c.ExpiresAt); err != nil {
 			return fmt.Errorf("inserting api key: %w", err)
 		}
-		return insertScope(ctx, tx, c.ID, g.Scope)
+		if err := insertScope(ctx, tx, c.ID, g.Scope); err != nil {
+			return err
+		}
+		return s.notifyCreated(ctx, tx, k.UserID, c.ID, k.Lang)
 	})
 	if err != nil {
 		return Created{}, err
@@ -292,8 +321,9 @@ func projectSpaces(ctx context.Context, tx pgx.Tx, cur, next Scope) (map[uuid.UU
 // expiry. The old key is left as it is and works until its own expiry or a
 // revocation. A revoked key gives ErrRevoked; an expired one may be reissued
 // and stays expired. ErrNotFound when the user has no such key. A prefix
-// collision is returned raw, as in Create.
-func (s *Store) Reissue(ctx context.Context, userID, id uuid.UUID, prefix, hash string, policy TTLPolicy) (Created, error) {
+// collision is returned raw, as in Create. The new key gets the owner's
+// notice in lang, as in Create.
+func (s *Store) Reissue(ctx context.Context, userID, id uuid.UUID, prefix, hash string, policy TTLPolicy, lang string) (Created, error) {
 	var c Created
 	err := pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
 		old, err := lockOwnKey(ctx, tx, userID, id)
@@ -315,7 +345,10 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 			levelColumn(g.Level), g.Admin, string(g.Scope.Mode), c.ExpiresAt, id); err != nil {
 			return fmt.Errorf("inserting reissued api key: %w", err)
 		}
-		return insertScope(ctx, tx, c.ID, g.Scope)
+		if err := insertScope(ctx, tx, c.ID, g.Scope); err != nil {
+			return err
+		}
+		return s.notifyCreated(ctx, tx, userID, c.ID, lang)
 	})
 	if err != nil {
 		return Created{}, err

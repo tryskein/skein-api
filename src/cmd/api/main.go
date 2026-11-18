@@ -41,6 +41,7 @@ import (
 	"skein-api/internal/issues"
 	"skein-api/internal/issues/lockreap"
 	"skein-api/internal/logging"
+	"skein-api/internal/mail"
 	mcppkg "skein-api/internal/mcp"
 	"skein-api/internal/monitorcreds"
 	"skein-api/internal/notifications"
@@ -728,6 +729,14 @@ func main() {
 		TTL:              apikeys.TTLPolicy{Default: cfg.APIKeyDefaultTTL, Max: cfg.APIKeyMaxTTL},
 		PublicAPIEnabled: cfg.PublicAPIEnabled,
 		PublicAPIURL:     cfg.PublicAPIURL,
+		KeyCreatedNotifier: func() apikeys.CreatedNotifier {
+			// sk-977.7.49: the owner gets an email about every new or
+			// reissued key — only when this instance sends mail.
+			if !cfg.EmailEnabled {
+				return nil
+			}
+			return mail.APIKeyNotifier{DeliveryTTL: cfg.EmailDeliveryTTL}
+		}(),
 	})
 
 	// R3.1 — admin user management. usersStore wraps the users package

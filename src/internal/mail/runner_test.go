@@ -284,7 +284,7 @@ func use(t *testing.T, pool *pgxpool.Pool, p tokens.Purpose, raw, addressee stri
 // ---------------------------------------------------------------- metrics
 
 var (
-	allKinds    = []mail.Kind{mail.KindEmailConfirm, mail.KindPasswordReset, mail.KindSpaceInvite}
+	allKinds    = []mail.Kind{mail.KindEmailConfirm, mail.KindPasswordReset, mail.KindSpaceInvite, mail.KindAPIKeyCreated}
 	allOutcomes = []string{mail.OutcomeSuccess, mail.OutcomeRejected, mail.OutcomeExpired, mail.OutcomeCancelled}
 )
 

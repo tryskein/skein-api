@@ -99,6 +99,17 @@ var linkPaths = map[Kind]string{
 	KindSpaceInvite:   "/invite/",
 }
 
+// apiKeysPath is the API keys page of the web UI (skein-frontend App.tsx),
+// the link of a KindAPIKeyCreated notice; it carries no token.
+const apiKeysPath = "/settings/api-keys"
+
+// carriesToken reports whether an email of kind has a one-time link token,
+// issued at every attempt. A notice (KindAPIKeyCreated) has none.
+func carriesToken(kind Kind) bool {
+	_, ok := linkPaths[kind]
+	return ok
+}
+
 // ErrNotIssuable: the token protocol refused to issue a token for the
 // email — it is not leased under this generation, was cancelled or
 // finished, or its action is no longer open. Nothing was written; the
@@ -329,6 +340,7 @@ type claim struct {
 	recipient    string
 	lang         string
 	invitationID *uuid.UUID
+	apiKeyID     *uuid.UUID
 	generation   int
 }
 
@@ -353,7 +365,7 @@ UPDATE outgoing_emails e
        attempts = e.attempts + 1
   FROM ready
  WHERE e.id = ready.id
-RETURNING e.id, e.kind, e.recipient, e.lang, e.invitation_id, e.attempts`
+RETURNING e.id, e.kind, e.recipient, e.lang, e.invitation_id, e.api_key_id, e.attempts`
 
 func (r *Runner) claim(ctx context.Context, now time.Time) ([]claim, error) {
 	rows, err := r.pool.Query(ctx, claimSQL, now, r.opts.BatchSize, r.opts.LeaseTTL.Microseconds())
@@ -363,7 +375,7 @@ func (r *Runner) claim(ctx context.Context, now time.Time) ([]claim, error) {
 	out, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (claim, error) {
 		var c claim
 		var kind string
-		err := row.Scan(&c.id, &kind, &c.recipient, &c.lang, &c.invitationID, &c.generation)
+		err := row.Scan(&c.id, &kind, &c.recipient, &c.lang, &c.invitationID, &c.apiKeyID, &c.generation)
 		c.kind = Kind(kind)
 		return c, err
 	})
@@ -414,16 +426,20 @@ func (r *Runner) attempt(ctx context.Context, c claim) {
 	work, cancel := context.WithTimeout(ctx, r.opts.LeaseTTL-leaseMargin)
 	defer cancel()
 
-	issued, err := r.issuer.IssueForEmail(work, c.id, c.generation)
-	if errors.Is(err, ErrNotIssuable) {
-		r.finalise(ctx, c, OutcomeCancelled)
-		return
-	}
-	if err != nil {
-		slog.WarnContext(ctx, "email attempt failed: issuing the link token",
-			"emailId", c.id, "kind", string(c.kind), "attempt", c.generation, "error", err.Error())
-		r.retry(ctx, c)
-		return
+	var issued Issued
+	if carriesToken(c.kind) {
+		var err error
+		issued, err = r.issuer.IssueForEmail(work, c.id, c.generation)
+		if errors.Is(err, ErrNotIssuable) {
+			r.finalise(ctx, c, OutcomeCancelled)
+			return
+		}
+		if err != nil {
+			slog.WarnContext(ctx, "email attempt failed: issuing the link token",
+				"emailId", c.id, "kind", string(c.kind), "attempt", c.generation, "error", err.Error())
+			r.retry(ctx, c)
+			return
+		}
 	}
 
 	data, ok, err := r.content(work, c, issued)
@@ -434,8 +450,8 @@ func (r *Runner) attempt(ctx context.Context, c claim) {
 		return
 	}
 	if !ok {
-		// The invitation or its space vanished after the token was issued:
-		// the action has lost its force.
+		// The invitation or its space vanished after the token was issued,
+		// or the key of a notice is gone: the email has lost its subject.
 		r.finalise(ctx, c, OutcomeCancelled)
 		return
 	}
@@ -478,8 +494,12 @@ func (r *Runner) attempt(ctx context.Context, c claim) {
 
 // content gathers what the template shows. For an invitation it reads the
 // inviter's and the space's names — ok=false when the invitation or its
-// space no longer exists.
+// space no longer exists. For an API key notice it reads the key's label
+// and creation time — ok=false when the key row is gone.
 func (r *Runner) content(ctx context.Context, c claim, issued Issued) (Data, bool, error) {
+	if c.kind == KindAPIKeyCreated {
+		return r.apiKeyContent(ctx, c)
+	}
 	d := Data{
 		Link:      r.baseURL + linkPaths[c.kind] + url.PathEscape(issued.Token),
 		ExpiresAt: issued.ExpiresAt.UTC().Format("2006-01-02 15:04 UTC"),
@@ -502,6 +522,25 @@ SELECT u.name, s.name
 	if err != nil {
 		return d, false, fmt.Errorf("reading invitation %s: %w", *c.invitationID, err)
 	}
+	return d, true, nil
+}
+
+// apiKeyContent is content for a KindAPIKeyCreated notice.
+func (r *Runner) apiKeyContent(ctx context.Context, c claim) (Data, bool, error) {
+	d := Data{Link: r.baseURL + apiKeysPath}
+	if c.apiKeyID == nil {
+		return d, false, nil
+	}
+	var createdAt time.Time
+	err := r.pool.QueryRow(ctx, `SELECT label, created_at FROM api_keys WHERE id = $1`, *c.apiKeyID).
+		Scan(&d.KeyName, &createdAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return d, false, nil
+	}
+	if err != nil {
+		return d, false, fmt.Errorf("reading api key %s: %w", *c.apiKeyID, err)
+	}
+	d.CreatedAt = createdAt.UTC().Format("2006-01-02 15:04 UTC")
 	return d, true, nil
 }
 

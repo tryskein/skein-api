@@ -13,9 +13,9 @@ var (
 	// deliveriesTotal counts final outcomes of queued emails recorded by the
 	// mail worker.
 	//
-	// @metric description Queued emails (email confirmation, password reset, space invitation) that reached a final outcome in the mail worker, by kind and outcome. One increment per email over its lifetime for every outcome the worker records; an email cancelled by the token protocol (internal/tokens Replace, Cancel or Use — a newer request, a revoked invitation, a completed action) in the transaction of that action is NOT counted here, because the worker never attempts it.
-	// @metric calculation Incremented in mail.Runner after the conditional finalising UPDATE of outgoing_emails affected the row (the lease generation still matched): success after the relay accepted DATA, rejected after a permanent SMTP failure, cancelled when tokens.IssueForEmail refused the email at the start of an attempt; and in the deadline sweep (Runner tick and CleanupRunner), expired once per pending email whose deadline_at passed. A finalisation that lost its lease affects no row and is not counted.
-	// @label kind Email kind. Values: email_confirm, password_reset, space_invite
+	// @metric description Queued emails (email confirmation, password reset, space invitation, API key notice) that reached a final outcome in the mail worker, by kind and outcome. One increment per email over its lifetime for every outcome the worker records; an email cancelled by the token protocol (internal/tokens Replace, Cancel or Use — a newer request, a revoked invitation, a completed action) in the transaction of that action is NOT counted here, because the worker never attempts it.
+	// @metric calculation Incremented in mail.Runner after the conditional finalising UPDATE of outgoing_emails affected the row (the lease generation still matched): success after the relay accepted DATA, rejected after a permanent SMTP failure, cancelled when tokens.IssueForEmail refused the email at the start of an attempt or the subject of the email (an invitation, the key of an API key notice) no longer exists; and in the deadline sweep (Runner tick and CleanupRunner), expired once per pending email whose deadline_at passed. A finalisation that lost its lease affects no row and is not counted.
+	// @label kind Email kind. Values: email_confirm, password_reset, space_invite, api_key_created
 	// @label outcome Final outcome. Values: success, rejected, expired, cancelled
 	deliveriesTotal = promauto.NewCounterVec(
 		prometheus.CounterOpts{

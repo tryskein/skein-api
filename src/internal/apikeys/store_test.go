@@ -274,7 +274,7 @@ func TestStoreGrants(t *testing.T) {
 		// The current policy differs from the one the key was created under.
 		current := apikeys.TTLPolicy{Default: 30 * day, Max: 60 * day}
 		m := newKeyMaterial(t)
-		fresh, err := store.Reissue(ctx, owner, old.ID, m.prefix, m.hash, current)
+		fresh, err := store.Reissue(ctx, owner, old.ID, m.prefix, m.hash, current, "en")
 		if err != nil {
 			t.Fatalf("Reissue: %v", err)
 		}
@@ -310,7 +310,7 @@ func TestStoreGrants(t *testing.T) {
 			t.Fatalf("make the key look migrated: %v", err)
 		}
 		m := newKeyMaterial(t)
-		fresh, err := store.Reissue(ctx, owner, old.ID, m.prefix, m.hash, testPolicy)
+		fresh, err := store.Reissue(ctx, owner, old.ID, m.prefix, m.hash, testPolicy, "en")
 		if err != nil {
 			t.Fatalf("Reissue: %v", err)
 		}
@@ -329,7 +329,7 @@ func TestStoreGrants(t *testing.T) {
 		}
 		before := countKeys(t, pool, owner)
 		m := newKeyMaterial(t)
-		if _, err := store.Reissue(ctx, owner, c.ID, m.prefix, m.hash, testPolicy); !errors.Is(err, apikeys.ErrRevoked) {
+		if _, err := store.Reissue(ctx, owner, c.ID, m.prefix, m.hash, testPolicy, "en"); !errors.Is(err, apikeys.ErrRevoked) {
 			t.Errorf("Reissue of a revoked key: err %v, want ErrRevoked", err)
 		}
 		if err := store.Narrow(ctx, owner, c.ID, apikeys.Grant{Level: apikeys.LevelRead, Scope: apikeys.Scope{Mode: apikeys.ScopeAll}}); !errors.Is(err, apikeys.ErrRevoked) {
@@ -353,7 +353,7 @@ func TestStoreGrants(t *testing.T) {
 			t.Errorf("Narrow of an expired key: err %v, want ErrExpired", err)
 		}
 		m := newKeyMaterial(t)
-		fresh, err := store.Reissue(ctx, owner, c.ID, m.prefix, m.hash, testPolicy)
+		fresh, err := store.Reissue(ctx, owner, c.ID, m.prefix, m.hash, testPolicy, "en")
 		if err != nil {
 			t.Fatalf("Reissue of an expired key: %v", err)
 		}

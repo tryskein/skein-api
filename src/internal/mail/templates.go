@@ -1,13 +1,14 @@
 package mail
 
-// templates.go — the texts of the three emails (sk-674.18, T022, K-9, US-9).
+// templates.go — the texts of the emails (sk-674.18, T022, K-9, US-9).
 //
 // Each kind has, per language (ru, en), three files under templates/<lang>/:
 // <kind>.subject.txt, <kind>.txt (the plain-text part) and <kind>.html (the
 // HTML part). They are embedded in the binary and parsed once; the template
 // is chosen by its KEY (kind, language), never by inspecting text.
 //
-// Text a user typed — the name of the space and of the person inviting —
+// Text a user typed — the name of the space and of the person inviting,
+// the name of an API key —
 // reaches an email only through [Render], which strips control characters,
 // collapses it to one line and cuts it to maxUserTextRunes, and through
 // html/template, which escapes it in the HTML part: a space named
@@ -45,6 +46,11 @@ type Data struct {
 	// ExpiresAt is when the link stops working, already formatted
 	// ("2006-01-02 15:04 UTC"); the invitation's expiry for an invite.
 	ExpiresAt string
+	// KeyName and CreatedAt — API key notices only: the key's label (user
+	// text, passed through [Render]'s sanitising) and when the key was
+	// created, already formatted ("2006-01-02 15:04 UTC").
+	KeyName   string
+	CreatedAt string
 }
 
 // Rendered is one email ready for the wire.
@@ -72,7 +78,7 @@ var templates = mustLoadTemplates()
 func mustLoadTemplates() map[templateKey]templateSet {
 	out := map[templateKey]templateSet{}
 	for _, lang := range []string{LangRU, LangEN} {
-		for _, kind := range []Kind{KindEmailConfirm, KindPasswordReset, KindSpaceInvite} {
+		for _, kind := range []Kind{KindEmailConfirm, KindPasswordReset, KindSpaceInvite, KindAPIKeyCreated} {
 			base := "templates/" + lang + "/" + string(kind)
 			read := func(name string) string {
 				b, err := templateFS.ReadFile(name)
@@ -101,6 +107,7 @@ func Render(kind Kind, lang string, d Data) (Rendered, error) {
 	}
 	d.InviterName = sanitizeUserText(d.InviterName)
 	d.SpaceName = sanitizeUserText(d.SpaceName)
+	d.KeyName = sanitizeUserText(d.KeyName)
 
 	var subj, text, html bytes.Buffer
 	if err := set.subject.Execute(&subj, d); err != nil {

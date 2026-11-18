@@ -27,6 +27,10 @@ const (
 	KindEmailConfirm  Kind = "email_confirm"
 	KindPasswordReset Kind = "password_reset"
 	KindSpaceInvite   Kind = "space_invite"
+	// KindAPIKeyCreated tells the owner of an account that an API key was
+	// created or reissued in it. It carries no link token: the link goes to
+	// the API keys page of the web UI.
+	KindAPIKeyCreated Kind = "api_key_created"
 )
 
 // Languages an email is rendered in (K-9: templates ru/en).
@@ -46,6 +50,10 @@ type Message struct {
 	UserID uuid.UUID
 	// InvitationID is the subject of KindSpaceInvite.
 	InvitationID uuid.UUID
+	// APIKeyID is the key a KindAPIKeyCreated email is about (its subject is
+	// the key's owner, UserID); the worker reads the key's name and creation
+	// time from it at delivery.
+	APIKeyID uuid.UUID
 }
 
 // ErrInvalidMessage is returned for a message whose kind, language or
@@ -57,12 +65,16 @@ var ErrInvalidMessage = errors.New("mail: invalid message")
 func (m Message) Validate() error {
 	switch m.Kind {
 	case KindEmailConfirm, KindPasswordReset:
-		if m.UserID == uuid.Nil || m.InvitationID != uuid.Nil {
+		if m.UserID == uuid.Nil || m.InvitationID != uuid.Nil || m.APIKeyID != uuid.Nil {
 			return fmt.Errorf("%w: kind %s takes a user subject", ErrInvalidMessage, m.Kind)
 		}
 	case KindSpaceInvite:
-		if m.InvitationID == uuid.Nil || m.UserID != uuid.Nil {
+		if m.InvitationID == uuid.Nil || m.UserID != uuid.Nil || m.APIKeyID != uuid.Nil {
 			return fmt.Errorf("%w: kind %s takes an invitation subject", ErrInvalidMessage, m.Kind)
+		}
+	case KindAPIKeyCreated:
+		if m.UserID == uuid.Nil || m.APIKeyID == uuid.Nil || m.InvitationID != uuid.Nil {
+			return fmt.Errorf("%w: kind %s takes a user subject and a key", ErrInvalidMessage, m.Kind)
 		}
 	default:
 		return fmt.Errorf("%w: unknown kind %q", ErrInvalidMessage, m.Kind)
@@ -79,8 +91,8 @@ func (m Message) Validate() error {
 // enqueueSQL queues a message as pending and ready at once; its delivery
 // deadline is now() + the delivery TTL (SKEIN_EMAIL_DELIVERY_TTL).
 const enqueueSQL = `
-INSERT INTO outgoing_emails (kind, recipient, lang, user_id, invitation_id, state, deadline_at)
-VALUES ($1, lower(btrim($2)), $3, $4, $5, 'pending', now() + ($6::bigint * interval '1 microsecond'))
+INSERT INTO outgoing_emails (kind, recipient, lang, user_id, invitation_id, api_key_id, state, deadline_at)
+VALUES ($1, lower(btrim($2)), $3, $4, $5, $6, 'pending', now() + ($7::bigint * interval '1 microsecond'))
 RETURNING id`
 
 // Enqueue queues m inside tx — the transaction of the action that produces
@@ -101,7 +113,7 @@ func Enqueue(ctx context.Context, tx pgx.Tx, m Message, deliveryTTL time.Duratio
 	}
 	var id uuid.UUID
 	if err := tx.QueryRow(ctx, enqueueSQL,
-		string(m.Kind), m.To, m.Lang, nullUUID(m.UserID), nullUUID(m.InvitationID),
+		string(m.Kind), m.To, m.Lang, nullUUID(m.UserID), nullUUID(m.InvitationID), nullUUID(m.APIKeyID),
 		deliveryTTL.Microseconds(),
 	).Scan(&id); err != nil {
 		return uuid.Nil, fmt.Errorf("queueing %s email: %w", m.Kind, err)
