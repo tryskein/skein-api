@@ -631,8 +631,11 @@ rows present, `auth.Bootstrap` is a no-op regardless of what is set here.
   operator's choice); the endpoint's host is resolved by skein-api, refused
   the same way, and the proxy is asked to `CONNECT` to the vetted IP address
   (TLS still verifies the push service's name), so the proxy's own name
-  resolution does not choose the destination. A proxy that is shared with
-  other workloads should still restrict where it connects.
+  resolution does not choose the destination; when the proxy cannot reach
+  one vetted address the next is tried. `http://` and `https://` proxies are
+  supported (TLS to an `https://` proxy is verified against the proxy's own
+  name); a `socks5://` proxy is refused. A proxy that is shared with other
+  workloads should still restrict where it connects.
 
 #### `SKEIN_APP_BASE_URL`
 

@@ -1,14 +1,26 @@
 package push
 
 import (
+	"bufio"
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"errors"
+	"fmt"
+	"io"
+	"math/big"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
 	"net/url"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 // relaxForLoopback lets a test sender reach a loopback httptest server: it
@@ -131,40 +143,116 @@ func TestSend_RedirectIsNotFollowed(t *testing.T) {
 	}
 }
 
-// With an outbound proxy, the proxy hop itself is not guarded (the operator
-// chose the proxy, often on an internal address), the target is: a target
-// that resolves to an internal address never reaches the proxy, and a public
-// one is sent to the proxy addressed by its VETTED IP — the proxy's own name
-// resolution never picks the destination — with the original host kept in
-// the Host header.
-func TestPushClient_ProxyIsAskedForTheVettedAddress(t *testing.T) {
-	type seen struct{ uri, host string }
-	got := make(chan seen, 4)
-	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		got <- seen{uri: r.RequestURI, host: r.Host}
-		w.WriteHeader(http.StatusCreated)
-	}))
-	defer proxy.Close()
-	lookup := func(_ context.Context, host string) ([]netip.Addr, error) {
-		switch host {
-		case "push.example":
-			return []netip.Addr{netip.MustParseAddr("8.8.8.8")}, nil
-		case "rebind.example":
-			return []netip.Addr{netip.MustParseAddr("8.8.8.8"), netip.MustParseAddr("169.254.169.254")}, nil
-		}
-		return nil, errors.New("no such host")
+// tunnelProxy is a forward proxy for the tests: it records every CONNECT
+// target, refuses the ones in refuse, and for the others plays the origin
+// itself inside the tunnel — optionally over TLS with originCert — answering
+// one request 201 and recording its Host header.
+type tunnelProxy struct {
+	connects   chan string
+	hosts      chan string
+	refuse     map[string]bool
+	originCert *tls.Certificate
+}
+
+func newTunnelProxy() *tunnelProxy {
+	return &tunnelProxy{connects: make(chan string, 8), hosts: make(chan string, 8), refuse: map[string]bool{}}
+}
+
+func (p *tunnelProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodConnect {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
 	}
+	p.connects <- r.Host
+	if p.refuse[r.Host] {
+		w.WriteHeader(http.StatusBadGateway)
+		return
+	}
+	conn, rw, err := w.(http.Hijacker).Hijack()
+	if err != nil {
+		return
+	}
+	defer conn.Close()
+	_, _ = rw.WriteString("HTTP/1.1 200 Connection established\r\n\r\n")
+	_ = rw.Flush()
+	var inner net.Conn = conn
+	if p.originCert != nil {
+		tc := tls.Server(conn, &tls.Config{Certificates: []tls.Certificate{*p.originCert}})
+		if err := tc.Handshake(); err != nil {
+			return
+		}
+		inner = tc
+	}
+	req, err := http.ReadRequest(bufio.NewReader(inner))
+	if err != nil {
+		return
+	}
+	p.hosts <- req.Host
+	_, _ = io.WriteString(inner, "HTTP/1.1 201 Created\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+}
+
+// selfSignedCert is a certificate for name, and a pool trusting it.
+func selfSignedCert(t *testing.T, name string) (tls.Certificate, *x509.CertPool) {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: name}, DNSNames: []string{name},
+		NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour),
+		KeyUsage: x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign, IsCA: true, BasicConstraintsValid: true,
+		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leaf, err := x509.ParseCertificate(der)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pool := x509.NewCertPool()
+	pool.AddCert(leaf)
+	return tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key, Leaf: leaf}, pool
+}
+
+func staticLookup(m map[string][]string) lookupFunc {
+	return func(_ context.Context, host string) ([]netip.Addr, error) {
+		var out []netip.Addr
+		for _, a := range m[host] {
+			out = append(out, netip.MustParseAddr(a))
+		}
+		if out == nil {
+			return nil, errors.New("no such host")
+		}
+		return out, nil
+	}
+}
+
+// With an outbound proxy, the target is checked and pinned: a target that
+// resolves to an internal address (even one of several) never reaches the
+// proxy; a public one is tunnelled with CONNECT to its vetted IP — the
+// proxy's own name resolution never picks the destination — and the request
+// in the tunnel keeps its original Host.
+func TestPushClient_ProxyTunnelsToTheVettedAddress(t *testing.T) {
+	tp := newTunnelProxy()
+	proxy := httptest.NewServer(tp)
+	defer proxy.Close()
 	c := newPushClientWith(checkPublicAddr, func(*http.Request) (*url.URL, error) {
 		return url.Parse(proxy.URL)
-	}, lookup)
+	}, staticLookup(map[string][]string{
+		"push.example":   {"8.8.8.8"},
+		"rebind.example": {"8.8.8.8", "169.254.169.254"},
+	}))
 
 	for _, target := range []string{"http://169.254.169.254/latest/meta-data", "http://rebind.example/x"} {
 		if _, err := c.Get(target); !errors.Is(err, ErrBlockedAddress) {
 			t.Fatalf("%s through the proxy: err = %v, want ErrBlockedAddress", target, err)
 		}
 	}
-	if len(got) != 0 {
-		t.Fatalf("the proxy got %d requests for internal targets, want 0", len(got))
+	if len(tp.connects) != 0 {
+		t.Fatalf("the proxy got %d CONNECTs for internal targets, want 0", len(tp.connects))
 	}
 
 	resp, err := c.Get("http://push.example/wpush/v2/abc")
@@ -173,41 +261,81 @@ func TestPushClient_ProxyIsAskedForTheVettedAddress(t *testing.T) {
 	}
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusCreated {
-		t.Fatalf("public target: status %d, want 201", resp.StatusCode)
+		t.Fatalf("status %d, want 201", resp.StatusCode)
 	}
-	s := <-got
-	if s.uri != "http://8.8.8.8:80/wpush/v2/abc" {
-		t.Fatalf("the proxy was asked for %q (Host %q); want the vetted http://8.8.8.8:80/wpush/v2/abc", s.uri, s.host)
+	if got := <-tp.connects; got != "8.8.8.8:80" {
+		t.Fatalf("CONNECT %q, want the vetted 8.8.8.8:80", got)
+	}
+	if got := <-tp.hosts; got != "push.example" {
+		t.Fatalf("Host in the tunnel %q, want push.example", got)
 	}
 }
 
-// Over https (the only scheme a push endpoint may have) the proxy is asked to
-// CONNECT to the vetted address, not to the name.
-func TestPushClient_ProxyConnectsToTheVettedAddress(t *testing.T) {
-	connects := make(chan string, 1)
-	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodConnect {
-			connects <- r.Host
-		}
-		w.WriteHeader(http.StatusForbidden) // refuse the tunnel: the target is what is checked
-	}))
+// The proxy cannot reach the first vetted address: the next one is tried.
+func TestPushClient_ProxyTriesTheNextVettedAddress(t *testing.T) {
+	tp := newTunnelProxy()
+	tp.refuse["8.8.8.8:80"] = true
+	proxy := httptest.NewServer(tp)
 	defer proxy.Close()
-	lookup := func(context.Context, string) ([]netip.Addr, error) {
-		return []netip.Addr{netip.MustParseAddr("8.8.4.4")}, nil
-	}
 	c := newPushClientWith(checkPublicAddr, func(*http.Request) (*url.URL, error) {
 		return url.Parse(proxy.URL)
-	}, lookup)
-	if _, err := c.Get("https://push.example/wpush/v2/abc"); err == nil {
-		t.Fatal("the refused tunnel did not fail the request")
+	}, staticLookup(map[string][]string{"push.example": {"8.8.8.8", "8.8.4.4"}}))
+
+	resp, err := c.Get("http://push.example/x")
+	if err != nil {
+		t.Fatalf("through the proxy: %v", err)
 	}
-	select {
-	case target := <-connects:
-		if target != "8.8.4.4:443" {
-			t.Fatalf("CONNECT %q, want the vetted 8.8.4.4:443", target)
+	resp.Body.Close()
+	first, second := <-tp.connects, <-tp.connects
+	if first != "8.8.8.8:80" || second != "8.8.4.4:80" {
+		t.Fatalf("CONNECTs %q then %q, want 8.8.8.8:80 then 8.8.4.4:80", first, second)
+	}
+}
+
+// An https proxy and an https push service: TLS to the proxy is verified
+// against the proxy's own name, TLS inside the tunnel against the push
+// service's name — two different certificates, each valid only for its own
+// hop — and the tunnel goes to the vetted address.
+func TestPushClient_HTTPSProxyAndOriginAreVerifiedSeparately(t *testing.T) {
+	proxyCert, proxyRoots := selfSignedCert(t, "proxy.test")
+	originCert, originRoots := selfSignedCert(t, "push.test")
+	tp := newTunnelProxy()
+	tp.originCert = &originCert
+	proxy := httptest.NewUnstartedServer(tp)
+	proxy.TLS = &tls.Config{Certificates: []tls.Certificate{proxyCert}}
+	proxy.StartTLS()
+	defer proxy.Close()
+	_, port, _ := net.SplitHostPort(proxy.Listener.Addr().String())
+
+	c := newPushClientWith(checkPublicAddr, func(*http.Request) (*url.URL, error) {
+		return url.Parse("https://proxy.test:" + port)
+	}, staticLookup(map[string][]string{"push.test": {"8.8.8.8"}}))
+	// The proxy's name resolves to the loopback test server; both trust
+	// roots are known to the client.
+	roots := originRoots
+	roots.AddCert(proxyCert.Leaf)
+	_ = proxyRoots
+	tr := c.Transport.(*pushTransport)
+	tr.direct.TLSClientConfig = &tls.Config{RootCAs: roots}
+	tr.direct.DialContext = nil
+	proxyDial := &net.Dialer{}
+	tr.dialProxy = func(ctx context.Context, addr string) (net.Conn, error) {
+		if addr != "proxy.test:"+port {
+			return nil, fmt.Errorf("unexpected proxy address %s", addr)
 		}
-	default:
-		t.Fatal("the proxy got no CONNECT")
+		return proxyDial.DialContext(ctx, "tcp", proxy.Listener.Addr().String())
+	}
+
+	resp, err := c.Get("https://push.test/wpush/v2/abc")
+	if err != nil {
+		t.Fatalf("https through an https proxy: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("status %d, want 201", resp.StatusCode)
+	}
+	if got := <-tp.connects; got != "8.8.8.8:443" {
+		t.Fatalf("CONNECT %q, want the vetted 8.8.8.8:443", got)
 	}
 }
 
@@ -215,10 +343,8 @@ func TestPushClient_ProxyConnectsToTheVettedAddress(t *testing.T) {
 // at: whatever the proxy configuration, the direct path never inherits the
 // proxy hop's exemption.
 func TestPushClient_DirectPathIsAlwaysGuarded(t *testing.T) {
-	var hits atomic.Int32
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		hits.Add(1)
-	}))
+	tp := newTunnelProxy()
+	srv := httptest.NewServer(tp)
 	defer srv.Close()
 	proxyURL, _ := url.Parse(srv.URL)
 	c := newPushClientWith(checkPublicAddr, func(r *http.Request) (*url.URL, error) {
@@ -228,20 +354,42 @@ func TestPushClient_DirectPathIsAlwaysGuarded(t *testing.T) {
 		return proxyURL, nil
 	}, defaultLookup)
 	// Through the proxy first, so a proxy hop to that address has happened.
-	if resp, err := c.Get("http://8.8.8.8/"); err != nil {
+	resp, err := c.Get("http://8.8.8.8/")
+	if err != nil {
 		t.Fatalf("through the proxy: %v", err)
-	} else {
-		resp.Body.Close()
 	}
-	before := hits.Load()
-	if before != 1 {
-		t.Fatalf("the proxy got %d requests, want 1", before)
-	}
+	resp.Body.Close()
+	<-tp.connects
+	<-tp.hosts
 	// Then directly to the proxy's own address: refused by the guard.
 	if _, err := c.Get(srv.URL + "/internal"); !errors.Is(err, ErrBlockedAddress) {
 		t.Fatalf("direct request to the proxy's address: err = %v, want ErrBlockedAddress", err)
 	}
-	if hits.Load() != before {
+	if len(tp.connects) != 0 || len(tp.hosts) != 0 {
 		t.Fatalf("the direct request reached the server")
+	}
+}
+
+// An explicit port outside 1..65535 is refused, not replaced by the default.
+func TestPortOf(t *testing.T) {
+	for raw, want := range map[string]int{
+		"https://push.example/x":       443,
+		"http://push.example/x":        80,
+		"https://push.example:8443/x":  8443,
+		"https://push.example:0/x":     -1,
+		"https://push.example:65536/x": -1,
+		"https://push.example:99999/x": -1,
+	} {
+		u, _ := url.Parse(raw)
+		got, err := portOf(u)
+		if want < 0 {
+			if !errors.Is(err, ErrInvalidEndpoint) {
+				t.Errorf("portOf(%s) = %d, %v; want ErrInvalidEndpoint", raw, got, err)
+			}
+			continue
+		}
+		if err != nil || int(got) != want {
+			t.Errorf("portOf(%s) = %d, %v; want %d", raw, got, err, want)
+		}
 	}
 }

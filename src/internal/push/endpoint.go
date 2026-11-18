@@ -47,6 +47,9 @@ func ValidateEndpoint(raw string) error {
 	if host == "" {
 		return fmt.Errorf("%w: empty host", ErrInvalidEndpoint)
 	}
+	if _, err := portOf(u); err != nil {
+		return err
+	}
 	if strings.EqualFold(host, "localhost") {
 		return fmt.Errorf("%w: host must not be localhost", ErrInvalidEndpoint)
 	}

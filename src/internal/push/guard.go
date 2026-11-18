@@ -1,8 +1,10 @@
 package push
 
 import (
+	"bufio"
 	"context"
 	"crypto/tls"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"net"
@@ -123,13 +125,13 @@ func defaultLookup(ctx context.Context, host string) ([]netip.Addr, error) {
 //     every address tried), so a name that resolves — or is rebound — to an
 //     internal address is refused at connect time;
 //   - a delivery through an outbound proxy (HTTPS_PROXY / HTTP_PROXY /
-//     NO_PROXY, as net/http reads them) resolves the endpoint's host here,
-//     refuses it when any address fails guard, and sends the request to the
-//     vetted address itself — for https the proxy is asked to CONNECT to
-//     that IP, and TLS still verifies the certificate against the original
-//     host name —
-//     so the proxy's own name resolution never picks the destination. The
-//     proxy hop is not guarded: the operator chose the proxy;
+//     NO_PROXY, as net/http reads them; http and https proxies) resolves the
+//     endpoint's host here, refuses it when any address fails guard, and
+//     opens the tunnel itself: CONNECT to a vetted IP (the next one when the
+//     proxy cannot reach it), so the proxy's own name resolution never picks
+//     the destination. TLS to an https proxy is verified against the
+//     proxy's name, TLS inside the tunnel against the push service's name.
+//     The proxy hop is not guarded: the operator chose the proxy;
 //   - redirects are not followed: the 3xx answer itself is returned and
 //     reported like any other non-2xx answer of a push service.
 func newPushClient(guard addrGuard) *http.Client {
@@ -175,6 +177,9 @@ type pushTransport struct {
 	lookup   lookupFunc
 	// direct never uses a proxy and dials only through the guard.
 	direct *http.Transport
+	// dialProxy opens the TCP connection to a proxy (host:port); nil dials
+	// it directly. Tests point it at a loopback server.
+	dialProxy func(ctx context.Context, addr string) (net.Conn, error)
 }
 
 func (t *pushTransport) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -185,70 +190,161 @@ func (t *pushTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	if p == nil {
 		return t.direct.RoundTrip(req)
 	}
-	host := req.URL.Hostname()
-	addr, err := vettedAddr(req.Context(), host, t.guard, t.lookup)
+	port, err := portOf(req.URL)
 	if err != nil {
 		return nil, err
 	}
-	// One transport per proxied request: it dials only the proxy (unguarded,
-	// the operator's choice), asks it for the vetted address, and verifies
-	// TLS against the original host name. Push deliveries are few, so the
-	// lost connection reuse costs nothing that matters.
+	addrs, err := vettedAddrs(req.Context(), req.URL.Hostname(), t.guard, t.lookup)
+	if err != nil {
+		return nil, err
+	}
+	// One transport per proxied request. Its only dial opens a tunnel
+	// through the proxy to a vetted address (connectVia); the request
+	// itself is unchanged, so TLS inside the tunnel verifies the push
+	// service's own name and the Host header stays the original. Push
+	// deliveries are few, so the lost connection reuse costs nothing that
+	// matters.
 	via := t.direct.Clone()
-	via.Proxy = http.ProxyURL(p)
-	via.DialContext = (&net.Dialer{Timeout: pushSendTimeout, KeepAlive: 30 * time.Second}).DialContext
+	via.Proxy = nil
 	via.DisableKeepAlives = true
-	if via.TLSClientConfig == nil {
-		via.TLSClientConfig = &tls.Config{}
+	base := via.TLSClientConfig
+	via.DialContext = func(ctx context.Context, _, _ string) (net.Conn, error) {
+		var lastErr error
+		for _, a := range addrs {
+			conn, err := connectVia(ctx, t.dialProxy, p, base, netip.AddrPortFrom(a, port))
+			if err == nil {
+				return conn, nil
+			}
+			lastErr = err
+		}
+		return nil, lastErr
 	}
-	via.TLSClientConfig.ServerName = host
 	defer via.CloseIdleConnections()
-
-	pinned := req.Clone(req.Context())
-	pinned.URL.Host = netip.AddrPortFrom(addr, portOf(req.URL)).String()
-	if req.URL.Scheme == "https" {
-		// The proxy gets CONNECT <vetted ip:port>; inside the tunnel the
-		// request keeps its original Host and TLS its original name.
-		pinned.Host = req.URL.Host
-	} else {
-		// Plain http through a proxy is addressed by Host in the request
-		// line, so the vetted address must be the Host too. Push endpoints
-		// are https (ValidateEndpoint); this only keeps the pin intact.
-		pinned.Host = ""
-	}
-	return via.RoundTrip(pinned)
+	return via.RoundTrip(req)
 }
 
-// vettedAddr resolves host (or parses it, for an IP literal), refuses it
-// when any of its addresses fails guard, and returns the first one.
-func vettedAddr(ctx context.Context, host string, guard addrGuard, lookup lookupFunc) (netip.Addr, error) {
+// connectVia opens a tunnel to target through the forward proxy p: it
+// connects to the proxy (over TLS verified against the PROXY's own name for
+// an https proxy, with the trust roots of base), sends CONNECT target — the
+// vetted IP, never the name — with the proxy's credentials when p carries
+// them, and returns the tunnel once the proxy answers 2xx. The proxy hop is
+// not checked by the address guard: the operator chose the proxy.
+func connectVia(ctx context.Context, dial func(context.Context, string) (net.Conn, error), p *url.URL, base *tls.Config, target netip.AddrPort) (net.Conn, error) {
+	if p.Scheme != "http" && p.Scheme != "https" {
+		return nil, fmt.Errorf("push proxy scheme %q is not supported (http or https)", p.Scheme)
+	}
+	if dial == nil {
+		d := &net.Dialer{Timeout: pushSendTimeout, KeepAlive: 30 * time.Second}
+		dial = func(ctx context.Context, addr string) (net.Conn, error) { return d.DialContext(ctx, "tcp", addr) }
+	}
+	conn, err := dial(ctx, proxyAddr(p))
+	if err != nil {
+		return nil, fmt.Errorf("connecting to the push proxy: %w", err)
+	}
+	if p.Scheme == "https" {
+		cfg := &tls.Config{}
+		if base != nil {
+			cfg = base.Clone()
+		}
+		cfg.ServerName = p.Hostname()
+		cfg.NextProtos = nil
+		tc := tls.Client(conn, cfg)
+		if err := tc.HandshakeContext(ctx); err != nil {
+			conn.Close()
+			return nil, fmt.Errorf("TLS to the push proxy: %w", err)
+		}
+		conn = tc
+	}
+	if dl, ok := ctx.Deadline(); ok {
+		_ = conn.SetDeadline(dl)
+	} else {
+		_ = conn.SetDeadline(time.Now().Add(pushSendTimeout))
+	}
+	authority := target.String()
+	connect := &http.Request{
+		Method: http.MethodConnect,
+		URL:    &url.URL{Opaque: authority},
+		Host:   authority,
+		Header: make(http.Header),
+	}
+	if u := p.User; u != nil {
+		pw, _ := u.Password()
+		connect.Header.Set("Proxy-Authorization",
+			"Basic "+base64.StdEncoding.EncodeToString([]byte(u.Username()+":"+pw)))
+	}
+	if err := connect.Write(conn); err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("sending CONNECT to the push proxy: %w", err)
+	}
+	br := bufio.NewReader(conn)
+	resp, err := http.ReadResponse(br, connect)
+	if err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("reading the push proxy's CONNECT answer: %w", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		conn.Close()
+		return nil, fmt.Errorf("push proxy refused CONNECT %s: %s", authority, resp.Status)
+	}
+	if br.Buffered() > 0 {
+		conn.Close()
+		return nil, errors.New("push proxy sent data before the tunnel was used")
+	}
+	_ = conn.SetDeadline(time.Time{})
+	return conn, nil
+}
+
+// proxyAddr is the host:port of proxy p (the default port of its scheme
+// when none is given).
+func proxyAddr(p *url.URL) string {
+	port := p.Port()
+	if port == "" {
+		port = "80"
+		if p.Scheme == "https" {
+			port = "443"
+		}
+	}
+	return net.JoinHostPort(p.Hostname(), port)
+}
+
+// vettedAddrs resolves host (or parses it, for an IP literal) and refuses
+// it when any of its addresses fails guard; the addresses are tried in
+// order.
+func vettedAddrs(ctx context.Context, host string, guard addrGuard, lookup lookupFunc) ([]netip.Addr, error) {
 	if a, err := netip.ParseAddr(host); err == nil {
-		return a, guard(a)
+		if err := guard(a); err != nil {
+			return nil, err
+		}
+		return []netip.Addr{a}, nil
 	}
 	addrs, err := lookup(ctx, host)
 	if err != nil {
-		return netip.Addr{}, fmt.Errorf("resolving push host: %w", err)
+		return nil, fmt.Errorf("resolving push host: %w", err)
 	}
 	if len(addrs) == 0 {
-		return netip.Addr{}, fmt.Errorf("resolving push host: no address")
+		return nil, errors.New("resolving push host: no address")
 	}
 	for _, a := range addrs {
 		if err := guard(a); err != nil {
-			return netip.Addr{}, err
+			return nil, err
 		}
 	}
-	return addrs[0], nil
+	return addrs, nil
 }
 
-// portOf is the port of u, the default of its scheme when none is given.
-func portOf(u *url.URL) uint16 {
+// portOf is the port of u: the explicit one, which must be 1..65535, or the
+// default of its scheme when none is given.
+func portOf(u *url.URL) (uint16, error) {
 	if p := u.Port(); p != "" {
-		if n, err := strconv.ParseUint(p, 10, 16); err == nil {
-			return uint16(n)
+		n, err := strconv.ParseUint(p, 10, 16)
+		if err != nil || n == 0 {
+			return 0, fmt.Errorf("%w: invalid port %q", ErrInvalidEndpoint, p)
 		}
+		return uint16(n), nil
 	}
 	if u.Scheme == "http" {
-		return 80
+		return 80, nil
 	}
-	return 443
+	return 443, nil
 }
