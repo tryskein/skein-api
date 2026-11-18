@@ -1038,7 +1038,7 @@ func (SearchPage) itemType() reflect.Type { return reflect.TypeFor[search.Item](
 // @Summary Search
 // @Description Searches the issues, comments, projects and components the key's owner sees within the key's scope — full-text, reranked by meaning when the instance has an embedder — the same search as the MCP tool skein_search. kinds narrows what is searched; the issue filters apply to issues only. Keyset paging: pass nextCursor back as cursor while hasMore is true. Read-only.
 // @Description
-// @Description snippet of each hit holds <b>…</b> around the matches and the user's text unescaped: sanitize it before rendering it as HTML, or strip the markers and render it as text.
+// @Description `snippet` of a hit wraps lexical matches in the literal markers `<b>` and `</b>` (it may also come without markers, or empty for a match by id) and carries the user's text unescaped: sanitize it before rendering it as HTML, or strip the markers and render it as text.
 // @Tags Search
 // @Produce json
 // @Security SkeinApiKey[read]

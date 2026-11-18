@@ -4608,7 +4608,7 @@
                         "type": "number"
                     },
                     "snippet": {
-                        "description": "Snippet is a fragment of the matched text with every match wrapped\nin <b>…</b>. The text around the markers is the user's text as\nwritten, NOT HTML-escaped: a title or description may itself contain\nmarkup. Sanitize it before rendering it as HTML (keep only <b>), or\nstrip the markers and render it as plain text.",
+                        "description": "Snippet is a fragment of the matched text. Lexical matches are\nwrapped in the literal markers `<b>` and `</b>`; a snippet may also\ncome without markers (a match by meaning) or be empty (a match by\nid). The text is the user's text, NOT HTML-escaped: it may itself\ncontain markup. Sanitize it before rendering it as HTML (keep only\n`b` elements, without attributes), or strip the markers and render\nit as plain text.",
                         "type": "string"
                     },
                     "spaceId": {
@@ -14324,7 +14324,7 @@
         },
         "/api/v1/search": {
             "get": {
-                "description": "Searches the issues, comments, projects and components the key's owner sees within the key's scope — full-text, reranked by meaning when the instance has an embedder — the same search as the MCP tool skein_search. kinds narrows what is searched; the issue filters apply to issues only. Keyset paging: pass nextCursor back as cursor while hasMore is true. Read-only.\n\nsnippet of each hit holds <b>…</b> around the matches and the user's text unescaped: sanitize it before rendering it as HTML, or strip the markers and render it as text.",
+                "description": "Searches the issues, comments, projects and components the key's owner sees within the key's scope — full-text, reranked by meaning when the instance has an embedder — the same search as the MCP tool skein_search. kinds narrows what is searched; the issue filters apply to issues only. Keyset paging: pass nextCursor back as cursor while hasMore is true. Read-only.\n\n`snippet` of a hit wraps lexical matches in the literal markers `<b>` and `</b>` (it may also come without markers, or empty for a match by id) and carries the user's text unescaped: sanitize it before rendering it as HTML, or strip the markers and render it as text.",
                 "operationId": "search",
                 "parameters": [
                     {

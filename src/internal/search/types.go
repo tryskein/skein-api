@@ -90,11 +90,13 @@ type Item struct {
 	// T031) — with ProjectName the client renders «Space · Project».
 	SpaceID string `json:"spaceId,omitempty"`
 	Title   string `json:"title"`
-	// Snippet is a fragment of the matched text with every match wrapped
-	// in <b>…</b>. The text around the markers is the user's text as
-	// written, NOT HTML-escaped: a title or description may itself contain
-	// markup. Sanitize it before rendering it as HTML (keep only <b>), or
-	// strip the markers and render it as plain text.
+	// Snippet is a fragment of the matched text. Lexical matches are
+	// wrapped in the literal markers `<b>` and `</b>`; a snippet may also
+	// come without markers (a match by meaning) or be empty (a match by
+	// id). The text is the user's text, NOT HTML-escaped: it may itself
+	// contain markup. Sanitize it before rendering it as HTML (keep only
+	// `b` elements, without attributes), or strip the markers and render
+	// it as plain text.
 	Snippet    string    `json:"snippet"`
 	Score      float64   `json:"score"`
 	ExactMatch bool      `json:"exactMatch"`
