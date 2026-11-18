@@ -88,8 +88,13 @@ type Item struct {
 	ProjectName *string `json:"projectName,omitempty"`
 	// SpaceID is the short id of the space of the hit's project (sk-674.18
 	// T031) — with ProjectName the client renders «Space · Project».
-	SpaceID    string    `json:"spaceId,omitempty"`
-	Title      string    `json:"title"`
+	SpaceID string `json:"spaceId,omitempty"`
+	Title   string `json:"title"`
+	// Snippet is a fragment of the matched text with every match wrapped
+	// in <b>…</b>. The text around the markers is the user's text as
+	// written, NOT HTML-escaped: a title or description may itself contain
+	// markup. Sanitize it before rendering it as HTML (keep only <b>), or
+	// strip the markers and render it as plain text.
 	Snippet    string    `json:"snippet"`
 	Score      float64   `json:"score"`
 	ExactMatch bool      `json:"exactMatch"`
