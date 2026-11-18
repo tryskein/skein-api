@@ -161,3 +161,25 @@ func TestValidate_APIKeyNoticeSubject(t *testing.T) {
 		})
 	}
 }
+
+// A notice is sent only for a key of its own subject: a queued notice
+// naming another account's key is cancelled, so the worker never mails one
+// account the name of someone else's key.
+func TestAPIKeyNotice_KeyOfAnotherAccountIsCancelled(t *testing.T) {
+	pool := testsupport.NewTestPool(t)
+	resetQueue(t, pool)
+	userID, to := seedUser(t, pool)
+	other, _ := seedUser(t, pool)
+	foreignKey, _ := seedKey(t, pool, other, "not-yours")
+	id := enqueue(t, pool, mail.Message{Kind: mail.KindAPIKeyCreated, To: to, Lang: mail.LangEN, UserID: userID, APIKeyID: foreignKey}, time.Hour)
+
+	r := &relay{}
+	run := newRunner(t, pool, r, newClock())
+	before := deliveries(t)
+	tick(t, run)
+
+	if e := readEmail(t, pool, id); e.state != "final" || e.outcome != mail.OutcomeCancelled || r.Calls() != 0 {
+		t.Fatalf("notice = %s/%q, relay calls %d; want final/cancelled and no call", e.state, e.outcome, r.Calls())
+	}
+	assertOneDelivery(t, before, mail.KindAPIKeyCreated, mail.OutcomeCancelled)
+}
