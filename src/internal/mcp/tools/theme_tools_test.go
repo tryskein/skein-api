@@ -99,7 +99,7 @@ func TestMCPThemeDescribe_ReturnsSchema(t *testing.T) {
 	pool := newTestPool(t)
 	userID, _ := seedUser(t, pool, "user")
 	store := themes.NewStore(pool)
-	cache := themes.NewInspectCache(0)
+	cache := themes.NewInspectCache(themes.DefaultInspectLimits())
 	handler := handleThemeDescribe(store, cache)
 
 	ctx := withCtx(t, userID, "user")
@@ -219,7 +219,7 @@ func TestMCPThemeDescribe_PicksUpInspectSelection(t *testing.T) {
 	pool := newTestPool(t)
 	userID, _ := seedUser(t, pool, "user")
 	store := themes.NewStore(pool)
-	cache := themes.NewInspectCache(0)
+	cache := themes.NewInspectCache(themes.DefaultInspectLimits())
 	cache.Set(userID, themes.InspectSelection{
 		Selector: ".task-card",
 		// A REAL role from the current catalogue. `tokens[]` is
@@ -229,7 +229,7 @@ func TestMCPThemeDescribe_PicksUpInspectSelection(t *testing.T) {
 		// produce. --elev is the successor of the --bg-elevated this
 		// fixture used to carry.
 		Tokens:        []string{"--elev"},
-		ComputedStyle: map[string]any{"backgroundColor": "rgb(238,232,213)"},
+		ComputedStyle: map[string]string{"backgroundColor": "rgb(238,232,213)"},
 	})
 	handler := handleThemeDescribe(store, cache)
 
@@ -246,8 +246,8 @@ func TestMCPThemeDescribe_PicksUpInspectSelection(t *testing.T) {
 	if len(body.SelectedTargets) != 1 {
 		t.Fatalf("len(selectedTargets) = %d, want 1", len(body.SelectedTargets))
 	}
-	if body.SelectedTargets[0].Selector != ".task-card" {
-		t.Fatalf("selectedTargets[0].selector = %q", body.SelectedTargets[0].Selector)
+	if selectorOf(t, body.SelectedTargets[0]) != ".task-card" {
+		t.Fatalf("selectedTargets[0].selector = %q", selectorOf(t, body.SelectedTargets[0]))
 	}
 }
 
@@ -258,7 +258,7 @@ func TestMCPThemeDescribe_MultipleSelections(t *testing.T) {
 	pool := newTestPool(t)
 	userID, _ := seedUser(t, pool, "user")
 	store := themes.NewStore(pool)
-	cache := themes.NewInspectCache(0)
+	cache := themes.NewInspectCache(themes.DefaultInspectLimits())
 	cache.Set(userID, themes.InspectSelection{Selector: ".first"})
 	cache.Set(userID, themes.InspectSelection{Selector: ".second"})
 	cache.Set(userID, themes.InspectSelection{Selector: ".third"})
@@ -279,9 +279,9 @@ func TestMCPThemeDescribe_MultipleSelections(t *testing.T) {
 	}
 	want := []string{".first", ".second", ".third"}
 	for i, w := range want {
-		if body.SelectedTargets[i].Selector != w {
+		if selectorOf(t, body.SelectedTargets[i]) != w {
 			t.Fatalf("selectedTargets[%d].selector = %q, want %q (oldest-first)",
-				i, body.SelectedTargets[i].Selector, w)
+				i, selectorOf(t, body.SelectedTargets[i]), w)
 		}
 	}
 }
@@ -293,7 +293,7 @@ func TestMCPThemeInspectClear_Empties(t *testing.T) {
 	pool := newTestPool(t)
 	userID, _ := seedUser(t, pool, "user")
 	store := themes.NewStore(pool)
-	cache := themes.NewInspectCache(0)
+	cache := themes.NewInspectCache(themes.DefaultInspectLimits())
 	cache.Set(userID, themes.InspectSelection{Selector: ".a"})
 	cache.Set(userID, themes.InspectSelection{Selector: ".b"})
 
@@ -1085,4 +1085,55 @@ func TestMCPTheme_ForeignThemeIsNonexistent(t *testing.T) {
 			t.Errorf("preview published %d event(s), want 1", pub.Count())
 		}
 	})
+}
+
+// selectorOf reads the selector of one selectedTargets entry.
+func selectorOf(t *testing.T, raw json.RawMessage) string {
+	t.Helper()
+	var sel themes.InspectSelection
+	if err := json.Unmarshal(raw, &sel); err != nil {
+		t.Fatalf("selectedTargets entry %s: %v", raw, err)
+	}
+	return sel.Selector
+}
+
+// sk-977.7.10: describe shows at most DescribeMaxEntries, the freshest,
+// says how many it left out, and inspect_clear removes the shown and the
+// left-out ones alike.
+func TestMCPThemeDescribe_TruncatesAndReportsOmitted(t *testing.T) {
+	pool := newTestPool(t)
+	userID, _ := seedUser(t, pool, "user")
+	store := themes.NewStore(pool)
+	lim := themes.DefaultInspectLimits()
+	lim.DescribeMaxEntries = 2
+	cache := themes.NewInspectCache(lim)
+	for _, s := range []string{".first", ".second", ".third"} {
+		if err := cache.Set(userID, themes.InspectSelection{Selector: s}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ctx := withCtx(t, userID, "user")
+	res := callToolDirect(ctx, t, handleThemeDescribe(store, cache), map[string]any{})
+	var body themeDescribeResponse
+	if err := json.Unmarshal([]byte(firstTextContent(t, res)), &body); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(body.SelectedTargets) != 2 || selectorOf(t, body.SelectedTargets[0]) != ".second" ||
+		selectorOf(t, body.SelectedTargets[1]) != ".third" || body.SelectedTargetsOmitted != 1 {
+		t.Fatalf("selectedTargets %d, omitted %d; want [.second .third] and 1", len(body.SelectedTargets), body.SelectedTargetsOmitted)
+	}
+	var withTime map[string]any
+	_ = json.Unmarshal(body.SelectedTargets[0], &withTime)
+	if withTime["capturedAt"] == nil {
+		t.Fatalf("selectedTargets entry carries no capturedAt: %s", body.SelectedTargets[0])
+	}
+
+	res = callToolDirect(ctx, t, handleThemeInspectClear(cache), map[string]any{})
+	var clearBody themeInspectClearResponse
+	if err := json.Unmarshal([]byte(firstTextContent(t, res)), &clearBody); err != nil {
+		t.Fatalf("unmarshal clear: %v", err)
+	}
+	if clearBody.Cleared != 3 {
+		t.Fatalf("cleared %d, want 3 (shown and omitted)", clearBody.Cleared)
+	}
 }

@@ -809,7 +809,7 @@ func main() {
 	// NATS_URL is unset (so the rest of the surface still boots).
 	themesStore := themes.NewStore(pool)
 	themesHandler := handler.NewThemesHandler(pool)
-	inspectCache := themes.NewInspectCache(themes.InspectCacheDefaultTTL)
+	inspectCache := themes.NewInspectCache(cfg.ThemeInspectLimits())
 	meThemeHandler := handler.NewMeThemeHandler(pool, inspectCache)
 
 	// R3.2a outbox dispatcher needs a NATS connection. sk-10.3 also
@@ -2324,6 +2324,13 @@ func buildRouter(
 	// and tells a caller without the secret nothing about which routes exist.
 	mountInternalAPI := func(r chi.Router) {
 		r.Use(handler.RequireInternalSecret(cfg.InternalSecret, ""))
+		// sk-977.7.10: POST …/me/theme/inspect gets its concurrency slot and
+		// its own body limit BEFORE RefuseNUL buffers the body.
+		inspectLimits := themes.DefaultInspectLimits()
+		if inspectCache != nil {
+			inspectLimits = inspectCache.Limits()
+		}
+		r.Use(handler.ThemeInspectGate(inspectLimits.MaxBodyBytes, inspectLimits.MaxInFlight))
 		// U+0000 anywhere in the request is refused before any route runs:
 		// the database cannot store it.
 		r.Use(handler.RefuseNUL)

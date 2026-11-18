@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"time"
@@ -39,16 +40,46 @@ type themeDescribeResponse struct {
 	Themes []themes.ThemeDTO `json:"themes"`
 
 	// SelectedTargets is the caller's inspect-mode selections from the
-	// in-memory cache (up to 20 most-recent clicks within the last 10
-	// minutes), oldest first. Always an array — empty when the user
+	// in-memory cache, oldest first: each {selector, parents, tokens,
+	// computedStyle, capturedAt}. Always an array — empty when the user
 	// hasn't clicked anything recently OR every entry has expired.
+	//
+	// sk-977.7.10: at most SKEIN_THEME_INSPECT_DESCRIBE_MAX_ENTRIES (20)
+	// entries and SKEIN_THEME_INSPECT_DESCRIBE_MAX_BYTES (32 KiB) of compact
+	// JSON for the whole array — the freshest contiguous tail of the live
+	// list, still oldest first.
 	//
 	// The agent should call skein_theme(action="inspect_clear") after
 	// processing the list so the next describe call returns a fresh
 	// window rather than accumulating selections across turns.
 	//
 	// sk-10.6 — was singular `selectedTarget` (overwrite-on-write).
-	SelectedTargets []themes.InspectSelection `json:"selectedTargets"`
+	SelectedTargets []json.RawMessage `json:"selectedTargets"`
+
+	// SelectedTargetsOmitted is how many older live selections did not fit
+	// the describe limits; absent when none. They are still in the cache:
+	// inspect_clear removes them along with the shown ones.
+	SelectedTargetsOmitted int `json:"selectedTargetsOmitted,omitempty"`
+}
+
+// describeTargets is the freshest contiguous tail of entries (oldest
+// first) that fits maxEntries and maxBytes of compact JSON array — brackets
+// and commas included — and how many older entries it leaves out.
+func describeTargets(entries []json.RawMessage, maxEntries, maxBytes int) ([]json.RawMessage, int) {
+	size := 2 // []
+	start := len(entries)
+	for start > 0 && len(entries)-start < maxEntries {
+		next := len(entries[start-1])
+		if start < len(entries) {
+			next++ // the comma before the entry after it
+		}
+		if size+next > maxBytes {
+			break
+		}
+		size += next
+		start--
+	}
+	return entries[start:], start
 }
 
 func handleThemeDescribe(store *themes.Store, inspectCache *themes.InspectCache) server.ToolHandlerFunc {
@@ -123,11 +154,11 @@ func handleThemeDescribe(store *themes.Store, inspectCache *themes.InspectCache)
 		// that don't wire it; treat that as "no selections". Always
 		// emit a non-nil slice so the JSON wire shape is consistently
 		// an array (never null) — easier for the agent to iterate.
-		selections := []themes.InspectSelection{}
+		selections := []json.RawMessage{}
+		omitted := 0
 		if inspectCache != nil {
-			if got, ok := inspectCache.Get(userID); ok && len(got) > 0 {
-				selections = got
-			}
+			lim := inspectCache.Limits()
+			selections, omitted = describeTargets(inspectCache.Get(userID), lim.DescribeMaxEntries, lim.DescribeMaxBytes)
 		}
 
 		slog.InfoContext(ctx, "mcp tool ok",
@@ -139,11 +170,12 @@ func handleThemeDescribe(store *themes.Store, inspectCache *themes.InspectCache)
 			"latencyMs", time.Since(start).Milliseconds())
 
 		return skmcp.ToolJSON(themeDescribeResponse{
-			Schema:          themes.TokenSchema,
-			ActiveTheme:     active,
-			BuiltinPref:     pref.BuiltinTheme,
-			Themes:          themesList,
-			SelectedTargets: selections,
+			Schema:                 themes.TokenSchema,
+			ActiveTheme:            active,
+			BuiltinPref:            pref.BuiltinTheme,
+			Themes:                 themesList,
+			SelectedTargets:        selections,
+			SelectedTargetsOmitted: omitted,
 		})
 	}
 }

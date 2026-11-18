@@ -421,7 +421,7 @@ func TestThemes_RequiresAuth(t *testing.T) {
 func TestMeTheme_DefaultsToBuiltinLight(t *testing.T) {
 	pool := newThemesTestPool(t)
 	user := seedThemesUser(t, pool)
-	router := makeMeThemeRouter(NewMeThemeHandler(pool, themes.NewInspectCache(0)))
+	router := makeMeThemeRouter(NewMeThemeHandler(pool, themes.NewInspectCache(themes.DefaultInspectLimits())))
 
 	req := jsonRequest(t, http.MethodGet, "/api/v1/me/theme", nil, user)
 	res, body := doRequest(t, router, req)
@@ -443,7 +443,7 @@ func TestMeTheme_SwitchToCustom(t *testing.T) {
 	pool := newThemesTestPool(t)
 	user := seedThemesUser(t, pool)
 	themeRouter := makeThemeRouter(NewThemesHandler(pool))
-	meRouter := makeMeThemeRouter(NewMeThemeHandler(pool, themes.NewInspectCache(0)))
+	meRouter := makeMeThemeRouter(NewMeThemeHandler(pool, themes.NewInspectCache(themes.DefaultInspectLimits())))
 
 	dto := createTheme(t, pool, themeRouter, user, uniqName("active"))
 
@@ -482,7 +482,7 @@ func TestMeTheme_BuiltinClearsCustomID(t *testing.T) {
 	pool := newThemesTestPool(t)
 	user := seedThemesUser(t, pool)
 	themeRouter := makeThemeRouter(NewThemesHandler(pool))
-	meRouter := makeMeThemeRouter(NewMeThemeHandler(pool, themes.NewInspectCache(0)))
+	meRouter := makeMeThemeRouter(NewMeThemeHandler(pool, themes.NewInspectCache(themes.DefaultInspectLimits())))
 
 	dto := createTheme(t, pool, themeRouter, user, uniqName("transient"))
 
@@ -518,7 +518,7 @@ func TestMeTheme_BuiltinClearsCustomID(t *testing.T) {
 func TestMeTheme_NonExistentCustomID(t *testing.T) {
 	pool := newThemesTestPool(t)
 	user := seedThemesUser(t, pool)
-	meRouter := makeMeThemeRouter(NewMeThemeHandler(pool, themes.NewInspectCache(0)))
+	meRouter := makeMeThemeRouter(NewMeThemeHandler(pool, themes.NewInspectCache(themes.DefaultInspectLimits())))
 
 	payload := map[string]any{
 		"mode":          "custom",
@@ -538,7 +538,7 @@ func TestMeTheme_NonExistentCustomID(t *testing.T) {
 func TestMeTheme_CustomRequiresID(t *testing.T) {
 	pool := newThemesTestPool(t)
 	user := seedThemesUser(t, pool)
-	meRouter := makeMeThemeRouter(NewMeThemeHandler(pool, themes.NewInspectCache(0)))
+	meRouter := makeMeThemeRouter(NewMeThemeHandler(pool, themes.NewInspectCache(themes.DefaultInspectLimits())))
 
 	payload := map[string]any{
 		"mode":         "custom",
@@ -557,7 +557,7 @@ func TestMeTheme_CustomRequiresID(t *testing.T) {
 
 func TestMeTheme_RequiresAuth(t *testing.T) {
 	pool := newThemesTestPool(t)
-	router := makeMeThemeRouter(NewMeThemeHandler(pool, themes.NewInspectCache(0)))
+	router := makeMeThemeRouter(NewMeThemeHandler(pool, themes.NewInspectCache(themes.DefaultInspectLimits())))
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/me/theme", nil)
 	res, _ := doRequest(t, router, req)
@@ -585,7 +585,7 @@ func TestMeTheme_RequiresAuth(t *testing.T) {
 func TestMeThemeInspect_PostHappy(t *testing.T) {
 	pool := newThemesTestPool(t)
 	user := seedThemesUser(t, pool)
-	cache := themes.NewInspectCache(0)
+	cache := themes.NewInspectCache(themes.DefaultInspectLimits())
 	router := makeMeThemeRouter(NewMeThemeHandler(pool, cache))
 
 	payload := map[string]any{
@@ -604,14 +604,14 @@ func TestMeThemeInspect_PostHappy(t *testing.T) {
 	if res.StatusCode != http.StatusNoContent {
 		t.Fatalf("status = %d, want 204; body=%v", res.StatusCode, body)
 	}
-	entries, ok := cache.Get(user)
-	if !ok {
-		t.Fatalf("cache.Get returned false; inspect payload not stored")
-	}
+	entries := cache.Get(user)
 	if len(entries) != 1 {
 		t.Fatalf("cache.Get returned %d entries, want 1", len(entries))
 	}
-	sel := entries[0]
+	var sel themes.InspectSelection
+	if err := json.Unmarshal(entries[0], &sel); err != nil {
+		t.Fatalf("stored entry is not a selection: %v", err)
+	}
 	if sel.Selector != ".task-card-title-text" {
 		t.Fatalf("selector = %q, want .task-card-title-text", sel.Selector)
 	}
@@ -634,7 +634,7 @@ func TestMeThemeInspect_PostHappy(t *testing.T) {
 // call the request context has no user id and the handler returns 401.
 func TestMeThemeInspect_RequiresAuth(t *testing.T) {
 	pool := newThemesTestPool(t)
-	router := makeMeThemeRouter(NewMeThemeHandler(pool, themes.NewInspectCache(0)))
+	router := makeMeThemeRouter(NewMeThemeHandler(pool, themes.NewInspectCache(themes.DefaultInspectLimits())))
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/me/theme/inspect",
 		strings.NewReader(`{"selector":".x"}`))
@@ -650,7 +650,7 @@ func TestMeThemeInspect_RequiresAuth(t *testing.T) {
 func TestMeThemeInspect_RejectsEmptySelector(t *testing.T) {
 	pool := newThemesTestPool(t)
 	user := seedThemesUser(t, pool)
-	router := makeMeThemeRouter(NewMeThemeHandler(pool, themes.NewInspectCache(0)))
+	router := makeMeThemeRouter(NewMeThemeHandler(pool, themes.NewInspectCache(themes.DefaultInspectLimits())))
 
 	for _, sel := range []string{"", "   ", "\t\n"} {
 		payload := map[string]any{"selector": sel}

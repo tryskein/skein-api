@@ -280,7 +280,7 @@ func routingDeps(pool *pgxpool.Pool) mcpDeps {
 		attachmentURLTTL:         time.Minute,
 		themesStore:              themes.NewStore(pool),
 		themesPublisher:          themes.NewPublisher(nil),
-		inspectCache:             themes.NewInspectCache(time.Minute),
+		inspectCache:             themes.NewInspectCache(themes.DefaultInspectLimits()),
 		remindersStore:           reminders.NewStore(pool),
 		monitorCredsStore:        monitorcreds.New(pool, time.Hour),
 		spacesSvc:                spaces.NewService(pool, spaces.Options{Creation: spaces.CreationAll}),

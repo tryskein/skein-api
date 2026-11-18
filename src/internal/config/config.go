@@ -14,6 +14,7 @@ import (
 	"skein-api/internal/agents"
 	"skein-api/internal/monitorcreds"
 	"skein-api/internal/oauthmeta"
+	"skein-api/internal/themes"
 
 	"github.com/caarlos0/env/v11"
 	"golang.org/x/crypto/bcrypt"
@@ -456,6 +457,30 @@ type Config struct {
 	// must not hang the request indefinitely; a network/timeout error is
 	// treated as "unknown" and does not block the password change.
 	PwnedPasswordsTimeout time.Duration `env:"SKEIN_PWNED_PASSWORDS_TIMEOUT" envDefault:"2s"`
+
+	// ---------------- sk-977.7.10 theme inspect limits ----------------
+	//
+	// Bounds of POST /me/theme/inspect, of the in-memory inspect cache and
+	// of skein_theme(action="describe"); see themes.InspectLimits and
+	// docs/env-reference.md. Defaults are themes.DefaultInspectLimits;
+	// every value must be > 0 and the budgets must hold one maximal entry
+	// (validated in Load).
+	ThemeInspectMaxBodyBytes       int64         `env:"SKEIN_THEME_INSPECT_MAX_BODY_BYTES" envDefault:"65536"`
+	ThemeInspectMaxSelectorBytes   int           `env:"SKEIN_THEME_INSPECT_MAX_SELECTOR_BYTES" envDefault:"1024"`
+	ThemeInspectMaxParents         int           `env:"SKEIN_THEME_INSPECT_MAX_PARENTS" envDefault:"16"`
+	ThemeInspectMaxParentBytes     int           `env:"SKEIN_THEME_INSPECT_MAX_PARENT_BYTES" envDefault:"1024"`
+	ThemeInspectMaxTokens          int           `env:"SKEIN_THEME_INSPECT_MAX_TOKENS" envDefault:"128"`
+	ThemeInspectMaxTokenBytes      int           `env:"SKEIN_THEME_INSPECT_MAX_TOKEN_BYTES" envDefault:"64"`
+	ThemeInspectMaxStyleKeys       int           `env:"SKEIN_THEME_INSPECT_MAX_STYLE_KEYS" envDefault:"16"`
+	ThemeInspectMaxStyleKeyBytes   int           `env:"SKEIN_THEME_INSPECT_MAX_STYLE_KEY_BYTES" envDefault:"64"`
+	ThemeInspectMaxStyleValueBytes int           `env:"SKEIN_THEME_INSPECT_MAX_STYLE_VALUE_BYTES" envDefault:"1024"`
+	ThemeInspectMaxEntryBytes      int           `env:"SKEIN_THEME_INSPECT_MAX_ENTRY_BYTES" envDefault:"8192"`
+	ThemeInspectMaxEntriesPerUser  int           `env:"SKEIN_THEME_INSPECT_MAX_ENTRIES_PER_USER" envDefault:"20"`
+	ThemeInspectTTL                time.Duration `env:"SKEIN_THEME_INSPECT_TTL" envDefault:"10m"`
+	ThemeInspectCacheMaxBytes      int64         `env:"SKEIN_THEME_INSPECT_CACHE_MAX_BYTES" envDefault:"8388608"`
+	ThemeInspectDescribeMaxEntries int           `env:"SKEIN_THEME_INSPECT_DESCRIBE_MAX_ENTRIES" envDefault:"20"`
+	ThemeInspectDescribeMaxBytes   int           `env:"SKEIN_THEME_INSPECT_DESCRIBE_MAX_BYTES" envDefault:"32768"`
+	ThemeInspectMaxInFlight        int           `env:"SKEIN_THEME_INSPECT_MAX_IN_FLIGHT" envDefault:"32"`
 
 	// AppBaseURL is the public address of the web UI. Two users:
 	//   - web push: the `url` field of a payload, so a click opens the issue
@@ -985,6 +1010,9 @@ func Load() (*Config, error) {
 	if cfg.PwnedPasswordsTimeout <= 0 {
 		return nil, fmt.Errorf("skein_pwned_passwords_timeout must be > 0; got %s", cfg.PwnedPasswordsTimeout)
 	}
+	if err := cfg.ThemeInspectLimits().Validate(); err != nil {
+		return nil, err
+	}
 
 	// sk-674.18 — installation settings: value checks first, then the
 	// contradictions of SAAS-PLAN 2.5 that need no data.
@@ -1372,4 +1400,27 @@ func isOrigin(s string) bool {
 	}
 	return u.Hostname() != "" && u.User == nil && u.Path == "" && u.RawPath == "" &&
 		u.RawQuery == "" && u.Fragment == "" && !u.ForceQuery && !strings.HasSuffix(s, "/")
+}
+
+// ThemeInspectLimits are the SKEIN_THEME_INSPECT_* settings as
+// themes.InspectLimits (sk-977.7.10).
+func (c *Config) ThemeInspectLimits() themes.InspectLimits {
+	return themes.InspectLimits{
+		MaxBodyBytes:       c.ThemeInspectMaxBodyBytes,
+		MaxSelectorBytes:   c.ThemeInspectMaxSelectorBytes,
+		MaxParents:         c.ThemeInspectMaxParents,
+		MaxParentBytes:     c.ThemeInspectMaxParentBytes,
+		MaxTokens:          c.ThemeInspectMaxTokens,
+		MaxTokenBytes:      c.ThemeInspectMaxTokenBytes,
+		MaxStyleKeys:       c.ThemeInspectMaxStyleKeys,
+		MaxStyleKeyBytes:   c.ThemeInspectMaxStyleKeyBytes,
+		MaxStyleValueBytes: c.ThemeInspectMaxStyleValueBytes,
+		MaxEntryBytes:      c.ThemeInspectMaxEntryBytes,
+		MaxEntriesPerUser:  c.ThemeInspectMaxEntriesPerUser,
+		TTL:                c.ThemeInspectTTL,
+		CacheMaxBytes:      c.ThemeInspectCacheMaxBytes,
+		DescribeMaxEntries: c.ThemeInspectDescribeMaxEntries,
+		DescribeMaxBytes:   c.ThemeInspectDescribeMaxBytes,
+		MaxInFlight:        c.ThemeInspectMaxInFlight,
+	}
 }

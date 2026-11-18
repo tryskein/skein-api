@@ -1,7 +1,11 @@
 package themes
 
 import (
+	"container/list"
 	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
 	"log/slog"
 	"sync"
 	"time"
@@ -9,29 +13,13 @@ import (
 	"github.com/google/uuid"
 )
 
-// InspectCacheDefaultTTL is the per-entry TTL for an inspect selection.
-// Ten minutes matches the "user clicks an element → switches to chat with
-// the agent → asks the agent to change something" workflow. Shorter would
-// expire mid-conversation; longer would leak stale selections into the
-// agent's view after the user has clearly moved on.
-const InspectCacheDefaultTTL = 10 * time.Minute
-
-// InspectCacheDefaultMax is the per-user hard cap on stored selections.
-// Twenty covers a normal back-and-forth between user and agent (each
-// click in the inspector adds one entry; the agent calls
-// skein_theme(action="inspect_clear") after processing them to flush
-// the list).
-// Without a cap a runaway frontend could pile selections forever; we
-// fall back to FIFO eviction when the cap is reached.
-const InspectCacheDefaultMax = 20
-
 // inspectCleanupInterval is how often the background goroutine sweeps
-// expired entries. 60 seconds is conservative — most entries are read
-// long before they expire (the agent fetches them via
-// skein_theme(action="describe")
-// almost immediately after the frontend posts them), so cleanup is purely
-// hygienic.
+// expired entries; reads never return an expired one either way.
 const inspectCleanupInterval = 60 * time.Second
+
+// ErrInspectEntryTooLarge — the normalized entry (its compact JSON with
+// capturedAt) exceeds InspectLimits.MaxEntryBytes; nothing is stored.
+var ErrInspectEntryTooLarge = errors.New("inspect entry exceeds the size limit")
 
 // InspectSelection is the wire shape POST /api/v1/me/theme/inspect
 // accepts and skein_theme(action="describe") re-emits under
@@ -40,10 +28,11 @@ const inspectCleanupInterval = 60 * time.Second
 // it to know "the user is staring at THIS element right now" without
 // asking for a description.
 //
-// ComputedStyle is left as map[string]any so the frontend can grow it
+// ComputedStyle is a flat map of string values, so the frontend can grow it
 // (e.g. add lineHeight, padding) without a backend change. Keys we
 // currently expect: color, fontFamily, fontSize, fontWeight,
-// backgroundColor — but accept-anything is the deliberate contract.
+// backgroundColor. Since sk-977.7.10 only string values are accepted, and
+// every field is bounded (InspectLimits).
 type InspectSelection struct {
 	// Selector is the most-specific selector the inspector picked,
 	// already trimmed. Non-empty by handler validation.
@@ -60,185 +49,210 @@ type InspectSelection struct {
 	// the computed style and decide which variable to nudge.
 	Tokens []string `json:"tokens"`
 
-	// ComputedStyle is the snapshot of getComputedStyle() at click time.
-	// Free-form on the wire — see the package doc.
-	ComputedStyle map[string]any `json:"computedStyle"`
+	// ComputedStyle is the snapshot of getComputedStyle() at click time:
+	// property name → serialized value.
+	ComputedStyle map[string]string `json:"computedStyle"`
 
 	// CapturedAt is set by the cache.Set call (not the client) so the
 	// agent sees server-canonical time.
 	CapturedAt time.Time `json:"capturedAt"`
 }
 
-// InspectCache is a process-local in-memory store of the user's recent
-// "I am looking at THIS element" hints. Multi-entry per user — each
-// inspector click appends a new selection (oldest evicted FIFO at the
-// per-user cap). TTL-bounded so a long-idle user doesn't leak stale
-// selections into the agent's context.
+// InspectCache is a process-local in-memory store of the users' recent
+// "I am looking at THIS element" hints. Each inspector click appends one
+// entry; an entry lives InspectLimits.TTL from its click.
 //
-// Thread-safety: every operation takes the embedded sync.RWMutex.
-// Cleanup runs in a separate goroutine driven by StartCleanup.
+// Each entry is kept as an independent compact JSON copy of the validated
+// selection with its server-side capturedAt, and is accounted at
+// InspectEntryCost of that copy. Three bounds hold at every moment, under
+// one lock (sk-977.7.10):
 //
-// Persistence: NONE. A pod restart wipes every selection. This is
-// intentional — selections are ephemeral UI state, not data. The
-// frontend re-posts on the next inspector click.
+//   - at most MaxEntriesPerUser entries per user — a new click drops that
+//     user's oldest;
+//   - at most CacheMaxBytes accounted bytes per process — a new click first
+//     frees expired entries, then the oldest clicks of ALL users, in click
+//     order (FIFO: reading an entry never extends its life);
+//   - no entry larger than MaxEntryBytes is stored at all, so a large
+//     entry never evicts others to make room for itself.
 //
-// sk-10.6 — switched from single-entry-per-user (overwrite-on-write)
-// to a bounded list (append-on-write, FIFO eviction at max). The agent
-// is expected to call skein_theme(action="inspect_clear") after
-// processing the
-// list so it does not pile up across sessions.
+// Persistence: NONE. A pod restart wipes every selection: they are
+// ephemeral UI state, not data.
 type InspectCache struct {
-	mu   sync.RWMutex
-	ttl  time.Duration
-	max  int
-	data map[uuid.UUID][]InspectSelection
+	mu     sync.Mutex
+	limits InspectLimits
+	now    func() time.Time
+	// all holds every entry in click order (oldest first); since every
+	// entry has the same TTL this is also expiry order.
+	all   *list.List
+	users map[uuid.UUID]*list.List
+	bytes int64
 }
 
-// NewInspectCache returns a fresh cache with the supplied TTL and the
-// default per-user cap (InspectCacheDefaultMax). Pass
-// InspectCacheDefaultTTL in production wiring; tests pass shorter
-// values to exercise expiry without time.Sleep'ing a real ten minutes.
-func NewInspectCache(ttl time.Duration) *InspectCache {
-	return NewInspectCacheWithMax(ttl, InspectCacheDefaultMax)
+// inspectEntry is one stored click.
+type inspectEntry struct {
+	user       uuid.UUID
+	raw        json.RawMessage
+	capturedAt time.Time
+	cost       int64
+	inAll      *list.Element
+	inUser     *list.Element
 }
 
-// NewInspectCacheWithMax is the test-tunable constructor — accepts an
-// explicit per-user cap so the FIFO-eviction tests don't have to set
-// twenty entries to exercise the trim path. Production wiring uses
-// NewInspectCache which delegates here with InspectCacheDefaultMax.
-func NewInspectCacheWithMax(ttl time.Duration, max int) *InspectCache {
-	if ttl <= 0 {
-		ttl = InspectCacheDefaultTTL
-	}
-	if max <= 0 {
-		max = InspectCacheDefaultMax
-	}
+// NewInspectCache returns an empty cache bounded by l (validated by the
+// caller, see InspectLimits.Validate).
+func NewInspectCache(l InspectLimits) *InspectCache {
 	return &InspectCache{
-		ttl:  ttl,
-		max:  max,
-		data: make(map[uuid.UUID][]InspectSelection),
+		limits: l,
+		now:    time.Now,
+		all:    list.New(),
+		users:  make(map[uuid.UUID]*list.List),
 	}
 }
 
-// Set appends a new selection to the user's list. CapturedAt is stamped
-// server-side so the wire value reflects the server's clock — clients
-// with skewed clocks can't backdate selections to extend the effective
-// TTL. When the list length exceeds the cap, the OLDEST entries are
-// dropped (FIFO) so the agent always sees the most-recent window.
-func (c *InspectCache) Set(userID uuid.UUID, sel InspectSelection) {
+// Limits reports the bounds the cache was built with.
+func (c *InspectCache) Limits() InspectLimits { return c.limits }
+
+// Set stores a new click of userID. capturedAt is stamped server-side so a
+// client with a skewed clock cannot backdate or extend its selections. The
+// stored copy is the compact JSON of sel with capturedAt; when it exceeds
+// MaxEntryBytes nothing changes and ErrInspectEntryTooLarge is returned.
+func (c *InspectCache) Set(userID uuid.UUID, sel InspectSelection) error {
 	if userID == uuid.Nil {
-		return
+		return nil
 	}
-	sel.CapturedAt = time.Now().UTC()
+	sel.CapturedAt = c.now().UTC()
+	raw, err := json.Marshal(sel)
+	if err != nil {
+		return fmt.Errorf("encoding inspect entry: %w", err)
+	}
+	if len(raw) > c.limits.MaxEntryBytes {
+		return ErrInspectEntryTooLarge
+	}
+	e := &inspectEntry{user: userID, raw: raw, capturedAt: sel.CapturedAt, cost: InspectEntryCost(len(raw))}
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	list := append(c.data[userID], sel)
-	// FIFO trim — drop the oldest leading entries so length == max.
-	// We allocate a fresh slice to release the underlying array of the
-	// dropped prefix (otherwise the array stays pinned for the lifetime
-	// of the cache).
-	if len(list) > c.max {
-		trimmed := make([]InspectSelection, c.max)
-		copy(trimmed, list[len(list)-c.max:])
-		list = trimmed
-	}
-	c.data[userID] = list
-}
-
-// Get returns the user's non-expired selections, oldest first.
-//
-// Return semantics:
-//
-//   - (nil, false) when the user has NEVER posted a selection (no map
-//     entry exists at all). Distinguishes "user never clicked" from
-//     "user clicked but all entries expired".
-//   - ([]InspectSelection{}, true) when the user has a map entry but
-//     every selection is past TTL (the sweeper will drop the empty key
-//     on its next tick).
-//   - (slice, true) for the normal case. Slice is a fresh copy filtered
-//     for TTL; callers may mutate it without affecting the cache.
-//
-// RLock-only — TTL filtering does NOT persist back to the map (sweep
-// handles eviction). The RLock is held across the FILTER LOOP, not just
-// the map lookup: releasing it earlier would race with sweep's in-place
-// `entries[:0]; kept = append(kept, e)` compaction, which writes to
-// positions Get is iterating. Holding the RLock costs microseconds on
-// the cheap read path; sweep runs once per minute and contention is
-// effectively zero.
-func (c *InspectCache) Get(userID uuid.UUID) ([]InspectSelection, bool) {
-	if userID == uuid.Nil {
-		return nil, false
-	}
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	entries, ok := c.data[userID]
-	if !ok {
-		return nil, false
-	}
-	now := time.Now().UTC()
-	cutoff := now.Add(-c.ttl)
-	// Filter non-expired entries into a fresh slice — also serves as a
-	// snapshot so the caller can't mutate the cache's backing array.
-	out := make([]InspectSelection, 0, len(entries))
-	for _, e := range entries {
-		if e.CapturedAt.After(cutoff) || e.CapturedAt.Equal(cutoff) {
-			out = append(out, e)
+	c.dropExpiredLocked(sel.CapturedAt)
+	if ul := c.users[userID]; ul != nil {
+		for ul.Len() >= c.limits.MaxEntriesPerUser {
+			c.removeLocked(ul.Front().Value.(*inspectEntry))
+			ul = c.users[userID]
+			if ul == nil {
+				break
+			}
 		}
 	}
-	return out, true
+	for c.bytes+e.cost > c.limits.CacheMaxBytes && c.all.Len() > 0 {
+		c.removeLocked(c.all.Front().Value.(*inspectEntry))
+	}
+	ul := c.users[userID]
+	if ul == nil {
+		ul = list.New()
+		c.users[userID] = ul
+	}
+	e.inAll = c.all.PushBack(e)
+	e.inUser = ul.PushBack(e)
+	c.bytes += e.cost
+	return nil
 }
 
-// Clear removes every selection for the user and returns the count of
-// dropped entries. Used by skein_theme(action="inspect_clear") so the
-// agent can flush the list after processing it (otherwise selections
-// pile up across describe calls).
-//
-// Idempotent — clearing a user with no entry returns 0.
+// Get returns the user's live entries, oldest first, as their stored
+// compact JSON (each an object with selector, parents, tokens,
+// computedStyle and capturedAt). The slice is a fresh copy; the JSON values
+// are never modified after Set. An empty slice when the user has none.
+func (c *InspectCache) Get(userID uuid.UUID) []json.RawMessage {
+	out := []json.RawMessage{}
+	if userID == uuid.Nil {
+		return out
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	ul := c.users[userID]
+	if ul == nil {
+		return out
+	}
+	cutoff := c.now().UTC().Add(-c.limits.TTL)
+	for el := ul.Front(); el != nil; el = el.Next() {
+		if e := el.Value.(*inspectEntry); !e.capturedAt.Before(cutoff) {
+			out = append(out, e.raw)
+		}
+	}
+	return out
+}
+
+// Clear removes every entry of the user and returns how many were live or
+// expired-but-unswept. Idempotent.
 func (c *InspectCache) Clear(userID uuid.UUID) int {
 	if userID == uuid.Nil {
 		return 0
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	entries, ok := c.data[userID]
-	if !ok {
+	ul := c.users[userID]
+	if ul == nil {
 		return 0
 	}
-	delete(c.data, userID)
-	return len(entries)
-}
-
-// Len returns the TOTAL number of selections across every user
-// (sum of per-user list lengths), including expired-but-not-yet-swept
-// entries. Used by tests to assert append/eviction/sweep behaviour.
-//
-// sk-10.6 migration: pre-multi-entry this returned the number of users
-// with a resident entry (which collapsed to "0 or 1 per user"). Now it
-// counts selections — a single user with three clicks reports Len()==3.
-func (c *InspectCache) Len() int {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	total := 0
-	for _, list := range c.data {
-		total += len(list)
+	n := ul.Len()
+	for ul.Len() > 0 {
+		c.removeLocked(ul.Front().Value.(*inspectEntry))
+		if c.users[userID] == nil {
+			break
+		}
 	}
-	return total
+	return n
 }
 
-// StartCleanup spawns a background goroutine that wakes every
-// inspectCleanupInterval and drops entries whose age exceeds ttl.
-// Lifetime is tied to ctx — when ctx.Done fires the goroutine returns
-// after the in-flight sweep.
-//
-// Single goroutine per cache. Calling twice spawns two reapers; tests
-// should construct a fresh cache instead.
+// Len is the number of stored entries of every user (expired-but-unswept
+// included); Bytes their accounted size. For tests and metrics.
+func (c *InspectCache) Len() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.all.Len()
+}
+
+// Bytes is the accounted size of every stored entry.
+func (c *InspectCache) Bytes() int64 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.bytes
+}
+
+// removeLocked unlinks e from both lists, drops an emptied user list and
+// gives its cost back.
+func (c *InspectCache) removeLocked(e *inspectEntry) {
+	c.all.Remove(e.inAll)
+	if ul := c.users[e.user]; ul != nil {
+		ul.Remove(e.inUser)
+		if ul.Len() == 0 {
+			delete(c.users, e.user)
+		}
+	}
+	c.bytes -= e.cost
+	e.inAll, e.inUser, e.raw = nil, nil, nil
+}
+
+// dropExpiredLocked frees every entry clicked before now - TTL; they sit at
+// the front of the click-ordered list.
+func (c *InspectCache) dropExpiredLocked(now time.Time) int {
+	cutoff := now.Add(-c.limits.TTL)
+	removed := 0
+	for el := c.all.Front(); el != nil; el = c.all.Front() {
+		e := el.Value.(*inspectEntry)
+		if !e.capturedAt.Before(cutoff) {
+			break
+		}
+		c.removeLocked(e)
+		removed++
+	}
+	return removed
+}
+
+// StartCleanup spawns a background goroutine that frees expired entries
+// every inspectCleanupInterval until ctx ends.
 func (c *InspectCache) StartCleanup(ctx context.Context) {
 	go c.cleanupLoop(ctx)
 }
 
-// cleanupLoop is the actual reaper. Separated from StartCleanup so a
-// test could drive a single sweep synchronously by calling sweep()
-// directly (kept private to avoid exposing the timing surface).
 func (c *InspectCache) cleanupLoop(ctx context.Context) {
 	ticker := time.NewTicker(inspectCleanupInterval)
 	defer ticker.Stop()
@@ -247,38 +261,16 @@ func (c *InspectCache) cleanupLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			removed := c.sweep()
-			if removed > 0 {
-				slog.DebugContext(ctx, "inspect cache sweep",
-					"removed", removed)
+			if removed := c.sweep(); removed > 0 {
+				slog.DebugContext(ctx, "inspect cache sweep", "removed", removed)
 			}
 		}
 	}
 }
 
-// sweep walks every user's list, drops expired selections, and removes
-// the map key when the resulting list is empty. Returns the total
-// number of dropped entries across all users for the debug log line.
+// sweep frees the expired entries and returns how many.
 func (c *InspectCache) sweep() int {
-	now := time.Now().UTC()
-	cutoff := now.Add(-c.ttl)
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	removed := 0
-	for uid, entries := range c.data {
-		kept := entries[:0]
-		for _, e := range entries {
-			if e.CapturedAt.After(cutoff) || e.CapturedAt.Equal(cutoff) {
-				kept = append(kept, e)
-			} else {
-				removed++
-			}
-		}
-		if len(kept) == 0 {
-			delete(c.data, uid)
-		} else {
-			c.data[uid] = kept
-		}
-	}
-	return removed
+	return c.dropExpiredLocked(c.now().UTC())
 }

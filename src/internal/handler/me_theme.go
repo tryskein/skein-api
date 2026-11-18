@@ -3,6 +3,7 @@ package handler
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -177,28 +178,91 @@ func (h *MeThemeHandler) SetTheme(w http.ResponseWriter, r *http.Request) {
 // Selector + parents come from the browser inspector overlay; tokens is
 // the theme-variable-key list the frontend deduced from the selector
 // chain (may be empty when no token matches). computedStyle is a snapshot
-// of getComputedStyle() at click time — free-form map (color, fontFamily,
-// fontSize, fontWeight, backgroundColor at minimum, but the contract is
-// "anything the frontend wants to surface").
+// of getComputedStyle() at click time — a flat map of string values
+// (color, fontFamily, fontSize, fontWeight, backgroundColor today).
+// Unknown top-level fields are ignored, so the frontend may add some.
 type inspectRequest struct {
-	Selector      string         `json:"selector"`
-	Parents       []string       `json:"parents"`
-	Tokens        []string       `json:"tokens"`
-	ComputedStyle map[string]any `json:"computedStyle"`
+	// Selector — the most specific selector picked; required, non-empty after trim.
+	Selector string `json:"selector"`
+	// Parents — parent selectors, closest first.
+	Parents []string `json:"parents"`
+	// Tokens — theme variable keys the frontend matched.
+	Tokens []string `json:"tokens"`
+	// ComputedStyle — CSS property → serialized value; string values only.
+	ComputedStyle map[string]json.RawMessage `json:"computedStyle" swaggertype:"object,string"`
+}
+
+// ThemeInspectGate guards POST …/me/theme/inspect BEFORE any other
+// middleware reads its body (RefuseNUL buffers bodies up to 1 MiB): it
+// takes one of maxInFlight concurrency slots — none free answers 429
+// theme_inspect_busy — refuses a declared Content-Length above maxBody with
+// 413 theme_inspect_body_too_large, and bounds the body to maxBody bytes so
+// the first read already stops there (the handler then answers 413 too).
+// The slot is held until the request is answered. Other requests pass
+// untouched (sk-977.7.10).
+func ThemeInspectGate(maxBody int64, maxInFlight int) func(http.Handler) http.Handler {
+	slots := make(chan struct{}, maxInFlight)
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodPost || !strings.HasSuffix(r.URL.Path, "/me/theme/inspect") {
+				next.ServeHTTP(w, r)
+				return
+			}
+			select {
+			case slots <- struct{}{}:
+				defer func() { <-slots }()
+			default:
+				writeProblem(w, http.StatusTooManyRequests, "theme_inspect_busy",
+					"too many inspector selections are being saved; try again", nil)
+				return
+			}
+			if r.ContentLength > maxBody {
+				writeInspectBodyTooLarge(w, maxBody)
+				return
+			}
+			if r.Body != nil && r.Body != http.NoBody {
+				r.Body = http.MaxBytesReader(w, r.Body, maxBody)
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+func writeInspectBodyTooLarge(w http.ResponseWriter, maxBody int64) {
+	writeProblem(w, http.StatusRequestEntityTooLarge, "theme_inspect_body_too_large",
+		fmt.Sprintf("request body exceeds %d bytes", maxBody),
+		map[string]any{"details": map[string]any{"limit": maxBody}})
+}
+
+// writeInspectLimit answers 422 theme_inspect_limits for field, whose limit
+// is limit (bytes or a count, see the message).
+func writeInspectLimit(w http.ResponseWriter, field string, limit int, what string) {
+	writeProblem(w, http.StatusUnprocessableEntity, "theme_inspect_limits",
+		fmt.Sprintf("%s: at most %d %s", field, limit, what),
+		map[string]any{"details": map[string]any{"field": field, "limit": limit}})
 }
 
 // Inspect handles POST /api/v1/me/theme/inspect (sk-10.3).
 //
 // @Summary Capture the caller's current inspector selection
-// @Description Appends the user's "I am looking at THIS element" hint to a process-local in-memory cache keyed by user id. The agent then reads the list via the skein_theme MCP tool (action="describe") in its selectedTargets field to know which elements the user wants to change. TTL = 10 minutes per entry; per-user cap = 20 entries (FIFO eviction); the agent flushes the list via skein_theme (action="inspect_clear") after processing. Body fields: selector (required, non-empty after trim) is the most-specific CSS selector the inspector picked; parents[] is the chain of parent selectors (closest first); tokens[] is the list of theme-variable keys the frontend deduced from the selector (may be empty); computedStyle is a free-form map of CSS property snapshots (color, fontFamily, fontSize, fontWeight, backgroundColor at minimum). Side effects: appends one entry to the in-memory inspect cache. NO database write — the cache is intentionally ephemeral.
+// @Description Appends the user's "I am looking at THIS element" hint to a process-local in-memory cache keyed by user id. The agent then reads the list via the skein_theme MCP tool (action="describe") in its selectedTargets field to know which elements the user wants to change; it flushes the list via skein_theme (action="inspect_clear") after processing.
+// @Description
+// @Description Body fields: selector (required, non-empty after trim) is the most-specific CSS selector the inspector picked; parents[] is the chain of parent selectors (closest first); tokens[] is the list of theme-variable keys the frontend deduced (may be empty); computedStyle is a flat map of CSS property → serialized value, string values only. Unknown top-level fields are ignored. Missing parents, tokens or computedStyle are stored as empty.
+// @Description
+// @Description Limits (sk-977.7.10; defaults, each set by an SKEIN_THEME_INSPECT_* variable): body 64 KiB, checked on the first read; selector 1 KiB; up to 16 parents of 1 KiB each; up to 128 tokens of 64 bytes each; up to 16 computedStyle keys of 64 bytes with values of 1 KiB; the stored entry (compact JSON with capturedAt) 8 KiB. At most 32 of these requests are served at once per replica. A refused request stores nothing — nothing is cut to fit.
+// @Description
+// @Description Side effects: appends one entry to the in-memory inspect cache — at most 20 entries per user (the oldest goes), TTL 10 minutes from the click, and at most 8 MiB accounted per replica (expired entries go first, then the oldest clicks of all users). NO database write.
 // @Tags Themes
 // @Accept json
 // @Produce json
 // @Security ApiKeyAuth
 // @Param body body inspectRequest true "Inspector selection snapshot"
 // @Success 204 "Selection captured"
-// @Failure 400 {object} map[string]any "invalid_json | invalid_selector"
+// @Failure 400 {object} map[string]any "invalid_json — empty or malformed body, a value of the wrong type (computedStyle values must be strings), or data after the JSON object; invalid_selector — selector empty after trim"
 // @Failure 401 {object} map[string]any "Missing / invalid auth"
+// @Failure 413 {object} map[string]any "theme_inspect_body_too_large — the body exceeds the body limit (details.limit); nothing is stored"
+// @Failure 422 {object} map[string]any "theme_inspect_limits — a field exceeds its limit (details.field, details.limit), or the stored entry would; nothing is stored"
+// @Failure 429 {object} map[string]any "theme_inspect_busy — too many inspector selections are being saved at once on this replica; retry"
 // @Failure 500 {object} map[string]any "internal_error — the request could not be served"
 // @Router /ui/v1/me/theme/inspect [post]
 func (h *MeThemeHandler) Inspect(w http.ResponseWriter, r *http.Request) {
@@ -216,49 +280,61 @@ func (h *MeThemeHandler) Inspect(w http.ResponseWriter, r *http.Request) {
 		writeProblem(w, http.StatusInternalServerError, "internal_error", "", nil)
 		return
 	}
-	// Inspect is the ONE handler that deliberately drops
-	// DisallowUnknownFields. The payload is intentionally extensible —
-	// the frontend may grow new fields (viewportSize, devicePixelRatio,
-	// etc.) without a backend redeploy, and the inner ComputedStyle map
-	// is also intentionally unvalidated. Only the outer body is open;
-	// we still bound the size via MaxBytesReader and require non-empty
-	// JSON via the Decode error path.
-	var req inspectRequest
-	r.Body = http.MaxBytesReader(nil, r.Body, requestBodyMaxBytes)
+	lim := h.inspectCache.Limits()
+	// ThemeInspectGate has already bounded the body at the route's limit;
+	// this second bound covers a mount without the gate (tests).
+	r.Body = http.MaxBytesReader(nil, r.Body, lim.MaxBodyBytes)
 	dec := json.NewDecoder(r.Body)
-	// DO NOT call DisallowUnknownFields() — Inspect payload is
-	// intentionally extensible (frontend may add viewportSize,
-	// devicePixelRatio, etc. without redeploying the backend). Only
-	// the *outer* fields are open; validation of inner ComputedStyle
-	// values is also intentionally absent.
-	if err := dec.Decode(&req); err != nil {
-		// Treat empty body and oversized body the same as decodeJSON so
-		// the error surface is symmetric with the rest of the API.
-		if errors.Is(err, io.EOF) {
-			slog.WarnContext(ctx, "me theme inspect: empty body",
-				"userId", c.UserID.String())
+	// Unknown top-level fields are ignored on purpose: the frontend may add
+	// fields (viewportSize, …) without a backend change.
+	var req inspectRequest
+	err := dec.Decode(&req)
+	if err == nil {
+		// Exactly one JSON value: anything after it is refused.
+		if _, terr := dec.Token(); !errors.Is(terr, io.EOF) {
+			var maxErr *http.MaxBytesError
+			if errors.As(terr, &maxErr) {
+				writeInspectBodyTooLarge(w, lim.MaxBodyBytes)
+				return
+			}
 			writeProblem(w, http.StatusBadRequest, "invalid_json",
-				"invalid request body", nil)
+				"the body must be exactly one JSON object", nil)
 			return
 		}
+	}
+	if err != nil {
 		var maxErr *http.MaxBytesError
-		if errors.As(err, &maxErr) {
-			slog.WarnContext(ctx, "me theme inspect: body too large",
-				"userId", c.UserID.String())
-			writeProblem(w, http.StatusBadRequest, "invalid_json",
-				"request body too large", nil)
-			return
+		switch {
+		case errors.As(err, &maxErr):
+			slog.WarnContext(ctx, "me theme inspect: body too large", "userId", c.UserID.String())
+			writeInspectBodyTooLarge(w, lim.MaxBodyBytes)
+		case errors.Is(err, io.EOF):
+			writeProblem(w, http.StatusBadRequest, "invalid_json", "invalid request body", nil)
+		default:
+			slog.WarnContext(ctx, "me theme inspect: invalid json",
+				"userId", c.UserID.String(), "error", err.Error())
+			writeProblem(w, http.StatusBadRequest, "invalid_json", "invalid request body", nil)
 		}
-		slog.WarnContext(ctx, "me theme inspect: invalid json",
-			"userId", c.UserID.String(), "error", err.Error())
-		writeProblem(w, http.StatusBadRequest, "invalid_json",
-			"invalid request body", nil)
 		return
 	}
 	selector := strings.TrimSpace(req.Selector)
 	if selector == "" {
 		writeProblem(w, http.StatusBadRequest, "invalid_selector",
 			"selector must be non-empty after trim", nil)
+		return
+	}
+	style := make(map[string]string, len(req.ComputedStyle))
+	for k, v := range req.ComputedStyle {
+		var sv string
+		if len(v) == 0 || v[0] != '"' || json.Unmarshal(v, &sv) != nil {
+			writeProblem(w, http.StatusBadRequest, "invalid_json",
+				"computedStyle values must be strings",
+				map[string]any{"details": map[string]any{"field": "computedStyle." + k}})
+			return
+		}
+		style[k] = sv
+	}
+	if !checkInspectLimits(w, lim, selector, req.Parents, req.Tokens, style) {
 		return
 	}
 	// Normalise parents / tokens to non-nil slices so the agent sees
@@ -271,20 +347,68 @@ func (h *MeThemeHandler) Inspect(w http.ResponseWriter, r *http.Request) {
 	if tokens == nil {
 		tokens = []string{}
 	}
-	// computedStyle is optional — empty map is a valid frontend state
-	// (e.g. selection lost focus before getComputedStyle ran). Pass
-	// through as-is.
-	style := req.ComputedStyle
-	if style == nil {
-		style = map[string]any{}
-	}
-	h.inspectCache.Set(c.UserID, themes.InspectSelection{
+	err = h.inspectCache.Set(c.UserID, themes.InspectSelection{
 		Selector:      selector,
 		Parents:       parents,
 		Tokens:        tokens,
 		ComputedStyle: style,
 	})
+	if errors.Is(err, themes.ErrInspectEntryTooLarge) {
+		writeInspectLimit(w, "entry", lim.MaxEntryBytes, "bytes")
+		return
+	}
+	if err != nil {
+		slog.ErrorContext(ctx, "me theme inspect: storing the selection failed",
+			"userId", c.UserID.String(), "error", err.Error())
+		writeProblem(w, http.StatusInternalServerError, "internal_error", "", nil)
+		return
+	}
 	// 204 No Content — the agent fetches the captured selection later
 	// via skein_theme(action="describe"), this endpoint just stashes it.
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// checkInspectLimits answers 422 theme_inspect_limits for the first field
+// over its limit and reports whether all are within. Sizes are bytes of the
+// decoded UTF-8; nothing is cut to fit.
+func checkInspectLimits(w http.ResponseWriter, lim themes.InspectLimits, selector string, parents, tokens []string, style map[string]string) bool {
+	if len(selector) > lim.MaxSelectorBytes {
+		writeInspectLimit(w, "selector", lim.MaxSelectorBytes, "bytes")
+		return false
+	}
+	if len(parents) > lim.MaxParents {
+		writeInspectLimit(w, "parents", lim.MaxParents, "items")
+		return false
+	}
+	for _, p := range parents {
+		if len(p) > lim.MaxParentBytes {
+			writeInspectLimit(w, "parents[]", lim.MaxParentBytes, "bytes")
+			return false
+		}
+	}
+	if len(tokens) > lim.MaxTokens {
+		writeInspectLimit(w, "tokens", lim.MaxTokens, "items")
+		return false
+	}
+	for _, t := range tokens {
+		if len(t) > lim.MaxTokenBytes {
+			writeInspectLimit(w, "tokens[]", lim.MaxTokenBytes, "bytes")
+			return false
+		}
+	}
+	if len(style) > lim.MaxStyleKeys {
+		writeInspectLimit(w, "computedStyle", lim.MaxStyleKeys, "keys")
+		return false
+	}
+	for k, v := range style {
+		if len(k) > lim.MaxStyleKeyBytes {
+			writeInspectLimit(w, "computedStyle key", lim.MaxStyleKeyBytes, "bytes")
+			return false
+		}
+		if len(v) > lim.MaxStyleValueBytes {
+			writeInspectLimit(w, "computedStyle."+k, lim.MaxStyleValueBytes, "bytes")
+			return false
+		}
+	}
+	return true
 }

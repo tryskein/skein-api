@@ -705,6 +705,115 @@ rows present, `auth.Bootstrap` is a no-op regardless of what is set here.
 - **Note:** a timeout or network error is treated as "unknown" and does **not**
   block the password change.
 
+## Theme inspect limits
+
+The theme inspector (`POST /me/theme/inspect`) keeps the clicked elements in
+the memory of each skein-api replica for the agent's `skein_theme(action="describe")`.
+These variables bound what is accepted, kept and handed out (sk-977.7.10).
+Sizes are bytes of UTF-8 after JSON decoding unless said otherwise; every
+value is an integer (the TTL a Go duration) and must be greater than zero,
+or startup aborts. Startup also aborts when
+`SKEIN_THEME_INSPECT_DESCRIBE_MAX_BYTES` cannot hold one entry of
+`SKEIN_THEME_INSPECT_MAX_ENTRY_BYTES` plus the brackets, or
+`SKEIN_THEME_INSPECT_CACHE_MAX_BYTES` cannot hold its accounted cost. A
+refused click stores nothing: nothing is cut to fit.
+
+#### `SKEIN_THEME_INSPECT_MAX_BODY_BYTES`
+
+- **Purpose:** bytes of the HTTP body of `POST /me/theme/inspect`, checked on the first read (also before the U+0000 guard buffers the body).
+- **Required:** no · **Default:** `65536`.
+- **When exceeded:** `413 theme_inspect_body_too_large`, nothing stored.
+
+#### `SKEIN_THEME_INSPECT_MAX_SELECTOR_BYTES`
+
+- **Purpose:** bytes of `selector`.
+- **Required:** no · **Default:** `1024`.
+- **When exceeded:** `422 theme_inspect_limits`, nothing stored.
+
+#### `SKEIN_THEME_INSPECT_MAX_PARENTS`
+
+- **Purpose:** number of `parents`.
+- **Required:** no · **Default:** `16`.
+- **When exceeded:** `422 theme_inspect_limits`; the chain is not cut.
+
+#### `SKEIN_THEME_INSPECT_MAX_PARENT_BYTES`
+
+- **Purpose:** bytes of one `parents` string.
+- **Required:** no · **Default:** `1024`.
+- **When exceeded:** `422 theme_inspect_limits`.
+
+#### `SKEIN_THEME_INSPECT_MAX_TOKENS`
+
+- **Purpose:** number of `tokens`.
+- **Required:** no · **Default:** `128`.
+- **When exceeded:** `422 theme_inspect_limits`; the hints are not cut.
+
+#### `SKEIN_THEME_INSPECT_MAX_TOKEN_BYTES`
+
+- **Purpose:** bytes of one `tokens` string.
+- **Required:** no · **Default:** `64`.
+- **When exceeded:** `422 theme_inspect_limits`.
+
+#### `SKEIN_THEME_INSPECT_MAX_STYLE_KEYS`
+
+- **Purpose:** number of `computedStyle` properties.
+- **Required:** no · **Default:** `16`.
+- **When exceeded:** `422 theme_inspect_limits`.
+
+#### `SKEIN_THEME_INSPECT_MAX_STYLE_KEY_BYTES`
+
+- **Purpose:** bytes of one `computedStyle` property name.
+- **Required:** no · **Default:** `64`.
+- **When exceeded:** `422 theme_inspect_limits`.
+
+#### `SKEIN_THEME_INSPECT_MAX_STYLE_VALUE_BYTES`
+
+- **Purpose:** bytes of one `computedStyle` value.
+- **Required:** no · **Default:** `1024`.
+- **When exceeded:** `422 theme_inspect_limits`.
+
+#### `SKEIN_THEME_INSPECT_MAX_ENTRY_BYTES`
+
+- **Purpose:** bytes of the stored entry: the compact JSON of the selection with `capturedAt`.
+- **Required:** no · **Default:** `8192`.
+- **When exceeded:** `422 theme_inspect_limits` (field `entry`), even when each field fits.
+
+#### `SKEIN_THEME_INSPECT_MAX_ENTRIES_PER_USER`
+
+- **Purpose:** selections kept per user.
+- **Required:** no · **Default:** `20`.
+- **When exceeded:** the user's oldest selection is dropped.
+
+#### `SKEIN_THEME_INSPECT_TTL`
+
+- **Purpose:** life of a selection from its click (Go duration).
+- **Required:** no · **Default:** `10m`.
+- **When exceeded:** an expired selection is hidden and freed.
+
+#### `SKEIN_THEME_INSPECT_CACHE_MAX_BYTES`
+
+- **Purpose:** accounted bytes of all selections in one replica; an entry counts its JSON size rounded up to a power of two plus 512.
+- **Required:** no · **Default:** `8388608`.
+- **When exceeded:** expired selections are freed first, then the oldest clicks of all users.
+
+#### `SKEIN_THEME_INSPECT_DESCRIBE_MAX_ENTRIES`
+
+- **Purpose:** selections `skein_theme(action="describe")` returns.
+- **Required:** no · **Default:** `20`.
+- **When exceeded:** the freshest ones are returned, `selectedTargetsOmitted` counts the rest.
+
+#### `SKEIN_THEME_INSPECT_DESCRIBE_MAX_BYTES`
+
+- **Purpose:** bytes of the compact JSON array `selectedTargets` of `describe`.
+- **Required:** no · **Default:** `32768`.
+- **When exceeded:** the freshest contiguous tail that fits is returned, `selectedTargetsOmitted` counts the rest.
+
+#### `SKEIN_THEME_INSPECT_MAX_IN_FLIGHT`
+
+- **Purpose:** `POST /me/theme/inspect` requests served at once in one replica.
+- **Required:** no · **Default:** `32`.
+- **When exceeded:** `429 theme_inspect_busy`; the click can be repeated.
+
 ## Agent data plane and task monitors
 
 #### `SKEIN_AGENT_PUBLIC_URL`

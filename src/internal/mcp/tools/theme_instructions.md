@@ -40,8 +40,10 @@ worked out what they actually want.
 - `builtinPref` — light / dark
 - `themes[]` — every saved theme in the system
 - `selectedTargets[]` — what the user clicked via Inspect (oldest first,
-  cap 20, TTL 10 min). Each: `{selector, parents, tokens,
-  computedStyle}`
+  at most the 20 freshest clicks of the last 10 min within 32 KiB). Each:
+  `{selector, parents, tokens, computedStyle, capturedAt}`
+- `selectedTargetsOmitted` — present when older clicks did not fit: tell
+  the user how many were left out
 
 ### Step 2 — make sure the user is on a CUSTOM theme
 
@@ -112,6 +114,8 @@ Filter `tokens` by the actual request ("bolder" → `--font-weight-*`,
 `tokens`).
 
 **MUST**: after processing all targets, call `skein_theme({action: "inspect_clear"})`.
+It removes the omitted clicks too — when `selectedTargetsOmitted` is set,
+say so before clearing.
 Otherwise the next describe returns the same batch plus new clicks and
 the agent gets confused.
 
