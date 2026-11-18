@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"testing"
 
+	"github.com/google/uuid"
+
 	"skein-api/internal/issues"
 )
 
@@ -41,6 +43,10 @@ func TestActivityFeeds_CommentBodyComesFromTheComment(t *testing.T) {
 		return c
 	}
 
+	type want struct {
+		body    string
+		deleted bool
+	}
 	const (
 		liveText     = "live comment text"
 		originalText = "original text with a secret"
@@ -55,6 +61,22 @@ func TestActivityFeeds_CommentBodyComesFromTheComment(t *testing.T) {
 	deleted := add(deletedText)
 	if err := store.DeleteComment(ctx, deleted.ID, "", actor); err != nil {
 		t.Fatalf("delete comment: %v", err)
+	}
+
+	// Events that kept no body copy (new_data NULL): the feed still shows
+	// the comment's text, or the marker for a deleted comment.
+	noCopyLive := uuid.Must(uuid.NewRandom()).String()
+	seedActivityComment(t, pool, noCopyLive, issueID, owner, ownerName)
+	noCopyLiveEvent := seedActivityEvent(t, pool, issues.EventCommentCreated, "comment", noCopyLive, pid, owner, ownerName)
+	noCopyDeleted := uuid.Must(uuid.NewRandom()).String()
+	seedActivityComment(t, pool, noCopyDeleted, issueID, owner, ownerName)
+	if _, err := pool.Exec(ctx, `UPDATE comments SET deleted_at = now() WHERE id = $1`, noCopyDeleted); err != nil {
+		t.Fatalf("soft-delete seeded comment: %v", err)
+	}
+	noCopyDeletedEvent := seedActivityEvent(t, pool, issues.EventCommentCreated, "comment", noCopyDeleted, pid, owner, ownerName)
+	wantsByEvent := map[int64]want{
+		noCopyLiveEvent:    {body: "test comment"},
+		noCopyDeletedEvent: {body: "comment deleted", deleted: true},
 	}
 
 	activityH := NewActivityHandler(pool, store)
@@ -79,14 +101,10 @@ func TestActivityFeeds_CommentBodyComesFromTheComment(t *testing.T) {
 		}},
 	}
 
-	type want struct {
-		body    string
-		deleted bool
-	}
 	wants := map[string]want{
 		live.ID.String():    {body: liveText},
 		edited.ID.String():  {body: editedText},
-		deleted.ID.String(): {body: issues.CommentDeletedBody, deleted: true},
+		deleted.ID.String(): {body: "comment deleted", deleted: true},
 	}
 
 	for _, f := range feeds {
@@ -107,6 +125,9 @@ func TestActivityFeeds_CommentBodyComesFromTheComment(t *testing.T) {
 				}
 				cid, _ := nv["id"].(string)
 				w, ours := wants[cid]
+				if ew, byEvent := wantsByEvent[it.ID]; byEvent {
+					w, ours, cid = ew, true, fmt.Sprintf("event-%d", it.ID)
+				}
 				if !ours {
 					continue
 				}
@@ -117,6 +138,11 @@ func TestActivityFeeds_CommentBodyComesFromTheComment(t *testing.T) {
 				gotDeleted, _ := nv["deleted"].(bool)
 				if gotDeleted != w.deleted {
 					t.Errorf("comment %s: newValue.deleted = %v, want %v", cid, nv["deleted"], w.deleted)
+				}
+			}
+			for id := range wantsByEvent {
+				if !seen[fmt.Sprintf("event-%d", id)] {
+					t.Errorf("comment.created event %d missing from the %s feed", id, f.name)
 				}
 			}
 			for cid := range wants {

@@ -8046,13 +8046,19 @@ const CommentDeletedBody = "comment deleted"
 // old/new value with the comment's current text: body is the live
 // comments.body, deletedAt its deleted_at. A deleted comment, or one whose
 // row no longer exists (body nil), gets CommentDeletedBody and
-// "deleted": true. A value without a "body" key is returned unchanged.
-func currentCommentBody(v any, body *string, deletedAt *time.Time) any {
+// "deleted": true. A value without a "body" key is returned unchanged
+// unless always is set (the new value of comment.created, which shows the
+// comment's text whether or not the event kept a copy); then a missing
+// object is started empty.
+func currentCommentBody(v any, body *string, deletedAt *time.Time, always bool) any {
 	m, ok := v.(map[string]any)
 	if !ok {
-		return v
+		if !always || v != nil {
+			return v
+		}
+		m = map[string]any{}
 	}
-	if _, has := m["body"]; !has {
+	if _, has := m["body"]; !has && !always {
 		return v
 	}
 	if body == nil || deletedAt != nil {
@@ -8205,8 +8211,9 @@ func scanActivityRows(ctx context.Context, q authz.RowsQuerier, rows pgx.Rows, l
 			// the event was written. The feed never serves that copy: the
 			// text comes from the comment row itself, so an edit shows the
 			// current version and a deletion shows the marker.
-			entry.OldValue = currentCommentBody(entry.OldValue, r.commentBody, r.commentDeletedAt)
-			entry.NewValue = currentCommentBody(entry.NewValue, r.commentBody, r.commentDeletedAt)
+			entry.OldValue = currentCommentBody(entry.OldValue, r.commentBody, r.commentDeletedAt, false)
+			entry.NewValue = currentCommentBody(entry.NewValue, r.commentBody, r.commentDeletedAt,
+				eventType == EventCommentCreated)
 		}
 		// project_id is NOT NULL for every activity row (the WHERE
 		// clauses in ListProjectActivity / ListUserActivity /

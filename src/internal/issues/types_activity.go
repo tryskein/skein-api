@@ -183,6 +183,12 @@ type ActivityEntry struct {
 	// → status strings; issue.reparented → {parentIds}/{parentId};
 	// dependency.created/deleted → the edge descriptor). nil (omitted)
 	// for events with no scalar diff.
+	//
+	// Comment events are the exception (sk-977.7.3): their "body" is NOT
+	// the copy stored in the event but the comment's current text, read
+	// from the comment row; comment.created always carries it in NewValue.
+	// For a deleted comment (or one whose row is gone) body is
+	// "comment deleted" and the object also carries "deleted": true.
 	OldValue any `json:"oldValue,omitempty"`
 	NewValue any `json:"newValue,omitempty"`
 	// Changes is the per-field diff for issue.updated, lifted verbatim
