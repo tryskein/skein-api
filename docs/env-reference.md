@@ -721,7 +721,7 @@ refused click stores nothing: nothing is cut to fit.
 #### `SKEIN_THEME_INSPECT_MAX_BODY_BYTES`
 
 - **Purpose:** bytes of the HTTP body of `POST /me/theme/inspect`, checked on the first read (also before the U+0000 guard buffers the body).
-- **Required:** no · **Default:** `65536`.
+- **Required:** no · **Default:** `65536` · **Range:** 1..1048576 — the U+0000 guard of the internal API reads at most 1 MiB of a body, so a larger limit would let a body through unscanned; startup aborts above it.
 - **When exceeded:** `413 theme_inspect_body_too_large`, nothing stored.
 
 #### `SKEIN_THEME_INSPECT_MAX_SELECTOR_BYTES`

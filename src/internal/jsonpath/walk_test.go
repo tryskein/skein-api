@@ -3,6 +3,7 @@ package jsonpath
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"strings"
 	"testing"
@@ -51,5 +52,52 @@ func TestAtOffset(t *testing.T) {
 func TestWalk_TruncatedDocument(t *testing.T) {
 	if err := Walk([]byte(`{"title":`), func(Token) bool { return true }); !errors.Is(err, io.ErrUnexpectedEOF) {
 		t.Errorf("Walk(truncated) = %v, want io.ErrUnexpectedEOF", err)
+	}
+}
+
+// WalkStrings names each string the way Walk does (member names by their
+// object's path, values by their own), building it only when asked.
+func TestWalkStrings_PathsMatchWalk(t *testing.T) {
+	doc := []byte(`{"title":"a","labels":["x","y"],"deps":[{"reason":"r","to":["k"]}],"n":1,"o":{"p":{"q":"z"}}}`)
+	type hit struct {
+		s, path string
+		name    bool
+	}
+	var want, got []hit
+	if err := Walk(doc, func(tok Token) bool {
+		if s, ok := tok.Value.(string); ok {
+			want = append(want, hit{s, tok.Path, tok.Name})
+		}
+		return true
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := WalkStrings(doc, func(s string, name bool, pathOf func() string) bool {
+		got = append(got, hit{s, pathOf(), name})
+		return true
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("WalkStrings\n%v\nWalk\n%v", got, want)
+	}
+}
+
+// A scan that never asks for a path costs allocations proportional to the
+// document, not to its size times its depth: doubling a deeply nested
+// document about doubles the work (Walk, which builds every path, grows
+// far faster).
+func TestWalkStrings_CostGrowsWithSize(t *testing.T) {
+	nested := func(depth int) []byte {
+		return []byte(strings.Repeat(`{"k":[`, depth) + `"v"` + strings.Repeat(`]}`, depth))
+	}
+	allocs := func(doc []byte) float64 {
+		return testing.AllocsPerRun(3, func() {
+			_ = WalkStrings(doc, func(string, bool, func() string) bool { return true })
+		})
+	}
+	small, large := allocs(nested(500)), allocs(nested(1000))
+	if large > 2.6*small {
+		t.Fatalf("allocations %v at depth 500, %v at depth 1000: more than linear", small, large)
 	}
 }

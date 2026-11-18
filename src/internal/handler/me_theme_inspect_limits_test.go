@@ -6,15 +6,18 @@ package handler
 // ThemeInspectGate, then RefuseNUL, then the handler. No database.
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -349,4 +352,38 @@ func TestThemeInspectGate_SharedAcrossPrefixes(t *testing.T) {
 	}
 	close(release)
 	<-done
+}
+
+// Through a real HTTP/1 server: an oversized chunked upload whose rest is
+// still pending is answered 413 as soon as the limit is crossed — no
+// waiting for, or draining of, the rest of the body.
+func TestThemeInspectGate_RealServerRefusesAtOnce(t *testing.T) {
+	cache := themes.NewInspectCache(themes.DefaultInspectLimits())
+	srv := httptest.NewServer(inspectRouter(cache))
+	defer srv.Close()
+	conn, err := net.Dial("tcp", srv.Listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	limit := themes.DefaultInspectLimits().MaxBodyBytes
+	chunk := strings.Repeat("x", 16<<10)
+	var b strings.Builder
+	fmt.Fprintf(&b, "POST %s HTTP/1.1\r\nHost: test\r\nTransfer-Encoding: chunked\r\nContent-Type: application/json\r\n\r\n", inspectPath)
+	for sent := int64(0); sent <= limit; sent += int64(len(chunk)) {
+		fmt.Fprintf(&b, "%x\r\n%s\r\n", len(chunk), chunk)
+	}
+	if _, err := io.WriteString(conn, b.String()); err != nil {
+		t.Fatal(err)
+	}
+	// The upload is left unfinished: no terminating chunk.
+	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
+	if err != nil {
+		t.Fatalf("no answer while the upload is pending: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status %d, want 413", resp.StatusCode)
+	}
 }

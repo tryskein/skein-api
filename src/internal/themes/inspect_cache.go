@@ -91,7 +91,9 @@ type InspectCache struct {
 // inspectEntry is one stored click.
 type inspectEntry struct {
 	user       uuid.UUID
-	raw        json.RawMessage
+	raw json.RawMessage
+	// capturedAt is the acceptance time as c.now returned it — with the
+	// monotonic reading in production — used for age only.
 	capturedAt time.Time
 	cost       int64
 	inAll      *list.Element
@@ -121,15 +123,13 @@ func (c *InspectCache) Set(userID uuid.UUID, sel InspectSelection) error {
 		return nil
 	}
 	// The click time is taken under the lock, so the click-ordered list is
-	// ordered by capturedAt too — eviction, expiry and describe rely on it.
+	// in acceptance order. Age is measured on that reading (time.Now carries
+	// the monotonic clock), so a wall-clock step neither extends nor cuts a
+	// selection's life; capturedAt on the wire is its wall-clock UTC form.
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	sel.CapturedAt = c.now().UTC()
-	if last := c.all.Back(); last != nil {
-		if prev := last.Value.(*inspectEntry).capturedAt; sel.CapturedAt.Before(prev) {
-			sel.CapturedAt = prev // a clock step back keeps the order
-		}
-	}
+	at := c.now()
+	sel.CapturedAt = at.UTC()
 	raw, err := json.Marshal(sel)
 	if err != nil {
 		return fmt.Errorf("encoding inspect entry: %w", err)
@@ -137,9 +137,9 @@ func (c *InspectCache) Set(userID uuid.UUID, sel InspectSelection) error {
 	if len(raw) > c.limits.MaxEntryBytes {
 		return ErrInspectEntryTooLarge
 	}
-	e := &inspectEntry{user: userID, raw: raw, capturedAt: sel.CapturedAt, cost: InspectEntryCost(len(raw))}
+	e := &inspectEntry{user: userID, raw: raw, capturedAt: at, cost: InspectEntryCost(len(raw))}
 
-	c.dropExpiredLocked(sel.CapturedAt)
+	c.dropExpiredLocked(at)
 	if ul := c.users[userID]; ul != nil {
 		for ul.Len() >= c.limits.MaxEntriesPerUser {
 			c.removeLocked(ul.Front().Value.(*inspectEntry))
@@ -178,7 +178,7 @@ func (c *InspectCache) Get(userID uuid.UUID) []json.RawMessage {
 	if ul == nil {
 		return out
 	}
-	cutoff := c.now().UTC().Add(-c.limits.TTL)
+	cutoff := c.now().Add(-c.limits.TTL)
 	for el := ul.Front(); el != nil; el = el.Next() {
 		if e := el.Value.(*inspectEntry); !e.capturedAt.Before(cutoff) {
 			out = append(out, e.raw)
@@ -279,5 +279,5 @@ func (c *InspectCache) cleanupLoop(ctx context.Context) {
 func (c *InspectCache) sweep() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.dropExpiredLocked(c.now().UTC())
+	return c.dropExpiredLocked(c.now())
 }

@@ -256,9 +256,8 @@ func TestInspectLimits_Validate(t *testing.T) {
 	}
 }
 
-// The click list stays in capturedAt order, also when the clock steps
-// back: eviction takes the oldest click and expiry frees what is expired
-// before anything live.
+// The click list stays in acceptance order, also when the wall clock steps
+// back: eviction takes the oldest click.
 func TestInspectCache_OrderSurvivesAClockStepBack(t *testing.T) {
 	l := DefaultInspectLimits()
 	l.MaxEntriesPerUser = 2
@@ -271,12 +270,29 @@ func TestInspectCache_OrderSurvivesAClockStepBack(t *testing.T) {
 	if s := selectors(t, c.Get(u)); strings.Join(s, ",") != ".second,.third" {
 		t.Fatalf("%v, want [.second .third]", s)
 	}
-	var a, b InspectSelection
-	got := c.Get(u)
-	_ = json.Unmarshal(got[0], &a)
-	_ = json.Unmarshal(got[1], &b)
-	if b.CapturedAt.Before(a.CapturedAt) {
-		t.Fatalf("capturedAt out of order: %s then %s", a.CapturedAt, b.CapturedAt)
+}
+
+// In production the cache ages entries on time.Now's monotonic reading: an
+// entry accepted now is live a little later and gone after the TTL, by the
+// real clock (a wall-clock step does not move it).
+func TestInspectCache_RealClockTTL(t *testing.T) {
+	l := DefaultInspectLimits()
+	l.TTL = 50 * time.Millisecond
+	c := NewInspectCache(l)
+	u := uuid.New()
+	mustSet(t, c, u, ".x")
+	if n := len(c.Get(u)); n != 1 {
+		t.Fatalf("%d entries right after Set, want 1", n)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for len(c.Get(u)) != 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("entry still live long after its TTL")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if removed := c.sweep(); removed != 1 || c.Bytes() != 0 {
+		t.Fatalf("sweep removed %d, bytes %d; want 1, 0", removed, c.Bytes())
 	}
 }
 

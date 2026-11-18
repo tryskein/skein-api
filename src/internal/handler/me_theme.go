@@ -226,14 +226,17 @@ func ThemeInspectGate(maxBody int64, maxInFlight int) func(http.Handler) http.Ha
 			// declared length and a streamed body alike. The handlers after
 			// the gate (RefuseNUL, Inspect) get the bytes read.
 			if r.Body != nil && r.Body != http.NoBody {
-				raw, err := io.ReadAll(io.LimitReader(r.Body, maxBody+1))
-				r.Body.Close()
-				if err != nil {
-					writeProblem(w, http.StatusBadRequest, "invalid_json", "the request body could not be read", nil)
+				// http.MaxBytesReader with w: past maxBody the read fails at
+				// once and the server closes the connection after the answer,
+				// instead of draining the rest of an oversized upload.
+				raw, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBody))
+				var maxErr *http.MaxBytesError
+				if errors.As(err, &maxErr) {
+					writeInspectBodyTooLarge(w, maxBody)
 					return
 				}
-				if int64(len(raw)) > maxBody {
-					writeInspectBodyTooLarge(w, maxBody)
+				if err != nil {
+					writeProblem(w, http.StatusBadRequest, "invalid_json", "the request body could not be read", nil)
 					return
 				}
 				r.Body = io.NopCloser(bytes.NewReader(raw))

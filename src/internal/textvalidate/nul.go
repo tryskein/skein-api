@@ -65,9 +65,11 @@ func ContainsNUL(s string) bool {
 // request reach the decoder that answers malformed input.
 func ScanJSONForNUL(raw []byte) error {
 	var found *NULError
-	err := jsonpath.Walk(raw, func(t jsonpath.Token) bool {
-		if s, ok := t.Value.(string); ok && ContainsNUL(s) {
-			found = &NULError{Field: t.Path, InName: t.Name}
+	// The path is built only for the string that holds U+0000 (WalkStrings),
+	// so the scan costs time proportional to the body, whatever its depth.
+	err := jsonpath.WalkStrings(raw, func(s string, name bool, pathOf func() string) bool {
+		if ContainsNUL(s) {
+			found = &NULError{Field: pathOf(), InName: name}
 			return false
 		}
 		return true
