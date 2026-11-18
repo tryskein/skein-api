@@ -87,15 +87,18 @@ func TestInspectLimits_UsualClicksAreStored(t *testing.T) {
 	cache := themes.NewInspectCache(themes.DefaultInspectLimits())
 	h := inspectRouter(cache)
 	user := uuid.New()
-	for name, v := range map[string]map[string]any{
-		"24 tokens":     card(24),
-		"33 tokens":     card(33),
-		"86 tokens":     card(86),
-		"only selector": {"selector": ".x"},
-		"unknown field": {"selector": ".y", "viewportSize": map[string]int{"w": 1, "h": 2}},
+	for _, tc := range []struct {
+		name string
+		v    map[string]any
+	}{
+		{"24 tokens", card(24)},
+		{"33 tokens", card(33)},
+		{"86 tokens", card(86)},
+		{"only selector", map[string]any{"selector": ".x"}},
+		{"unknown field", map[string]any{"selector": ".y", "viewportSize": map[string]int{"w": 1, "h": 2}}},
 	} {
-		if code, out := postInspect(t, h, user, inspectBody(t, v), false); code != http.StatusNoContent {
-			t.Fatalf("%s: %d %v, want 204", name, code, out)
+		if code, out := postInspect(t, h, user, inspectBody(t, tc.v), false); code != http.StatusNoContent {
+			t.Fatalf("%s: %d %v, want 204", tc.name, code, out)
 		}
 	}
 	entries := cache.Get(user)
@@ -103,7 +106,10 @@ func TestInspectLimits_UsualClicksAreStored(t *testing.T) {
 		t.Fatalf("%d entries stored, want 5", len(entries))
 	}
 	var bare map[string]any
-	_ = json.Unmarshal(entries[3], &bare)
+	_ = json.Unmarshal(entries[3], &bare) // "only selector", the fourth posted
+	if bare["selector"] != ".x" {
+		t.Fatalf("fourth entry is %v, want the .x click", bare["selector"])
+	}
 	if fmt.Sprint(bare["parents"], bare["tokens"], bare["computedStyle"]) != "[] [] map[]" {
 		t.Fatalf("missing fields stored as %v %v %v, want [] [] {}", bare["parents"], bare["tokens"], bare["computedStyle"])
 	}
@@ -139,6 +145,8 @@ func TestInspectLimits_FieldBounds(t *testing.T) {
 		field string
 	}{
 		{"selector", map[string]any{"selector": long(lim.MaxSelectorBytes)}, map[string]any{"selector": long(lim.MaxSelectorBytes + 1)}, "selector"},
+		// The size is that of the decoded value, trimming comes after.
+		{"selector with spaces", map[string]any{"selector": " " + long(lim.MaxSelectorBytes-2) + " "}, map[string]any{"selector": " " + long(lim.MaxSelectorBytes-1) + " "}, "selector"},
 		{"parents count", map[string]any{"selector": ".s", "parents": strs(lim.MaxParents, 1)}, map[string]any{"selector": ".s", "parents": strs(lim.MaxParents+1, 1)}, "parents"},
 		{"parent size", map[string]any{"selector": ".s", "parents": strs(1, lim.MaxParentBytes)}, map[string]any{"selector": ".s", "parents": strs(1, lim.MaxParentBytes+1)}, "parents[]"},
 		{"tokens count", map[string]any{"selector": ".s", "tokens": strs(lim.MaxTokens, 1)}, map[string]any{"selector": ".s", "tokens": strs(lim.MaxTokens+1, 1)}, "tokens"},
@@ -205,10 +213,17 @@ func TestInspectLimits_BodyBound(t *testing.T) {
 	if code, out := postInspect(t, h, user, pad(int(lim.MaxBodyBytes)), false); code != http.StatusNoContent {
 		t.Fatalf("a body of exactly the limit: %d %v, want 204", code, out)
 	}
-	for _, streamed := range []bool{false, true} {
-		code, out := postInspect(t, h, user, pad(int(lim.MaxBodyBytes)+1), streamed)
-		if code != http.StatusRequestEntityTooLarge || out["error"] != "theme_inspect_body_too_large" {
-			t.Fatalf("streamed=%v: %d %v, want 413 theme_inspect_body_too_large", streamed, code, out)
+	// Over the limit: 413 whatever the JSON looks like — also a body whose
+	// JSON is broken, or complete and followed by junk, within the limit.
+	early := func(prefix string) []byte {
+		return []byte(prefix + strings.Repeat("x", int(lim.MaxBodyBytes)+1-len(prefix)))
+	}
+	for _, body := range [][]byte{pad(int(lim.MaxBodyBytes) + 1), early(`{"selector":}`), early(`{"selector":".s"} `), early(`not json `)} {
+		for _, streamed := range []bool{false, true} {
+			code, out := postInspect(t, h, user, body, streamed)
+			if code != http.StatusRequestEntityTooLarge || out["error"] != "theme_inspect_body_too_large" {
+				t.Fatalf("streamed=%v, body %.20q…: %d %v, want 413 theme_inspect_body_too_large", streamed, body, code, out)
+			}
 		}
 	}
 	if n := len(cache.Get(user)); n != 1 {
@@ -234,6 +249,10 @@ func TestInspectLimits_Shape(t *testing.T) {
 		"trailing junk":  {`{"selector":".s"}x`, http.StatusBadRequest},
 		"nul":            {`{"selector":".s\u0000"}`, http.StatusUnprocessableEntity},
 		"array token":    {`{"selector":".s","tokens":[["--a"]]}`, http.StatusBadRequest},
+		"null root":      {`null`, http.StatusBadRequest},
+		"array root":     {`[{"selector":".s"}]`, http.StatusBadRequest},
+		"null parent":    {`{"selector":".s","parents":[null]}`, http.StatusBadRequest},
+		"null token":     {`{"selector":".s","tokens":[".a",null]}`, http.StatusBadRequest},
 	} {
 		if code, out := postInspect(t, h, user, []byte(tc.body), false); code != tc.code {
 			t.Fatalf("%s: %d %v, want %d", name, code, out, tc.code)
@@ -297,4 +316,37 @@ func TestThemeInspectGate_Slots(t *testing.T) {
 	if code := do(inspectPath); code != http.StatusNoContent {
 		t.Fatalf("after a refusal: %d, want 204 (slot returned)", code)
 	}
+}
+
+// One gate serves both prefixes of the internal API (mountInternalAPI): its
+// slots are per replica, not per prefix.
+func TestThemeInspectGate_SharedAcrossPrefixes(t *testing.T) {
+	release := make(chan struct{})
+	entered := make(chan struct{}, 2)
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		entered <- struct{}{}
+		<-release
+		w.WriteHeader(http.StatusNoContent)
+	})
+	gate := ThemeInspectGate(1024, 1)
+	root := chi.NewRouter()
+	for _, prefix := range []string{"/ui/v1", "/api/v1"} {
+		root.Route(prefix, func(r chi.Router) {
+			r.Use(gate)
+			r.Post("/me/theme/inspect", next)
+		})
+	}
+	do := func(path string) int {
+		rec := httptest.NewRecorder()
+		root.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{}`)))
+		return rec.Code
+	}
+	done := make(chan int)
+	go func() { done <- do("/ui/v1/me/theme/inspect") }()
+	<-entered
+	if code := do("/api/v1/me/theme/inspect"); code != http.StatusTooManyRequests {
+		t.Fatalf("the other prefix while the only slot is taken: %d, want 429", code)
+	}
+	close(release)
+	<-done
 }

@@ -120,7 +120,16 @@ func (c *InspectCache) Set(userID uuid.UUID, sel InspectSelection) error {
 	if userID == uuid.Nil {
 		return nil
 	}
+	// The click time is taken under the lock, so the click-ordered list is
+	// ordered by capturedAt too — eviction, expiry and describe rely on it.
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	sel.CapturedAt = c.now().UTC()
+	if last := c.all.Back(); last != nil {
+		if prev := last.Value.(*inspectEntry).capturedAt; sel.CapturedAt.Before(prev) {
+			sel.CapturedAt = prev // a clock step back keeps the order
+		}
+	}
 	raw, err := json.Marshal(sel)
 	if err != nil {
 		return fmt.Errorf("encoding inspect entry: %w", err)
@@ -130,8 +139,6 @@ func (c *InspectCache) Set(userID uuid.UUID, sel InspectSelection) error {
 	}
 	e := &inspectEntry{user: userID, raw: raw, capturedAt: sel.CapturedAt, cost: InspectEntryCost(len(raw))}
 
-	c.mu.Lock()
-	defer c.mu.Unlock()
 	c.dropExpiredLocked(sel.CapturedAt)
 	if ul := c.users[userID]; ul != nil {
 		for ul.Len() >= c.limits.MaxEntriesPerUser {

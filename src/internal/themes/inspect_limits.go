@@ -97,6 +97,11 @@ func (l InspectLimits) Validate() error {
 			return fmt.Errorf("%s must be > 0; got %d", f.name, f.v)
 		}
 	}
+	// The U+0000 guard of the internal API reads at most 1 MiB of a body; a
+	// larger inspect body would be accepted unscanned.
+	if l.MaxBodyBytes > 1<<20 {
+		return fmt.Errorf("SKEIN_THEME_INSPECT_MAX_BODY_BYTES must be at most 1048576; got %d", l.MaxBodyBytes)
+	}
 	if l.TTL <= 0 {
 		return fmt.Errorf("SKEIN_THEME_INSPECT_TTL must be > 0; got %s", l.TTL)
 	}

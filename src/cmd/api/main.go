@@ -2322,15 +2322,17 @@ func buildRouter(
 	// RequireInternalSecret guards the prefix itself, so an unknown path or
 	// a wrong method without the secret is refused with 401 like every route,
 	// and tells a caller without the secret nothing about which routes exist.
+	// sk-977.7.10: POST …/me/theme/inspect gets its concurrency slot and its
+	// own body limit BEFORE RefuseNUL buffers the body. ONE gate for both
+	// prefixes of the internal API, so the slots are per replica.
+	inspectLimits := themes.DefaultInspectLimits()
+	if inspectCache != nil {
+		inspectLimits = inspectCache.Limits()
+	}
+	inspectGate := handler.ThemeInspectGate(inspectLimits.MaxBodyBytes, inspectLimits.MaxInFlight)
 	mountInternalAPI := func(r chi.Router) {
 		r.Use(handler.RequireInternalSecret(cfg.InternalSecret, ""))
-		// sk-977.7.10: POST …/me/theme/inspect gets its concurrency slot and
-		// its own body limit BEFORE RefuseNUL buffers the body.
-		inspectLimits := themes.DefaultInspectLimits()
-		if inspectCache != nil {
-			inspectLimits = inspectCache.Limits()
-		}
-		r.Use(handler.ThemeInspectGate(inspectLimits.MaxBodyBytes, inspectLimits.MaxInFlight))
+		r.Use(inspectGate)
 		// U+0000 anywhere in the request is refused before any route runs:
 		// the database cannot store it.
 		r.Use(handler.RefuseNUL)

@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -185,9 +186,9 @@ type inspectRequest struct {
 	// Selector — the most specific selector picked; required, non-empty after trim.
 	Selector string `json:"selector"`
 	// Parents — parent selectors, closest first.
-	Parents []string `json:"parents"`
+	Parents []*string `json:"parents" swaggertype:"array,string"`
 	// Tokens — theme variable keys the frontend matched.
-	Tokens []string `json:"tokens"`
+	Tokens []*string `json:"tokens" swaggertype:"array,string"`
 	// ComputedStyle — CSS property → serialized value; string values only.
 	ComputedStyle map[string]json.RawMessage `json:"computedStyle" swaggertype:"object,string"`
 }
@@ -195,11 +196,11 @@ type inspectRequest struct {
 // ThemeInspectGate guards POST …/me/theme/inspect BEFORE any other
 // middleware reads its body (RefuseNUL buffers bodies up to 1 MiB): it
 // takes one of maxInFlight concurrency slots — none free answers 429
-// theme_inspect_busy — refuses a declared Content-Length above maxBody with
-// 413 theme_inspect_body_too_large, and bounds the body to maxBody bytes so
-// the first read already stops there (the handler then answers 413 too).
-// The slot is held until the request is answered. Other requests pass
-// untouched (sk-977.7.10).
+// theme_inspect_busy — and reads the body once, bounded to maxBody bytes:
+// a declared or actual length above it answers 413
+// theme_inspect_body_too_large before any JSON is parsed. The slot is held
+// until the request is answered. Other requests pass untouched
+// (sk-977.7.10). Build ONE gate per router: the slots are its own.
 func ThemeInspectGate(maxBody int64, maxInFlight int) func(http.Handler) http.Handler {
 	slots := make(chan struct{}, maxInFlight)
 	return func(next http.Handler) http.Handler {
@@ -220,8 +221,23 @@ func ThemeInspectGate(maxBody int64, maxInFlight int) func(http.Handler) http.Ha
 				writeInspectBodyTooLarge(w, maxBody)
 				return
 			}
+			// The whole body is read here, bounded: the size decision is made
+			// on this first read, before any JSON is looked at, for a
+			// declared length and a streamed body alike. The handlers after
+			// the gate (RefuseNUL, Inspect) get the bytes read.
 			if r.Body != nil && r.Body != http.NoBody {
-				r.Body = http.MaxBytesReader(w, r.Body, maxBody)
+				raw, err := io.ReadAll(io.LimitReader(r.Body, maxBody+1))
+				r.Body.Close()
+				if err != nil {
+					writeProblem(w, http.StatusBadRequest, "invalid_json", "the request body could not be read", nil)
+					return
+				}
+				if int64(len(raw)) > maxBody {
+					writeInspectBodyTooLarge(w, maxBody)
+					return
+				}
+				r.Body = io.NopCloser(bytes.NewReader(raw))
+				r.ContentLength = int64(len(raw))
 			}
 			next.ServeHTTP(w, r)
 		})
@@ -288,7 +304,15 @@ func (h *MeThemeHandler) Inspect(w http.ResponseWriter, r *http.Request) {
 	// Unknown top-level fields are ignored on purpose: the frontend may add
 	// fields (viewportSize, …) without a backend change.
 	var req inspectRequest
-	err := dec.Decode(&req)
+	var root json.RawMessage
+	err := dec.Decode(&root)
+	if err == nil {
+		if t := bytes.TrimLeft(root, " \t\r\n"); len(t) == 0 || t[0] != '{' {
+			writeProblem(w, http.StatusBadRequest, "invalid_json", "the body must be a JSON object", nil)
+			return
+		}
+		err = json.Unmarshal(root, &req)
+	}
 	if err == nil {
 		// Exactly one JSON value: anything after it is refused.
 		if _, terr := dec.Token(); !errors.Is(terr, io.EOF) {
@@ -317,6 +341,10 @@ func (h *MeThemeHandler) Inspect(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+	if len(req.Selector) > lim.MaxSelectorBytes {
+		writeInspectLimit(w, "selector", lim.MaxSelectorBytes, "bytes")
+		return
+	}
 	selector := strings.TrimSpace(req.Selector)
 	if selector == "" {
 		writeProblem(w, http.StatusBadRequest, "invalid_selector",
@@ -334,18 +362,18 @@ func (h *MeThemeHandler) Inspect(w http.ResponseWriter, r *http.Request) {
 		}
 		style[k] = sv
 	}
-	if !checkInspectLimits(w, lim, selector, req.Parents, req.Tokens, style) {
+	// Missing parents / tokens become [] (the agent sees `"parents": []`,
+	// never null); a null element is refused.
+	parents, ok := inspectStrings(w, "parents", req.Parents)
+	if !ok {
 		return
 	}
-	// Normalise parents / tokens to non-nil slices so the agent sees
-	// `"parents": []` instead of `"parents": null` when nothing was sent.
-	parents := req.Parents
-	if parents == nil {
-		parents = []string{}
+	tokens, ok := inspectStrings(w, "tokens", req.Tokens)
+	if !ok {
+		return
 	}
-	tokens := req.Tokens
-	if tokens == nil {
-		tokens = []string{}
+	if !checkInspectLimits(w, lim, selector, parents, tokens, style) {
+		return
 	}
 	err = h.inspectCache.Set(c.UserID, themes.InspectSelection{
 		Selector:      selector,
@@ -368,14 +396,25 @@ func (h *MeThemeHandler) Inspect(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// inspectStrings is a string array of the body: absent → [], a null element
+// answers 400 invalid_json for field.
+func inspectStrings(w http.ResponseWriter, field string, in []*string) ([]string, bool) {
+	out := make([]string, 0, len(in))
+	for _, s := range in {
+		if s == nil {
+			writeProblem(w, http.StatusBadRequest, "invalid_json", field+" elements must be strings",
+				map[string]any{"details": map[string]any{"field": field}})
+			return nil, false
+		}
+		out = append(out, *s)
+	}
+	return out, true
+}
+
 // checkInspectLimits answers 422 theme_inspect_limits for the first field
 // over its limit and reports whether all are within. Sizes are bytes of the
 // decoded UTF-8; nothing is cut to fit.
 func checkInspectLimits(w http.ResponseWriter, lim themes.InspectLimits, selector string, parents, tokens []string, style map[string]string) bool {
-	if len(selector) > lim.MaxSelectorBytes {
-		writeInspectLimit(w, "selector", lim.MaxSelectorBytes, "bytes")
-		return false
-	}
 	if len(parents) > lim.MaxParents {
 		writeInspectLimit(w, "parents", lim.MaxParents, "items")
 		return false

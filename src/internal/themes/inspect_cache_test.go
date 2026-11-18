@@ -246,11 +246,54 @@ func TestInspectLimits_Validate(t *testing.T) {
 		"zero ttl":             func(l *InspectLimits) { l.TTL = 0 },
 		"describe below entry": func(l *InspectLimits) { l.DescribeMaxBytes = l.MaxEntryBytes + 1 },
 		"cache below entry":    func(l *InspectLimits) { l.CacheMaxBytes = InspectEntryCost(l.MaxEntryBytes) - 1 },
+		"body above the guard": func(l *InspectLimits) { l.MaxBodyBytes = 1<<20 + 1 },
 	} {
 		l := DefaultInspectLimits()
 		mut(&l)
 		if err := l.Validate(); err == nil {
 			t.Errorf("%s: Validate accepted it", name)
 		}
+	}
+}
+
+// The click list stays in capturedAt order, also when the clock steps
+// back: eviction takes the oldest click and expiry frees what is expired
+// before anything live.
+func TestInspectCache_OrderSurvivesAClockStepBack(t *testing.T) {
+	l := DefaultInspectLimits()
+	l.MaxEntriesPerUser = 2
+	c, clk := newTestCache(l)
+	u := uuid.New()
+	mustSet(t, c, u, ".first")
+	clk.advance(-time.Minute) // the clock steps back
+	mustSet(t, c, u, ".second")
+	mustSet(t, c, u, ".third") // evicts .first, the oldest
+	if s := selectors(t, c.Get(u)); strings.Join(s, ",") != ".second,.third" {
+		t.Fatalf("%v, want [.second .third]", s)
+	}
+	var a, b InspectSelection
+	got := c.Get(u)
+	_ = json.Unmarshal(got[0], &a)
+	_ = json.Unmarshal(got[1], &b)
+	if b.CapturedAt.Before(a.CapturedAt) {
+		t.Fatalf("capturedAt out of order: %s then %s", a.CapturedAt, b.CapturedAt)
+	}
+}
+
+// The stored-entry limit, exactly at it and one byte over (the normalized
+// JSON with capturedAt is what is measured).
+func TestInspectCache_EntryLimitBoundary(t *testing.T) {
+	l := DefaultInspectLimits()
+	c, clk := newTestCache(l)
+	probe := InspectSelection{Selector: "", Parents: []string{}, Tokens: []string{}, ComputedStyle: map[string]string{}, CapturedAt: clk.now()}
+	base, _ := json.Marshal(probe)
+	at := InspectSelection{Selector: strings.Repeat("s", l.MaxEntryBytes-len(base)), Parents: []string{}, Tokens: []string{}, ComputedStyle: map[string]string{}}
+	if err := c.Set(uuid.New(), at); err != nil {
+		t.Fatalf("an entry of exactly MaxEntryBytes: %v", err)
+	}
+	over := at
+	over.Selector += "s"
+	if err := c.Set(uuid.New(), over); err != ErrInspectEntryTooLarge {
+		t.Fatalf("one byte over: %v, want ErrInspectEntryTooLarge", err)
 	}
 }

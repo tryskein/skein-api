@@ -37,6 +37,14 @@ func RefuseNUL(next http.Handler) http.Handler {
 			return
 		}
 		r.Body = replayedBody{Reader: bytes.NewReader(raw), Closer: r.Body}
+		// The JSON walk (which builds the field path of a hit) runs only on
+		// a body that can hold U+0000 at all: a raw 0x00 byte or the escape
+		// \u0000. Any other body is NUL-free, and skipping the walk keeps a
+		// deeply nested body from costing more than its bytes (sk-977.7.10).
+		if !mayContainNUL(raw) {
+			next.ServeHTTP(w, r)
+			return
+		}
 		var nulErr *textvalidate.NULError
 		if err := textvalidate.ScanJSONForNUL(raw); errors.As(err, &nulErr) {
 			writeNULProblem(w, nulErr)
@@ -61,4 +69,12 @@ func writeNULProblem(w http.ResponseWriter, err error) {
 		extra["field"] = nulErr.Field
 	}
 	writeProblem(w, http.StatusUnprocessableEntity, "validation_error", err.Error(), extra)
+}
+
+// mayContainNUL reports whether a JSON body can encode U+0000: as a raw
+// 0x00 byte or as the escape \u0000 (the only escape of that character; its
+// hex digits have no case). A false positive (an escaped backslash before
+// "u0000") only costs the full scan.
+func mayContainNUL(raw []byte) bool {
+	return bytes.IndexByte(raw, 0) >= 0 || bytes.Contains(raw, []byte(`\u0000`))
 }

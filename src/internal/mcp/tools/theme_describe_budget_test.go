@@ -5,6 +5,10 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+
+	"github.com/google/uuid"
+
+	"skein-api/internal/themes"
 )
 
 func rawEntries(sizes ...int) []json.RawMessage {
@@ -73,4 +77,25 @@ func repeat(n, times int) []int {
 		out[i] = n
 	}
 	return out
+}
+
+// The exact byte boundary on real stored entries whose JSON needs escaping
+// (quotes, <, non-ASCII): the budget is that of the array the tool emits.
+func TestDescribeTargets_EscapedEntriesBoundary(t *testing.T) {
+	cache := themes.NewInspectCache(themes.DefaultInspectLimits())
+	u := uuid.New()
+	for i := 0; i < 3; i++ {
+		if err := cache.Set(u, themes.InspectSelection{Selector: fmt.Sprintf(`a[title="x<%d>"] > .ж`, i)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	entries := cache.Get(u)
+	exact := arrayBytes(entries[1:])
+	got, omitted := describeTargets(entries, 20, exact)
+	if len(got) != 2 || omitted != 1 || arrayBytes(got) != exact {
+		t.Fatalf("budget %d: %d entries (%d bytes), %d omitted; want 2 and 1", exact, len(got), arrayBytes(got), omitted)
+	}
+	if got, _ := describeTargets(entries, 20, exact-1); len(got) != 1 {
+		t.Fatalf("budget %d: %d entries, want 1", exact-1, len(got))
+	}
 }
