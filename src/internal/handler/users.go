@@ -31,6 +31,10 @@ type UsersHandler struct {
 	store         *users.Store
 	projectsStore *projects.Store
 
+	// pwnedClientHint is whether the browser may run its own breach-hint
+	// lookup against the PUBLIC Pwned Passwords API (SetPwnedClientHint).
+	pwnedClientHint bool
+
 	// pwChangeLimiter is the defense-in-depth throttle on POST
 	// /me/password (sk-350.2). See the passwordChangeLimiter* constants
 	// below for the rationale and the key/threshold choice.
@@ -90,6 +94,13 @@ func NewUsersHandler(pool *pgxpool.Pool, store *users.Store, projectsStore *proj
 	}
 }
 
+// SetPwnedClientHint sets whether the password page may run its own breach
+// hint in the browser against the public Pwned Passwords API: only when the
+// server check is on AND uses that public API — with a mirror
+// (SKEIN_PWNED_PASSWORDS_BASE_URL) the browser must not call the public
+// service the operator replaced (sk-977.7.20).
+func (h *UsersHandler) SetPwnedClientHint(allowed bool) { h.pwnedClientHint = allowed }
+
 // ----------------- request shapes -----------------
 
 type createUserRequest struct {
@@ -124,8 +135,9 @@ type changePasswordRequest struct {
 	// the stored bcrypt hash before anything else happens.
 	CurrentPassword string `json:"currentPassword"`
 	// NewPassword replaces the current one once every check in
-	// ChangeMyPassword's algorithm passes. Must be 8..72 bytes once UTF-8
-	// encoded; there is no composition rule (NIST SP 800-63B rev. 4).
+	// ChangeMyPassword's algorithm passes. At least 12 characters (code
+	// points) and at most 72 bytes once UTF-8 encoded; there is no
+	// composition rule (NIST SP 800-63B rev. 4).
 	NewPassword string `json:"newPassword"`
 }
 
@@ -561,7 +573,7 @@ func (h *UsersHandler) Reactivate(w http.ResponseWriter, r *http.Request) {
 }
 
 // @Summary Change the caller's own password
-// @Description Rotates the CALLER's own password (self-service, not admin-gated — any authenticated user, including external collaborators, may call this for themselves). Algorithm: (1) validate the new password's length is within [8, 72] bytes once UTF-8 encoded; (2) load the caller's row with a plain read (no open transaction); (3) if OIDC is active (SKEIN_AUTH_MODE=keycloak/hybrid) and the account is internal and not the break-glass admin, reject — local password management is disabled for that account class (it must rotate via SSO); (4) if the account is deactivated, or has no local password hash (Keycloak-only), or the supplied current password does not verify against the stored bcrypt hash, reject with the SAME invalid_credentials code in all three cases (deliberate — a caller must not be able to distinguish "deactivated" / "SSO-only" / "wrong password" from the response); (5) ONLY once the current password is verified, and only when SKEIN_PWNED_PASSWORDS_ENABLED=true, check the NEW password's SHA-1 hash against the Pwned Passwords k-anonymity range API (only a 5-character hash prefix ever leaves the process) — a match rejects the change without writing anything; a network/timeout failure on that check is logged and does NOT block the change; none of this touches the database — no connection or transaction is held across the outbound call; (6) bcrypt-hash the new password (cost from SKEIN_BCRYPT_COST); (7) commit with a short compare-and-swap UPDATE (WHERE password_hash = the hash verified in step 4) — if another request rotated the password in the meantime, this affects 0 rows and the call rejects with password_change_conflict instead of silently clobbering an unverified hash.
+// @Description Rotates the CALLER's own password (self-service, not admin-gated — any authenticated user, including external collaborators, may call this for themselves). Algorithm: (1) validate the new password's length: at least 12 characters (code points) and at most 72 bytes once UTF-8 encoded; (2) load the caller's row with a plain read (no open transaction); (3) if OIDC is active (SKEIN_AUTH_MODE=keycloak/hybrid) and the account is internal and not the break-glass admin, reject — local password management is disabled for that account class (it must rotate via SSO); (4) if the account is deactivated, or has no local password hash (Keycloak-only), or the supplied current password does not verify against the stored bcrypt hash, reject with the SAME invalid_credentials code in all three cases (deliberate — a caller must not be able to distinguish "deactivated" / "SSO-only" / "wrong password" from the response); (5) ONLY once the current password is verified, and only when SKEIN_PWNED_PASSWORDS_ENABLED=true, check the NEW password's SHA-1 hash against the Pwned Passwords k-anonymity range API (only a 5-character hash prefix ever leaves the process) — a match rejects the change without writing anything; a network/timeout failure on that check is logged and does NOT block the change; none of this touches the database — no connection or transaction is held across the outbound call; (6) bcrypt-hash the new password (cost from SKEIN_BCRYPT_COST); (7) commit with a short compare-and-swap UPDATE (WHERE password_hash = the hash verified in step 4) — if another request rotated the password in the meantime, this affects 0 rows and the call rejects with password_change_conflict instead of silently clobbering an unverified hash.
 // @Description
 // @Description Side effects: writes a users.password_changed audit event in the same short transaction as the compare-and-swap UPDATE (attributed to the caller). No webhook, no other system is notified.
 // @Description
@@ -658,10 +670,16 @@ type passwordPolicyResponse struct {
 	// — it must not dial out to a third-party breach-check service when
 	// the operator has not opted in server-side, even just for a hint.
 	PwnedCheckEnabled bool `json:"pwnedCheckEnabled"`
+	// PwnedClientHintEnabled reports whether the browser may run its own
+	// breach-hint lookup against the PUBLIC Pwned Passwords API: true only
+	// when pwnedCheckEnabled is true and the server itself uses that public
+	// API (not a mirror set by SKEIN_PWNED_PASSWORDS_BASE_URL). The frontend
+	// runs its hint only when this is true.
+	PwnedClientHintEnabled bool `json:"pwnedClientHintEnabled"`
 }
 
 // @Summary Self-service password change policy
-// @Description Reports whether the server-side Pwned Passwords k-anonymity check is enabled (SKEIN_PWNED_PASSWORDS_ENABLED) — the SINGLE source of truth for "does this deployment call out to a breach-check service". The frontend's password-change page reads this once on mount and, ONLY when true, wires up its own client-side hint lookup (a browser fetch to the breach-check API on blur of the new-password field); when false, no such lookup is attempted at all, so a deployment that has not opted in server-side never makes an unexpected outbound call from the browser either. Mirrors the existing GET /push/config pattern: always 200, a plain feature-detection flag, no PII, no secrets. Available to every authenticated user (not admin-only) — same audience as the endpoint it gates.
+// @Description Reports whether the server-side Pwned Passwords k-anonymity check is enabled (SKEIN_PWNED_PASSWORDS_ENABLED, pwnedCheckEnabled) and whether the browser may run its own hint lookup against the public Pwned Passwords API (pwnedClientHintEnabled: true only when the check is on and the server uses that public API, not a mirror set by SKEIN_PWNED_PASSWORDS_BASE_URL) — the SINGLE source of truth for "does this deployment call out to a breach-check service". The frontend's password-change page reads this once on mount and, ONLY when pwnedClientHintEnabled is true, wires up its own client-side hint lookup (a browser fetch to the breach-check API on blur of the new-password field); when false, no such lookup is attempted at all, so a deployment that has not opted in server-side never makes an unexpected outbound call from the browser either. Mirrors the existing GET /push/config pattern: always 200, a plain feature-detection flag, no PII, no secrets. Available to every authenticated user (not admin-only) — same audience as the endpoint it gates.
 // @Description
 // @Description sk-350.2 — deliberately NOT rate-limited, unlike POST /me/password: this handler does exactly one nil-check (Store.PwnedCheckEnabled) with no DB round trip, no bcrypt, and no outbound call, so there is no expensive-work budget to protect. Throttling it would add complexity without a corresponding cost to bound.
 // @Tags Users
@@ -676,7 +694,8 @@ func (h *UsersHandler) PasswordPolicy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, passwordPolicyResponse{
-		PwnedCheckEnabled: h.store.PwnedCheckEnabled(),
+		PwnedCheckEnabled:      h.store.PwnedCheckEnabled(),
+		PwnedClientHintEnabled: h.store.PwnedCheckEnabled() && h.pwnedClientHint,
 	})
 }
 

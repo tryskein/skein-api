@@ -97,3 +97,7 @@ func (c *Client) Check(ctx context.Context, password string) (bool, error) {
 	}
 	return false, nil
 }
+
+// PublicBaseURL is the public Pwned Passwords range API, the default of
+// SKEIN_PWNED_PASSWORDS_BASE_URL.
+const PublicBaseURL = "https://api.pwnedpasswords.com"

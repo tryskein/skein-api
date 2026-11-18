@@ -285,6 +285,26 @@ func TestPasswordPolicy_ReflectsStoreState(t *testing.T) {
 	if out["pwnedCheckEnabled"] != true {
 		t.Fatalf("pwnedCheckEnabled = %v, want true for a non-nil checker", out["pwnedCheckEnabled"])
 	}
+
+	// sk-977.7.20: the browser hint calls the PUBLIC API, so it is allowed
+	// only when the check is on and the server uses that public API.
+	for _, tc := range []struct {
+		name      string
+		store     *users.Store
+		publicAPI bool
+		want      bool
+	}{
+		{"check on, public API", enabledStore, true, true},
+		{"check on, mirror", enabledStore, false, false},
+		{"check off, public API", disabledStore, true, false},
+	} {
+		h := NewUsersHandler(pool, tc.store, projectsStore)
+		h.SetPwnedClientHint(tc.publicAPI)
+		_, out := callPolicy(h)
+		if out["pwnedClientHintEnabled"] != tc.want {
+			t.Errorf("%s: pwnedClientHintEnabled = %v, want %v", tc.name, out["pwnedClientHintEnabled"], tc.want)
+		}
+	}
 }
 
 // TestPasswordPolicy_Unauthenticated — same auth gate as ChangeMyPassword

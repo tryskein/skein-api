@@ -762,6 +762,7 @@ func main() {
 	usersStore.SetSpaceMemberLimit(cfg.SpaceMemberLimit)
 	// projectsStore feeds GET /ui/v1/me/memberships (R3.2c).
 	usersHandler := handler.NewUsersHandler(pool, usersStore, projectsStore)
+	usersHandler.SetPwnedClientHint(strings.TrimRight(cfg.PwnedPasswordsBaseURL, "/") == pwned.PublicBaseURL)
 
 	// R4.2 — attachments handler. s3Access is nil when S3_URL is
 	// unset; every endpoint short-circuits with 503 in that case.

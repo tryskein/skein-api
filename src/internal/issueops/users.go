@@ -55,6 +55,9 @@ func MapUsersError(ctx context.Context, err error, action, actorUserID string) *
 		return Fail(ErrCodeUsernameTaken, "username already in use", nil)
 	case errors.Is(err, spaces.ErrConcurrentChange):
 		return Fail(ErrCodeConcurrentChange, "a concurrent membership change won; retry", nil)
+	case errors.Is(err, users.ErrPasswordTooLong):
+		return Fail(ErrCodeValidationError, "password must not exceed 72 bytes once UTF-8 encoded",
+			map[string]any{"field": "password", "limit": 72})
 	case errors.Is(err, users.ErrInvalidPassword):
 		return Fail(ErrCodeValidationError, "password must be at least 12 characters (and at most 72 bytes once UTF-8 encoded)", map[string]any{"field": "password"})
 	case errors.Is(err, users.ErrInvalidRole):

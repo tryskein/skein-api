@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -167,6 +168,39 @@ func TestUserCreate_ShortPassword(t *testing.T) {
 	body := extractToolJSON(t, res)
 	if body["error"] != ErrCodeValidationError {
 		t.Fatalf("error = %v, want %s", body["error"], ErrCodeValidationError)
+	}
+}
+
+// TestUserCreate_PasswordTooLong — sk-977.7.20: a password that has the 12
+// characters but exceeds bcrypt's 72 bytes (19 emoji = 76 bytes) is a
+// validation_error on the password, not an internal error.
+func TestUserCreate_PasswordTooLong(t *testing.T) {
+	pool := newTestPool(t)
+	adminID, _ := seedUser(t, pool, "admin")
+	store := users.NewStore(pool, auth.MinBcryptCost, apikeys.New(pool), "local", "", nil)
+	handler := handleUserCreate(store)
+	ctx := withCtx(t, adminID, "admin")
+
+	req := mcpgo.CallToolRequest{}
+	req.Params.Arguments = map[string]any{
+		"email":    "longp" + adminID.String()[:6] + "@x.local",
+		"name":     "Long",
+		"password": strings.Repeat("😀", 19),
+		"role":     "user",
+	}
+	res, err := handler(ctx, req)
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+	if !res.IsError {
+		t.Fatalf("expected isError")
+	}
+	body := extractToolJSON(t, res)
+	if body["error"] != ErrCodeValidationError {
+		t.Fatalf("error = %v, want %s", body["error"], ErrCodeValidationError)
+	}
+	if body["field"] != "password" {
+		t.Fatalf("field = %v, want password (body %v)", body["field"], body)
 	}
 }
 

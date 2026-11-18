@@ -659,14 +659,23 @@ rows present, `auth.Bootstrap` is a no-op regardless of what is set here.
 
 #### `SKEIN_PWNED_PASSWORDS_ENABLED`
 
-- **Purpose:** whether a new password (self-service change, signup, signup by
-  invitation, password reset) is checked against the Have I Been Pwned corpus
-  using the k-anonymity range API: only the first five hex characters of the
-  password's SHA-1 leave the server. A password found there is refused.
+- **Purpose:** whether a password a user sets for themselves — self-service
+  change, signup, signup by invitation, password reset — is checked against
+  the Have I Been Pwned corpus using the k-anonymity range API: only the first
+  five hex characters of the password's SHA-1 leave the server. A password
+  found there is refused. A password an administrator sets (creating or
+  updating a user) is not checked; the 12-character minimum applies to it
+  all the same.
 - **Required:** no · **Default:** `true` · **Format:** boolean.
 - **If unset:** enabled. When the service cannot be reached (an install with no
   route to the internet, a timeout), the check is skipped silently — logged as
-  a warning and counted as `degraded` — and never blocks the password change.
+  a warning and counted as `degraded` — and never blocks any of those four
+  paths.
+- **Browser hint:** the password-change page also runs a hint lookup from the
+  browser against the public API, only when the check is on and
+  `SKEIN_PWNED_PASSWORDS_BASE_URL` is the public API
+  (`GET /me/password/policy` → `pwnedClientHintEnabled`); with a mirror the
+  browser makes no such call.
 - **Set to `false`:** no outbound call is ever made, and
   `GET /me/password/policy` reports `pwnedCheckEnabled=false` so clients do not
   attempt their own lookup either. For an operator who does not want the
