@@ -144,3 +144,19 @@ func TestRender_APIKeyNoticeNamesTheKeyAsText(t *testing.T) {
 		})
 	}
 }
+
+// A key name is shown whole up to the longest label the API accepts (100
+// characters): two keys may differ only at the end of their names.
+func TestRender_APIKeyNoticeShowsALongNameWhole(t *testing.T) {
+	name := strings.Repeat("k", 90) + "-staging01" // 100 runes
+	got, err := mail.Render(mail.KindAPIKeyCreated, mail.LangEN, mail.Data{
+		Link: "https://skein.example.com/settings/api-keys", KeyName: name, CreatedAt: "z"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for part, body := range map[string]string{"text": got.Text, "html": html.UnescapeString(got.HTML)} {
+		if !strings.Contains(body, name) {
+			t.Errorf("%s part does not show the 100-character name whole", part)
+		}
+	}
+}

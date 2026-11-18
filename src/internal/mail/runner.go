@@ -495,7 +495,8 @@ func (r *Runner) attempt(ctx context.Context, c claim) {
 // content gathers what the template shows. For an invitation it reads the
 // inviter's and the space's names — ok=false when the invitation or its
 // space no longer exists. For an API key notice it reads the key's label
-// and creation time — ok=false when the key row is gone.
+// and creation time — ok=false when the key row is gone or its owner is no
+// longer an active account at the queued address.
 func (r *Runner) content(ctx context.Context, c claim, issued Issued) (Data, bool, error) {
 	if c.kind == KindAPIKeyCreated {
 		return r.apiKeyContent(ctx, c)
@@ -531,8 +532,18 @@ func (r *Runner) apiKeyContent(ctx context.Context, c claim) (Data, bool, error)
 	if c.apiKeyID == nil {
 		return d, false, nil
 	}
+	// The key must still belong to the notice's subject, and the owner must
+	// still be an active account at the queued address: a notice queued
+	// before a deactivation, a deletion or an address change is not sent.
 	var createdAt time.Time
-	err := r.pool.QueryRow(ctx, `SELECT label, created_at FROM api_keys WHERE id = $1`, *c.apiKeyID).
+	err := r.pool.QueryRow(ctx, `
+SELECT k.label, k.created_at
+  FROM outgoing_emails e
+  JOIN api_keys k ON k.id = e.api_key_id AND k.user_id = e.user_id
+  JOIN users u    ON u.id = e.user_id
+ WHERE e.id = $1
+   AND u.deleted_at IS NULL AND u.deactivated_at IS NULL
+   AND lower(btrim(u.email)) = e.recipient`, c.id).
 		Scan(&d.KeyName, &createdAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return d, false, nil

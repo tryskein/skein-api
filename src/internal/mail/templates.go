@@ -34,6 +34,11 @@ var templateFS embed.FS
 // maxUserTextRunes bounds a user-typed name inside an email.
 const maxUserTextRunes = 80
 
+// maxKeyNameRunes bounds an API key's name inside an email. It is the
+// longest label the API accepts (100), so a notice always shows the whole
+// name — two keys may differ only at the end of their names.
+const maxKeyNameRunes = 100
+
 // Data is what a template may show. Link carries the raw token and is
 // built in memory for one attempt; nothing of Data is stored.
 type Data struct {
@@ -105,9 +110,9 @@ func Render(kind Kind, lang string, d Data) (Rendered, error) {
 	if !ok {
 		return Rendered{}, fmt.Errorf("%w: no template for %s/%s", ErrInvalidMessage, kind, lang)
 	}
-	d.InviterName = sanitizeUserText(d.InviterName)
-	d.SpaceName = sanitizeUserText(d.SpaceName)
-	d.KeyName = sanitizeUserText(d.KeyName)
+	d.InviterName = sanitizeUserText(d.InviterName, maxUserTextRunes)
+	d.SpaceName = sanitizeUserText(d.SpaceName, maxUserTextRunes)
+	d.KeyName = sanitizeUserText(d.KeyName, maxKeyNameRunes)
 
 	var subj, text, html bytes.Buffer
 	if err := set.subject.Execute(&subj, d); err != nil {
@@ -128,8 +133,8 @@ func Render(kind Kind, lang string, d Data) (Rendered, error) {
 
 // sanitizeUserText makes a user-typed name safe to place in a sentence:
 // control characters (line breaks included) become spaces, runs of space
-// collapse, and the result is cut to maxUserTextRunes with an ellipsis.
-func sanitizeUserText(s string) string {
+// collapse, and the result is cut to max runes with an ellipsis.
+func sanitizeUserText(s string, max int) string {
 	s = strings.Map(func(r rune) rune {
 		if unicode.IsControl(r) || r == ' ' || r == ' ' {
 			return ' '
@@ -137,8 +142,8 @@ func sanitizeUserText(s string) string {
 		return r
 	}, s)
 	s = strings.Join(strings.Fields(s), " ")
-	if r := []rune(s); len(r) > maxUserTextRunes {
-		s = strings.TrimSpace(string(r[:maxUserTextRunes-1])) + "…"
+	if r := []rune(s); len(r) > max {
+		s = strings.TrimSpace(string(r[:max-1])) + "…"
 	}
 	return s
 }

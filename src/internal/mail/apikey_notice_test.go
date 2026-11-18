@@ -101,27 +101,42 @@ SELECT id, kind, recipient, lang FROM outgoing_emails WHERE api_key_id = $1`, ke
 	}
 }
 
-// A notice whose key row is gone by delivery time is cancelled, not sent.
-func TestAPIKeyNotice_KeyGoneIsCancelled(t *testing.T) {
+// A notice that lost its subject between queueing and delivery is cancelled,
+// not sent: the key row is gone, the owner was deactivated (which keeps the
+// revoked key row) or deleted, or the account's address changed.
+func TestAPIKeyNotice_LostSubjectIsCancelled(t *testing.T) {
 	pool := testsupport.NewTestPool(t)
 	ctx := context.Background()
-	resetQueue(t, pool)
-	userID, to := seedUser(t, pool)
-	keyID, _ := seedKey(t, pool, userID, "short-lived")
-	id := enqueue(t, pool, mail.Message{Kind: mail.KindAPIKeyCreated, To: to, Lang: mail.LangEN, UserID: userID, APIKeyID: keyID}, time.Hour)
-	if _, err := pool.Exec(ctx, `DELETE FROM api_keys WHERE id = $1`, keyID); err != nil {
-		t.Fatalf("deleting the key: %v", err)
+	cases := []struct {
+		name  string
+		after string // run with $1 = user id, $2 = key id
+	}{
+		{"key deleted", `DELETE FROM api_keys WHERE id = $2 AND user_id = $1`},
+		{"owner deactivated", `UPDATE users SET deactivated_at = now() WHERE id = $1 AND $2::uuid IS NOT NULL`},
+		{"owner deleted", `UPDATE users SET deleted_at = now(), pseudonym = 'deleted-' || substr(md5(id::text), 1, 8) WHERE id = $1 AND $2::uuid IS NOT NULL`},
+		{"address changed", `UPDATE users SET email = 'moved-' || email WHERE id = $1 AND $2::uuid IS NOT NULL`},
 	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			resetQueue(t, pool)
+			userID, to := seedUser(t, pool)
+			keyID, _ := seedKey(t, pool, userID, "short-lived")
+			id := enqueue(t, pool, mail.Message{Kind: mail.KindAPIKeyCreated, To: to, Lang: mail.LangEN, UserID: userID, APIKeyID: keyID}, time.Hour)
+			if _, err := pool.Exec(ctx, tc.after, userID, keyID); err != nil {
+				t.Fatalf("%s: %v", tc.name, err)
+			}
 
-	r := &relay{}
-	run := newRunner(t, pool, r, newClock())
-	before := deliveries(t)
-	tick(t, run)
+			r := &relay{}
+			run := newRunner(t, pool, r, newClock())
+			before := deliveries(t)
+			tick(t, run)
 
-	if e := readEmail(t, pool, id); e.state != "final" || e.outcome != mail.OutcomeCancelled || r.Calls() != 0 {
-		t.Fatalf("notice = %s/%q, relay calls %d; want final/cancelled and no call", e.state, e.outcome, r.Calls())
+			if e := readEmail(t, pool, id); e.state != "final" || e.outcome != mail.OutcomeCancelled || r.Calls() != 0 {
+				t.Fatalf("notice = %s/%q, relay calls %d; want final/cancelled and no call", e.state, e.outcome, r.Calls())
+			}
+			assertOneDelivery(t, before, mail.KindAPIKeyCreated, mail.OutcomeCancelled)
+		})
 	}
-	assertOneDelivery(t, before, mail.KindAPIKeyCreated, mail.OutcomeCancelled)
 }
 
 // Validate refuses an API key notice without its key or owner, and any other
