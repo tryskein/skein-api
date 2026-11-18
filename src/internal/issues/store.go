@@ -7991,6 +7991,8 @@ SELECT e.id, e.occurred_at, e.type, e.actor, e.actor_user_id, e.actor_type,
        e.old_data, e.new_data,
        i.title       AS issue_title,
        c.issue_id    AS comment_issue_id,
+       c.body        AS comment_body,
+       c.deleted_at  AS comment_deleted_at,
        ci.title      AS comment_issue_title,
        prj.name      AS project_name,
        prj.id_prefix AS project_id_prefix,
@@ -8032,6 +8034,34 @@ func decodeJSONValue(b []byte) any {
 		return nil
 	}
 	return v
+}
+
+// CommentDeletedBody is the text an activity row carries in place of the
+// body of a comment that has been deleted (or whose row is gone). The row
+// also carries "deleted": true, so a client tells the marker from a comment
+// that happens to say the same words.
+const CommentDeletedBody = "comment deleted"
+
+// currentCommentBody replaces the "body" key of a comment event's decoded
+// old/new value with the comment's current text: body is the live
+// comments.body, deletedAt its deleted_at. A deleted comment, or one whose
+// row no longer exists (body nil), gets CommentDeletedBody and
+// "deleted": true. A value without a "body" key is returned unchanged.
+func currentCommentBody(v any, body *string, deletedAt *time.Time) any {
+	m, ok := v.(map[string]any)
+	if !ok {
+		return v
+	}
+	if _, has := m["body"]; !has {
+		return v
+	}
+	if body == nil || deletedAt != nil {
+		m["body"] = CommentDeletedBody
+		m["deleted"] = true
+		return m
+	}
+	m["body"] = *body
+	return m
 }
 
 // decodeActivityChanges lifts the per-field diff out of an issue.updated
@@ -8080,6 +8110,8 @@ func scanActivityRows(ctx context.Context, q authz.RowsQuerier, rows pgx.Rows, l
 		oldData, newData                  []byte
 		issueTitle                        *string
 		commentIssueID, commentIssueTitle *string
+		commentBody                       *string
+		commentDeletedAt                  *time.Time
 		projectName, projectIDPrefix      *string
 		commentProjectPrefix              *string
 		actorStatus                       *person.Status
@@ -8093,7 +8125,7 @@ func scanActivityRows(ctx context.Context, q authz.RowsQuerier, rows pgx.Rows, l
 			&r.entityType, &r.entityID, &r.projectID, &r.field, &r.payload,
 			&r.oldData, &r.newData,
 			&r.issueTitle,
-			&r.commentIssueID, &r.commentIssueTitle,
+			&r.commentIssueID, &r.commentBody, &r.commentDeletedAt, &r.commentIssueTitle,
 			&r.projectName, &r.projectIDPrefix,
 			&r.commentProjectPrefix, &r.spaceShort,
 		); err != nil {
@@ -8168,6 +8200,14 @@ func scanActivityRows(ctx context.Context, q authz.RowsQuerier, rows pgx.Rows, l
 		entry.OldValue = decodeJSONValue(oldData)
 		entry.NewValue = decodeJSONValue(newData)
 		entry.Changes = decodeActivityChanges(payload)
+		if entityType == "comment" {
+			// The comment events keep a copy of the body as it was when
+			// the event was written. The feed never serves that copy: the
+			// text comes from the comment row itself, so an edit shows the
+			// current version and a deletion shows the marker.
+			entry.OldValue = currentCommentBody(entry.OldValue, r.commentBody, r.commentDeletedAt)
+			entry.NewValue = currentCommentBody(entry.NewValue, r.commentBody, r.commentDeletedAt)
+		}
 		// project_id is NOT NULL for every activity row (the WHERE
 		// clauses in ListProjectActivity / ListUserActivity /
 		// ListIssueActivity all require it), so projectID is non-nil
