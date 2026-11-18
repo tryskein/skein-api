@@ -129,13 +129,47 @@ func dedupeSummary(summary string, n notifications.NotificationDTO) string {
 // short, and a number rendered through the truncation rule would come back
 // as a string — changing the type of a field on the wire, which is a
 // bigger break than the bytes it would save.
+//
+// A comment event's value is an object whose "body" is the comment's text
+// (sk-1024: its current text, which can be as long as a comment); that
+// string is cut the same way, inside the object, which keeps its other
+// keys.
 func truncateInboxValue(v any) (any, bool) {
+	if obj, isObj := v.(map[string]any); isObj {
+		body, isString := obj["body"].(string)
+		if !isString {
+			return v, false
+		}
+		preview, truncated := TruncateRunes(body, InboxValuePreviewMaxRunes)
+		obj["body"] = preview
+		return obj, truncated
+	}
 	s, isString := v.(string)
 	if !isString {
 		return v, false
 	}
 	preview, truncated := TruncateRunes(s, InboxValuePreviewMaxRunes)
 	return preview, truncated
+}
+
+// inboxValueString is the cuttable string of the row's value under key: the
+// value itself, or the "body" of a comment event's object.
+func inboxValueString(m map[string]any, key string) (string, bool) {
+	if obj, isObj := m[key].(map[string]any); isObj {
+		s, isString := obj["body"].(string)
+		return s, isString
+	}
+	s, isString := m[key].(string)
+	return s, isString
+}
+
+// setInboxValueString writes s where inboxValueString read it.
+func setInboxValueString(m map[string]any, key, s string) {
+	if obj, isObj := m[key].(map[string]any); isObj {
+		obj["body"] = s
+		return
+	}
+	m[key] = s
 }
 
 // projectInboxRow projects one notification.
@@ -218,7 +252,7 @@ func fitInboxRowToBudget(m map[string]any, cut bool) (bool, error) {
 	keys := make([]string, 0, len(inboxValueKeys))
 	values := make(map[string]string, len(inboxValueKeys))
 	for _, key := range inboxValueKeys {
-		s, isString := m[key].(string)
+		s, isString := inboxValueString(m, key)
 		if !isString {
 			continue
 		}
@@ -236,7 +270,7 @@ func fitInboxRowToBudget(m map[string]any, cut bool) (bool, error) {
 	// and only if data was actually dropped).
 	m[inboxValuesTruncatedKey] = true
 	for _, key := range keys {
-		m[key] = ""
+		setInboxValueString(m, key, "")
 	}
 	overhead, err := encodedRunes(m)
 	if err != nil {
@@ -259,7 +293,7 @@ func fitInboxRowToBudget(m map[string]any, cut bool) (bool, error) {
 
 	// Budget exhausted: the pair is gone and the row is still too long.
 	for _, key := range keys {
-		m[key] = ""
+		setInboxValueString(m, key, "")
 		if values[key] != "" {
 			cut = true
 		}
@@ -273,7 +307,7 @@ func applyPairBudget(m map[string]any, keys []string, values map[string]string, 
 	cut := false
 	for key, share := range splitPairBudget(keys, values, budget) {
 		prefix, truncated := TruncateRunes(values[key], share)
-		m[key] = prefix
+		setInboxValueString(m, key, prefix)
 		cut = cut || truncated
 	}
 	return cut

@@ -20,6 +20,7 @@ package tools
 
 import (
 	"bytes"
+	"encoding/json"
 	"log/slog"
 	"strings"
 	"testing"
@@ -327,5 +328,39 @@ func TestProjectionPathsLogNoBodies(t *testing.T) {
 	}
 	if logged != "" {
 		t.Logf("projection paths logged %d bytes; verified body-free:\n%s", len(logged), logged)
+	}
+}
+
+// sk-1024: a comment event's value is an object whose body is the comment's
+// current text — possibly long after an edit. The value ceiling and the row
+// budget cut that body inside the object, keep its other keys and mark the
+// cut, so the MCP row stays under SC-005.
+func TestProjectInboxRow_CutsTheBodyOfACommentObject(t *testing.T) {
+	long := strings.Repeat("ж", 5000)
+	n := notifications.NotificationDTO{
+		ID: 7, Type: "comment.created",
+		Actor:    notifications.ActorDTO{Username: "author", Type: "human"},
+		Entity:   notifications.EntityDTO{Type: "issue", ID: "sk-1", Title: "t"},
+		Summary:  "author commented on sk-1 (t)",
+		NewValue: map[string]any{"id": "c1", "issueId": "sk-1", "author": "author", "body": long},
+	}
+	m, err := projectInboxRow(n)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nv, ok := m["newValue"].(map[string]any)
+	if !ok {
+		t.Fatalf("newValue is %T, want the object", m["newValue"])
+	}
+	body, _ := nv["body"].(string)
+	if utf8.RuneCountInString(body) >= utf8.RuneCountInString(long) || nv["id"] != "c1" || nv["issueId"] != "sk-1" {
+		t.Fatalf("newValue %v: body not cut or keys lost", nv)
+	}
+	if m[inboxValuesTruncatedKey] != true {
+		t.Fatalf("valuesTruncated not set: %v", m)
+	}
+	raw, _ := json.Marshal(m)
+	if n := utf8.RuneCount(raw); n >= sc005RowBudgetRunes {
+		t.Fatalf("row is %d runes, want under %d", n, sc005RowBudgetRunes)
 	}
 }

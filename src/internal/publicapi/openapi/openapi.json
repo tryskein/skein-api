@@ -1386,7 +1386,7 @@
                         "description": "Entity is what the row is about, already re-pointed to the thing a\nclient can open: for a comment event this is the ISSUE the comment\nis on, not the comment."
                     },
                     "field": {
-                        "description": "Field, OldValue and NewValue come straight off the events row — for\nstatus_changed a client renders \"open → in_progress\" without\nparsing the raw payload. Field names WHAT changed; the two values\nare its before and after, and either may be absent when the event\nhas no such side (a creation has no old value). Their JSON type\nfollows the field, so they are not always strings.",
+                        "description": "Field, OldValue and NewValue come straight off the events row — for\nstatus_changed a client renders \"open → in_progress\" without\nparsing the raw payload. Field names WHAT changed; the two values\nare its before and after, and either may be absent when the event\nhas no such side (a creation has no old value). Their JSON type\nfollows the field, so they are not always strings.\n\nComment events are the exception (sk-1024): their \"body\" is never the\ncopy stored in the event. On inbox and Watching rows it is the\ncomment's current text (comment.created always carries it in\nNewValue); for a deleted comment, or one whose row is gone, it is\n\"comment deleted\" and the object also carries \"deleted\": true. On a\ntask-monitor row there is no body at all: the text travels only as\nBodyPreview.",
                         "type": "string"
                     },
                     "id": {

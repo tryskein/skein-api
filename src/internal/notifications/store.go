@@ -374,7 +374,9 @@ SELECT n.id, n.type, n.created_at, n.read_at, n.archived_at,
        ci.id   AS comment_issue_id,
        ci.title AS comment_issue_title,
        cpr.id_prefix AS comment_project_prefix,
-       c.body        AS comment_body,
+       -- A deleted comment's stored text is not read: its rows show the
+       -- deletion marker (redact.CurrentCommentBody).
+       CASE WHEN c.deleted_at IS NOT NULL THEN NULL ELSE c.body END AS comment_body,
        c.deleted_at  AS comment_deleted_at` + notifRowExtraCols + `
   FROM notifications n
   JOIN events e ON e.id = n.event_id
@@ -2686,7 +2688,9 @@ SELECT w.card_issue_id, w.id, w.type, w.created_at, w.read_at,
        ci.id    AS comment_issue_id,
        ci.title AS comment_issue_title,
        cpr.id_prefix AS comment_project_prefix,
-       c.body        AS comment_body,
+       -- A deleted comment's stored text is not read: its rows show the
+       -- deletion marker (redact.CurrentCommentBody).
+       CASE WHEN c.deleted_at IS NOT NULL THEN NULL ELSE c.body END AS comment_body,
        c.deleted_at  AS comment_deleted_at` + notifSpaceCol + `
   FROM windowed w
   JOIN events e ON e.id = w.event_id

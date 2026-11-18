@@ -160,6 +160,41 @@ VALUES ($1, $2, 'tester', $3, 'human', $4, $5)`,
 		}
 	})
 
+	// --- sk-1024: the event's own copy of the body never reaches the poll ---
+	t.Run("event body copy is not on the poll wire", func(t *testing.T) {
+		const copyText = "body copy kept by the event"
+		cid, eid := insertCommentWithBody(t, "the current text", false)
+		if _, err := pool.Exec(ctx, `UPDATE events SET new_data = jsonb_build_object('id', $2::text, 'body', $3::text) WHERE id = $1`,
+			eid, cid.String(), copyText); err != nil {
+			t.Fatalf("store the event copy: %v", err)
+		}
+		dcid, deid := insertCommentWithBody(t, "deleted current text", true)
+		if _, err := pool.Exec(ctx, `UPDATE events SET new_data = jsonb_build_object('id', $2::text, 'body', $3::text) WHERE id = $1`,
+			deid, dcid.String(), copyText); err != nil {
+			t.Fatalf("store the event copy: %v", err)
+		}
+		res := poll(t)
+		for _, id := range []int64{eid, deid} {
+			it, ok := find(res, id)
+			if !ok {
+				t.Fatalf("event %d not delivered", id)
+			}
+			raw, _ := json.Marshal(it)
+			if strings.Contains(string(raw), copyText) || strings.Contains(string(raw), `"body":`) {
+				t.Errorf("poll row %d carries a body: %s", id, raw)
+			}
+			if nv, _ := it.NewValue.(map[string]any); nv["id"] == nil {
+				t.Errorf("poll row %d lost the other keys of newValue: %v", id, it.NewValue)
+			}
+		}
+		if it, _ := find(res, eid); it.BodyPreview == nil || *it.BodyPreview != "the current text" {
+			t.Errorf("live row preview = %v, want the current text", ptrStr(it.BodyPreview))
+		}
+		if it, _ := find(res, deid); it.BodyPreview != nil {
+			t.Errorf("deleted row has a preview %q", *it.BodyPreview)
+		}
+	})
+
 	// --- US-1 live long ---
 	t.Run("live body >1024 runes → truncated true, preview ≤1024", func(t *testing.T) {
 		long := strings.Repeat("🚀", BodyPreviewMaxRunes+20)
