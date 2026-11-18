@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -37,10 +38,14 @@ const pgUniqueViolation = "23505"
 // SERIALIZABLE level protects in those flows. See R3.1 W3.
 const pgSerializationFailure = "40001"
 
-// PasswordMinLen is the minimum password length per R3.1 plan Q-2 — 8
-// chars. Enforced in CreateUser, UpdateUser, and ChangePassword. Below
-// this we return ErrInvalidPassword without reaching the bcrypt path.
-const PasswordMinLen = 8
+// PasswordMinLen is the minimum length of a new password in CHARACTERS
+// (Unicode code points, utf8.RuneCountInString), not bytes: 12 since
+// sk-977.7.20. Enforced on every path that sets a password — CreateUser,
+// UpdateUser, ChangePassword and the self-service routes (CheckNewPassword).
+// Existing passwords are never re-checked: sign-in compares the hash only,
+// so an account with a shorter password keeps working until it is changed.
+// Below this we return ErrInvalidPassword without reaching the bcrypt path.
+const PasswordMinLen = 12
 
 // usernameRegex mirrors the DB CHECK on users.username. Re-validated at
 // the application layer so handlers return validation errors before
@@ -1351,7 +1356,7 @@ var ErrValidation = errors.New("validation error")
 const passwordMaxBytes = 72
 
 func validatePassword(p string) error {
-	if len(p) < PasswordMinLen {
+	if utf8.RuneCountInString(p) < PasswordMinLen {
 		return ErrInvalidPassword
 	}
 	if len(p) > passwordMaxBytes {

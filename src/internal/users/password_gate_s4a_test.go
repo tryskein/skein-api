@@ -16,7 +16,7 @@ import (
 // assigned a local password (that would be a Keycloak bypass). External
 // accounts and the break-glass admin are exempt; local mode is unchanged.
 
-const gatePassword = "passw0rd!"
+const gatePassword = "passw0rd!2025"
 
 // createExternalUser seeds an external user THROUGH the store so is_external
 // + a real bcrypt password hash both persist. Returns id + email.
@@ -58,7 +58,7 @@ func TestChangePasswordS4a_HybridInternalRejected(t *testing.T) {
 	// irrelevant — the call must reject on account class.
 	targetID, _ := seedUserDirect(t, pool, "user")
 
-	err := store.ChangePassword(context.Background(), targetID, "whatever", "new-passw0rd!")
+	err := store.ChangePassword(context.Background(), targetID, "whatever", "new-passw0rd!2025")
 	if !errors.Is(err, ErrLocalPasswordDisabled) {
 		t.Fatalf("ChangePassword(hybrid,internal) err = %v, want ErrLocalPasswordDisabled", err)
 	}
@@ -70,7 +70,7 @@ func TestChangePasswordS4a_HybridExternalAllowed(t *testing.T) {
 	adminID, adminName := seedUserDirect(t, pool, "admin")
 
 	uid, _ := createExternalUser(t, store, adminID, adminName, "chgext")
-	if err := store.ChangePassword(context.Background(), uid, gatePassword, "new-passw0rd!"); err != nil {
+	if err := store.ChangePassword(context.Background(), uid, gatePassword, "new-passw0rd!2025"); err != nil {
 		t.Fatalf("ChangePassword(hybrid,external) = %v, want nil", err)
 	}
 }
@@ -94,7 +94,7 @@ func TestChangePasswordS4a_HybridBreakGlassAllowed(t *testing.T) {
 	}
 	_ = adminName
 
-	if err := store.ChangePassword(context.Background(), adminID, gatePassword, "new-passw0rd!"); err != nil {
+	if err := store.ChangePassword(context.Background(), adminID, gatePassword, "new-passw0rd!2025"); err != nil {
 		t.Fatalf("ChangePassword(hybrid,break-glass) = %v, want nil", err)
 	}
 }
@@ -113,7 +113,7 @@ func TestChangePasswordS4a_LocalInternalUnchanged(t *testing.T) {
 	}
 	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM users WHERE id = $1`, dto.ID) })
 
-	if err := store.ChangePassword(context.Background(), dto.ID, gatePassword, "new-passw0rd!"); err != nil {
+	if err := store.ChangePassword(context.Background(), dto.ID, gatePassword, "new-passw0rd!2025"); err != nil {
 		t.Fatalf("ChangePassword(local,internal) = %v, want nil (no regression)", err)
 	}
 }
@@ -126,7 +126,7 @@ func TestUpdateUserS4a_HybridInternalPasswordRejected(t *testing.T) {
 	adminID, adminName := seedUserDirect(t, pool, "admin")
 	targetID, _ := seedUserDirect(t, pool, "user") // internal
 
-	newPw := "admin-set-passw0rd!"
+	newPw := "admin-set-passw0rd!2025"
 	_, err := store.UpdateUser(context.Background(), targetID,
 		UpdateUserInput{Password: &newPw}, adminActor(adminID, adminName))
 	if !errors.Is(err, ErrLocalPasswordDisabled) {
@@ -140,7 +140,7 @@ func TestUpdateUserS4a_HybridExternalPasswordAllowed(t *testing.T) {
 	adminID, adminName := seedUserDirect(t, pool, "admin")
 	uid, _ := createExternalUser(t, store, adminID, adminName, "updext")
 
-	newPw := "admin-set-passw0rd!"
+	newPw := "admin-set-passw0rd!2025"
 	dto, err := store.UpdateUser(context.Background(), uid,
 		UpdateUserInput{Password: &newPw}, adminActor(adminID, adminName))
 	if err != nil {
@@ -157,7 +157,7 @@ func TestUpdateUserS4a_LocalInternalPasswordUnchanged(t *testing.T) {
 	adminID, adminName := seedUserDirect(t, pool, "admin")
 	targetID, _ := seedUserDirect(t, pool, "user")
 
-	newPw := "admin-set-passw0rd!"
+	newPw := "admin-set-passw0rd!2025"
 	if _, err := store.UpdateUser(context.Background(), targetID,
 		UpdateUserInput{Password: &newPw}, adminActor(adminID, adminName)); err != nil {
 		t.Fatalf("UpdateUser(local,internal,password) = %v, want nil (no regression)", err)

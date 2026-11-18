@@ -173,7 +173,7 @@ func (h *UsersHandler) mapStoreErr(w http.ResponseWriter, err error) bool {
 		return true
 	case errors.Is(err, users.ErrInvalidPassword):
 		writeProblem(w, http.StatusBadRequest, "invalid_password",
-			"password must be at least 8 characters", nil)
+			"password must be at least 12 characters (and at most 72 bytes once UTF-8 encoded)", nil)
 		return true
 	case errors.Is(err, users.ErrInvalidRole):
 		writeProblem(w, http.StatusBadRequest, "invalid_role",
@@ -572,7 +572,7 @@ func (h *UsersHandler) Reactivate(w http.ResponseWriter, r *http.Request) {
 // @Security ApiKeyAuth
 // @Param body body changePasswordRequest true "Current and new password"
 // @Success 204 "Password changed"
-// @Failure 400 {object} map[string]any "invalid_json — malformed body; invalid_password — new password shorter than 8 bytes; password_too_long — new password exceeds 72 bytes once UTF-8 encoded (bcrypt's structural ceiling)"
+// @Failure 400 {object} map[string]any "invalid_json — malformed body; invalid_password — new password shorter than 12 characters; password_too_long — new password exceeds 72 bytes once UTF-8 encoded (bcrypt's structural ceiling)"
 // @Failure 401 {object} map[string]any "unauthenticated — missing/invalid caller identity"
 // @Failure 403 {object} map[string]any "local_password_disabled — account authenticates via SSO and has no local password to rotate"
 // @Failure 422 {object} map[string]any "invalid_credentials — current password did not verify (or the account is deactivated / SSO-only, collapsed into the same code to avoid account-state enumeration); password_pwned — new password found in the Pwned Passwords breach corpus (only when SKEIN_PWNED_PASSWORDS_ENABLED=true); password_change_conflict — another request rotated the password between the read and the write (retry with the new current password)"

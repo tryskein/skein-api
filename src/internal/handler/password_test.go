@@ -85,12 +85,12 @@ func TestChangeMyPassword_PwnedRejected_422(t *testing.T) {
 	projectsStore := projects.NewStore(pool)
 	h := NewUsersHandler(pool, usersStore, projectsStore)
 
-	callerID := seedUserWithPassword(t, pool, usersStore, "oldP@sswd1")
+	callerID := seedUserWithPassword(t, pool, usersStore, "oldP@sswd1234")
 	t.Cleanup(func() {
 		_, _ = pool.Exec(context.Background(), `DELETE FROM users WHERE id = $1`, callerID)
 	})
 
-	res, out := callChangeMyPassword(t, h, callerID, "oldP@sswd1", "newP@ssword2")
+	res, out := callChangeMyPassword(t, h, callerID, "oldP@sswd1234", "newP@ssword2")
 	if res.StatusCode != http.StatusUnprocessableEntity {
 		t.Fatalf("status = %d, want 422; body=%+v", res.StatusCode, out)
 	}
@@ -109,13 +109,13 @@ func TestChangeMyPassword_TooLong_400(t *testing.T) {
 	projectsStore := projects.NewStore(pool)
 	h := NewUsersHandler(pool, usersStore, projectsStore)
 
-	callerID := seedUserWithPassword(t, pool, usersStore, "oldP@sswd1")
+	callerID := seedUserWithPassword(t, pool, usersStore, "oldP@sswd1234")
 	t.Cleanup(func() {
 		_, _ = pool.Exec(context.Background(), `DELETE FROM users WHERE id = $1`, callerID)
 	})
 
 	tooLong := strings.Repeat("a", 73) // 73 bytes — past passwordMaxBytes
-	res, out := callChangeMyPassword(t, h, callerID, "oldP@sswd1", tooLong)
+	res, out := callChangeMyPassword(t, h, callerID, "oldP@sswd1234", tooLong)
 	if res.StatusCode != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400; body=%+v", res.StatusCode, out)
 	}
@@ -171,7 +171,7 @@ func TestChangeMyPassword_ExceedsLimiter_429(t *testing.T) {
 	projectsStore := projects.NewStore(pool)
 	h := NewUsersHandler(pool, usersStore, projectsStore)
 
-	callerID := seedUserWithPassword(t, pool, usersStore, "oldP@sswd1")
+	callerID := seedUserWithPassword(t, pool, usersStore, "oldP@sswd1234")
 	t.Cleanup(func() {
 		_, _ = pool.Exec(context.Background(), `DELETE FROM users WHERE id = $1`, callerID)
 	})
@@ -185,7 +185,7 @@ func TestChangeMyPassword_ExceedsLimiter_429(t *testing.T) {
 
 	// The next call must be throttled BEFORE the store is consulted at
 	// all — even with the CORRECT current password, it still 429s.
-	res, out := callChangeMyPassword(t, h, callerID, "oldP@sswd1", "newP@ssword2")
+	res, out := callChangeMyPassword(t, h, callerID, "oldP@sswd1234", "newP@ssword2")
 	if res.StatusCode != http.StatusTooManyRequests {
 		t.Fatalf("status = %d, want 429; body=%+v", res.StatusCode, out)
 	}
@@ -204,12 +204,12 @@ func TestChangeMyPassword_NormalFrequency_NotThrottled(t *testing.T) {
 	projectsStore := projects.NewStore(pool)
 	h := NewUsersHandler(pool, usersStore, projectsStore)
 
-	callerID := seedUserWithPassword(t, pool, usersStore, "oldP@sswd1")
+	callerID := seedUserWithPassword(t, pool, usersStore, "oldP@sswd1234")
 	t.Cleanup(func() {
 		_, _ = pool.Exec(context.Background(), `DELETE FROM users WHERE id = $1`, callerID)
 	})
 
-	res, out := callChangeMyPassword(t, h, callerID, "oldP@sswd1", "newP@ssword2")
+	res, out := callChangeMyPassword(t, h, callerID, "oldP@sswd1234", "newP@ssword2")
 	if res.StatusCode != http.StatusNoContent {
 		t.Fatalf("first rotation: status = %d, want 204; body=%+v", res.StatusCode, out)
 	}
@@ -231,7 +231,7 @@ func TestChangeMyPassword_RetryAfterWrongCurrentPassword_Succeeds(t *testing.T) 
 	projectsStore := projects.NewStore(pool)
 	h := NewUsersHandler(pool, usersStore, projectsStore)
 
-	callerID := seedUserWithPassword(t, pool, usersStore, "oldP@sswd1")
+	callerID := seedUserWithPassword(t, pool, usersStore, "oldP@sswd1234")
 	t.Cleanup(func() {
 		_, _ = pool.Exec(context.Background(), `DELETE FROM users WHERE id = $1`, callerID)
 	})
@@ -240,7 +240,7 @@ func TestChangeMyPassword_RetryAfterWrongCurrentPassword_Succeeds(t *testing.T) 
 	if res.StatusCode != http.StatusUnprocessableEntity {
 		t.Fatalf("mistyped attempt: status = %d, want 422; body=%+v", res.StatusCode, out)
 	}
-	res, out = callChangeMyPassword(t, h, callerID, "oldP@sswd1", "newP@ssword2")
+	res, out = callChangeMyPassword(t, h, callerID, "oldP@sswd1234", "newP@ssword2")
 	if res.StatusCode != http.StatusNoContent {
 		t.Fatalf("corrected attempt: status = %d, want 204; body=%+v", res.StatusCode, out)
 	}
@@ -339,7 +339,7 @@ func TestChangeMyPassword_ConcurrentBurst_LimiterAdmitsAtMostThreshold(t *testin
 	projectsStore := projects.NewStore(pool)
 	h := NewUsersHandler(pool, usersStore, projectsStore)
 
-	callerID := seedUserWithPassword(t, pool, usersStore, "oldP@sswd1")
+	callerID := seedUserWithPassword(t, pool, usersStore, "oldP@sswd1234")
 	t.Cleanup(func() {
 		_, _ = pool.Exec(context.Background(), `DELETE FROM users WHERE id = $1`, callerID)
 	})

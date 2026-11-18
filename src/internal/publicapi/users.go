@@ -41,7 +41,7 @@ type (
 		Email *string `json:"email,omitempty"`
 		// Name. Required.
 		Name *string `json:"name,omitempty"`
-		// Password, the initial one, at least 8 characters. Required.
+		// Password, the initial one: at least 12 characters, at most 72 bytes once UTF-8 encoded. Required.
 		Password *string `json:"password,omitempty"`
 		// Role: user (an administrator is created only in the UI). Required.
 		Role *string `json:"role,omitempty"`

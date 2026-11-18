@@ -4037,7 +4037,7 @@
                         "type": "string"
                     },
                     "password": {
-                        "description": "Password, the initial one, at least 8 characters. Required.",
+                        "description": "Password, the initial one: at least 12 characters, at most 72 bytes once UTF-8 encoded. Required.",
                         "type": "string"
                     },
                     "role": {

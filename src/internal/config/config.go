@@ -431,17 +431,19 @@ type Config struct {
 	// ---------------- sk-303.20 self-service password page ----------------
 	//
 	// PwnedPasswordsEnabled gates the server-side Have I Been Pwned
-	// k-anonymity lookup that ChangePassword runs against the caller's NEW
-	// password. Deliberately envDefault "false": Skein is self-hosted by
-	// organisations that may run in a closed network with no route to the
-	// public internet, and an unexpected outbound call to a third-party
-	// service on every password change is not something an operator should
-	// get without opting in. When disabled, ChangePassword never dials out
-	// and GET /me/password/policy reports pwnedCheckEnabled=false so the
+	// k-anonymity lookup run against a NEW password (self-service change,
+	// signup, signup by invitation, password reset). On by default since
+	// sk-977.7.20: only the first five hex characters of the password's
+	// SHA-1 leave the server. An operator who does not want the outbound
+	// call (a closed network, a policy) sets it to false. When the service
+	// cannot be reached — no route to the internet, a timeout — the check is
+	// skipped silently (logged, counted as degraded) and never blocks the
+	// password change. When disabled, nothing dials out and
+	// GET /me/password/policy reports pwnedCheckEnabled=false so the
 	// frontend never attempts its own hint lookup either — the server is the
 	// single source of truth for "do we call out", not each client deciding
 	// independently.
-	PwnedPasswordsEnabled bool `env:"SKEIN_PWNED_PASSWORDS_ENABLED" envDefault:"false"`
+	PwnedPasswordsEnabled bool `env:"SKEIN_PWNED_PASSWORDS_ENABLED" envDefault:"true"`
 
 	// PwnedPasswordsBaseURL is the k-anonymity range-lookup endpoint's base
 	// URL (no trailing slash; "/range/{prefix}" is appended). Overridable so

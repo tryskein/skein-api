@@ -99,7 +99,7 @@ func TestCreateUser_HappyPath(t *testing.T) {
 	dto, err := store.CreateUser(context.Background(), CreateUserInput{
 		Email:    email,
 		Name:     "Test Created",
-		Password: "passw0rd!",
+		Password: "passw0rd!2025",
 		Role:     "user",
 	}, adminActor(adminID, adminName))
 	if err != nil {
@@ -137,7 +137,7 @@ func TestCreateUser_EmailTaken(t *testing.T) {
 
 	email := "tcet" + adminID.String()[:6] + "@test.local"
 	dto, err := store.CreateUser(context.Background(), CreateUserInput{
-		Email: email, Name: "First", Password: "passw0rd!", Role: "user",
+		Email: email, Name: "First", Password: "passw0rd!2025", Role: "user",
 	}, adminActor(adminID, adminName))
 	if err != nil {
 		t.Fatalf("first CreateUser: %v", err)
@@ -147,7 +147,7 @@ func TestCreateUser_EmailTaken(t *testing.T) {
 	})
 
 	_, err = store.CreateUser(context.Background(), CreateUserInput{
-		Email: email, Name: "Second", Password: "passw0rd!", Role: "user",
+		Email: email, Name: "Second", Password: "passw0rd!2025", Role: "user",
 	}, adminActor(adminID, adminName))
 	if !errors.Is(err, ErrEmailTaken) {
 		t.Fatalf("err = %v, want ErrEmailTaken", err)
@@ -162,7 +162,7 @@ func TestCreateUser_UsernameTaken(t *testing.T) {
 	uname := "tut" + strings.ReplaceAll(adminID.String()[:13], "-", "")
 	_, err := store.CreateUser(context.Background(), CreateUserInput{
 		Email: uname + "@x.local", Username: uname, Name: "First",
-		Password: "passw0rd!", Role: "user",
+		Password: "passw0rd!2025", Role: "user",
 	}, adminActor(adminID, adminName))
 	if err != nil {
 		t.Fatalf("first CreateUser: %v", err)
@@ -173,7 +173,7 @@ func TestCreateUser_UsernameTaken(t *testing.T) {
 
 	_, err = store.CreateUser(context.Background(), CreateUserInput{
 		Email: uname + "2@x.local", Username: uname, Name: "Second",
-		Password: "passw0rd!", Role: "user",
+		Password: "passw0rd!2025", Role: "user",
 	}, adminActor(adminID, adminName))
 	if !errors.Is(err, ErrUsernameTaken) {
 		t.Fatalf("err = %v, want ErrUsernameTaken", err)
@@ -208,7 +208,7 @@ func TestCreateUser_PseudonymShapeRefused(t *testing.T) {
 	for _, uname := range []string{"deleted-0a1b2c3d", "DELETED-0A1B2C3D"} {
 		_, err := store.CreateUser(context.Background(), CreateUserInput{
 			Email: "pseud" + tag + "@x.local", Username: uname, Name: "Pseudonym",
-			Password: "passw0rd!", Role: "user",
+			Password: "passw0rd!2025", Role: "user",
 		}, adminActor(adminID, adminName))
 		if !errors.Is(err, ErrValidation) {
 			t.Errorf("CreateUser(%q) err = %v, want ErrValidation", uname, err)
@@ -228,7 +228,7 @@ func TestCreateUser_PseudonymShapeRefused(t *testing.T) {
 	ok := "deleted-" + tag + "x"
 	if _, err := store.CreateUser(context.Background(), CreateUserInput{
 		Email: "pseudok" + tag + "@x.local", Username: ok, Name: "Not a pseudonym",
-		Password: "passw0rd!", Role: "user",
+		Password: "passw0rd!2025", Role: "user",
 	}, adminActor(adminID, adminName)); err != nil {
 		t.Errorf("CreateUser(%q) = %v, want success — not of the pseudonym shape", ok, err)
 	}
@@ -314,7 +314,7 @@ func TestListUsers_Search(t *testing.T) {
 	uniq := "tlsq" + strings.ReplaceAll(adminID.String()[:11], "-", "")
 	dto, err := store.CreateUser(context.Background(), CreateUserInput{
 		Email: uniq + "@x.local", Username: uniq, Name: "Searchable",
-		Password: "passw0rd!", Role: "user",
+		Password: "passw0rd!2025", Role: "user",
 	}, adminActor(adminID, adminName))
 	if err != nil {
 		t.Fatalf("CreateUser: %v", err)
@@ -350,14 +350,14 @@ func TestListUsers_ExternalFilter(t *testing.T) {
 	tok := "tlef" + strings.ReplaceAll(adminID.String()[:11], "-", "")
 	intl, err := store.CreateUser(context.Background(), CreateUserInput{
 		Email: tok + "int@x.local", Username: tok + "int", Name: "Internal " + tok,
-		Password: "passw0rd!", Role: "user",
+		Password: "passw0rd!2025", Role: "user",
 	}, adminActor(adminID, adminName))
 	if err != nil {
 		t.Fatalf("CreateUser internal: %v", err)
 	}
 	ext, err := store.CreateUser(context.Background(), CreateUserInput{
 		Email: tok + "ext@customer.com", Username: tok + "ext", Name: "External " + tok,
-		Password: "passw0rd!", Role: "user", IsExternal: true,
+		Password: "passw0rd!2025", Role: "user", IsExternal: true,
 	}, adminActor(adminID, adminName))
 	if err != nil {
 		t.Fatalf("CreateUser external: %v", err)
@@ -419,7 +419,7 @@ func TestUpdateUser_RoleAndPassword(t *testing.T) {
 
 	newName := "Renamed"
 	newRole := "admin"
-	newPass := "anotherP@ss"
+	newPass := "anotherP@ss1"
 	dto, err := store.UpdateUser(context.Background(), target, UpdateUserInput{
 		Name:     &newName,
 		Role:     &newRole,
@@ -759,7 +759,7 @@ func TestChangePassword_HappyPath(t *testing.T) {
 
 	email := "cphp" + adminID.String()[:6] + "@x.local"
 	dto, err := store.CreateUser(context.Background(), CreateUserInput{
-		Email: email, Name: "PWChange", Password: "oldP@sswd1", Role: "user",
+		Email: email, Name: "PWChange", Password: "oldP@sswd1234", Role: "user",
 	}, adminActor(adminID, adminName))
 	if err != nil {
 		t.Fatalf("CreateUser: %v", err)
@@ -767,7 +767,7 @@ func TestChangePassword_HappyPath(t *testing.T) {
 	t.Cleanup(func() {
 		_, _ = pool.Exec(context.Background(), `DELETE FROM users WHERE id = $1`, dto.ID)
 	})
-	if err := store.ChangePassword(context.Background(), dto.ID, "oldP@sswd1", "newP@ssword2"); err != nil {
+	if err := store.ChangePassword(context.Background(), dto.ID, "oldP@sswd1234", "newP@ssword2"); err != nil {
 		t.Fatalf("ChangePassword: %v", err)
 	}
 }
@@ -779,7 +779,7 @@ func TestChangePassword_BadCurrent(t *testing.T) {
 
 	email := "cpbc" + adminID.String()[:6] + "@x.local"
 	dto, err := store.CreateUser(context.Background(), CreateUserInput{
-		Email: email, Name: "BadCur", Password: "oldP@sswd1", Role: "user",
+		Email: email, Name: "BadCur", Password: "oldP@sswd1234", Role: "user",
 	}, adminActor(adminID, adminName))
 	if err != nil {
 		t.Fatalf("CreateUser: %v", err)
@@ -830,7 +830,7 @@ func TestChangePassword_PwnedRejected(t *testing.T) {
 
 	email := "cppw" + adminID.String()[:6] + "@x.local"
 	dto, err := store.CreateUser(context.Background(), CreateUserInput{
-		Email: email, Name: "PwnedRej", Password: "oldP@sswd1", Role: "user",
+		Email: email, Name: "PwnedRej", Password: "oldP@sswd1234", Role: "user",
 	}, adminActor(adminID, adminName))
 	if err != nil {
 		t.Fatalf("CreateUser: %v", err)
@@ -839,14 +839,14 @@ func TestChangePassword_PwnedRejected(t *testing.T) {
 		_, _ = pool.Exec(context.Background(), `DELETE FROM users WHERE id = $1`, dto.ID)
 	})
 
-	err = store.ChangePassword(context.Background(), dto.ID, "oldP@sswd1", "newP@ssword2")
+	err = store.ChangePassword(context.Background(), dto.ID, "oldP@sswd1234", "newP@ssword2")
 	if !errors.Is(err, ErrPasswordPwned) {
 		t.Fatalf("err = %v, want ErrPasswordPwned", err)
 	}
 	// The hash must NOT have been rotated: the OLD current password still
 	// works as "current" for a follow-up change (checker now reports clean).
 	checker.breached = false
-	if err := store.ChangePassword(context.Background(), dto.ID, "oldP@sswd1", "yetAnother3"); err != nil {
+	if err := store.ChangePassword(context.Background(), dto.ID, "oldP@sswd1234", "yetAnother3456"); err != nil {
 		t.Fatalf("expected old password still active after the rejected change (hash must not have been rotated): %v", err)
 	}
 }
@@ -861,7 +861,7 @@ func TestChangePassword_PwnedClean(t *testing.T) {
 
 	email := "cppc" + adminID.String()[:6] + "@x.local"
 	dto, err := store.CreateUser(context.Background(), CreateUserInput{
-		Email: email, Name: "PwnedClean", Password: "oldP@sswd1", Role: "user",
+		Email: email, Name: "PwnedClean", Password: "oldP@sswd1234", Role: "user",
 	}, adminActor(adminID, adminName))
 	if err != nil {
 		t.Fatalf("CreateUser: %v", err)
@@ -870,7 +870,7 @@ func TestChangePassword_PwnedClean(t *testing.T) {
 		_, _ = pool.Exec(context.Background(), `DELETE FROM users WHERE id = $1`, dto.ID)
 	})
 
-	if err := store.ChangePassword(context.Background(), dto.ID, "oldP@sswd1", "newP@ssword2"); err != nil {
+	if err := store.ChangePassword(context.Background(), dto.ID, "oldP@sswd1234", "newP@ssword2"); err != nil {
 		t.Fatalf("ChangePassword: %v", err)
 	}
 }
@@ -885,7 +885,7 @@ func TestChangePassword_PwnedDegraded_NotBlocked(t *testing.T) {
 
 	email := "cppd" + adminID.String()[:6] + "@x.local"
 	dto, err := store.CreateUser(context.Background(), CreateUserInput{
-		Email: email, Name: "PwnedDegraded", Password: "oldP@sswd1", Role: "user",
+		Email: email, Name: "PwnedDegraded", Password: "oldP@sswd1234", Role: "user",
 	}, adminActor(adminID, adminName))
 	if err != nil {
 		t.Fatalf("CreateUser: %v", err)
@@ -894,7 +894,7 @@ func TestChangePassword_PwnedDegraded_NotBlocked(t *testing.T) {
 		_, _ = pool.Exec(context.Background(), `DELETE FROM users WHERE id = $1`, dto.ID)
 	})
 
-	if err := store.ChangePassword(context.Background(), dto.ID, "oldP@sswd1", "newP@ssword2"); err != nil {
+	if err := store.ChangePassword(context.Background(), dto.ID, "oldP@sswd1234", "newP@ssword2"); err != nil {
 		t.Fatalf("ChangePassword should proceed unblocked when the pwned check degrades: %v", err)
 	}
 }
@@ -917,7 +917,7 @@ func TestChangePassword_PwnedNil_NoOp(t *testing.T) {
 
 	email := "cppn" + adminID.String()[:6] + "@x.local"
 	dto, err := store.CreateUser(context.Background(), CreateUserInput{
-		Email: email, Name: "PwnedNilNoOp", Password: "oldP@sswd1", Role: "user",
+		Email: email, Name: "PwnedNilNoOp", Password: "oldP@sswd1234", Role: "user",
 	}, adminActor(adminID, adminName))
 	if err != nil {
 		t.Fatalf("CreateUser: %v", err)
@@ -928,7 +928,7 @@ func TestChangePassword_PwnedNil_NoOp(t *testing.T) {
 	if store.PwnedCheckEnabled() {
 		t.Fatal("newTestStore's Store must have the pwned check disabled")
 	}
-	if err := store.ChangePassword(context.Background(), dto.ID, "oldP@sswd1", "newP@ssword2"); err != nil {
+	if err := store.ChangePassword(context.Background(), dto.ID, "oldP@sswd1234", "newP@ssword2"); err != nil {
 		t.Fatalf("ChangePassword: %v", err)
 	}
 }
@@ -968,7 +968,7 @@ func TestChangePassword_PwnedCheck_DoesNotHoldPoolConnection(t *testing.T) {
 
 	email := "cppool" + adminID.String()[:6] + "@x.local"
 	dto, err := store.CreateUser(ctx, CreateUserInput{
-		Email: email, Name: "PoolProbe", Password: "oldP@sswd1", Role: "user",
+		Email: email, Name: "PoolProbe", Password: "oldP@sswd1234", Role: "user",
 	}, adminActor(adminID, adminName))
 	if err != nil {
 		t.Fatalf("CreateUser: %v", err)
@@ -977,7 +977,7 @@ func TestChangePassword_PwnedCheck_DoesNotHoldPoolConnection(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- store.ChangePassword(ctx, dto.ID, "oldP@sswd1", "newP@ssword2")
+		done <- store.ChangePassword(ctx, dto.ID, "oldP@sswd1234", "newP@ssword2")
 	}()
 
 	// Give the goroutine time to pass Verify and enter the checker's sleep.
@@ -1021,7 +1021,7 @@ func TestChangePassword_ConcurrentRotation_Conflict(t *testing.T) {
 
 	email := "cprace" + adminID.String()[:6] + "@x.local"
 	dto, err := store.CreateUser(context.Background(), CreateUserInput{
-		Email: email, Name: "Race", Password: "oldP@sswd1", Role: "user",
+		Email: email, Name: "Race", Password: "oldP@sswd1234", Role: "user",
 	}, adminActor(adminID, adminName))
 	if err != nil {
 		t.Fatalf("CreateUser: %v", err)
@@ -1030,7 +1030,7 @@ func TestChangePassword_ConcurrentRotation_Conflict(t *testing.T) {
 
 	// Read + verify exactly as ChangePassword's first phase would — captures
 	// the hash a "stale" writer will later try to CAS against.
-	staleOldHash, err := store.loadPasswordState(context.Background(), dto.ID, "oldP@sswd1")
+	staleOldHash, err := store.loadPasswordState(context.Background(), dto.ID, "oldP@sswd1234")
 	if err != nil {
 		t.Fatalf("loadPasswordState: %v", err)
 	}
@@ -1038,7 +1038,7 @@ func TestChangePassword_ConcurrentRotation_Conflict(t *testing.T) {
 	// A concurrent request "wins the race": a full ChangePassword using the
 	// same current password rotates the hash out from under the stale read
 	// above.
-	if err := store.ChangePassword(context.Background(), dto.ID, "oldP@sswd1", "raceWinner1"); err != nil {
+	if err := store.ChangePassword(context.Background(), dto.ID, "oldP@sswd1234", "raceWinner1234"); err != nil {
 		t.Fatalf("concurrent ChangePassword (the race winner): %v", err)
 	}
 
@@ -1054,7 +1054,7 @@ func TestChangePassword_ConcurrentRotation_Conflict(t *testing.T) {
 	}
 
 	// And the winner's password must still be the one in effect.
-	if err := store.ChangePassword(context.Background(), dto.ID, "raceWinner1", "final3Pass"); err != nil {
+	if err := store.ChangePassword(context.Background(), dto.ID, "raceWinner1234", "final3Pass456"); err != nil {
 		t.Fatalf("ChangePassword with the winning password should still work: %v", err)
 	}
 }
@@ -1073,7 +1073,7 @@ func TestChangePassword_Deactivated_RejectsWithInvalidCredentials(t *testing.T) 
 
 	email := "cpdeact" + adminID.String()[:6] + "@x.local"
 	dto, err := store.CreateUser(context.Background(), CreateUserInput{
-		Email: email, Name: "Deactivated", Password: "oldP@sswd1", Role: "user",
+		Email: email, Name: "Deactivated", Password: "oldP@sswd1234", Role: "user",
 	}, adminActor(adminID, adminName))
 	if err != nil {
 		t.Fatalf("CreateUser: %v", err)
@@ -1084,7 +1084,7 @@ func TestChangePassword_Deactivated_RejectsWithInvalidCredentials(t *testing.T) 
 		t.Fatalf("Deactivate: %v", err)
 	}
 
-	err = store.ChangePassword(context.Background(), dto.ID, "oldP@sswd1", "newP@ssword2")
+	err = store.ChangePassword(context.Background(), dto.ID, "oldP@sswd1234", "newP@ssword2")
 	if !errors.Is(err, ErrInvalidCredentials) {
 		t.Fatalf("err = %v, want ErrInvalidCredentials", err)
 	}
@@ -1093,7 +1093,7 @@ func TestChangePassword_Deactivated_RejectsWithInvalidCredentials(t *testing.T) 
 		`SELECT password_hash FROM users WHERE id = $1`, dto.ID).Scan(&hash); scanErr != nil {
 		t.Fatalf("read back hash: %v", scanErr)
 	}
-	if verr := auth.Verify(hash, "oldP@sswd1"); verr != nil {
+	if verr := auth.Verify(hash, "oldP@sswd1234"); verr != nil {
 		t.Fatalf("hash was rotated despite the deactivated guard rejecting the call: %v", verr)
 	}
 }
@@ -1189,6 +1189,36 @@ func TestValidatePassword_UpperBound(t *testing.T) {
 	}
 }
 
+// sk-977.7.20: the minimum is 12 CHARACTERS, counted as code points, not
+// bytes — 6 Cyrillic letters are 12 bytes and still too short, 12 of them
+// are enough; the boundary is 11 → refused, 12 → accepted.
+func TestValidatePassword_LowerBoundInCharacters(t *testing.T) {
+	cases := []struct {
+		name string
+		pw   string
+		ok   bool
+	}{
+		{"11 ASCII", strings.Repeat("a", 11), false},
+		{"12 ASCII", strings.Repeat("a", 12), true},
+		{"6 Cyrillic = 12 bytes", strings.Repeat("ж", 6), false},
+		{"11 Cyrillic", strings.Repeat("ж", 11), false},
+		{"12 Cyrillic", strings.Repeat("ж", 12), true},
+		{"11 emoji = 44 bytes", strings.Repeat("😀", 11), false},
+		{"12 emoji = 48 bytes", strings.Repeat("😀", 12), true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validatePassword(tc.pw)
+			if tc.ok && err != nil {
+				t.Fatalf("validatePassword: %v, want accepted", err)
+			}
+			if !tc.ok && !errors.Is(err, ErrInvalidPassword) {
+				t.Fatalf("validatePassword: %v, want ErrInvalidPassword", err)
+			}
+		})
+	}
+}
+
 func TestCountActiveAdmins(t *testing.T) {
 	pool := newTestPool(t)
 	store := newTestStore(t, pool)
@@ -1244,7 +1274,7 @@ func TestCreateUser_ExternalForSSOEmailRejected(t *testing.T) {
 	_, err := store.CreateUser(context.Background(), CreateUserInput{
 		Email:      ssoEmail,
 		Name:       "External Impersonator",
-		Password:   "passw0rd!",
+		Password:   "passw0rd!2025",
 		Role:       "user",
 		IsExternal: true,
 	}, adminActor(adminID, adminName))
@@ -1265,7 +1295,7 @@ func TestCreateUser_ExternalForFreshEmailOK(t *testing.T) {
 	dto, err := store.CreateUser(context.Background(), CreateUserInput{
 		Email:      email,
 		Name:       "Fresh External",
-		Password:   "passw0rd!",
+		Password:   "passw0rd!2025",
 		Role:       "user",
 		IsExternal: true,
 	}, adminActor(adminID, adminName))
@@ -1301,7 +1331,7 @@ func TestCreateUser_InternalForSSOEmailUnaffected(t *testing.T) {
 	_, err := store.CreateUser(context.Background(), CreateUserInput{
 		Email:      ssoEmail,
 		Name:       "Internal Dup",
-		Password:   "passw0rd!",
+		Password:   "passw0rd!2025",
 		Role:       "user",
 		IsExternal: false,
 	}, adminActor(adminID, adminName))

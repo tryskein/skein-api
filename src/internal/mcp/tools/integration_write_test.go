@@ -349,7 +349,7 @@ func TestIntegration_WriteToolsViaInProcessClient(t *testing.T) {
 		"action":   "create",
 		"email":    "intguser-" + userID.String()[:8] + "@x.local",
 		"name":     "Intg Created User",
-		"password": "passw0rd!",
+		"password": "passw0rd!2025",
 		"role":     "user",
 	}
 	createUserRes, err := c.CallTool(ctx, createUserReq)

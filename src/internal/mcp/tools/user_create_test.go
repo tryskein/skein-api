@@ -33,7 +33,7 @@ func TestUserCreate_HappyPath(t *testing.T) {
 	req.Params.Arguments = map[string]any{
 		"email":    email,
 		"name":     "Created Via MCP",
-		"password": "passw0rd!",
+		"password": "passw0rd!2025",
 		"role":     "user",
 	}
 	res, err := handler(ctx, req)
@@ -85,7 +85,7 @@ func TestUserCreate_NotAdmin(t *testing.T) {
 	req.Params.Arguments = map[string]any{
 		"email":    "xx@test.local",
 		"name":     "Should Not Insert",
-		"password": "passw0rd!",
+		"password": "passw0rd!2025",
 		"role":     "user",
 	}
 	res, err := handler(ctx, req)
@@ -115,7 +115,7 @@ func TestUserCreate_EmailTaken(t *testing.T) {
 	req.Params.Arguments = map[string]any{
 		"email":    email,
 		"name":     "First",
-		"password": "passw0rd!",
+		"password": "passw0rd!2025",
 		"role":     "user",
 	}
 	res, err := handler(ctx, req)
@@ -205,7 +205,7 @@ func TestUserCreate_External(t *testing.T) {
 	req.Params.Arguments = map[string]any{
 		"email":       email,
 		"name":        "External via MCP",
-		"password":    "passw0rd!",
+		"password":    "passw0rd!2025",
 		"role":        "user",
 		"is_external": true,
 	}
@@ -253,7 +253,7 @@ func TestUserCreate_ExternalAdminRejected(t *testing.T) {
 	req.Params.Arguments = map[string]any{
 		"email":       email,
 		"name":        "External Admin Attempt",
-		"password":    "passw0rd!",
+		"password":    "passw0rd!2025",
 		"role":        "admin",
 		"is_external": true,
 	}

@@ -656,14 +656,20 @@ rows present, `auth.Bootstrap` is a no-op regardless of what is set here.
 
 #### `SKEIN_PWNED_PASSWORDS_ENABLED`
 
-- **Purpose:** whether a password change is checked against the Have I Been
-  Pwned corpus using the k-anonymity range API.
-- **Required:** no · **Default:** `false` · **Format:** boolean.
-- **If unset:** disabled — no outbound call is ever made, and
+- **Purpose:** whether a new password (self-service change, signup, signup by
+  invitation, password reset) is checked against the Have I Been Pwned corpus
+  using the k-anonymity range API: only the first five hex characters of the
+  password's SHA-1 leave the server. A password found there is refused.
+- **Required:** no · **Default:** `true` · **Format:** boolean.
+- **If unset:** enabled. When the service cannot be reached (an install with no
+  route to the internet, a timeout), the check is skipped silently — logged as
+  a warning and counted as `degraded` — and never blocks the password change.
+- **Set to `false`:** no outbound call is ever made, and
   `GET /me/password/policy` reports `pwnedCheckEnabled=false` so clients do not
-  attempt their own lookup either. Off by default because a self-hosted install
-  may sit in a closed network, and an unexpected third-party call on every
-  password change should be opt-in.
+  attempt their own lookup either. For an operator who does not want the
+  third-party call; a closed network may instead point
+  `SKEIN_PWNED_PASSWORDS_BASE_URL` at a mirror.
+- **Changed:** the default was `false` before sk-977.7.20.
 
 #### `SKEIN_PWNED_PASSWORDS_BASE_URL`
 

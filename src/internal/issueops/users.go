@@ -56,7 +56,7 @@ func MapUsersError(ctx context.Context, err error, action, actorUserID string) *
 	case errors.Is(err, spaces.ErrConcurrentChange):
 		return Fail(ErrCodeConcurrentChange, "a concurrent membership change won; retry", nil)
 	case errors.Is(err, users.ErrInvalidPassword):
-		return Fail(ErrCodeValidationError, "password must be at least 8 characters", map[string]any{"field": "password"})
+		return Fail(ErrCodeValidationError, "password must be at least 12 characters (and at most 72 bytes once UTF-8 encoded)", map[string]any{"field": "password"})
 	case errors.Is(err, users.ErrInvalidRole):
 		return Fail(ErrCodeValidationError, "role must be 'admin' or 'user'", map[string]any{"field": "role"})
 	case errors.Is(err, users.ErrLastAdmin):

@@ -43,7 +43,7 @@ func TestUserPatchFields_NoOp(t *testing.T) {
 
 func TestUserPatchFields_PasswordOnlyNoChange(t *testing.T) {
 	old := baseUserDTO()
-	in := &UpdateUserInput{Password: ptrStr("newPa$$1234")}
+	in := &UpdateUserInput{Password: ptrStr("newPa$$12345")}
 	changes := eventbus.DiffRegistry(UserPatchFields, old, in)
 	if len(changes) != 0 {
 		t.Fatalf("password-only patch produced %d changes; password is lifecycle-only", len(changes))

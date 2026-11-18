@@ -27,7 +27,7 @@ func TestCreateUser_ExternalAdminRejected(t *testing.T) {
 	_, err := store.CreateUser(context.Background(), CreateUserInput{
 		Email:      email,
 		Name:       "External Admin Attempt",
-		Password:   "passw0rd!",
+		Password:   "passw0rd!2025",
 		Role:       "admin",
 		IsExternal: true,
 	}, adminActor(adminID, adminName))
@@ -47,7 +47,7 @@ func TestCreateUser_ExternalUserRoleOK(t *testing.T) {
 	dto, err := store.CreateUser(context.Background(), CreateUserInput{
 		Email:      email,
 		Name:       "External Member",
-		Password:   "passw0rd!",
+		Password:   "passw0rd!2025",
 		Role:       "user",
 		IsExternal: true,
 	}, adminActor(adminID, adminName))
@@ -70,7 +70,7 @@ func TestCreateUser_InternalAdminUnaffected(t *testing.T) {
 	dto, err := store.CreateUser(context.Background(), CreateUserInput{
 		Email:    email,
 		Name:     "Internal Admin",
-		Password: "passw0rd!",
+		Password: "passw0rd!2025",
 		Role:     "admin",
 	}, adminActor(adminID, adminName))
 	if err != nil {
@@ -97,7 +97,7 @@ func TestUpdateUser_ExternalToAdminRejected(t *testing.T) {
 	target, err := store.CreateUser(context.Background(), CreateUserInput{
 		Email:      email,
 		Name:       "External Target",
-		Password:   "passw0rd!",
+		Password:   "passw0rd!2025",
 		Role:       "user",
 		IsExternal: true,
 	}, adminActor(adminID, adminName))

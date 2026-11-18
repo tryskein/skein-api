@@ -751,9 +751,9 @@ func main() {
 	// disabled branch would box a non-nil interface (Go's classic
 	// typed-nil-in-interface trap), which would make
 	// usersStore.PwnedCheckEnabled() report true even though the feature is
-	// off. Default is disabled (SKEIN_PWNED_PASSWORDS_ENABLED=false) — see
-	// config.Config.PwnedPasswordsEnabled doc comment for why the default
-	// must stay off (self-hosted deployments in closed networks).
+	// off. On by default since sk-977.7.20 (SKEIN_PWNED_PASSWORDS_ENABLED=true;
+	// an unreachable service is skipped, never blocking) — see the
+	// config.Config.PwnedPasswordsEnabled doc comment.
 	var pwnedChecker users.PwnedChecker
 	if cfg.PwnedPasswordsEnabled {
 		pwnedChecker = pwned.NewClient(cfg.PwnedPasswordsBaseURL, cfg.PwnedPasswordsTimeout)

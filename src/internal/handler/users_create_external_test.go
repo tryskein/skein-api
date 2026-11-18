@@ -50,7 +50,7 @@ func TestCreateUser_External_Flagged(t *testing.T) {
 	res, out := callCreateUser(t, h, admin, map[string]any{
 		"email":      email,
 		"name":       "External via REST",
-		"password":   "passw0rd!",
+		"password":   "passw0rd!2025",
 		"role":       "user",
 		"isExternal": true,
 	})
@@ -102,7 +102,7 @@ func TestCreateUser_ExternalAdmin_Rejected(t *testing.T) {
 	res, out := callCreateUser(t, h, admin, map[string]any{
 		"email":      email,
 		"name":       "External Admin Attempt",
-		"password":   "passw0rd!",
+		"password":   "passw0rd!2025",
 		"role":       "admin",
 		"isExternal": true,
 	})
@@ -157,11 +157,11 @@ func TestListUsers_ExternalQueryParam(t *testing.T) {
 	tok := "hqp" + admin.String()[:6]
 
 	_, intOut := callCreateUser(t, h, admin, map[string]any{
-		"email": tok + "int@test.local", "name": "Int " + tok, "password": "passw0rd!", "role": "user",
+		"email": tok + "int@test.local", "name": "Int " + tok, "password": "passw0rd!2025", "role": "user",
 	})
 	intID, _ := intOut["id"].(string)
 	_, extOut := callCreateUser(t, h, admin, map[string]any{
-		"email": tok + "ext@customer.com", "name": "Ext " + tok, "password": "passw0rd!",
+		"email": tok + "ext@customer.com", "name": "Ext " + tok, "password": "passw0rd!2025",
 		"role": "user", "isExternal": true,
 	})
 	extID, _ := extOut["id"].(string)
@@ -223,7 +223,7 @@ func TestCreateUser_InternalDefault(t *testing.T) {
 	res, out := callCreateUser(t, h, admin, map[string]any{
 		"email":    email,
 		"name":     "Internal Default",
-		"password": "passw0rd!",
+		"password": "passw0rd!2025",
 		"role":     "user",
 	})
 	if res.StatusCode != http.StatusCreated {
