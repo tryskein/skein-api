@@ -358,8 +358,29 @@ func TestThemeInspectGate_SharedAcrossPrefixes(t *testing.T) {
 // still pending is answered 413 as soon as the limit is crossed — no
 // waiting for, or draining of, the rest of the body.
 func TestThemeInspectGate_RealServerRefusesAtOnce(t *testing.T) {
+	for _, wrapped := range []bool{false, true} {
+		t.Run(fmt.Sprintf("wrapped writer %v", wrapped), func(t *testing.T) {
+			testRealServerRefusesAtOnce(t, wrapped)
+		})
+	}
+}
+
+// wrappingWriter hides the server's own ResponseWriter behind Unwrap, as
+// the production metrics and cancellation middleware do.
+type wrappingWriter struct{ http.ResponseWriter }
+
+func (w wrappingWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
+
+func testRealServerRefusesAtOnce(t *testing.T, wrapped bool) {
 	cache := themes.NewInspectCache(themes.DefaultInspectLimits())
-	srv := httptest.NewServer(inspectRouter(cache))
+	var h http.Handler = inspectRouter(cache)
+	if wrapped {
+		inner := h
+		h = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			inner.ServeHTTP(wrappingWriter{w}, r)
+		})
+	}
+	srv := httptest.NewServer(h)
 	defer srv.Close()
 	conn, err := net.Dial("tcp", srv.Listener.Addr().String())
 	if err != nil {

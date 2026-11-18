@@ -226,10 +226,12 @@ func ThemeInspectGate(maxBody int64, maxInFlight int) func(http.Handler) http.Ha
 			// declared length and a streamed body alike. The handlers after
 			// the gate (RefuseNUL, Inspect) get the bytes read.
 			if r.Body != nil && r.Body != http.NoBody {
-				// http.MaxBytesReader with w: past maxBody the read fails at
-				// once and the server closes the connection after the answer,
-				// instead of draining the rest of an oversized upload.
-				raw, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBody))
+				// http.MaxBytesReader with the SERVER's writer: past maxBody the
+				// read fails at once and the server closes the connection after
+				// the answer, instead of waiting for and draining the rest of an
+				// oversized upload. Middleware writers (metrics, cancellation)
+				// hide the server's one, so it is found through Unwrap.
+				raw, err := io.ReadAll(http.MaxBytesReader(innermostWriter(w), r.Body, maxBody))
 				var maxErr *http.MaxBytesError
 				if errors.As(err, &maxErr) {
 					writeInspectBodyTooLarge(w, maxBody)
@@ -244,6 +246,18 @@ func ThemeInspectGate(maxBody int64, maxInFlight int) func(http.Handler) http.Ha
 			}
 			next.ServeHTTP(w, r)
 		})
+	}
+}
+
+// innermostWriter follows the Unwrap chain of middleware ResponseWriters
+// (the convention http.ResponseController uses) down to the server's own.
+func innermostWriter(w http.ResponseWriter) http.ResponseWriter {
+	for {
+		u, ok := w.(interface{ Unwrap() http.ResponseWriter })
+		if !ok {
+			return w
+		}
+		w = u.Unwrap()
 	}
 }
 
