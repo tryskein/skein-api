@@ -364,3 +364,24 @@ func TestProjectInboxRow_CutsTheBodyOfACommentObject(t *testing.T) {
 		t.Fatalf("row is %d runes, want under %d", n, sc005RowBudgetRunes)
 	}
 }
+
+// The deletion marker of a deleted comment is never cut, even on a row
+// that needs every rune: it is a fixed short text, not the comment.
+func TestProjectInboxRow_KeepsTheDeletionMarker(t *testing.T) {
+	n := notifications.NotificationDTO{
+		ID: 8, Type: "comment.created",
+		Actor:    notifications.ActorDTO{Username: "author", Type: "human"},
+		Entity:   notifications.EntityDTO{Type: "issue", ID: "sk-1", Title: strings.Repeat("t", 1000)},
+		Summary:  "author commented on sk-1",
+		OldValue: strings.Repeat("o", 3000),
+		NewValue: map[string]any{"id": "c1", "body": "comment deleted", "deleted": true},
+	}
+	m, err := projectInboxRow(n)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nv, _ := m["newValue"].(map[string]any)
+	if nv["body"] != "comment deleted" || nv["deleted"] != true {
+		t.Fatalf("newValue %v: the deletion marker was cut", nv)
+	}
+}

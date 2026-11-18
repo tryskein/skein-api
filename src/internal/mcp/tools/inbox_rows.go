@@ -137,7 +137,7 @@ func dedupeSummary(summary string, n notifications.NotificationDTO) string {
 func truncateInboxValue(v any) (any, bool) {
 	if obj, isObj := v.(map[string]any); isObj {
 		body, isString := obj["body"].(string)
-		if !isString {
+		if !isString || isDeletedComment(obj) {
 			return v, false
 		}
 		preview, truncated := TruncateRunes(body, InboxValuePreviewMaxRunes)
@@ -156,11 +156,22 @@ func truncateInboxValue(v any) (any, bool) {
 // value itself, or the "body" of a comment event's object.
 func inboxValueString(m map[string]any, key string) (string, bool) {
 	if obj, isObj := m[key].(map[string]any); isObj {
+		if isDeletedComment(obj) {
+			return "", false // the fixed deletion marker is not text to cut
+		}
 		s, isString := obj["body"].(string)
 		return s, isString
 	}
 	s, isString := m[key].(string)
 	return s, isString
+}
+
+// isDeletedComment reports a comment object carrying the deletion marker
+// (redact.CommentDeletedBody with "deleted": true): a short fixed text that
+// must reach the agent whole.
+func isDeletedComment(obj map[string]any) bool {
+	d, _ := obj["deleted"].(bool)
+	return d
 }
 
 // setInboxValueString writes s where inboxValueString read it.
