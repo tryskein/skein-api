@@ -116,14 +116,40 @@ SELECT ps.id, ps.user_id, ps.endpoint, ps.p256dh, ps.auth, ps.ua, ps.created_at,
 // ran does not repeat that migration's cleanup, so subscriptions an older
 // release kept for users deactivated meanwhile are removed here. Device
 // revocations are not touched. Idempotent.
+//
+// The owners are locked FOR SHARE first, and the inactivity is checked on
+// the locked, current row: a user switched on again by a transaction that
+// commits while the purge runs is no longer selected, and a subscription the
+// user then registers or refreshes is not deleted; a switch-on that comes
+// later waits for the purge. Locks are taken users → push_subscriptions, the
+// order of every push write.
 func (s *Store) PurgeInactiveOwners(ctx context.Context) (int, error) {
-	tag, err := s.pool.Exec(ctx, `
-DELETE FROM push_subscriptions ps
- USING users u
- WHERE u.id = ps.user_id
-   AND (u.deactivated_at IS NOT NULL OR u.deleted_at IS NOT NULL)`)
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("purging push subscriptions of inactive users: begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	rows, err := tx.Query(ctx, `
+SELECT id FROM users
+ WHERE deactivated_at IS NOT NULL OR deleted_at IS NOT NULL
+ FOR SHARE`)
+	if err != nil {
+		return 0, fmt.Errorf("locking inactive users: %w", err)
+	}
+	owners, err := pgx.CollectRows(rows, pgx.RowTo[uuid.UUID])
+	if err != nil {
+		return 0, fmt.Errorf("locking inactive users: %w", err)
+	}
+	if len(owners) == 0 {
+		return 0, tx.Commit(ctx)
+	}
+	tag, err := tx.Exec(ctx, `DELETE FROM push_subscriptions WHERE user_id = ANY($1)`, owners)
 	if err != nil {
 		return 0, fmt.Errorf("purging push subscriptions of inactive users: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return 0, fmt.Errorf("purging push subscriptions of inactive users: commit: %w", err)
 	}
 	return int(tag.RowsAffected()), nil
 }

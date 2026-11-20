@@ -11,6 +11,7 @@ package push_test
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -151,4 +152,86 @@ func TestDeleteGone_RemovesOnlyTheRecordThatWasSentTo(t *testing.T) {
 				removed, w.exists(t, fresh))
 		}
 	})
+}
+
+// Review fix — PurgeInactiveOwners against a concurrent switch-on: the owner
+// is switched on again and refreshes their own subscription in a transaction
+// the purge has to wait for (it holds the user's row and the subscription's
+// row). Once that transaction commits, the subscription belongs to an active
+// user and the purge must leave it, while another, still inactive user's
+// subscription goes. A purge that decided on the inactivity it saw before the
+// commit deletes the refreshed subscription.
+func TestPurgeInactiveOwners_LeavesTheSubscriptionOfAUserSwitchedOnMeanwhile(t *testing.T) {
+	w := newTxWorld(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	user, _ := w.user(t)
+	endpoint := newEndpoint()
+	sub := w.seedSub(t, user, endpoint, labelPtr(uuid.New()))
+	w.exec(t, `UPDATE users SET deactivated_at = now() WHERE id = $1`, user)
+
+	stillInactive, _ := w.user(t)
+	control := w.seedSub(t, stillInactive, newEndpoint(), nil)
+	w.exec(t, `UPDATE users SET deactivated_at = now() WHERE id = $1`, stillInactive)
+
+	switchOn, err := w.pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin the switch-on: %v", err)
+	}
+	defer func() { _ = switchOn.Rollback(context.Background()) }()
+	if _, err := switchOn.Exec(ctx, `UPDATE users SET deactivated_at = NULL WHERE id = $1`, user); err != nil {
+		t.Fatalf("switch the user on: %v", err)
+	}
+	if _, err := switchOn.Exec(ctx, `
+UPDATE push_subscriptions SET p256dh = 'refreshed', version = version + 1, last_seen_at = now()
+ WHERE id = $1`, sub); err != nil {
+		t.Fatalf("refresh the subscription: %v", err)
+	}
+	var holder int32
+	if err := switchOn.QueryRow(ctx, `SELECT pg_backend_pid()`).Scan(&holder); err != nil {
+		t.Fatalf("read the switch-on pid: %v", err)
+	}
+
+	purgeStore, purgeGate := gatedStore(t, false)
+	purged := make(chan error, 1)
+	go func() {
+		_, err := purgeStore.PurgeInactiveOwners(ctx)
+		purged <- err
+	}()
+	for {
+		select {
+		case err := <-purged:
+			t.Fatalf("the purge finished without waiting for the switch-on: %v", err)
+		case <-ctx.Done():
+			t.Fatal("the purge never waited for the switch-on")
+		default:
+		}
+		if waiter := purgeGate.pid.Load(); waiter != 0 {
+			var blocked bool
+			if err := w.pool.QueryRow(ctx,
+				`SELECT $1::int = ANY(pg_blocking_pids($2::int))`, holder, waiter).Scan(&blocked); err != nil {
+				t.Fatalf("read blocking pids: %v", err)
+			}
+			if blocked {
+				break
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	if err := switchOn.Commit(ctx); err != nil {
+		t.Fatalf("commit the switch-on: %v", err)
+	}
+	if err := <-purged; err != nil {
+		t.Fatalf("PurgeInactiveOwners: %v", err)
+	}
+
+	row, ok := w.byEndpoint(t, endpoint)
+	if !ok || row.ID != sub || row.Version != 2 || row.P256dh != "refreshed" {
+		t.Fatalf("the subscription refreshed by the user switched on: present=%v %+v; want it kept at version 2", ok, row)
+	}
+	if w.exists(t, control) {
+		t.Error("the subscription of the user still inactive survived the purge")
+	}
 }
