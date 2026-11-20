@@ -32,10 +32,24 @@ import "time"
 // Business refusals are 422 {"error":"<code>","message":"…"}; neither the
 // response nor the message carries the endpoint, the keys or the owner of a
 // subscription. Codes: the Code* constants. Syntax errors are 400
-// CodeInvalidRequest (a value that is not a UUID, an unknown mode, deviceLabel
-// without expectedUserId, an empty revocation, more than MaxDeviceLabels
-// labels); malformed JSON is 400 CodeInvalidJSON. expectedUserId and
-// deviceLabel are UUIDs; the browser creates the label (crypto.randomUUID()).
+// CodeInvalidRequest: a value that is not a UUID; a new-form POST
+// /push/subscriptions without deviceLabel or without mode; deviceLabel or
+// mode without expectedUserId; ifSubscription without expectedUserId; a mode
+// other than ModeUpsert and ModeUpdateOnly; an empty revocation; more than
+// MaxDeviceLabels labels. Malformed JSON is 400 CodeInvalidJSON.
+// expectedUserId and deviceLabel are UUIDs; the browser creates the label
+// (crypto.randomUUID()).
+//
+// # Form of a body
+//
+// POST and DELETE /push/subscriptions accept two forms of body. The new form
+// is a body that carries expectedUserId. The old form carries none of
+// expectedUserId, deviceLabel, mode and ifSubscription and is accepted for
+// older pages and service workers: POST only refreshes the keys of the
+// caller's existing subscription, DELETE only deletes the caller's own
+// subscription with that endpoint. A body with deviceLabel, mode or
+// ifSubscription but without expectedUserId belongs to neither form and is
+// 400 CodeInvalidRequest.
 //
 // # Operations
 //
@@ -157,10 +171,11 @@ type SubscriptionKeys struct {
 	Auth string `json:"auth"`
 }
 
-// SubscribeRequest is the body of POST /push/subscriptions. The new form
-// carries ExpectedUserID, DeviceLabel and Mode; the old form carries only
-// Endpoint, Keys and UA. DeviceLabel without ExpectedUserID is 400
-// invalid_request.
+// SubscribeRequest is the body of POST /push/subscriptions. A body with
+// ExpectedUserID is the new form and also carries DeviceLabel and Mode; a
+// body without ExpectedUserID, DeviceLabel and Mode is the old form (Endpoint,
+// Keys, UA), which only refreshes the keys of the caller's existing
+// subscription.
 type SubscribeRequest struct {
 	// Endpoint is the push service URL of the browser subscription.
 	Endpoint string `json:"endpoint"`
@@ -172,10 +187,11 @@ type SubscribeRequest struct {
 	// caller; another caller gets 422 expected_user_mismatch.
 	ExpectedUserID string `json:"expectedUserId"`
 	// DeviceLabel is the UUID label of the device consent, created by the
-	// browser.
-	DeviceLabel string `json:"deviceLabel"`
-	// Mode is ModeUpsert or ModeUpdateOnly; any other value is 400
+	// browser. Required in the new form; without ExpectedUserID it is 400
 	// invalid_request.
+	DeviceLabel string `json:"deviceLabel"`
+	// Mode is ModeUpsert or ModeUpdateOnly. Required in the new form; any
+	// other value, or a mode without ExpectedUserID, is 400 invalid_request.
 	Mode string `json:"mode"`
 }
 
@@ -188,9 +204,11 @@ type IfSubscription struct {
 	Version int64 `json:"version"`
 }
 
-// RemoveChannelRequest is the new-form body of DELETE /push/subscriptions:
-// removal of a channel (endpoint) held by another user. The old form carries
-// only Endpoint.
+// RemoveChannelRequest is the body of DELETE /push/subscriptions. A body with
+// ExpectedUserID is the new form: removal of a channel (endpoint) held by
+// another user. A body with only Endpoint is the old form, which deletes only
+// the caller's own subscription with that endpoint. IfSubscription without
+// ExpectedUserID is 400 invalid_request.
 type RemoveChannelRequest struct {
 	// ExpectedUserID is the UUID of the user the page expects to be the
 	// caller.
