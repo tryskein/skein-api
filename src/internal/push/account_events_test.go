@@ -21,6 +21,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"skein-api/internal/accounts"
@@ -216,18 +217,29 @@ func captureLogs(t *testing.T) *accountLogs {
 	return logs
 }
 
+// lateFailureCode is the SQLSTATE the late-failure trigger raises.
+const lateFailureCode = "SK984"
+
 // failAfterPushDeletion makes the event of user fail at its first write of
 // a user.* event — written after the users row and after
 // DeleteAllForUserInTx on every entry — with a trigger of the test
-// database, dropped in cleanup.
+// database, dropped in cleanup. The trigger raises lateFailureCode with
+// DETAIL "<users row as accountRow renders it>|<subscriptions of user>", as
+// the event's transaction sees them at that moment.
 func failAfterPushDeletion(t *testing.T, w txWorld, user uuid.UUID) {
 	t.Helper()
 	name := "push_test_late_failure_" + strings.ReplaceAll(uuid.NewString(), "-", "")
 	w.exec(t, fmt.Sprintf(`
-CREATE FUNCTION %s() RETURNS trigger LANGUAGE plpgsql AS $$
+CREATE FUNCTION %[1]s() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE
+    row_state text;
+    subs      bigint;
 BEGIN
-    RAISE EXCEPTION 'late failure of the account event';
-END $$`, name))
+    SELECT %[2]s INTO row_state FROM users WHERE id = '%[3]s';
+    SELECT count(*) INTO subs FROM push_subscriptions WHERE user_id = '%[3]s';
+    RAISE EXCEPTION 'late failure of the account event'
+        USING ERRCODE = '%[4]s', DETAIL = row_state || '|' || subs;
+END $$`, name, accountRowSQL, user, lateFailureCode))
 	t.Cleanup(func() {
 		_, _ = w.pool.Exec(context.Background(), fmt.Sprintf(`DROP FUNCTION IF EXISTS %s()`, name))
 	})
@@ -240,13 +252,30 @@ EXECUTE FUNCTION %s()`, name, user, name))
 	})
 }
 
+// lateFailure reads the state the trigger saw from err, failing the test
+// unless err is the trigger's own failure.
+func lateFailure(t *testing.T, err error) (row string, subs string) {
+	t.Helper()
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) || pgErr.Code != lateFailureCode {
+		t.Fatalf("the event failed with %v, want the late failure %s", err, lateFailureCode)
+	}
+	i := strings.LastIndex(pgErr.Detail, "|")
+	if i < 0 {
+		t.Fatalf("late failure detail %q", pgErr.Detail)
+	}
+	return pgErr.Detail[:i], pgErr.Detail[i+1:]
+}
+
+// accountRowSQL renders what each event changes in the users row.
+const accountRowSQL = `concat_ws(',', deactivated_at IS NULL, deleted_at IS NULL, session_epoch, password_hash, email)`
+
 // accountRow renders what each event changes in the users row.
 func accountRow(t *testing.T, w txWorld, user uuid.UUID) string {
 	t.Helper()
 	var s string
 	if err := w.pool.QueryRow(context.Background(), `
-SELECT concat_ws(',', deactivated_at IS NULL, deleted_at IS NULL, session_epoch, password_hash, email)
-  FROM users WHERE id = $1`, user).Scan(&s); err != nil {
+SELECT `+accountRowSQL+` FROM users WHERE id = $1`, user).Scan(&s); err != nil {
 		t.Fatalf("read account row: %v", err)
 	}
 	return s
@@ -301,8 +330,12 @@ func TestAccountEvents_DeleteSubscriptionsWithTheEvent(t *testing.T) {
 			failAfterPushDeletion(t, w, user)
 			before := accountRow(t, w, user)
 
-			if err := event(w.pool); err == nil {
-				t.Fatal("the event did not fail")
+			seenRow, seenSubs := lateFailure(t, event(w.pool))
+			if seenRow == before {
+				t.Errorf("at the late failure the users row was not written yet: %s", seenRow)
+			}
+			if seenSubs != "0" {
+				t.Errorf("at the late failure the event's transaction saw %s subscriptions, want 0 — the failure must come after the deletion", seenSubs)
 			}
 			if after := accountRow(t, w, user); after != before {
 				t.Errorf("the failed event changed the users row: before %s, after %s", before, after)
