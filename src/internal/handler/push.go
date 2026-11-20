@@ -1,9 +1,13 @@
 package handler
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -87,6 +91,35 @@ func toSubscriptionDTO(s push.Subscription) push.SubscriptionDTO {
 		CreatedAt:    s.CreatedAt,
 		LastSeenAt:   s.LastSeenAt,
 	}
+}
+
+// decodePushJSON decodes the body of a push request into dst: one JSON
+// value, no unknown fields, nothing after it but whitespace — trailing
+// data is a malformed body (400 invalid_json), not a request to act on.
+// Stricter than decodeJSON, which the other routes keep using unchanged.
+func decodePushJSON(r *http.Request, dst any) error {
+	r.Body = http.MaxBytesReader(nil, r.Body, requestBodyMaxBytes)
+	raw, err := io.ReadAll(r.Body)
+	if err != nil {
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			return errBodyTooLarge
+		}
+		return fmt.Errorf("reading the body: %w", err)
+	}
+	if len(bytes.TrimSpace(raw)) == 0 {
+		return errors.New("request body is empty")
+	}
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(dst); err != nil {
+		return fmt.Errorf("invalid JSON: %w", err)
+	}
+	var trailing json.RawMessage
+	if err := dec.Decode(&trailing); !errors.Is(err, io.EOF) {
+		return errors.New("invalid JSON: data after the JSON value")
+	}
+	return nil
 }
 
 // pushCall is the caller of a push write: the user and the session epoch
@@ -233,7 +266,7 @@ func (h *PushHandler) Subscribe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req push.SubscribeRequest
-	if err := decodeJSON(r, &req); err != nil {
+	if err := decodePushJSON(r, &req); err != nil {
 		writeProblem(w, http.StatusBadRequest, push.CodeInvalidJSON, err.Error(), nil)
 		return
 	}
@@ -323,7 +356,7 @@ func (h *PushHandler) Unsubscribe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req push.RemoveChannelRequest
-	if err := decodeJSON(r, &req); err != nil {
+	if err := decodePushJSON(r, &req); err != nil {
 		writeProblem(w, http.StatusBadRequest, push.CodeInvalidJSON, err.Error(), nil)
 		return
 	}
@@ -398,7 +431,7 @@ func (h *PushHandler) RevokeDevice(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req push.RevokeDeviceRequest
-	if err := decodeJSON(r, &req); err != nil {
+	if err := decodePushJSON(r, &req); err != nil {
 		writeProblem(w, http.StatusBadRequest, push.CodeInvalidJSON, err.Error(), nil)
 		return
 	}
@@ -469,7 +502,7 @@ func (h *PushHandler) RemoveDevice(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req push.RemoveDeviceRequest
-	if err := decodeJSON(r, &req); err != nil {
+	if err := decodePushJSON(r, &req); err != nil {
 		writeProblem(w, http.StatusBadRequest, push.CodeInvalidJSON, err.Error(), nil)
 		return
 	}

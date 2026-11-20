@@ -187,6 +187,17 @@ func newForm(expected uuid.UUID, endpoint string, label uuid.UUID, mode string) 
 	}
 }
 
+// withTail renders body as JSON followed by tail, a body that is valid up
+// to its end.
+func withTail(t *testing.T, body any, tail string) string {
+	t.Helper()
+	raw, err := json.Marshal(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(raw) + tail
+}
+
 // Row 12 — INV-12, SC-009, Edge 7, R-6: every page operation whose
 // expectedUserId is not the caller answers 422 expected_user_mismatch and
 // changes nothing; the list is not returned.
@@ -270,23 +281,28 @@ func TestPush_RefusalsByOperation(t *testing.T) {
 		{"register: mode without expectedUserId", rg.h.Subscribe, post, map[string]any{"endpoint": freshEndpoint(), "mode": push.ModeUpsert}, u.epoch, 400, push.CodeInvalidRequest},
 		{"register: malformed JSON", rg.h.Subscribe, post, `{"endpoint":`, u.epoch, 400, push.CodeInvalidJSON},
 		{"register: unknown field", rg.h.Subscribe, post, `{"endpoint":"https://push.test.local/x","owner":"x"}`, u.epoch, 400, push.CodeInvalidJSON},
+		{"register: a second JSON value after the body", rg.h.Subscribe, post, withTail(t, newForm(u.id, freshEndpoint(), uuid.New(), push.ModeUpsert), `{"mode":"upsert"}`), u.epoch, 400, push.CodeInvalidJSON},
+		{"register: garbage after the body", rg.h.Subscribe, post, withTail(t, newForm(u.id, freshEndpoint(), uuid.New(), push.ModeUpsert), ` x`), u.epoch, 400, push.CodeInvalidJSON},
 		// DELETE /push/subscriptions
 		{"remove channel: endpoint missing", rg.h.Unsubscribe, del, map[string]any{"expectedUserId": me}, u.epoch, 422, push.CodeInvalidSubscription},
 		{"remove channel: stale session", rg.h.Unsubscribe, del, map[string]any{"expectedUserId": me, "endpoint": ownEndpoint}, stale, 422, push.CodeSessionStale},
 		{"remove channel: ifSubscription without expectedUserId", rg.h.Unsubscribe, del, map[string]any{"endpoint": ownEndpoint, "ifSubscription": map[string]any{"id": ownID.String(), "version": 1}}, u.epoch, 400, push.CodeInvalidRequest},
 		{"remove channel: ifSubscription.id not a UUID", rg.h.Unsubscribe, del, map[string]any{"expectedUserId": me, "endpoint": ownEndpoint, "ifSubscription": map[string]any{"id": "nope", "version": 1}}, u.epoch, 400, push.CodeInvalidRequest},
 		{"remove channel: malformed JSON", rg.h.Unsubscribe, del, `{`, u.epoch, 400, push.CodeInvalidJSON},
+		{"remove channel: data after the body", rg.h.Unsubscribe, del, withTail(t, map[string]any{"expectedUserId": me, "endpoint": ownEndpoint}, `[]`), u.epoch, 400, push.CodeInvalidJSON},
 		// POST /push/device-revocations
 		{"revoke: stale session", rg.h.RevokeDevice, post, map[string]any{"expectedUserId": me, "deviceLabels": []string{ownLabel.String()}}, stale, 422, push.CodeSessionStale},
 		{"revoke: empty revocation", rg.h.RevokeDevice, post, map[string]any{"expectedUserId": me, "deviceLabels": []string{}}, u.epoch, 400, push.CodeInvalidRequest},
 		{"revoke: label not a UUID", rg.h.RevokeDevice, post, map[string]any{"expectedUserId": me, "deviceLabels": []string{"nope"}}, u.epoch, 400, push.CodeInvalidRequest},
 		{"revoke: without expectedUserId", rg.h.RevokeDevice, post, map[string]any{"deviceLabels": []string{ownLabel.String()}}, u.epoch, 400, push.CodeInvalidRequest},
 		{"revoke: malformed JSON", rg.h.RevokeDevice, post, `[`, u.epoch, 400, push.CodeInvalidJSON},
+		{"revoke: data after the body", rg.h.RevokeDevice, post, withTail(t, map[string]any{"expectedUserId": me, "deviceLabels": []string{ownLabel.String()}}, `1`), u.epoch, 400, push.CodeInvalidJSON},
 		// POST /push/device-removals
 		{"remove device: another user's or missing id", rg.h.RemoveDevice, post, map[string]any{"expectedUserId": me, "id": uuid.NewString()}, u.epoch, 422, push.CodeSubscriptionNotFound},
 		{"remove device: stale session", rg.h.RemoveDevice, post, map[string]any{"expectedUserId": me, "id": ownID.String()}, stale, 422, push.CodeSessionStale},
 		{"remove device: id not a UUID", rg.h.RemoveDevice, post, map[string]any{"expectedUserId": me, "id": "nope"}, u.epoch, 400, push.CodeInvalidRequest},
 		{"remove device: malformed JSON", rg.h.RemoveDevice, post, `{"id"`, u.epoch, 400, push.CodeInvalidJSON},
+		{"remove device: data after the body", rg.h.RemoveDevice, post, withTail(t, map[string]any{"expectedUserId": me, "id": ownID.String()}, `{}`), u.epoch, 400, push.CodeInvalidJSON},
 	}
 	secrets := []string{foreignEndpoint, ownEndpoint, "seed-p256dh", "seed-auth", "new-p256dh", "new-auth", other.id.String()}
 	for _, c := range calls {
