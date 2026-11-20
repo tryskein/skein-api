@@ -681,7 +681,10 @@ func overlap(t *testing.T, w txWorld, first, second func(*push.Store) error) (er
 	t.Helper()
 	firstStore, firstGate := gatedStore(t, true)
 	secondStore, secondGate := gatedStore(t, false)
-	deadline := time.After(15 * time.Second)
+	// One deadline for the whole wait; the polls are cancelled with it.
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	deadline := ctx.Done()
 
 	firstDone := make(chan error, 1)
 	go func() { firstDone <- first(firstStore) }()
@@ -706,7 +709,7 @@ func overlap(t *testing.T, w txWorld, first, second func(*push.Store) error) (er
 		}
 		if waiter := secondGate.pid.Load(); waiter != 0 {
 			var blocked bool
-			if err := w.pool.QueryRow(context.Background(),
+			if err := w.pool.QueryRow(ctx,
 				`SELECT $1::int = ANY(pg_blocking_pids($2::int))`, holder, waiter).Scan(&blocked); err != nil {
 				t.Fatalf("read blocking pids: %v", err)
 			}

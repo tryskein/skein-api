@@ -439,7 +439,10 @@ func gatedPool(t *testing.T, marker string, hold bool) (*pgxpool.Pool, *eventGat
 // commits.
 func overlapping(t *testing.T, w txWorld, first func() error, fg *eventGate, second func() error, sg *eventGate) (error, error) {
 	t.Helper()
-	deadline := time.After(15 * time.Second)
+	// One deadline for the whole wait; the polls are cancelled with it.
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	deadline := ctx.Done()
 	firstDone := make(chan error, 1)
 	go func() { firstDone <- first() }()
 	select {
@@ -462,7 +465,7 @@ func overlapping(t *testing.T, w txWorld, first func() error, fg *eventGate, sec
 		}
 		if waiter := sg.pid.Load(); waiter != 0 {
 			var blocked bool
-			if err := w.pool.QueryRow(context.Background(),
+			if err := w.pool.QueryRow(ctx,
 				`SELECT $1::int = ANY(pg_blocking_pids($2::int))`, holder, waiter).Scan(&blocked); err != nil {
 				t.Fatalf("read blocking pids: %v", err)
 			}
