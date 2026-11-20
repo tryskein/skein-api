@@ -13,10 +13,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/go-chi/chi/v5"
@@ -216,6 +218,31 @@ func TestPushContract_MarkerOnTheGroupOnly(t *testing.T) {
 		registerBody(u, "https://push.test.local/"+uuid.NewString(), uuid.New()), u, raised)
 	if rec.Code != http.StatusOK {
 		t.Errorf("registration with the raised epoch: %d %s, want 200 — the checked epoch reaches the store", rec.Code, rec.Body.String())
+	}
+
+	// A failure of the store is a 500 of the group, outside the contract:
+	// no marker. A trigger of the test database makes u's next insert fail.
+	name := "push_test_store_failure_" + strings.ReplaceAll(uuid.NewString(), "-", "")
+	for _, sql := range []string{
+		fmt.Sprintf(`CREATE FUNCTION %s() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'store failure'; END $$`, name),
+		fmt.Sprintf(`CREATE TRIGGER %s BEFORE INSERT ON push_subscriptions FOR EACH ROW WHEN (NEW.user_id = '%s') EXECUTE FUNCTION %s()`, name, u, name),
+	} {
+		if _, err := pool.Exec(context.Background(), sql); err != nil {
+			t.Fatalf("%s: %v", sql, err)
+		}
+	}
+	t.Cleanup(func() {
+		ctx := context.Background()
+		_, _ = pool.Exec(ctx, fmt.Sprintf(`DROP TRIGGER IF EXISTS %s ON push_subscriptions`, name))
+		_, _ = pool.Exec(ctx, fmt.Sprintf(`DROP FUNCTION IF EXISTS %s()`, name))
+	})
+	rec = p.serve(http.MethodPost, "/ui/v1/push/subscriptions",
+		registerBody(u, "https://push.test.local/"+uuid.NewString(), uuid.New()), u, raised)
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("registration over a failing store: %d %s, want 500", rec.Code, rec.Body.String())
+	}
+	if got := rec.Header().Get(push.ContractHeader); got != "" {
+		t.Errorf("500 of the group carries %s = %q, want none", push.ContractHeader, got)
 	}
 }
 

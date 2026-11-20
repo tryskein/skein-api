@@ -47,16 +47,44 @@ func NewPushHandler(pool *pgxpool.Pool, store *push.Store, vapidPublic string, e
 	return &PushHandler{pool: pool, store: store, vapidPublic: vapidPublic, enabled: enabled}
 }
 
-// PushContractV2 marks every response of the /push group with
-// push.ContractHeader: push.ContractVersion. It is mounted on the group only:
-// responses produced before the group (401 session_revoked of
-// RequireSessionEpoch) and routes outside it do not carry the marker.
+// PushContractV2 marks the responses of the /push group with
+// push.ContractHeader: push.ContractVersion — those of the contract: 2xx,
+// 400 and 422. Other statuses (401 of RequireUser, 500) carry no marker,
+// whatever handler answered. It is mounted on the group only: responses
+// produced before the group (401 session_revoked of RequireSessionEpoch)
+// and routes outside it do not carry the marker either.
 func PushContractV2(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set(push.ContractHeader, push.ContractVersion)
-		next.ServeHTTP(w, r)
+		next.ServeHTTP(&pushMarkWriter{ResponseWriter: w}, r)
 	})
 }
+
+// pushMarkWriter sets the contract marker when the status is written, if
+// the status is one the contract marks.
+type pushMarkWriter struct {
+	http.ResponseWriter
+	wroteHeader bool
+}
+
+func (m *pushMarkWriter) WriteHeader(status int) {
+	if !m.wroteHeader {
+		m.wroteHeader = true
+		if status/100 == 2 || status == http.StatusBadRequest || status == http.StatusUnprocessableEntity {
+			m.Header().Set(push.ContractHeader, push.ContractVersion)
+		}
+	}
+	m.ResponseWriter.WriteHeader(status)
+}
+
+func (m *pushMarkWriter) Write(b []byte) (int, error) {
+	if !m.wroteHeader {
+		m.WriteHeader(http.StatusOK)
+	}
+	return m.ResponseWriter.Write(b)
+}
+
+// Unwrap lets http.ResponseController reach the underlying writer.
+func (m *pushMarkWriter) Unwrap() http.ResponseWriter { return m.ResponseWriter }
 
 // pushConfigResponse is the GET /push/config payload.
 type pushConfigResponse struct {
