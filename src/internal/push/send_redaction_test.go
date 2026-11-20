@@ -62,7 +62,7 @@ func TestSend_NoErrorOrLogCarriesTheSubscriptionSecrets(t *testing.T) {
 		gone, forbidden, invalid bool
 		status                   int
 	}
-	cases := []struct {
+	type redactionCase struct {
 		name     string
 		endpoint string
 		// secrets — besides the endpoint and both keys.
@@ -73,7 +73,8 @@ func TestSend_NoErrorOrLogCarriesTheSubscriptionSecrets(t *testing.T) {
 		want      outcome
 		// host — the provider host the error must still name.
 		host string
-	}{
+	}
+	cases := []redactionCase{
 		{
 			name:     "short endpoint, transport error quoting it and the keys",
 			endpoint: "https://p.example/t9",
@@ -127,6 +128,40 @@ func TestSend_NoErrorOrLogCarriesTheSubscriptionSecrets(t *testing.T) {
 			secrets:  []string{pathToken, queryToken},
 			want:     outcome{invalid: true},
 		},
+	}
+	// A short token in the middle of the path and a query token written
+	// with lower-case percent escapes, each echoed on its own — in the body
+	// and the body read error of a refusal, and in a transport error.
+	for _, echo := range []struct{ name, endpoint, token string }{
+		{"short token mid-path", "https://push.example.com/t9/send/" + pathToken, "t9"},
+		{"raw query token", "https://push.example.com/wpush/v2?token=abc%2fdef%3d", "abc%2fdef%3d"},
+	} {
+		cases = append(cases,
+			redactionCase{
+				name:     echo.name + ", echoed in body and read error",
+				endpoint: echo.endpoint,
+				secrets:  []string{echo.token},
+				transport: func(Subscription) http.RoundTripper {
+					return answering(http.StatusInternalServerError, &failingBody{
+						data: strings.NewReader(`{"reason":"Overloaded","device":"` + echo.token + `"} device ` + echo.token + ` rejected`),
+						err:  errors.New("reset while reading device " + echo.token),
+					})
+				},
+				want: outcome{status: http.StatusInternalServerError},
+				host: "push.example.com",
+			},
+			redactionCase{
+				name:     echo.name + ", echoed in a transport error",
+				endpoint: echo.endpoint,
+				secrets:  []string{echo.token},
+				transport: func(Subscription) http.RoundTripper {
+					return answerTransport(func(*http.Request) (*http.Response, error) {
+						return nil, errors.New("tls alert for device " + echo.token + ": handshake failure")
+					})
+				},
+				host: "push.example.com",
+			},
+		)
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

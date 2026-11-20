@@ -204,3 +204,61 @@ func TestLogSendFailure_NoFieldCarriesTheSubscriptionSecrets(t *testing.T) {
 		})
 	}
 }
+
+// Row 30 — INV-9, the forms a provider may echo on their own: a short token
+// in the middle of the path and a query token as written in the endpoint
+// (lower-case percent escapes). Neither, nor its decoded form, reaches any
+// field of the record, whether it comes back in a transport error or in a
+// refusal's body and body read error; the diagnosis stays.
+func TestLogSendFailure_ShortAndRawQueryTokensAreRemoved(t *testing.T) {
+	for _, tc := range []struct {
+		name, endpoint string
+		tokens         []string
+	}{
+		{"short token mid-path", "https://push.example.com/t9/send/row30-long-device-token", []string{"t9"}},
+		{"raw query token", "https://push.example.com/wpush/v2?token=abc%2fdef%3d", []string{"abc%2fdef%3d", "abc/def="}},
+	} {
+		sub := push.Subscription{Endpoint: tc.endpoint, P256dh: "row30-p256dh-material", Auth: "row30-auth-secret"}
+		echo := strings.Join(tc.tokens, " ")
+		for _, failure := range []struct {
+			name string
+			err  error
+			keep []string
+		}{
+			{"transport error", fmt.Errorf("sending web push: tls alert for device %s: handshake failure", echo),
+				[]string{"handshake failure"}},
+			{"refusal", &push.StatusError{StatusCode: 500, Host: "push.example.com",
+				Body:          `{"reason":"Overloaded","device":"` + tc.tokens[0] + `"} device ` + echo + ` rejected`,
+				BodyReadError: "reset while reading device " + echo},
+				[]string{"status=500", "pushHost=push.example.com", "Overloaded", "reset while reading"}},
+		} {
+			t.Run(tc.name+", "+failure.name, func(t *testing.T) {
+				var buf bytes.Buffer
+				prev := slog.Default()
+				slog.SetDefault(slog.New(logging.NewDualHandler(&buf, slog.LevelDebug)))
+				t.Cleanup(func() { slog.SetDefault(prev) })
+
+				reason := "mention"
+				logSendFailure(context.Background(), pushClaim{id: 31, userID: uuid.New(), reason: &reason}, sub, failure.err)
+
+				line := buf.String()
+				if !strings.Contains(line, `msg="push send failed"`) {
+					t.Fatalf("no \"push send failed\" record in %q", line)
+				}
+				// No other text of the record contains these strings (the ids
+				// are hex, the words are fixed), so plain containment is the
+				// check.
+				for _, token := range tc.tokens {
+					if strings.Contains(line, token) {
+						t.Errorf("the record carries the token %q: %s", token, line)
+					}
+				}
+				for _, want := range failure.keep {
+					if !strings.Contains(line, want) {
+						t.Errorf("the record lost %q: %s", want, line)
+					}
+				}
+			})
+		}
+	}
+}

@@ -369,35 +369,30 @@ func newStatusError(resp *http.Response, sub Subscription) *StatusError {
 const redactedSecret = "<redacted>"
 
 // secretForms lists the strings that would disclose the subscription if they
-// reached a log: the endpoint itself, its token-bearing path segments and
-// query values, and both keys (p256dh, auth), each as written,
-// percent-encoded (query and path rules) and with JSON-escaped slashes. A segment counts as token-bearing when it is the
-// last one or is at least minSecretSegmentLen long — the static parts of the
-// push services' paths ("3", "device", "fcm", "send", "wpush", "v2") are
-// shorter, device tokens are far longer. Longest first, so a whole endpoint is
-// replaced before its parts.
+// reached a log: the endpoint itself, every path segment and every query
+// value — as written in the endpoint and decoded — and both keys (p256dh,
+// auth), each as is, percent-encoded (query and path rules) and with
+// JSON-escaped slashes. No segment is presumed static: a provider may put a
+// short token anywhere in the path, so over-masking is the safe side. Longest
+// first, so a whole endpoint is replaced before its parts.
 func secretForms(sub Subscription) []string {
-	const minSecretSegmentLen = 8
 	endpoint := sub.Endpoint
 	secrets := []string{endpoint, sub.P256dh, sub.Auth}
 	if u, err := url.Parse(endpoint); err == nil {
-		segs := strings.Split(strings.Trim(u.EscapedPath(), "/"), "/")
-		for i, seg := range segs {
-			if seg == "" {
-				continue
-			}
-			if i == len(segs)-1 || len(seg) >= minSecretSegmentLen {
-				secrets = append(secrets, seg)
-				if dec, derr := url.PathUnescape(seg); derr == nil {
-					secrets = append(secrets, dec)
-				}
+		for _, seg := range strings.Split(strings.Trim(u.EscapedPath(), "/"), "/") {
+			secrets = append(secrets, seg)
+			if dec, derr := url.PathUnescape(seg); derr == nil {
+				secrets = append(secrets, dec)
 			}
 		}
-		for _, vals := range u.Query() {
-			for _, v := range vals {
-				if v != "" {
-					secrets = append(secrets, v)
-				}
+		for _, pair := range strings.Split(u.RawQuery, "&") {
+			_, raw, _ := strings.Cut(pair, "=")
+			secrets = append(secrets, raw)
+			if dec, derr := url.QueryUnescape(raw); derr == nil {
+				secrets = append(secrets, dec)
+			}
+			if dec, derr := url.PathUnescape(raw); derr == nil {
+				secrets = append(secrets, dec)
 			}
 		}
 	}
@@ -423,12 +418,55 @@ func secretForms(sub Subscription) []string {
 	return forms
 }
 
-// redactSubscription replaces every secret form in s.
+// shortSecretFormLen — a secret form shorter than this is replaced only where
+// it stands as a whole token (see replaceBounded): a short path segment such
+// as "t9" or "3" also occurs inside ordinary diagnostic text — a host, a
+// status code — which must stay readable.
+const shortSecretFormLen = 8
+
+// tokenBoundaries are the characters that delimit a secret inside an echo of
+// the endpoint, of a JSON or form body, or of an error text: path and query
+// separators, quotes, the backslash of a JSON-escaped slash, white space and
+// the punctuation that ends a word in an error message.
+const tokenBoundaries = "/=\"&? \\:,;()\t\n"
+
+// redactSubscription replaces every secret form in s; a short form only where
+// it stands as a whole token.
 func redactSubscription(s string, forms []string) string {
 	for _, f := range forms {
+		if len(f) < shortSecretFormLen {
+			s = replaceBounded(s, f, redactedSecret)
+			continue
+		}
 		s = strings.ReplaceAll(s, f, redactedSecret)
 	}
 	return s
+}
+
+// replaceBounded replaces the occurrences of f in s that start and end at a
+// token boundary: the start or end of s, or a tokenBoundaries character.
+func replaceBounded(s, f, repl string) string {
+	bounded := func(i int) bool { return strings.IndexByte(tokenBoundaries, s[i]) >= 0 }
+	var b strings.Builder
+	i := 0
+	for {
+		j := strings.Index(s[i:], f)
+		if j < 0 {
+			break
+		}
+		j += i
+		end := j + len(f)
+		if (j == 0 || bounded(j-1)) && (end == len(s) || bounded(end)) {
+			b.WriteString(s[i:j])
+			b.WriteString(repl)
+			i = end
+			continue
+		}
+		b.WriteString(s[i : j+1])
+		i = j + 1
+	}
+	b.WriteString(s[i:])
+	return b.String()
 }
 
 // trimPartialSecret drops a suffix of s that is the beginning of a secret
