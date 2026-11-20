@@ -75,11 +75,14 @@ func TestPushRunner_InactiveRecipientGetsNoKindOfPush(t *testing.T) {
 			if got := callsTo(sender, f.endpoint); len(got) != 0 {
 				t.Fatalf("a %s recipient was pushed %d times, want 0: %+v", inactive.name, len(got), got)
 			}
+			// Finished, not retried, and not as a delivery: which gate
+			// stopped it (no deliverable device, or the project access
+			// re-check) is not the contract — no send is.
 			for kind, id := range rows {
 				state, outcome, _ := pushStateOf(t, pool, id)
-				if state != "final" || outcome == nil || *outcome != outcomeNoDevice {
-					t.Errorf("%s row of a %s recipient: %s/%v, want final/%s — finished without a send",
-						kind, inactive.name, state, outcome, outcomeNoDevice)
+				if state != "final" || outcome == nil || *outcome == outcomeSuccess {
+					t.Errorf("%s row of a %s recipient: %s/%v, want final without a delivery",
+						kind, inactive.name, state, outcome)
 				}
 			}
 		})

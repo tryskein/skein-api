@@ -113,11 +113,12 @@ func TestDeleteGone_RemovesOnlyTheRecordThatWasSentTo(t *testing.T) {
 	t.Run("registered again after the send", func(t *testing.T) {
 		user, epoch := w.user(t)
 		endpoint := newEndpoint()
-		sent, err := register(w, user, epoch, endpoint, nil, push.ModeUpsert, "first")
+		label := labelPtr(uuid.New())
+		sent, err := register(w, user, epoch, endpoint, label, push.ModeUpsert, "first")
 		if err != nil {
 			t.Fatalf("first registration: %v", err)
 		}
-		if _, err := register(w, user, epoch, endpoint, nil, push.ModeUpsert, "again"); err != nil {
+		if _, err := register(w, user, epoch, endpoint, label, push.ModeUpsert, "again"); err != nil {
 			t.Fatalf("repeated registration: %v", err)
 		}
 		removed, err := w.store.DeleteGone(ctx, sent.ID, sent.Version)

@@ -213,7 +213,7 @@ func TestPushDelivery_LateGoneAnswerKeepsARecordRegisteredAgain(t *testing.T) {
 		}
 		sub, err := w.store.Register(context.Background(), push.RegisterInput{
 			UserID: w.user, SessionEpoch: epoch, Endpoint: w.endpoint,
-			P256dh: validP256dh, Auth: validAuth, Mode: push.ModeUpsert,
+			P256dh: validP256dh, Auth: validAuth, // the old form: no label, no mode
 		})
 		if err != nil {
 			t.Fatalf("register again while the answer is held: %v", err)
