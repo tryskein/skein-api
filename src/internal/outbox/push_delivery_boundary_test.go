@@ -167,9 +167,14 @@ func (w boundaryWorld) retryNow(t *testing.T) {
 	if state != "pending" {
 		t.Fatalf("the row is %s before the retry, want pending — there is no retry to observe", state)
 	}
-	if _, err := w.pool.Exec(ctx,
-		`UPDATE notifications SET push_next_attempt_at = now() WHERE id = $1 AND push_deadline_at > now()`, w.row); err != nil {
+	tag, err := w.pool.Exec(ctx,
+		`UPDATE notifications SET push_next_attempt_at = now() WHERE id = $1 AND push_deadline_at > now()`, w.row)
+	if err != nil {
 		t.Fatalf("make the retry due: %v", err)
+	}
+	if tag.RowsAffected() != 1 {
+		t.Fatalf("make the retry due: %d rows updated, want 1 — the row is gone or past its deadline, so no retry inside the window can run",
+			tag.RowsAffected())
 	}
 	testsupport.TickPushUntilSettled(t, w.pool, w.user, w.runner.Tick)
 }
