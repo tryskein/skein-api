@@ -12,6 +12,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -111,5 +112,63 @@ func TestPushRunner_ActiveRecipientWithoutASessionGetsEveryKind(t *testing.T) {
 		if state != "final" || outcome == nil || *outcome != outcomeSuccess {
 			t.Errorf("%s row: %s/%v, want final/%s", kind, state, outcome, outcomeSuccess)
 		}
+	}
+}
+
+// leaseRow leases one notification row for a direct delivery step exactly as
+// the runner's claim does — pending → leased, one attempt more — and returns
+// its claim.
+func leaseRow(t *testing.T, pool *pgxpool.Pool, id int64, lease time.Duration) pushClaim {
+	t.Helper()
+	var c pushClaim
+	if err := pool.QueryRow(context.Background(), `
+UPDATE notifications
+   SET push_state = 'leased',
+       push_leased_until = now() + ($2::bigint * interval '1 second'),
+       push_attempts = push_attempts + 1
+ WHERE id = $1 AND push_state = 'pending'
+RETURNING id, user_id, event_id, project_id, reason, push_attempts, push_deadline_at`,
+		id, int64(lease/time.Second)).Scan(&c.id, &c.userID, &c.eventID, &c.projectID,
+		&c.reason, &c.attempts, &c.deadlineAt); err != nil {
+		t.Fatalf("lease row %d: %v", id, err)
+	}
+	return c
+}
+
+// Row 24 (review fix) — INV-6 on the device selection itself: the shared
+// last step of delivery, which all three kinds reach once their payload is
+// built, selects no device of a deactivated or deleted owner although the
+// subscription is stored, so it sends nothing and finishes the row as having
+// no device. Driven directly, past the earlier gates (the project access
+// re-check, the invitation's addressee check), which would otherwise finish
+// some kinds before the selection is ever reached.
+func TestPushRunner_SendPayloadSelectsNoDeviceOfAnInactiveOwner(t *testing.T) {
+	pool := newTestPool(t)
+	ctx := context.Background()
+	for _, inactive := range []struct{ name, sql string }{
+		{"deactivated", `UPDATE users SET deactivated_at = now() WHERE id = $1`},
+		{"deleted", `UPDATE users SET deleted_at = now(), pseudonym = 'deleted-' || substr(md5(random()::text), 1, 8) WHERE id = $1`},
+	} {
+		t.Run(inactive.name, func(t *testing.T) {
+			f, rows := threeKindsOwed(t, pool)
+			if _, err := pool.Exec(ctx, inactive.sql, f.user); err != nil {
+				t.Fatalf("mark the recipient %s: %v", inactive.name, err)
+			}
+			sender := &fakePushSender{enabled: true}
+			runner := newRunner(pool, sender)
+
+			for kind, id := range rows {
+				c := leaseRow(t, pool, id, runner.opts.LeaseTTL)
+				runner.sendPayload(ctx, ctx, c, []byte(`{"title":"t"}`))
+
+				if got := callsTo(sender, f.endpoint); len(got) != 0 {
+					t.Fatalf("%s: the %s owner's stored subscription was sent to %d times, want 0", kind, inactive.name, len(got))
+				}
+				state, outcome, _ := pushStateOf(t, pool, id)
+				if state != "final" || outcome == nil || *outcome != outcomeNoDevice {
+					t.Errorf("%s row: %s/%v, want final/%s — no device selected", kind, state, outcome, outcomeNoDevice)
+				}
+			}
+		})
 	}
 }
