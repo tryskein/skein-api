@@ -229,6 +229,9 @@ func ParseUserHeaders(next http.Handler) http.Handler {
 // loses the admin routes (RequireAdmin) from his very next request, without
 // waiting for the BFF to end his session; the session itself stays.
 //
+// The checked epoch is stored in the request context (auth.WithSessionEpoch)
+// for writes that check it again at the moment of the write.
+//
 // A request without a user (login, OIDC provisioning, the hub batch) passes
 // through untouched; API-key requests (/mcp) carry no epoch and are checked
 // by their key's and their user's status in auth.RequireAPIKey.
@@ -275,6 +278,9 @@ SELECT deactivated_at IS NULL AND deleted_at IS NULL, session_epoch, role, is_ex
 				return
 			}
 			ctx = auth.WithIsExternal(auth.WithUserRole(ctx, role), external)
+			// The checked epoch goes on for writes that re-check it inside
+			// their own transaction (push subscriptions).
+			ctx = auth.WithSessionEpoch(ctx, epoch)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}

@@ -164,6 +164,7 @@ const (
 	ctxKeyAPIKeyID
 	ctxKeyMcpSessionID
 	ctxKeyKeyGrant
+	ctxKeySessionEpoch
 )
 
 // WithUserID stores a parsed user UUID in ctx. Used by ParseUserHeaders
@@ -193,6 +194,22 @@ func WithUserRole(ctx context.Context, role string) context.Context {
 // IsExternalFrom and the centralized Principal (PrincipalFrom).
 func WithIsExternal(ctx context.Context, external bool) context.Context {
 	return context.WithValue(ctx, ctxKeyIsExternal, external)
+}
+
+// WithSessionEpoch stores the session epoch of the request, checked against
+// users.session_epoch by RequireSessionEpoch, in ctx. Writes that must hold
+// only for the current session (push subscriptions) pass it to the store,
+// which checks it again inside the write transaction.
+func WithSessionEpoch(ctx context.Context, epoch int64) context.Context {
+	return context.WithValue(ctx, ctxKeySessionEpoch, epoch)
+}
+
+// SessionEpochFrom returns the session epoch stored by WithSessionEpoch and
+// whether one was stored. A request of a user that passed
+// RequireSessionEpoch always has one.
+func SessionEpochFrom(ctx context.Context) (int64, bool) {
+	v, ok := ctx.Value(ctxKeySessionEpoch).(int64)
+	return v, ok
 }
 
 // UserIDFrom returns the user UUID stashed in ctx by ParseUserHeaders, plus

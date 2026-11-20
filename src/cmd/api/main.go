@@ -1827,20 +1827,23 @@ func buildRouter(
 			r.Delete("/{reminderID}", remindersH.Dismiss)
 		})
 
-		// Web Push — VAPID config discovery + caller-scoped subscription
-		// CRUD. /config exposes only the PUBLIC key (200 always, empty when
-		// push is unconfigured — the frontend feature-detects). The
-		// subscriptions sub-tree is keyed on the browser-supplied endpoint
-		// and scoped to the calling user.
+		// Web Push, REST contract v2 (internal/push/contract.go). Every
+		// response of the group carries Skein-Push-Contract: 2; a 401 of
+		// RequireSessionEpoch above is produced before the group and does
+		// not. /config exposes only the PUBLIC key (200 always, empty when
+		// push is unconfigured — the frontend feature-detects).
 		r.Route("/push", func(r chi.Router) {
+			r.Use(handler.PushContractV2)
 			r.Use(handler.RequireUser)
 			r.Get("/config", pushH.Config)
 			r.Get("/subscriptions", pushH.List)
 			r.Post("/subscriptions", pushH.Subscribe)
 			r.Delete("/subscriptions", pushH.Unsubscribe)
-			// Id-keyed delete for the device-management UI (remove ANY listed
-			// device by id). Coexists with the endpoint-keyed delete above —
-			// chi distinguishes /subscriptions from /subscriptions/{id}.
+			r.Post(push.RouteDeviceRevocations, pushH.RevokeDevice)
+			r.Post(push.RouteDeviceRemovals, pushH.RemoveDevice)
+			// Removal by id of pages that predate contract v2; same effect
+			// as POST /device-removals. chi distinguishes /subscriptions
+			// from /subscriptions/{id}.
 			r.Delete("/subscriptions/{id}", pushH.DeleteByID)
 		})
 
