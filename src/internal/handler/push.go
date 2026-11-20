@@ -97,29 +97,55 @@ func toSubscriptionDTO(s push.Subscription) push.SubscriptionDTO {
 // value, no unknown fields, nothing after it but whitespace — trailing
 // data is a malformed body (400 invalid_json), not a request to act on.
 // Stricter than decodeJSON, which the other routes keep using unchanged.
-func decodePushJSON(r *http.Request, dst any) error {
+//
+// It also returns the top-level fields the body carries, null ones
+// included: the form of a body is told by the presence of a field
+// (internal/push/contract.go, "Form of a body"), not by its value.
+func decodePushJSON(r *http.Request, dst any) (pushFields, error) {
 	r.Body = http.MaxBytesReader(nil, r.Body, requestBodyMaxBytes)
 	raw, err := io.ReadAll(r.Body)
 	if err != nil {
 		var maxErr *http.MaxBytesError
 		if errors.As(err, &maxErr) {
-			return errBodyTooLarge
+			return nil, errBodyTooLarge
 		}
-		return fmt.Errorf("reading the body: %w", err)
+		return nil, fmt.Errorf("reading the body: %w", err)
 	}
 	if len(bytes.TrimSpace(raw)) == 0 {
-		return errors.New("request body is empty")
+		return nil, errors.New("request body is empty")
 	}
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(dst); err != nil {
-		return fmt.Errorf("invalid JSON: %w", err)
+		return nil, fmt.Errorf("invalid JSON: %w", err)
 	}
 	var trailing json.RawMessage
 	if err := dec.Decode(&trailing); !errors.Is(err, io.EOF) {
-		return errors.New("invalid JSON: data after the JSON value")
+		return nil, errors.New("invalid JSON: data after the JSON value")
 	}
-	return nil
+	// dst accepted the value, so it is an object or null; null carries no
+	// fields.
+	var fields pushFields
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		return nil, fmt.Errorf("invalid JSON: %w", err)
+	}
+	return fields, nil
+}
+
+// pushFields are the top-level fields of a request body, as written.
+type pushFields map[string]json.RawMessage
+
+// has reports whether the body carries the field, whatever its value
+// (null included).
+func (f pushFields) has(name string) bool {
+	_, ok := f[name]
+	return ok
+}
+
+// isNull reports whether the body carries the field with the value null.
+func (f pushFields) isNull(name string) bool {
+	v, ok := f[name]
+	return ok && string(bytes.TrimSpace(v)) == "null"
 }
 
 // pushCall is the caller of a push write: the user and the session epoch
@@ -266,14 +292,17 @@ func (h *PushHandler) Subscribe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req push.SubscribeRequest
-	if err := decodePushJSON(r, &req); err != nil {
+	fields, err := decodePushJSON(r, &req)
+	if err != nil {
 		writeProblem(w, http.StatusBadRequest, push.CodeInvalidJSON, err.Error(), nil)
 		return
 	}
 
+	// The form is told by the presence of expectedUserId: present — even
+	// "" or null — is the new form and must be a UUID.
 	in := push.RegisterInput{UserID: c.userID, SessionEpoch: c.epoch}
-	if req.ExpectedUserID == "" {
-		if req.DeviceLabel != "" || req.Mode != "" {
+	if !fields.has("expectedUserId") {
+		if fields.has("deviceLabel") || fields.has("mode") {
 			writeProblem(w, http.StatusBadRequest, push.CodeInvalidRequest,
 				"deviceLabel and mode require expectedUserId", nil)
 			return
@@ -356,14 +385,18 @@ func (h *PushHandler) Unsubscribe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req push.RemoveChannelRequest
-	if err := decodePushJSON(r, &req); err != nil {
+	fields, err := decodePushJSON(r, &req)
+	if err != nil {
 		writeProblem(w, http.StatusBadRequest, push.CodeInvalidJSON, err.Error(), nil)
 		return
 	}
 
-	newForm := req.ExpectedUserID != ""
+	// The form is told by the presence of expectedUserId: present — even
+	// "" or null — is the new form and must be a UUID. ifSubscription, when
+	// present, is a condition and may not be null.
+	newForm := fields.has("expectedUserId")
 	var guard *push.VersionGuard
-	if !newForm && req.IfSubscription != nil {
+	if !newForm && fields.has("ifSubscription") {
 		writeProblem(w, http.StatusBadRequest, push.CodeInvalidRequest,
 			"ifSubscription requires expectedUserId", nil)
 		return
@@ -371,6 +404,10 @@ func (h *PushHandler) Unsubscribe(w http.ResponseWriter, r *http.Request) {
 	if newForm {
 		expected, ok := parseExpectedUser(w, req.ExpectedUserID)
 		if !ok {
+			return
+		}
+		if fields.isNull("ifSubscription") {
+			writeProblem(w, http.StatusBadRequest, push.CodeInvalidRequest, "ifSubscription must not be null", nil)
 			return
 		}
 		if req.IfSubscription != nil {
@@ -431,7 +468,7 @@ func (h *PushHandler) RevokeDevice(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req push.RevokeDeviceRequest
-	if err := decodePushJSON(r, &req); err != nil {
+	if _, err := decodePushJSON(r, &req); err != nil {
 		writeProblem(w, http.StatusBadRequest, push.CodeInvalidJSON, err.Error(), nil)
 		return
 	}
@@ -502,7 +539,7 @@ func (h *PushHandler) RemoveDevice(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req push.RemoveDeviceRequest
-	if err := decodePushJSON(r, &req); err != nil {
+	if _, err := decodePushJSON(r, &req); err != nil {
 		writeProblem(w, http.StatusBadRequest, push.CodeInvalidJSON, err.Error(), nil)
 		return
 	}
