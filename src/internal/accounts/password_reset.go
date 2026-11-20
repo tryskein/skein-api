@@ -24,6 +24,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -151,7 +152,11 @@ func (s *Service) CompletePasswordReset(ctx context.Context, rawToken string, re
 	if err != nil {
 		return AuthResponse{}, err
 	}
-	var resp AuthResponse
+	var (
+		resp        AuthResponse
+		resetUser   uuid.UUID
+		removedPush int
+	)
 	err = pgx.BeginTxFunc(ctx, s.db, pgx.TxOptions{}, func(tx pgx.Tx) error {
 		used, err := tokens.Use(ctx, tx, tokens.PurposePasswordReset, rawToken, "")
 		if err != nil {
@@ -170,7 +175,8 @@ func (s *Service) CompletePasswordReset(ctx context.Context, rawToken string, re
 		if !s.passwordLoginAllowed(email, external) {
 			return tokens.ErrInvalid
 		}
-		resp, err = s.users.CompletePasswordResetInTx(ctx, tx, used.UserID, hash)
+		resetUser = used.UserID
+		resp, removedPush, err = s.users.CompletePasswordResetInTx(ctx, tx, used.UserID, hash)
 		return err
 	})
 	if errors.Is(err, tokens.ErrInvalid) {
@@ -179,5 +185,11 @@ func (s *Service) CompletePasswordReset(ctx context.Context, rawToken string, re
 	if err != nil {
 		return AuthResponse{}, err
 	}
+	// The reset deleted every push subscription of the user in its
+	// transaction; logged after the commit. The field names and the reason
+	// are those of push.LogAccountEventRemoval (push.ReasonPasswordReset),
+	// which this package cannot import (push depends on it).
+	slog.InfoContext(ctx, "push subscriptions removed by an account event",
+		"userId", resetUser.String(), "reason", "password_reset", "removed", removedPush)
 	return resp, nil
 }

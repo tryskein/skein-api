@@ -1597,6 +1597,11 @@ VALUES ($1, $2, $3, 'en', now() + interval '1 day') RETURNING id`, elsewhere, em
 	if _, _, err := testsupport.CreateOwnerKey(ctx, pool, u, "rollback", keyPrefix, keyHash); err != nil {
 		t.Fatal(err)
 	}
+	// The account's push subscription and device revocation go only with
+	// a deletion that commits (INV-5).
+	pushLabel := uuid.New()
+	pushSub := testsupport.SeedLabeledPushSubscription(t, pool, u, uuid.New())
+	testsupport.SeedPushDeviceRevocation(t, pool, u, pushLabel)
 	keyWorks := func() int {
 		chain := auth.RequireAPIKey(pool, auth.MinBcryptCost, "")(
 			http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }))
@@ -1625,7 +1630,9 @@ SELECT concat_ws(' | ',
        OR (kind = 'username' AND value_hash = sha256(convert_to($7, 'UTF8')))),
   (SELECT count(*) FROM events WHERE actor_user_id = $1 OR (entity_type = 'user' AND entity_id = $1::text)
                                   OR (entity_type = 'issue' AND entity_id = $4)),
-  (SELECT generation FROM account_deletion_generation WHERE id = 1))`,
+  (SELECT generation FROM account_deletion_generation WHERE id = 1),
+  (SELECT count(*) FROM push_subscriptions WHERE user_id = $1),
+  (SELECT count(*) FROM push_device_revocations WHERE user_id = $1))`,
 			u, personal, personalProject, issue, invitation, email, username).Scan(&s); err != nil {
 			t.Fatal(err)
 		}
@@ -1640,6 +1647,16 @@ SELECT concat_ws(' | ',
 	}
 	if after := state(); after != before {
 		t.Errorf("the failed deletion left traces:\nbefore %s\nafter  %s", before, after)
+	}
+	if testsupport.CountRows(t, pool, "push_subscriptions", "id", pushSub) != 1 {
+		t.Error("the failed deletion removed the push subscription")
+	}
+	var revocations int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM push_device_revocations WHERE user_id = $1 AND device_label = $2`, u, pushLabel).Scan(&revocations); err != nil {
+		t.Fatal(err)
+	}
+	if revocations != 1 {
+		t.Error("the failed deletion removed the device revocation")
 	}
 	if a := rig.do(t, u, epoch, http.MethodGet, "/api/v1/probe", nil); a.status != http.StatusOK {
 		t.Errorf("the session after the failed deletion = %d, want 200", a.status)

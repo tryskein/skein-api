@@ -12,6 +12,7 @@ import (
 
 	"skein-api/internal/authz"
 	"skein-api/internal/person"
+	"skein-api/internal/push"
 	"skein-api/internal/signals"
 	"skein-api/internal/spaces"
 )
@@ -249,7 +250,15 @@ func (s *Store) RemoveMember(
 	projectID, userID uuid.UUID,
 	actor Actor,
 ) error {
-	return spaces.WithRetry(ctx, s.pool, func(tx pgx.Tx) error {
+	// orphaned / removedPush — the last attempt deactivated an orphaned
+	// external user and deleted that many push subscriptions; logged after
+	// the commit.
+	var (
+		orphaned    bool
+		removedPush int
+	)
+	err := spaces.WithRetry(ctx, s.pool, func(tx pgx.Tx) error {
+		orphaned, removedPush = false, 0
 		if err := spaces.LockProjectSpace(ctx, tx, projectID); err != nil {
 			return err
 		}
@@ -294,8 +303,17 @@ DELETE FROM project_members WHERE project_id = $1 AND user_id = $2`,
 		// membership. Runs AFTER the DELETE above so the remaining-count check
 		// sees the post-removal state, in the SAME transaction so deactivation
 		// + key revocation are atomic with the membership drop.
-		return s.deactivateExternalIfOrphaned(ctx, tx, userID, actor)
+		var err2 error
+		orphaned, removedPush, err2 = s.deactivateExternalIfOrphaned(ctx, tx, userID, actor)
+		return err2
 	})
+	if err != nil {
+		return err
+	}
+	if orphaned {
+		push.LogAccountEventRemoval(ctx, userID, push.ReasonExternalOrphaned, removedPush)
+	}
+	return nil
 }
 
 // deactivateExternalIfOrphaned enforces the sk-159 invariant: an external
@@ -311,38 +329,41 @@ DELETE FROM project_members WHERE project_id = $1 AND user_id = $2`,
 // Mirrors users.Store.Deactivate's cascade
 // (deactivated_at + apikeys.RevokeAllForUser + a user.deactivated event) but
 // is triggered by membership loss rather than an explicit admin action.
-func (s *Store) deactivateExternalIfOrphaned(ctx context.Context, tx pgx.Tx, userID uuid.UUID, actor Actor) error {
+// Every push subscription of the user is deleted after the users row is
+// written. Returns whether the user was deactivated here and how many push
+// subscriptions were deleted. The session epoch is not raised on this path.
+func (s *Store) deactivateExternalIfOrphaned(ctx context.Context, tx pgx.Tx, userID uuid.UUID, actor Actor) (deactivated bool, removedPush int, err error) {
 	var (
 		isExternal         bool
 		alreadyDeactivated bool
 	)
-	err := tx.QueryRow(ctx,
+	err = tx.QueryRow(ctx,
 		`SELECT is_external, deactivated_at IS NOT NULL FROM users WHERE id = $1`,
 		userID).Scan(&isExternal, &alreadyDeactivated)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return nil // user already gone — nothing to deactivate
+		return false, 0, nil // user already gone — nothing to deactivate
 	}
 	if err != nil {
-		return fmt.Errorf("reading user for external-orphan check %s: %w", userID, err)
+		return false, 0, fmt.Errorf("reading user for external-orphan check %s: %w", userID, err)
 	}
 	if !isExternal || alreadyDeactivated {
-		return nil
+		return false, 0, nil
 	}
 
 	var remaining int
 	if err := tx.QueryRow(ctx,
 		`SELECT count(*) FROM project_members WHERE user_id = $1`,
 		userID).Scan(&remaining); err != nil {
-		return fmt.Errorf("counting remaining memberships for %s: %w", userID, err)
+		return false, 0, fmt.Errorf("counting remaining memberships for %s: %w", userID, err)
 	}
 	if remaining > 0 {
-		return nil // still a member elsewhere — keep the account active
+		return false, 0, nil // still a member elsewhere — keep the account active
 	}
 
 	now := time.Now().UTC()
 	if _, err := tx.Exec(ctx,
 		`UPDATE users SET deactivated_at = $2 WHERE id = $1`, userID, now); err != nil {
-		return fmt.Errorf("deactivating orphaned external %s: %w", userID, err)
+		return false, 0, fmt.Errorf("deactivating orphaned external %s: %w", userID, err)
 	}
 
 	// Cascade — soft-revoke every live key in the same tx (reuses the same
@@ -350,7 +371,11 @@ func (s *Store) deactivateExternalIfOrphaned(ctx context.Context, tx pgx.Tx, use
 	// consistent).
 	revoked, err := s.apikeys.RevokeAllForUser(ctx, tx, userID)
 	if err != nil {
-		return err
+		return false, 0, err
+	}
+	removedPush, err = push.DeleteAllForUserInTx(ctx, tx, userID, push.ReasonExternalOrphaned)
+	if err != nil {
+		return false, 0, err
 	}
 
 	// Audit event mirrors users.EventUserDeactivated ("user.deactivated") so
@@ -364,7 +389,10 @@ func (s *Store) deactivateExternalIfOrphaned(ctx context.Context, tx pgx.Tx, use
 			Reason             string    `json:"reason"`
 		}{now, revoked, "external user removed from last project"},
 	)
-	return err
+	if err != nil {
+		return false, 0, err
+	}
+	return true, removedPush, nil
 }
 
 // MembershipDTO is one row returned by ListMembershipsForUser. Mirrors the

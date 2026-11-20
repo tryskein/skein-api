@@ -55,8 +55,8 @@ func (fakeUsers) CreateSelfService(_ context.Context, a accounts.NewAccount) (ac
 	return accounts.AuthResponse{ID: uuid.NewString(), Email: a.Email, Username: a.Username}, nil
 }
 func (fakeUsers) HashPassword(string) (string, error) { return "hash", nil }
-func (fakeUsers) CompletePasswordResetInTx(context.Context, pgx.Tx, uuid.UUID, string) (accounts.AuthResponse, error) {
-	return accounts.AuthResponse{}, nil
+func (fakeUsers) CompletePasswordResetInTx(context.Context, pgx.Tx, uuid.UUID, string) (accounts.AuthResponse, int, error) {
+	return accounts.AuthResponse{}, 0, nil
 }
 
 // freeIdentities: nothing is taken.

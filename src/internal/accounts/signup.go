@@ -118,7 +118,7 @@ type Users interface {
 	// the transaction that used the reset token — raises the session epoch
 	// (every session ends, API keys stay; INV-26) and returns the
 	// authentication response with the new epoch.
-	CompletePasswordResetInTx(ctx context.Context, tx pgx.Tx, userID uuid.UUID, hash string) (AuthResponse, error)
+	CompletePasswordResetInTx(ctx context.Context, tx pgx.Tx, userID uuid.UUID, hash string) (resp AuthResponse, removedPush int, err error)
 }
 
 // Paths a new password comes from, for the log of the password check.

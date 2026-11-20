@@ -21,6 +21,7 @@ import (
 	"skein-api/internal/accounts"
 	"skein-api/internal/assignee"
 	"skein-api/internal/auth"
+	"skein-api/internal/push"
 	"skein-api/internal/pwned"
 	"skein-api/internal/signals"
 	"skein-api/internal/spaces"
@@ -204,24 +205,34 @@ func (s *Store) HashPassword(password string) (string, error) {
 // every session of the user ends, the API keys are not touched (INV-26) —
 // the password-changed event with the user as its actor, and the
 // authentication response read after the bump, so it carries the new epoch
-// (K-16). tx is the transaction that used the reset token.
-func (s *Store) CompletePasswordResetInTx(ctx context.Context, tx pgx.Tx, userID uuid.UUID, hash string) (accounts.AuthResponse, error) {
+// (K-16). tx is the transaction that used the reset token. Every push
+// subscription of the user is deleted after the users row is written;
+// removedPush is how many, for the caller's log after its commit.
+func (s *Store) CompletePasswordResetInTx(ctx context.Context, tx pgx.Tx, userID uuid.UUID, hash string) (resp accounts.AuthResponse, removedPush int, err error) {
 	var username string
-	err := tx.QueryRow(ctx, `
+	err = tx.QueryRow(ctx, `
 UPDATE users SET password_hash = $2 WHERE id = $1 RETURNING username`, userID, hash).Scan(&username)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return accounts.AuthResponse{}, ErrUserNotFound
+		return accounts.AuthResponse{}, 0, ErrUserNotFound
 	}
 	if err != nil {
-		return accounts.AuthResponse{}, fmt.Errorf("setting the reset password: %w", err)
+		return accounts.AuthResponse{}, 0, fmt.Errorf("setting the reset password: %w", err)
 	}
 	if _, err := BumpSessionEpochInTx(ctx, tx, userID); err != nil {
-		return accounts.AuthResponse{}, err
+		return accounts.AuthResponse{}, 0, err
+	}
+	removedPush, err = push.DeleteAllForUserInTx(ctx, tx, userID, push.ReasonPasswordReset)
+	if err != nil {
+		return accounts.AuthResponse{}, 0, err
 	}
 	if err := writeUserEvent(ctx, tx, EventUserPasswordChanged, userID, HumanActor(userID, username), nil, map[string]any{
 		"userId": userID.String(), "via": "reset",
 	}); err != nil {
-		return accounts.AuthResponse{}, err
+		return accounts.AuthResponse{}, 0, err
 	}
-	return BuildAuthResponse(ctx, tx, userID)
+	resp, err = BuildAuthResponse(ctx, tx, userID)
+	if err != nil {
+		return accounts.AuthResponse{}, 0, err
+	}
+	return resp, removedPush, nil
 }

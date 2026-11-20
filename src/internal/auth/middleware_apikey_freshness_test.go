@@ -87,7 +87,7 @@ func TestDeactivation_RefusesWarmKeyAndSessionAtOnce(t *testing.T) {
 	}
 
 	if err := pgx.BeginTxFunc(ctx, pool, pgx.TxOptions{IsoLevel: pgx.Serializable}, func(tx pgx.Tx) error {
-		_, err := store.DeactivateInTx(ctx, tx, u, actor)
+		_, _, err := store.DeactivateInTx(ctx, tx, u, actor)
 		return err
 	}); err != nil {
 		t.Fatalf("DeactivateInTx: %v", err)

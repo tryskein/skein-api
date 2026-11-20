@@ -20,6 +20,7 @@ import (
 	"skein-api/internal/authz"
 	"skein-api/internal/eventbus"
 	"skein-api/internal/person"
+	"skein-api/internal/push"
 	"skein-api/internal/signals"
 	"skein-api/internal/spaces"
 )
@@ -1053,35 +1054,37 @@ UPDATE users SET session_epoch = session_epoch + 1 WHERE id = $1 RETURNING sessi
 // (changed = false, no event). It is the one deactivation of the product:
 // the admin path (Deactivate), the operator (T042) and the account deletion
 // (T041) all go through it. Deactivation is not a loss of access (INV-12):
-// memberships and assignments stay.
-func (s *Store) DeactivateInTx(ctx context.Context, tx pgx.Tx, id uuid.UUID, actor Actor) (changed bool, err error) {
+// memberships and assignments stay. Every push subscription of the user is
+// deleted after the users row is written; removedPush is how many, for the
+// caller's log after its commit.
+func (s *Store) DeactivateInTx(ctx context.Context, tx pgx.Tx, id uuid.UUID, actor Actor) (changed bool, removedPush int, err error) {
 	old, err := loadUserInTx(ctx, tx, id)
 	if err != nil {
-		return false, err
+		return false, 0, err
 	}
 	if byKey(ctx, actor) && old.Role == "admin" {
-		return false, fmt.Errorf("%w: deactivating an instance admin", ErrNotByAPIKey)
+		return false, 0, fmt.Errorf("%w: deactivating an instance admin", ErrNotByAPIKey)
 	}
 	if old.DeactivatedAt != nil {
 		// Already deactivated — no-op. Don't write a duplicate event.
-		return false, nil
+		return false, 0, nil
 	}
 	// Last-admin protection — only relevant when we're disabling an
 	// active admin row.
 	if old.Role == "admin" {
 		adminCount, err := countActiveAdminsInTx(ctx, tx)
 		if err != nil {
-			return false, err
+			return false, 0, err
 		}
 		if adminCount <= 1 {
-			return false, ErrLastAdmin
+			return false, 0, ErrLastAdmin
 		}
 	}
 
 	now := time.Now().UTC()
 	if _, err := tx.Exec(ctx, `
 UPDATE users SET deactivated_at = $2, session_epoch = session_epoch + 1 WHERE id = $1`, id, now); err != nil {
-		return false, err
+		return false, 0, err
 	}
 
 	// Cascade — soft-revoke every active key in the same tx. The
@@ -1089,7 +1092,13 @@ UPDATE users SET deactivated_at = $2, session_epoch = session_epoch + 1 WHERE id
 	// can see it without a separate query.
 	revoked, err := s.apikeysStore.RevokeAllForUser(ctx, tx, id)
 	if err != nil {
-		return false, err
+		return false, 0, err
+	}
+	// Every push subscription goes with the deactivation, after the users
+	// row is written (push/account_events.go).
+	removedPush, err = push.DeleteAllForUserInTx(ctx, tx, id, push.ReasonDeactivation)
+	if err != nil {
+		return false, 0, err
 	}
 
 	newDTO := *old
@@ -1098,11 +1107,11 @@ UPDATE users SET deactivated_at = $2, session_epoch = session_epoch + 1 WHERE id
 		UserDTO
 		RevokedAPIKeyCount int64 `json:"revokedApiKeyCount"`
 	}{newDTO, revoked}); err != nil {
-		return false, err
+		return false, 0, err
 	}
 	// sk-622.21 T017 (US-11): "Deactivation".
 	signalAccessChanged(tx, id)
-	return true, nil
+	return true, removedPush, nil
 }
 
 // Deactivate is the admin's deactivation: DeactivateInTx in a SERIALIZABLE
@@ -1111,11 +1120,26 @@ UPDATE users SET deactivated_at = $2, session_epoch = session_epoch + 1 WHERE id
 // admin: the retry re-reads the admin count, and ErrLastAdmin comes only
 // from that recheck. Exhausted retries are spaces.ErrConcurrentChange.
 // Idempotent on an already deactivated user (the handler maps that to 204).
+//
+// The push subscriptions deleted with the deactivation are logged after the
+// commit, with the number of the last attempt.
 func (s *Store) Deactivate(ctx context.Context, id uuid.UUID, actor Actor) error {
-	return spaces.WithRetry(ctx, s.pool, func(tx pgx.Tx) error {
-		_, err := s.DeactivateInTx(ctx, tx, id, actor)
+	var (
+		changed bool
+		removed int
+	)
+	err := spaces.WithRetry(ctx, s.pool, func(tx pgx.Tx) error {
+		var err error
+		changed, removed, err = s.DeactivateInTx(ctx, tx, id, actor)
 		return err
 	})
+	if err != nil {
+		return err
+	}
+	if changed {
+		push.LogAccountEventRemoval(ctx, id, push.ReasonDeactivation, removed)
+	}
+	return nil
 }
 
 // Reactivate clears deactivated_at. Does NOT un-revoke API keys per Q-4

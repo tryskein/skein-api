@@ -63,6 +63,7 @@ import (
 	"skein-api/internal/auth"
 	"skein-api/internal/authz"
 	"skein-api/internal/invitations"
+	"skein-api/internal/push"
 	"skein-api/internal/spaces"
 )
 
@@ -223,7 +224,11 @@ SELECT password_hash, deleted_at IS NOT NULL, deactivated_at IS NOT NULL FROM us
 // already deleted.
 func (s *Store) DeleteAccount(ctx context.Context, userID uuid.UUID, verifiedHash string, actor Actor) error {
 	sa := spaces.Actor{UserID: actor.UserID, Username: actor.Username, SessionID: actor.SessionID, Type: actor.Role}
-	return spaces.WithRetry(ctx, s.pool, func(tx pgx.Tx) error {
+	// removedPush is the number of push subscriptions the last attempt
+	// deleted, logged after the commit.
+	var removedPush int
+	err := spaces.WithRetry(ctx, s.pool, func(tx pgx.Tx) error {
+		removedPush = 0
 		toLock, err := collectUUIDs(ctx, tx, `
 SELECT space_id FROM space_members WHERE user_id = $1
 UNION
@@ -264,7 +269,7 @@ SELECT email, username, name, password_hash, deleted_at IS NOT NULL FROM users W
 			return ref
 		}
 
-		changed, err := s.DeactivateInTx(ctx, tx, userID, actor)
+		changed, removed, err := s.DeactivateInTx(ctx, tx, userID, actor)
 		if errors.Is(err, ErrLastAdmin) {
 			return refusedLastAdmin
 		}
@@ -298,11 +303,18 @@ SELECT email, username, name, password_hash, deleted_at IS NOT NULL FROM users W
 		if err := retireInvitations(ctx, tx, userID, who.email, actor.UserID); err != nil {
 			return err
 		}
-		if err := dropPersonalState(ctx, tx, userID, who.email); err != nil {
+		dropped, err := dropPersonalState(ctx, tx, userID, who.email)
+		if err != nil {
 			return err
 		}
+		removedPush = removed + dropped
 		return anonymizeInTx(ctx, tx, userID, who)
 	})
+	if err != nil {
+		return err
+	}
+	push.LogAccountEventRemoval(ctx, userID, push.ReasonAccountDeleted, removedPush)
+	return nil
 }
 
 // revokeEverywhere applies INV-12 to every project the account still has
@@ -363,11 +375,15 @@ SELECT id FROM space_invitations
 // dropPersonalState deletes what only the account had: its tokens and every
 // email of it or to its address, finished ones included (the mail cleanup,
 // mail/cleanup.go, removes only what a worker finalises later), push
-// subscriptions, agent sessions,
+// subscriptions and device revocations, agent sessions,
 // monitor credentials, preferences, notifications, watches, reminders and
 // its themes; its revoked keys keep their rows, labelled by the pseudonym
-// in anonymizeInTx.
-func dropPersonalState(ctx context.Context, tx pgx.Tx, userID uuid.UUID, email string) error {
+// in anonymizeInTx. Returns the number of push subscriptions deleted.
+func dropPersonalState(ctx context.Context, tx pgx.Tx, userID uuid.UUID, email string) (int, error) {
+	removedPush, err := push.DeleteAllForUserInTx(ctx, tx, userID, push.ReasonAccountDeleted)
+	if err != nil {
+		return 0, err
+	}
 	steps := []struct{ what, sql string }{
 		{"tokens", `DELETE FROM auth_tokens WHERE user_id = $1`},
 		// Every email of the account or to its address, finished ones
@@ -375,7 +391,7 @@ func dropPersonalState(ctx context.Context, tx pgx.Tx, userID uuid.UUID, email s
 		// cancellation turns the unsent invitation emails final. The mail
 		// cleanup stays for an outcome a worker writes later.
 		{"emails", `DELETE FROM outgoing_emails WHERE user_id = $1 OR recipient = lower(btrim($2))`},
-		{"push subscriptions", `DELETE FROM push_subscriptions WHERE user_id = $1`},
+		{"push device revocations", `DELETE FROM push_device_revocations WHERE user_id = $1`},
 		{"agent sessions", `DELETE FROM agents WHERE user_id = $1`},
 		{"monitor credentials", `DELETE FROM monitor_credentials WHERE user_id = $1`},
 		{"notifications", `DELETE FROM notifications WHERE user_id = $1`},
@@ -397,10 +413,10 @@ func dropPersonalState(ctx context.Context, tx pgx.Tx, userID uuid.UUID, email s
 			args = append(args, email)
 		}
 		if _, err := tx.Exec(ctx, st.sql, args...); err != nil {
-			return fmt.Errorf("deleting the account's %s: %w", st.what, err)
+			return 0, fmt.Errorf("deleting the account's %s: %w", st.what, err)
 		}
 	}
-	return nil
+	return removedPush, nil
 }
 
 // collectUUIDs runs sql and reads one uuid column.
