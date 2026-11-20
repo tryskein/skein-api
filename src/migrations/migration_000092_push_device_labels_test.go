@@ -28,9 +28,6 @@ var m92NewColumns = []string{"device_label", "version"}
 const (
 	m92RevocationsTable = "push_device_revocations"
 	m92LabelIndex       = "idx_push_subscriptions_user_label"
-	// m92LabelIndexDef is the label lookup index as the catalogue renders
-	// it: (user_id, device_label), only rows with a label.
-	m92LabelIndexDef = "CREATE INDEX idx_push_subscriptions_user_label ON public.push_subscriptions USING btree (user_id, device_label) WHERE (device_label IS NOT NULL)"
 )
 
 // seedM92Subscription writes a subscription in the form every writer before
@@ -67,14 +64,34 @@ SELECT device_label, version FROM push_subscriptions WHERE id = $1`, id).Scan(&l
 	}
 }
 
-func m92IndexDef(t *testing.T, pool *pgxpool.Pool, stage string) string {
+// m92Index is the label lookup index as the catalogue describes it.
+type m92Index struct {
+	table     string
+	columns   []string
+	unique    bool
+	predicate *string
+}
+
+func m92ReadIndex(t *testing.T, pool *pgxpool.Pool, stage string) m92Index {
 	t.Helper()
-	var def string
+	var ix m92Index
 	if err := pool.QueryRow(context.Background(), `
-SELECT indexdef FROM pg_indexes WHERE schemaname = 'public' AND indexname = $1`, m92LabelIndex).Scan(&def); err != nil {
+SELECT tbl.relname,
+       ARRAY(SELECT a.attname::text
+               FROM unnest(i.indkey::int2[]) WITH ORDINALITY AS k(attnum, ord)
+               JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = k.attnum
+              ORDER BY k.ord),
+       i.indisunique,
+       pg_get_expr(i.indpred, i.indrelid)
+  FROM pg_index i
+  JOIN pg_class idx ON idx.oid = i.indexrelid
+  JOIN pg_class tbl ON tbl.oid = i.indrelid
+  JOIN pg_namespace n ON n.oid = idx.relnamespace
+ WHERE n.nspname = 'public' AND idx.relname = $1`, m92LabelIndex).
+		Scan(&ix.table, &ix.columns, &ix.unique, &ix.predicate); err != nil {
 		t.Fatalf("%s: read index %s: %v", stage, m92LabelIndex, err)
 	}
-	return def
+	return ix
 }
 
 func assertM92Schema(t *testing.T, pool *pgxpool.Pool, stage string) {
@@ -87,8 +104,20 @@ func assertM92Schema(t *testing.T, pool *pgxpool.Pool, stage string) {
 	if !tableExists(t, pool, m92RevocationsTable) {
 		t.Errorf("%s: table %s missing", stage, m92RevocationsTable)
 	}
-	if got := m92IndexDef(t, pool, stage); got != m92LabelIndexDef {
-		t.Errorf("%s: index = %q, want %q", stage, got, m92LabelIndexDef)
+	// The plan: a non-unique index on (user_id, device_label) over the rows
+	// with a label.
+	ix := m92ReadIndex(t, pool, stage)
+	if ix.table != "push_subscriptions" {
+		t.Errorf("%s: index table = %q, want push_subscriptions", stage, ix.table)
+	}
+	if len(ix.columns) != 2 || ix.columns[0] != "user_id" || ix.columns[1] != "device_label" {
+		t.Errorf("%s: index key = %v, want [user_id device_label]", stage, ix.columns)
+	}
+	if ix.unique {
+		t.Errorf("%s: index is unique, want non-unique", stage)
+	}
+	if ix.predicate == nil || *ix.predicate != "(device_label IS NOT NULL)" {
+		t.Errorf("%s: index predicate = %v, want device_label IS NOT NULL", stage, ix.predicate)
 	}
 }
 
