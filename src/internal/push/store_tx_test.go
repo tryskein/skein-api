@@ -884,3 +884,48 @@ func TestRegister_OverlappingFirstRegistrationsOfAnEndpoint(t *testing.T) {
 		}
 	})
 }
+
+// Edge 1, US-4, SC-004: a registration with label L at a new endpoint —
+// it shares no row with the revocation, so it waits on nothing — runs to
+// its end while RevokeDevice(L) is held at its commit; then the revocation
+// commits. Whatever the order the database settles on, no subscription
+// with L is left and L is revoked.
+func TestRegisterAtANewEndpointAndRevokeDevice_LeaveNoSubscription(t *testing.T) {
+	w := newTxWorld(t)
+	ctx := context.Background()
+	user, epoch := w.user(t)
+	label := uuid.New()
+	w.seedSub(t, user, newEndpoint(), &label)
+
+	revokeStore, gate := gatedStore(t, true)
+	revokeDone := make(chan error, 1)
+	go func() {
+		_, err := revokeStore.RevokeDevice(ctx, user, epoch, []uuid.UUID{label}, "")
+		revokeDone <- err
+	}()
+	select {
+	case <-gate.held:
+	case err := <-revokeDone:
+		t.Fatalf("the revocation ended before its commit was held: %v", err)
+	case <-time.After(15 * time.Second):
+		t.Fatal("the revocation did not reach its commit")
+	}
+
+	_, regErr := w.store.Register(ctx, push.RegisterInput{
+		UserID: user, SessionEpoch: epoch, Endpoint: newEndpoint(),
+		P256dh: "p", Auth: "a", DeviceLabel: &label, Mode: push.ModeUpsert,
+	})
+	gate.open()
+	if err := <-revokeDone; err != nil {
+		t.Errorf("revocation: %v, want nil", err)
+	}
+	if regErr != nil && !errors.Is(regErr, push.ErrDeviceRevoked) {
+		t.Errorf("registration: %v, want nil or ErrDeviceRevoked", regErr)
+	}
+	if n := w.count(t, `SELECT count(*) FROM push_subscriptions WHERE user_id = $1 AND device_label = $2`, user, label); n != 0 {
+		t.Errorf("subscriptions with the label after both = %d, want 0", n)
+	}
+	if !w.revoked(t, user, label) {
+		t.Error("the label is not revoked")
+	}
+}
