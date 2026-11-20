@@ -179,9 +179,9 @@ func (h *handlers) finish(operation, result string) {
 // @Summary Block an account
 // @Description Business meaning: the operator blocks an account (abuse, non-payment): it can no longer sign in, every session and API key of it stops working at once, its memberships, assignments and spaces stay and keep working for the others (US-11: blocking is the deactivation).
 // @Description
-// @Description Algorithm: the account is found by email, case-insensitively (a deleted account is not found); one SERIALIZABLE transaction sets deactivated_at, raises the session epoch and revokes every API key, refusing the last active admin. Blocking a blocked account is a no-op answered 204.
+// @Description Algorithm: the account is found by email, case-insensitively (a deleted account is not found); one SERIALIZABLE transaction sets deactivated_at, raises the session epoch, revokes every API key and deletes every push subscription of the account, refusing the last active admin. Blocking a blocked account is a no-op answered 204.
 // @Description
-// @Description Side effects: the user.deactivated event (skein-web drops the account's sessions and hub groups); personal signals. Refusals: 400 invalid_request; 422 account_not_found, last_admin_cannot_demote, concurrent_change (a serialization conflict after three attempts — nothing is changed, repeat).
+// @Description Side effects: the user.deactivated event (skein-web drops the account's sessions and hub groups); personal signals; an Information log record of the push subscriptions deleted (userId, reason deactivation, number) after the commit. Refusals: 400 invalid_request; 422 account_not_found, last_admin_cannot_demote, concurrent_change (a serialization conflict after three attempts — nothing is changed, repeat).
 // @Tags Operator
 // @Accept json
 // @Security OperatorKeyAuth

@@ -482,8 +482,8 @@ func (h *UsersHandler) Update(w http.ResponseWriter, r *http.Request) {
 // admin.
 //
 // @Summary Deactivate a user (admin)
-// @Description Blocks the account: one SERIALIZABLE transaction sets deactivated_at, raises the session epoch (every browser session is refused from its next request) and revokes every active API key; memberships, assignments and spaces stay (INV-12: deactivation is not a loss of access). Deactivating an already deactivated user is a no-op answered 204.
-// @Description Side effects: the user.deactivated event (skein-web drops the user's session tickets and hub groups) and personal signals.
+// @Description Blocks the account: one SERIALIZABLE transaction sets deactivated_at, raises the session epoch (every browser session is refused from its next request), revokes every active API key and deletes every push subscription of the user (device revocations are kept; after reactivation a new session may register again); memberships, assignments and spaces stay (INV-12: deactivation is not a loss of access). Deactivating an already deactivated user is a no-op answered 204.
+// @Description Side effects: the user.deactivated event (skein-web drops the user's session tickets and hub groups), personal signals, and an Information log record of the push subscriptions deleted (userId, reason deactivation, number) after the commit.
 // @Description Refusals: the only active admin → 422 last_admin_cannot_demote; a serialization conflict with a concurrent change is retried (three attempts, K-7), after that 422 concurrent_change — nothing is changed, repeat the request. Admin only.
 // @Tags Users
 // @Produce json

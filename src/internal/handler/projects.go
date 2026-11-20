@@ -1267,6 +1267,26 @@ func (h *ProjectsHandler) UpsertMember(w http.ResponseWriter, r *http.Request) {
 // Self-leave (R3.1 Q-7): when callerID == targetID, the EnsureProjectOwner
 // gate is bypassed — a plain member must be able to remove themselves
 // from a project without bothering the owner.
+//
+// @Summary Remove a member from a project
+// @Description Takes the user's explicit membership of the project away (US-17), or lets the caller leave the project (the caller removes himself).
+// @Description
+// @Description Algorithm: {projectID} or {userID} not a UUID → 400 invalid_id / invalid_user_id; removing another user requires the caller to own the project, leaving requires only seeing it (403 forbidden / 404 not_found otherwise). Then one SERIALIZABLE transaction under the lock of the project's space: no membership → 404 member_not_found; a member who keeps the project through its space → 422 member_via_space, nothing changes; else the membership row is deleted, the user loses what he no longer sees in the project (INV-12), and an external user left without any project is deactivated: deactivated_at is set, every API key revoked and every push subscription of the user deleted (device revocations are kept; the session epoch is not raised). The last explicit owner may go: the project stays under the implicit owner of its space. A concurrent membership change that wins three times → 422 concurrent_change.
+// @Description
+// @Description Side effects: the project.member_removed event and personal signals; for an orphaned external user the user.deactivated event and an Information log record of the push subscriptions deleted (userId, reason external_orphaned, number) after the commit.
+// @Tags Projects
+// @Produce json
+// @Security ApiKeyAuth
+// @Param projectID path string true "Project id (UUID)"
+// @Param userID path string true "User id (UUID)"
+// @Success 204 "Removed"
+// @Failure 400 {object} map[string]any "invalid_id | invalid_user_id"
+// @Failure 401 {object} map[string]any "Missing / invalid auth"
+// @Failure 403 {object} map[string]any "forbidden — the caller does not own the project"
+// @Failure 404 {object} map[string]any "not_found — project not visible | member_not_found"
+// @Failure 422 {object} map[string]any "member_via_space | concurrent_change"
+// @Failure 500 {object} map[string]any "internal_error — the request could not be served"
+// @Router /ui/v1/projects/{projectID}/members/{userID} [delete]
 func (h *ProjectsHandler) RemoveMember(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	c, ok := caller(r)
