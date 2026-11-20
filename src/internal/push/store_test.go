@@ -63,25 +63,6 @@ func seededEndpoint(t *testing.T, pool *pgxpool.Pool, id uuid.UUID) string {
 	return endpoint
 }
 
-func TestStore_DeleteByEndpointAny(t *testing.T) {
-	pool := newTestPool(t)
-	ctx := context.Background()
-	store := NewStore(pool)
-	user := seedUser(t, pool)
-
-	endpoint := seededEndpoint(t, pool, testsupport.SeedPushSubscription(t, pool, user))
-	if err := store.DeleteByEndpointAny(ctx, endpoint); err != nil {
-		t.Fatalf("delete-any: %v", err)
-	}
-	if l, _ := store.ListForUser(ctx, user); len(l) != 0 {
-		t.Fatalf("expected row removed by delete-any, got %d", len(l))
-	}
-	// Idempotent on a missing endpoint.
-	if err := store.DeleteByEndpointAny(ctx, "https://push.example/missing"); err != nil {
-		t.Fatalf("idempotent delete-any: %v", err)
-	}
-}
-
 func TestStore_CascadeOnUserDelete(t *testing.T) {
 	pool := newTestPool(t)
 	ctx := context.Background()

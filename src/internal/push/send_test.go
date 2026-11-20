@@ -6,12 +6,14 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"unicode/utf8"
@@ -22,18 +24,20 @@ import (
 	"skein-api/internal/logging"
 )
 
-// fakePruner records DeleteByEndpointAny calls so the Send tests can assert
-// the gone-endpoint prune fired without a real DB.
+// fakePruner records DeleteGone calls so the Send tests can assert the
+// gone-endpoint prune fired, and for which record, without a real DB.
 type fakePruner struct {
-	calls     atomic.Int32
-	lastArg   string
-	returnErr error
+	calls       atomic.Int32
+	lastID      uuid.UUID
+	lastVersion int64
+	returnErr   error
 }
 
-func (f *fakePruner) DeleteByEndpointAny(_ context.Context, endpoint string) error {
+func (f *fakePruner) DeleteGone(_ context.Context, id uuid.UUID, version int64) (bool, error) {
 	f.calls.Add(1)
-	f.lastArg = endpoint
-	return f.returnErr
+	f.lastID = id
+	f.lastVersion = version
+	return f.returnErr == nil, f.returnErr
 }
 
 // realVAPIDPublic / realVAPIDPrivate are a keypair generated fresh for every
@@ -74,12 +78,13 @@ func TestSend_GonePrunesSubscription(t *testing.T) {
 			defer srv.Close()
 
 			pr := &fakePruner{}
-			s := NewSender(pr, realVAPIDPublic, realVAPIDPrivate, "mailto:test@skein.local")
+			s := NewSender(pr, loopbackClient(), realVAPIDPublic, realVAPIDPrivate, "mailto:test@skein.local")
 			// The httptest server is loopback http — the real ValidateEndpoint
 			// (correctly) rejects that, so relax the guard to exercise the
 			// status-handling path we're actually testing here.
 			relaxForLoopback(s)
 			sub := testSubscription(srv.URL)
+			sub.Version = 3
 
 			err := s.Send(context.Background(), sub, []byte(`{"hello":"world"}`))
 			if !errors.Is(err, ErrGone) {
@@ -88,8 +93,12 @@ func TestSend_GonePrunesSubscription(t *testing.T) {
 			if got := pr.calls.Load(); got != 1 {
 				t.Fatalf("expected exactly 1 prune call, got %d", got)
 			}
-			if pr.lastArg != sub.Endpoint {
-				t.Fatalf("prune called with %q, want %q", pr.lastArg, sub.Endpoint)
+			// Only the record that was sent to, at the version sent to: a
+			// registration made after this request is not what the answer
+			// speaks about.
+			if pr.lastID != sub.ID || pr.lastVersion != 3 {
+				t.Fatalf("prune called with (%s, %d), want the sent record (%s, 3)",
+					pr.lastID, pr.lastVersion, sub.ID)
 			}
 		})
 	}
@@ -102,15 +111,21 @@ func TestSend_GonePruneErrorStillReturnsErrGone(t *testing.T) {
 	defer srv.Close()
 
 	pr := &fakePruner{returnErr: errors.New("db down")}
-	s := NewSender(pr, realVAPIDPublic, realVAPIDPrivate, "mailto:test@skein.local")
+	s := NewSender(pr, loopbackClient(), realVAPIDPublic, realVAPIDPrivate, "mailto:test@skein.local")
 	relaxForLoopback(s)
+	sub := testSubscription(srv.URL)
+	sub.Version = 7
 
-	err := s.Send(context.Background(), testSubscription(srv.URL), []byte(`{}`))
+	err := s.Send(context.Background(), sub, []byte(`{}`))
 	if !errors.Is(err, ErrGone) {
 		t.Fatalf("expected ErrGone even when prune fails, got %v", err)
 	}
 	if pr.calls.Load() != 1 {
 		t.Fatalf("expected prune attempted once, got %d", pr.calls.Load())
+	}
+	if pr.lastID != sub.ID || pr.lastVersion != 7 {
+		t.Fatalf("prune attempted with (%s, %d), want the sent record (%s, 7)",
+			pr.lastID, pr.lastVersion, sub.ID)
 	}
 }
 
@@ -121,7 +136,7 @@ func TestSend_Success(t *testing.T) {
 	defer srv.Close()
 
 	pr := &fakePruner{}
-	s := NewSender(pr, realVAPIDPublic, realVAPIDPrivate, "mailto:test@skein.local")
+	s := NewSender(pr, loopbackClient(), realVAPIDPublic, realVAPIDPrivate, "mailto:test@skein.local")
 	relaxForLoopback(s)
 
 	if err := s.Send(context.Background(), testSubscription(srv.URL), []byte(`{}`)); err != nil {
@@ -139,7 +154,7 @@ func TestSend_NonGoneErrorDoesNotPrune(t *testing.T) {
 	defer srv.Close()
 
 	pr := &fakePruner{}
-	s := NewSender(pr, realVAPIDPublic, realVAPIDPrivate, "mailto:test@skein.local")
+	s := NewSender(pr, loopbackClient(), realVAPIDPublic, realVAPIDPrivate, "mailto:test@skein.local")
 	relaxForLoopback(s)
 
 	err := s.Send(context.Background(), testSubscription(srv.URL), []byte(`{}`))
@@ -156,7 +171,7 @@ func TestSend_NonGoneErrorDoesNotPrune(t *testing.T) {
 
 func TestSend_DisabledWhenNoKeys(t *testing.T) {
 	pr := &fakePruner{}
-	s := NewSender(pr, "", "", "mailto:test@skein.local")
+	s := NewSender(pr, NewGuardedClient(), "", "", "mailto:test@skein.local")
 	if s.Enabled() {
 		t.Fatal("expected Enabled()=false with no keys")
 	}
@@ -174,7 +189,7 @@ func TestSend_InvalidEndpointSkippedNoPrune(t *testing.T) {
 	// dispatched. With the REAL validator (NewSender's default), Send returns
 	// an ErrInvalidEndpoint-wrapped error and does NOT prune the row.
 	pr := &fakePruner{}
-	s := NewSender(pr, realVAPIDPublic, realVAPIDPrivate, "mailto:test@skein.local")
+	s := NewSender(pr, NewGuardedClient(), realVAPIDPublic, realVAPIDPrivate, "mailto:test@skein.local")
 	sub := testSubscription("https://127.0.0.1/internal")
 
 	err := s.Send(context.Background(), sub, []byte(`{}`))
@@ -236,7 +251,7 @@ func TestSend_VAPIDSubjectIsSentVerbatim(t *testing.T) {
 			}))
 			defer srv.Close()
 
-			s := NewSender(&fakePruner{}, realVAPIDPublic, realVAPIDPrivate, subject)
+			s := NewSender(&fakePruner{}, loopbackClient(), realVAPIDPublic, realVAPIDPrivate, subject)
 			relaxForLoopback(s)
 			if err := s.Send(context.Background(), testSubscription(srv.URL), []byte(`{}`)); err != nil {
 				t.Fatalf("Send: %v", err)
@@ -261,7 +276,7 @@ func TestSend_ForbiddenIsNotGoneAndKeepsTheSubscription(t *testing.T) {
 	defer srv.Close()
 
 	pr := &fakePruner{}
-	s := NewSender(pr, realVAPIDPublic, realVAPIDPrivate, "mailto:test@skein.local")
+	s := NewSender(pr, loopbackClient(), realVAPIDPublic, realVAPIDPrivate, "mailto:test@skein.local")
 	relaxForLoopback(s)
 
 	err := s.Send(context.Background(), testSubscription(srv.URL), []byte(`{}`))
@@ -308,7 +323,7 @@ func TestSend_StatusErrorCarriesHostAndBoundedBody(t *testing.T) {
 			}))
 			defer srv.Close()
 
-			s := NewSender(&fakePruner{}, realVAPIDPublic, realVAPIDPrivate, "mailto:test@skein.local")
+			s := NewSender(&fakePruner{}, loopbackClient(), realVAPIDPublic, realVAPIDPrivate, "mailto:test@skein.local")
 			relaxForLoopback(s)
 			sub := testSubscription(srv.URL + "/push/v1/secret-subscription-token")
 
@@ -385,7 +400,7 @@ func TestSend_ResponseBodyNeverCarriesTheSubscriptionSecret(t *testing.T) {
 			defer srv.Close()
 			endpoint = srv.URL + "/3/device/" + sk627Token
 
-			s := NewSender(&fakePruner{}, realVAPIDPublic, realVAPIDPrivate, "mailto:test@skein.local")
+			s := NewSender(&fakePruner{}, loopbackClient(), realVAPIDPublic, realVAPIDPrivate, "mailto:test@skein.local")
 			relaxForLoopback(s)
 			err := s.Send(context.Background(), testSubscription(endpoint), []byte(`{}`))
 			var se *StatusError
@@ -432,7 +447,7 @@ func TestSend_StatusErrorBodyHonoursItsBound(t *testing.T) {
 			}))
 			defer srv.Close()
 
-			s := NewSender(&fakePruner{}, realVAPIDPublic, realVAPIDPrivate, "mailto:test@skein.local")
+			s := NewSender(&fakePruner{}, loopbackClient(), realVAPIDPublic, realVAPIDPrivate, "mailto:test@skein.local")
 			relaxForLoopback(s)
 			var se *StatusError
 			if err := s.Send(context.Background(), testSubscription(srv.URL), []byte(`{}`)); !errors.As(err, &se) {
@@ -464,7 +479,7 @@ func TestSend_BodyReadFailureIsReportedNotCut(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	s := NewSender(&fakePruner{}, realVAPIDPublic, realVAPIDPrivate, "mailto:test@skein.local")
+	s := NewSender(&fakePruner{}, loopbackClient(), realVAPIDPublic, realVAPIDPrivate, "mailto:test@skein.local")
 	relaxForLoopback(s)
 	var se *StatusError
 	if err := s.Send(context.Background(), testSubscription(srv.URL), []byte(`{}`)); !errors.As(err, &se) {
@@ -478,5 +493,54 @@ func TestSend_BodyReadFailureIsReportedNotCut(t *testing.T) {
 	}
 	if se.BodyTruncated {
 		t.Error("BodyTruncated = true, but nothing that arrived was cut")
+	}
+}
+
+// recordingTransport answers every request with status and keeps the
+// requests it saw — the provider boundary of the sender, without a network.
+type recordingTransport struct {
+	status int
+	mu     sync.Mutex
+	seen   []*http.Request
+}
+
+func (rt *recordingTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	rt.mu.Lock()
+	rt.seen = append(rt.seen, r)
+	rt.mu.Unlock()
+	return &http.Response{
+		StatusCode: rt.status,
+		Body:       io.NopCloser(strings.NewReader("")),
+		Header:     http.Header{},
+		Request:    r,
+	}, nil
+}
+
+func (rt *recordingTransport) requests() []*http.Request {
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	return append([]*http.Request(nil), rt.seen...)
+}
+
+// Row 27 — US-11, SC-007: every request to the push service asks it to keep
+// an undelivered message for 24 hours from the request: the TTL header is
+// 86400 seconds whatever the service then answers.
+func TestSend_EveryRequestAsksTheProviderToKeepTheMessageADay(t *testing.T) {
+	for _, status := range []int{http.StatusCreated, http.StatusGone, http.StatusInternalServerError} {
+		t.Run(strconv.Itoa(status), func(t *testing.T) {
+			rt := &recordingTransport{status: status}
+			s := NewSender(&fakePruner{}, &http.Client{Transport: rt},
+				realVAPIDPublic, realVAPIDPrivate, "mailto:test@skein.local")
+
+			_ = s.Send(context.Background(), testSubscription("https://push.example.com/ttl"), []byte(`{}`))
+
+			reqs := rt.requests()
+			if len(reqs) != 1 {
+				t.Fatalf("requests to the push service = %d, want 1", len(reqs))
+			}
+			if got := reqs[0].Header.Get("TTL"); got != "86400" {
+				t.Fatalf("TTL header = %q, want \"86400\" (24 hours)", got)
+			}
+		})
 	}
 }

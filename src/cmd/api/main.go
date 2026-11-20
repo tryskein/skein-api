@@ -518,32 +518,9 @@ func main() {
 		os.Exit(1)
 	}
 
-	// sk-303.12 — warn, once, if this cluster's ctype cannot classify
-	// non-ASCII letters (locale C/POSIX, or LC_CTYPE=C under any locale
-	// provider). This is a Skein-open-source concern, not just ours: a
-	// third-party deployment that lands on the wrong locale (easy to do —
-	// Alpine-flavoured Postgres images default to C, see
-	// DEPLOYMENT-NOTES.md §1) gets a service that starts, migrates, and
-	// serves 200s while its duplicate-issue detection silently never
-	// compares any non-ASCII title. We stayed on exactly that defect in
-	// production for months (sk-228) because nothing said so out loud.
-	//
-	// Deliberately slog.Warn, not slog.Error+os.Exit: a C-locale cluster
-	// with strictly-ASCII content works correctly today, so failing
-	// startup over it would be a content-dependent crash for a condition
-	// that is legal — the same mistake sk-304 made forcing a required env
-	// var to gate the whole process. This check's own failure (e.g.
-	// pg_trgm missing) is equally non-fatal; a diagnostic must not be able
-	// to take the API down.
-	localeCheckCtx, cancelLocaleCheck := context.WithTimeout(context.Background(), 10*time.Second)
-	localeWarning, localeCheckErr := dependencies.LocaleWarning(localeCheckCtx, pool)
-	cancelLocaleCheck()
-	switch {
-	case localeCheckErr != nil:
-		slog.Warn("locale legibility check failed; continuing without it",
-			"error", localeCheckErr.Error())
-	case localeWarning != "":
-		slog.Warn(localeWarning)
+	if err := runPostMigrationMaintenance(context.Background(), pool); err != nil {
+		slog.Error("post-migration maintenance failed", "error", err.Error())
+		os.Exit(1)
 	}
 
 	// R4.2 — S3 client (optional). When S3_URL is empty the
@@ -797,7 +774,7 @@ func main() {
 	// dispatcher uses it to web-push notifications stamped with a
 	// push_category. NewSender is a no-op (Enabled()==false) when VAPID keys
 	// are absent, so the dispatcher simply skips push in that case.
-	pushSender := push.NewSender(pushStore, cfg.VAPIDPublic, cfg.VAPIDPrivate, cfg.VAPIDSubject)
+	pushSender := push.NewSender(pushStore, push.NewGuardedClient(), cfg.VAPIDPublic, cfg.VAPIDPrivate, cfg.VAPIDSubject)
 
 	// sk-10.1 — user-customizable themes. CRUD over /themes lives on
 	// ThemesHandler; the per-user active selection (/me/theme) lives on
@@ -2447,4 +2424,50 @@ func attachmentsStoreWithQuotas(pool *pgxpool.Pool, cfg *config.Config) *attachm
 	st := attachments.NewStore(pool)
 	st.SetStorageQuotas(cfg.QuotaPersonalStorageBytes, cfg.QuotaSpaceStorageBytes)
 	return st
+}
+
+// runPostMigrationMaintenance runs the startup steps that need the migrated
+// schema: the locale legibility warning and the removal of push
+// subscriptions whose owner is deactivated or deleted. The removal is here,
+// not only in the migration that introduced it, because a release deployed
+// again over a schema whose migrations already ran does not repeat them:
+// subscriptions an older release kept for users deactivated meanwhile would
+// otherwise stay. A failed removal stops startup, like a failed migration.
+func runPostMigrationMaintenance(ctx context.Context, pool *pgxpool.Pool) error {
+	// sk-303.12 — warn, once, if this cluster's ctype cannot classify
+	// non-ASCII letters (locale C/POSIX, or LC_CTYPE=C under any locale
+	// provider). This is a Skein-open-source concern, not just ours: a
+	// third-party deployment that lands on the wrong locale (easy to do —
+	// Alpine-flavoured Postgres images default to C, see
+	// DEPLOYMENT-NOTES.md §1) gets a service that starts, migrates, and
+	// serves 200s while its duplicate-issue detection silently never
+	// compares any non-ASCII title. We stayed on exactly that defect in
+	// production for months (sk-228) because nothing said so out loud.
+	//
+	// Deliberately slog.Warn, not slog.Error+os.Exit: a C-locale cluster
+	// with strictly-ASCII content works correctly today, so failing
+	// startup over it would be a content-dependent crash for a condition
+	// that is legal — the same mistake sk-304 made forcing a required env
+	// var to gate the whole process. This check's own failure (e.g.
+	// pg_trgm missing) is equally non-fatal; a diagnostic must not be able
+	// to take the API down.
+	localeCheckCtx, cancelLocaleCheck := context.WithTimeout(ctx, 10*time.Second)
+	localeWarning, localeCheckErr := dependencies.LocaleWarning(localeCheckCtx, pool)
+	cancelLocaleCheck()
+	switch {
+	case localeCheckErr != nil:
+		slog.Warn("locale legibility check failed; continuing without it",
+			"error", localeCheckErr.Error())
+	case localeWarning != "":
+		slog.Warn(localeWarning)
+	}
+
+	purgeCtx, cancelPurge := context.WithTimeout(ctx, 30*time.Second)
+	defer cancelPurge()
+	purged, err := push.NewStore(pool).PurgeInactiveOwners(purgeCtx)
+	if err != nil {
+		return err
+	}
+	slog.Info("push subscriptions of inactive users removed at startup", "removed", purged)
+	return nil
 }

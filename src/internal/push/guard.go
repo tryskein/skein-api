@@ -118,6 +118,12 @@ func defaultLookup(ctx context.Context, host string) ([]netip.Addr, error) {
 	return net.DefaultResolver.LookupNetIP(ctx, "ip", host)
 }
 
+// NewGuardedClient returns the HTTP client production hands to NewSender:
+// newPushClient with the public-address guard (checkPublicAddr).
+func NewGuardedClient() *http.Client {
+	return newPushClient(checkPublicAddr)
+}
+
 // newPushClient builds the HTTP client of the push sender. It closes the
 // SSRF paths that a check of the endpoint URL alone leaves open:
 //

@@ -14,6 +14,7 @@ import (
 	"unicode/utf8"
 
 	webpush "github.com/SherClockHolmes/webpush-go"
+	"github.com/google/uuid"
 )
 
 // pushSendTimeout bounds a single web-push delivery. The dispatcher sends
@@ -24,11 +25,12 @@ import (
 // dispatcher Run context (which only cancels on shutdown).
 const pushSendTimeout = 10 * time.Second
 
-// defaultTTL is the seconds a push service should retain an undelivered
-// message. 30s keeps it short — Skein push payloads are real-time nudges
-// (a comment, a mention); a message that couldn't be delivered for half a
-// minute is stale, the user will see the change in-app instead.
-const defaultTTL = 30
+// defaultTTL is the seconds a push service is asked to retain a message it
+// could not deliver yet: 24 hours from the request, so a device that was
+// offline still receives it when it comes back within a day. Delivery inside
+// that window is up to the push service and the browser; Skein's own retry
+// window of a notification is a separate, unchanged contract.
+const defaultTTL = 24 * 60 * 60
 
 // maxErrorBodyBytes bounds how much of a non-2xx push-service response body
 // is kept for diagnostics. The body is where a push service says WHY it
@@ -53,7 +55,8 @@ const maxErrorBodyReadBytes = 16 << 10
 var ErrDisabled = errors.New("push disabled: VAPID keys not configured")
 
 // ErrGone is returned (wrapped) by Send when the push service reported the
-// subscription endpoint is dead (404/410). Send has already pruned the row;
+// subscription endpoint is dead (404/410). Send has already asked the store
+// to remove the record it sent to (see pruner);
 // the sentinel lets callers distinguish "the device unsubscribed" from a
 // transient delivery failure so they don't retry.
 var ErrGone = errors.New("push subscription gone (pruned)")
@@ -105,22 +108,25 @@ func (e *StatusError) Unwrap() error {
 // pruner is the subset of *Store that Send needs to drop dead endpoints.
 // Declared as an interface so Send is unit-testable with a fake.
 type pruner interface {
-	DeleteByEndpointAny(ctx context.Context, endpoint string) error
+	// DeleteGone removes the record with this id while it is still at this
+	// version, and reports whether it did.
+	DeleteGone(ctx context.Context, id uuid.UUID, version int64) (bool, error)
 }
 
 // Sender signs payloads with the configured VAPID keypair and POSTs them to
 // browser push services. It prunes subscriptions the push service reports as
-// gone (404/410) via the store. Build one at startup and share it — methods
+// gone (404/410) via the store — only the record that was sent to, at the
+// version that was sent to. Build one at startup and share it — methods
 // are goroutine-safe (no mutable state beyond the immutable config + pool).
 type Sender struct {
 	store        pruner
 	vapidPublic  string
 	vapidPrivate string
 	vapidSubject string
-	// httpClient is the bounded client handed to webpush-go so a hung push
-	// service cannot stall the dispatcher. It refuses non-public addresses
-	// at connect time and follows no redirects (newPushClient). Shared +
-	// goroutine-safe.
+	// httpClient is the client handed to webpush-go. In production it is
+	// NewGuardedClient: bounded so a hung push service cannot stall the
+	// runner, refusing non-public addresses at connect time and following
+	// no redirects. Shared + goroutine-safe.
 	httpClient *http.Client
 	// validate is the send-time endpoint guard. Defaults to ValidateEndpoint;
 	// it is a field (not a direct call) only so tests can relax it to reach a
@@ -131,6 +137,10 @@ type Sender struct {
 // NewSender wires a Sender. When publicKey or privateKey is empty the Sender
 // is "disabled": Send returns ErrDisabled without attempting a request.
 //
+// httpClient carries every request to the push services; production passes
+// NewGuardedClient(), whose guard against internal addresses must not be
+// replaced there.
+//
 // vapidSubject is the configured contact URI ("mailto:…" or "https:…", as the
 // config validation requires). webpush-go v1.4.0 (vapid.go,
 // getVAPIDAuthorizationHeader) prepends "mailto:" to every subscriber that
@@ -138,13 +148,13 @@ type Sender struct {
 // would leave as "mailto:mailto:…" — which Apple's push service rejects with
 // 403 (sk-627). The prefix is therefore removed here and restored by the
 // library; an "https:" subject passes through untouched.
-func NewSender(store pruner, vapidPublic, vapidPrivate, vapidSubject string) *Sender {
+func NewSender(store pruner, httpClient *http.Client, vapidPublic, vapidPrivate, vapidSubject string) *Sender {
 	return &Sender{
 		store:        store,
 		vapidPublic:  vapidPublic,
 		vapidPrivate: vapidPrivate,
 		vapidSubject: strings.TrimPrefix(vapidSubject, "mailto:"),
-		httpClient:   newPushClient(checkPublicAddr),
+		httpClient:   httpClient,
 		validate:     ValidateEndpoint,
 	}
 }
@@ -161,8 +171,10 @@ func (s *Sender) Enabled() bool {
 // Outcomes:
 //   - VAPID keys unset → ErrDisabled (no request made).
 //   - 2xx → nil (delivered / accepted by the push service).
-//   - 404 / 410 → the endpoint is dead; the row is pruned (best-effort) and
-//     the wrapped ErrGone is returned so the caller can skip a retry without
+//   - 404 / 410 → the endpoint is dead; the record sent to is removed
+//     (best-effort) only while it keeps the id and version of sub, so a
+//     registration made after this request survives a late answer; the
+//     wrapped ErrGone is returned so the caller can skip a retry without
 //     treating it as a hard failure.
 //   - 403 → a *StatusError wrapping ErrForbidden. The row is NOT pruned and
 //     the caller must not retry: see ErrForbidden.
@@ -218,15 +230,24 @@ func (s *Sender) Send(ctx context.Context, sub Subscription, payload []byte) err
 		return nil
 	case resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusGone:
 		// The browser unsubscribed; the endpoint will never accept again.
-		// Prune the row best-effort — failing to prune must not fail the
-		// caller, so we log and still return ErrGone.
-		if perr := s.store.DeleteByEndpointAny(ctx, sub.Endpoint); perr != nil {
+		// Remove the record that was sent to, best-effort — failing to
+		// remove must not fail the caller, so we log and still return
+		// ErrGone. The answer speaks only of the request it answers: a
+		// record registered again or created anew since then is kept.
+		removed, perr := s.store.DeleteGone(ctx, sub.ID, sub.Version)
+		switch {
+		case perr != nil:
 			slog.InfoContext(ctx, "push: prune gone subscription failed",
 				"subscriptionId", sub.ID.String(),
 				"endpointPrefix", maskEndpoint(sub.Endpoint),
 				"status", resp.StatusCode, "error", perr.Error())
-		} else {
+		case removed:
 			slog.InfoContext(ctx, "push: pruned gone subscription",
+				"subscriptionId", sub.ID.String(),
+				"endpointPrefix", maskEndpoint(sub.Endpoint),
+				"status", resp.StatusCode)
+		default:
+			slog.InfoContext(ctx, "push: gone subscription changed since the send, kept",
 				"subscriptionId", sub.ID.String(),
 				"endpointPrefix", maskEndpoint(sub.Endpoint),
 				"status", resp.StatusCode)

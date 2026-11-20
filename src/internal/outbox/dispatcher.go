@@ -179,10 +179,13 @@ type PushSender interface {
 	Send(ctx context.Context, sub push.Subscription, payload []byte) error
 }
 
-// PushSubscriptionStore is the subset of *push.Store the dispatcher needs to
+// PushSubscriptionStore is the subset of *push.Store the push runner needs to
 // load a recipient's registered devices.
 type PushSubscriptionStore interface {
-	ListForUser(ctx context.Context, userID uuid.UUID) ([]push.Subscription, error)
+	// ListDeliverableForUser returns the recipient's subscriptions while the
+	// recipient is neither deactivated nor deleted — one statement per
+	// attempt, for every payload kind.
+	ListDeliverableForUser(ctx context.Context, userID uuid.UUID) ([]push.Subscription, error)
 }
 
 // Dispatcher is the long-lived outbox poller. Construct via New and run

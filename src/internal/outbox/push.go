@@ -722,8 +722,11 @@ func (r *PushRunner) deliver(ctx context.Context, c pushClaim) {
 // used for the bookkeeping writes so an outcome is still recordable when the
 // delivery window has just closed.
 func (r *PushRunner) sendPayload(ctx, work context.Context, c pushClaim, payload []byte) {
-	// 5. Devices.
-	subs, err := r.store.ListForUser(work, c.userID)
+	// 5. Devices — only of a recipient who is neither deactivated nor
+	//    deleted, for every payload kind (notification, digest, invitation):
+	//    an inactive recipient has no deliverable device and the row
+	//    finishes as no_device without a send.
+	subs, err := r.store.ListDeliverableForUser(work, c.userID)
 	if err != nil {
 		slog.WarnContext(ctx, "push deferred: subscription load failed",
 			"notificationId", c.id, "userId", c.userID.String(), "error", err.Error())

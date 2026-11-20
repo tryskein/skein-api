@@ -24,18 +24,23 @@ import (
 	"time"
 )
 
-// relaxForLoopback lets a test sender reach a loopback httptest server: it
-// accepts any endpoint URL and lets loopback addresses through the dial
-// guard, which keeps refusing every other non-public address. The tests of
-// the guard itself use the production sender (NewSender) untouched.
-func relaxForLoopback(s *Sender) {
-	s.validate = func(string) error { return nil }
-	s.httpClient = newPushClient(func(a netip.Addr) error {
+// loopbackClient is the push client a test sender gets to reach a loopback
+// httptest server: it lets loopback addresses through the dial guard, which
+// keeps refusing every other non-public address. The tests of the guard
+// itself give the sender the production client (NewGuardedClient).
+func loopbackClient() *http.Client {
+	return newPushClient(func(a netip.Addr) error {
 		if a.Unmap().IsLoopback() {
 			return nil
 		}
 		return checkPublicAddr(a)
 	})
+}
+
+// relaxForLoopback makes a test sender built with loopbackClient accept any
+// endpoint URL, so it reaches the loopback httptest server.
+func relaxForLoopback(s *Sender) {
+	s.validate = func(string) error { return nil }
 }
 
 // The address classes of the deny-list (sk-977.7.8): every one is refused,
@@ -103,7 +108,7 @@ func TestSend_DialGuardRefusesInternalAddress(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	s := NewSender(&fakePruner{}, realVAPIDPublic, realVAPIDPrivate, "mailto:test@skein.local")
+	s := NewSender(&fakePruner{}, NewGuardedClient(), realVAPIDPublic, realVAPIDPrivate, "mailto:test@skein.local")
 	s.validate = func(string) error { return nil } // the URL check is not under test here
 	err := s.Send(context.Background(), testSubscription(srv.URL), []byte(`{}`))
 	if !errors.Is(err, ErrBlockedAddress) {
@@ -130,7 +135,7 @@ func TestSend_RedirectIsNotFollowed(t *testing.T) {
 			}))
 			defer origin.Close()
 
-			s := NewSender(&fakePruner{}, realVAPIDPublic, realVAPIDPrivate, "mailto:test@skein.local")
+			s := NewSender(&fakePruner{}, loopbackClient(), realVAPIDPublic, realVAPIDPrivate, "mailto:test@skein.local")
 			relaxForLoopback(s)
 			err := s.Send(context.Background(), testSubscription(origin.URL), []byte(`{}`))
 			var se *StatusError

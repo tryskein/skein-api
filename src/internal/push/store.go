@@ -61,17 +61,71 @@ func scanSubscription(row pgx.Row) (Subscription, error) {
 	return s, nil
 }
 
-// DeleteByEndpointAny removes a subscription by endpoint regardless of owner.
-// Used by Send when the push service reports the endpoint is gone (404/410):
-// the registration is dead, so we prune it no matter which user it belongs
-// to. Idempotent.
-func (s *Store) DeleteByEndpointAny(ctx context.Context, endpoint string) error {
-	_, err := s.pool.Exec(ctx, `
-DELETE FROM push_subscriptions WHERE endpoint = $1`, endpoint)
+// DeleteGone removes the subscription the push service reported dead
+// (404/410) — only while it is still the record that was sent to: the same
+// id at the same version. A record registered again after the send (its
+// version moved) or created anew at the same endpoint (another id) is a
+// newer registration the answer does not speak about, and it stays.
+// It reports whether a record was removed.
+func (s *Store) DeleteGone(ctx context.Context, id uuid.UUID, version int64) (bool, error) {
+	tag, err := s.pool.Exec(ctx, `
+DELETE FROM push_subscriptions WHERE id = $1 AND version = $2`, id, version)
 	if err != nil {
-		return fmt.Errorf("deleting push subscription by endpoint: %w", err)
+		return false, fmt.Errorf("deleting gone push subscription: %w", err)
 	}
-	return nil
+	return tag.RowsAffected() > 0, nil
+}
+
+// ListDeliverableForUser returns the subscriptions a delivery attempt may
+// use: those of userID while the user is neither deactivated nor deleted,
+// read in one statement, so the activity check is made once per attempt and
+// the attempt sees the user's state either before or after a concurrent
+// account event, never a mix. Records without a device label are included.
+func (s *Store) ListDeliverableForUser(ctx context.Context, userID uuid.UUID) ([]Subscription, error) {
+	rows, err := s.pool.Query(ctx, `
+SELECT ps.id, ps.user_id, ps.endpoint, ps.p256dh, ps.auth, ps.ua, ps.created_at,
+       ps.last_seen_at, ps.device_label, ps.version
+  FROM push_subscriptions ps
+  JOIN users u ON u.id = ps.user_id
+ WHERE ps.user_id = $1
+   AND u.deactivated_at IS NULL
+   AND u.deleted_at IS NULL
+ ORDER BY ps.created_at DESC, ps.id ASC`, userID)
+	if err != nil {
+		return nil, fmt.Errorf("listing deliverable push subscriptions: %w", err)
+	}
+	defer rows.Close()
+
+	out := make([]Subscription, 0, 4)
+	for rows.Next() {
+		sub, err := scanSubscription(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scanning push subscription: %w", err)
+		}
+		out = append(out, sub)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating deliverable push subscriptions: %w", err)
+	}
+	return out, nil
+}
+
+// PurgeInactiveOwners deletes every subscription whose owner is deactivated
+// or deleted and returns how many were deleted. It runs at startup after the
+// migrations: a release deployed again over a schema whose migration already
+// ran does not repeat that migration's cleanup, so subscriptions an older
+// release kept for users deactivated meanwhile are removed here. Device
+// revocations are not touched. Idempotent.
+func (s *Store) PurgeInactiveOwners(ctx context.Context) (int, error) {
+	tag, err := s.pool.Exec(ctx, `
+DELETE FROM push_subscriptions ps
+ USING users u
+ WHERE u.id = ps.user_id
+   AND (u.deactivated_at IS NOT NULL OR u.deleted_at IS NOT NULL)`)
+	if err != nil {
+		return 0, fmt.Errorf("purging push subscriptions of inactive users: %w", err)
+	}
+	return int(tag.RowsAffected()), nil
 }
 
 // ListForUser returns every subscription owned by userID, newest-first, so a
