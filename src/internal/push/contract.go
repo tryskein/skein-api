@@ -59,10 +59,13 @@ import "time"
 //	    expected_user_mismatch, session_stale
 //	POST /push/device-removals — removal of the caller's device by id
 //	  RemoveDeviceRequest
-//	    204; 422 subscription_not_found, expected_user_mismatch, session_stale
+//	    204; 422 subscription_not_found, expected_user_mismatch, session_stale;
+//	    deletes the caller's subscription; when it has a label, revokes the
+//	    label and deletes every subscription of the caller with that label
 //	DELETE /push/subscriptions/{id} — old page only, no expected user
 //	    204; 422 subscription_not_found (was 404), session_stale; deletes the
-//	    caller's subscription and revokes its label when it has one
+//	    caller's subscription; when it has a label, revokes the label and
+//	    deletes every subscription of the caller with that label
 //	GET /push/subscriptions?expectedUserId=
 //	    200 [SubscriptionDTO]; 422 expected_user_mismatch; without the query
 //	    parameter — as before (plus the additive DTO fields)
@@ -78,9 +81,14 @@ import "time"
 // (deleted, never existed, or the record is newer and was left untouched).
 // Revocation: the listed labels are revoked for the caller, the caller has no
 // subscription with these labels and no unlabelled subscription with the
-// presented endpoint. Removal by id: this subscription does not exist; if it
-// had a label, the label is revoked. 204 is the same for every outcome and
-// never discloses the owner.
+// presented endpoint. Removal by id (both routes): the caller has no
+// subscription with this id and, if it had a label, the label is revoked for
+// the caller and the caller has no subscription with that label; a
+// subscription the caller does not own is 422 subscription_not_found.
+//
+// Removal of a channel by endpoint answers the same 204 whether a
+// subscription existed and whoever owned it, so the owner is never
+// disclosed.
 
 // ContractHeader is the name of the response header that marks a response of
 // the push REST contract v2. See the package-level contract description for
@@ -209,7 +217,9 @@ type RevokeDeviceRequest struct {
 }
 
 // RemoveDeviceRequest is the body of POST /push/device-removals: removal of
-// the caller's device by subscription id, revoking its label when it has one.
+// the caller's device by subscription id. When the subscription has a label,
+// the label is revoked for the caller and every subscription of the caller
+// with that label is deleted.
 type RemoveDeviceRequest struct {
 	// ExpectedUserID is the UUID of the user the page expects to be the
 	// caller.
