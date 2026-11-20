@@ -5,11 +5,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"strings"
 	"testing"
 
 	"github.com/prometheus/client_golang/prometheus/testutil"
+
+	"skein-api/internal/push"
 )
 
 // observability_test.go — sk-303.13 / T012: the DELIVERY-side signals.
@@ -160,39 +163,106 @@ UPDATE notifications SET push_state = 'pending', push_next_attempt_at = now(),
 func TestObservability_SendFailureLogHidesTheDeviceEndpoint(t *testing.T) {
 	pool := newTestPool(t)
 	ctx := context.Background()
-	f := newPushFixture(t, pool, "obsep").withDevice(t)
-	f.owed(t, pushRow{})
 
-	logs := captureOutboxLogs(t)
-	sender := &fakePushSender{enabled: true}
-	sender.setErr(errors.New(`Post "` + f.endpoint + `?token=abc123": dial tcp 10.0.0.1:443: connect: connection refused`))
+	// Row 30a — INV-9 on the changed path through Tick: the sender's error
+	// may quote the endpoint with a query token and both keys of the device
+	// (seedPushSubscription writes p256dh-fake / auth-fake); none of it
+	// reaches the log, the diagnosis does, and the delivery verdict of each
+	// kind of answer is the one it was.
+	const p256dh, auth = "p256dh-fake", "auth-fake"
+	cases := []struct {
+		name string
+		err  func(endpoint string) error
+		// result — the per-device delivery label the answer is counted under.
+		result string
+		// logged — whether the answer writes a "push send failed" record.
+		logged bool
+		// field / diagnosis — the record's field that must keep the
+		// diagnosis and the redaction marker.
+		field, diagnosis string
+	}{
+		{
+			name: "transport error",
+			err: func(endpoint string) error {
+				return errors.New(`Post "` + endpoint + `?token=abc123": dial tcp 10.0.0.1:443: connect: connection refused` +
+					` (keys ` + p256dh + ` ` + auth + `)`)
+			},
+			result: "error", logged: true, field: "error", diagnosis: "connection refused",
+		},
+		{
+			name: "refusal echoing the endpoint and the keys",
+			err: func(endpoint string) error {
+				return &push.StatusError{StatusCode: 500, Host: "push.example.com",
+					Body: `{"reason":"Overloaded","endpoint":"` + endpoint + `?token=abc123","keys":"` + p256dh + `,` + auth + `"}`}
+			},
+			result: "error", logged: true, field: "responseBody", diagnosis: "Overloaded",
+		},
+		{
+			name: "forbidden echoing the endpoint and the keys",
+			err: func(endpoint string) error {
+				return &push.StatusError{StatusCode: 403, Host: "push.example.com",
+					Body: `{"reason":"BadJwtToken","endpoint":"` + endpoint + `?token=abc123","keys":"` + p256dh + `,` + auth + `"}`}
+			},
+			result: "forbidden", logged: true, field: "responseBody", diagnosis: "BadJwtToken",
+		},
+		{
+			name: "gone",
+			err: func(endpoint string) error {
+				return fmt.Errorf("push endpoint returned 410: %w", push.ErrGone)
+			},
+			result: "gone", logged: false,
+		},
+	}
+	for i, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			key := fmt.Sprintf("obsep%d", i)
+			f := newPushFixture(t, pool, key).withDevice(t)
+			f.owed(t, pushRow{})
 
-	if _, err := newRunner(pool, sender).Tick(ctx); err != nil {
-		t.Fatalf("Tick: %v", err)
-	}
+			logs := captureOutboxLogs(t)
+			sender := &fakePushSender{enabled: true}
+			sender.setErr(tc.err(f.endpoint))
+			before := testutil.ToFloat64(pushDeliveriesTotal.WithLabelValues("delegated_status", tc.result))
 
-	text := logs.text()
-	if strings.Contains(text, f.endpoint) {
-		t.Errorf("the device endpoint leaked into the log:\n%s", text)
-	}
-	if strings.Contains(text, "token=abc123") {
-		t.Errorf("a subscription token leaked into the log:\n%s", text)
-	}
-	rec := logs.find(t, "push send failed")
-	if rec == nil {
-		t.Fatalf("the send failure was not logged at all; captured:\n%s", text)
-	}
-	// The useful half survives: an operator can still tell WHAT failed.
-	msg, _ := rec["error"].(string)
-	if !strings.Contains(msg, "connection refused") {
-		t.Errorf("redaction removed the diagnosis too: %q", msg)
-	}
-	if !strings.Contains(msg, "<redacted-endpoint>") {
-		t.Errorf("the redaction marker is missing, so the reader cannot tell something was removed: %q", msg)
-	}
-	// The task title is never part of a delivery log line.
-	if strings.Contains(text, "Task obsep") {
-		t.Errorf("the issue title leaked into the log:\n%s", text)
+			if _, err := newRunner(pool, sender).Tick(ctx); err != nil {
+				t.Fatalf("Tick: %v", err)
+			}
+			if len(callsTo(sender, f.endpoint)) == 0 {
+				t.Fatalf("the runner never sent to the device; the case proves nothing")
+			}
+			if got := testutil.ToFloat64(pushDeliveriesTotal.WithLabelValues("delegated_status", tc.result)) - before; got < 1 {
+				t.Errorf("deliveries counted as %q grew by %v, want the answer classified as %q", tc.result, got, tc.result)
+			}
+
+			text := logs.text()
+			for _, secret := range []string{f.endpoint, "token=abc123", "abc123", p256dh, auth} {
+				if strings.Contains(text, secret) {
+					t.Errorf("%q leaked into the log:\n%s", secret, text)
+				}
+			}
+			// The task title is never part of a delivery log line.
+			if strings.Contains(text, "Task "+key) {
+				t.Errorf("the issue title leaked into the log:\n%s", text)
+			}
+			rec := logs.find(t, "push send failed")
+			if !tc.logged {
+				if rec != nil {
+					t.Errorf("a %s answer wrote a send-failure record: %v", tc.name, rec)
+				}
+				return
+			}
+			if rec == nil {
+				t.Fatalf("the send failure was not logged at all; captured:\n%s", text)
+			}
+			// The useful half survives: an operator can still tell WHAT failed.
+			msg, _ := rec[tc.field].(string)
+			if !strings.Contains(msg, tc.diagnosis) {
+				t.Errorf("redaction removed the diagnosis too: %s = %q", tc.field, msg)
+			}
+			if !strings.Contains(msg, "<redacted-endpoint>") {
+				t.Errorf("the redaction marker is missing, so the reader cannot tell something was removed: %s = %q", tc.field, msg)
+			}
+		})
 	}
 }
 

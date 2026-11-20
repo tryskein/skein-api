@@ -777,11 +777,11 @@ func (r *PushRunner) sendPayload(ctx, work context.Context, c pushClaim, payload
 			// classifySendOutcome for the mixed case.
 			tally.forbidden++
 			result = "forbidden"
-			logSendFailure(ctx, c, serr)
+			logSendFailure(ctx, c, sub, serr)
 		default:
 			tally.failed++
 			result = "error"
-			logSendFailure(ctx, c, serr)
+			logSendFailure(ctx, c, sub, serr)
 		}
 		pushDeliveriesTotal.WithLabelValues(reasonLabel(c.reason), result).Inc()
 	}
@@ -803,27 +803,33 @@ func (r *PushRunner) sendPayload(ctx, work context.Context, c pushClaim, payload
 // (*push.StatusError) adds its status, the push-service HOST and the bounded
 // response body — the body is where the provider names the reason, and it is
 // redacted the same way in case a provider echoes the endpoint back.
+// Every text field is cleaned twice: any URL becomes "<redacted-endpoint>",
+// then whatever else would disclose sub — a token-bearing part of its
+// endpoint, either key — is removed (push.RedactSubscription).
 //
 // Field names avoid the logging sanitizer's secret tokens (internal/logging
 // secretKeyTokens): a key such as "responseToken" would be masked to "***"
 // and hide exactly the diagnosis this line exists for.
-func logSendFailure(ctx context.Context, c pushClaim, serr error) {
+func logSendFailure(ctx context.Context, c pushClaim, sub push.Subscription, serr error) {
+	clean := func(text string) string {
+		return push.RedactSubscription(redactEndpoints(text), sub)
+	}
 	attrs := []any{
 		"notificationId", c.id,
 		"userId", c.userID.String(),
 		"reason", reasonLabel(c.reason),
-		"error", redactEndpoints(serr.Error()),
+		"error", clean(serr.Error()),
 	}
 	var se *push.StatusError
 	if errors.As(serr, &se) {
 		attrs = append(attrs,
 			"status", se.StatusCode,
 			"pushHost", se.Host,
-			"responseBody", redactEndpoints(se.Body),
+			"responseBody", clean(se.Body),
 			"responseBodyTruncated", se.BodyTruncated,
 		)
 		if se.BodyReadError != "" {
-			attrs = append(attrs, "responseBodyReadError", redactEndpoints(se.BodyReadError))
+			attrs = append(attrs, "responseBodyReadError", clean(se.BodyReadError))
 		}
 	}
 	slog.WarnContext(ctx, "push send failed", attrs...)

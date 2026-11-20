@@ -2,6 +2,8 @@ package push
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -181,12 +183,38 @@ func (s *Sender) Enabled() bool {
 //   - any other non-2xx → a *StatusError (status, push-service host, bounded
 //     response body) — a transient failure the caller may retry.
 //
-// The response body is always drained + closed. Endpoint / key material is
-// never logged in full — only a short prefix for correlation.
+// The response body is always drained + closed. Neither the endpoint, nor
+// a part of it that carries the subscription token, nor the keys reach a log
+// record or the text of a returned error: they are replaced by the endpoint
+// reference (push-service host + fingerprint, endpointRef) and a redaction
+// marker. errors.Is / errors.As see the original error chain.
 func (s *Sender) Send(ctx context.Context, sub Subscription, payload []byte) error {
 	if !s.Enabled() {
 		return ErrDisabled
 	}
+	err := s.send(ctx, sub, payload)
+	if err == nil || errors.Is(err, ErrDisabled) {
+		return err
+	}
+	if _, built := err.(*StatusError); built {
+		// Built by newStatusError: its text and fields are already clean.
+		return err
+	}
+	return &redactedError{msg: RedactSubscription(err.Error(), sub), err: err}
+}
+
+// redactedError is an error whose text has the subscription's secrets
+// removed while the wrapped chain stays classifiable.
+type redactedError struct {
+	msg string
+	err error
+}
+
+func (e *redactedError) Error() string { return e.msg }
+func (e *redactedError) Unwrap() error { return e.err }
+
+// send is Send before its error text is redacted.
+func (s *Sender) send(ctx context.Context, sub Subscription, payload []byte) error {
 
 	// SSRF guard for stale rows: an endpoint that was valid at subscribe-time
 	// could in principle be a row predating this validation, so we re-check
@@ -198,8 +226,8 @@ func (s *Sender) Send(ctx context.Context, sub Subscription, payload []byte) err
 	if err := s.validate(sub.Endpoint); err != nil {
 		slog.InfoContext(ctx, "push: skipping unsendable subscription (invalid endpoint)",
 			"subscriptionId", sub.ID.String(),
-			"endpointPrefix", maskEndpoint(sub.Endpoint),
-			"error", err.Error())
+			"endpointRef", endpointRef(sub.Endpoint),
+			"error", RedactSubscription(err.Error(), sub))
 		return fmt.Errorf("send web push: %w", err)
 	}
 
@@ -239,27 +267,28 @@ func (s *Sender) Send(ctx context.Context, sub Subscription, payload []byte) err
 		case perr != nil:
 			slog.InfoContext(ctx, "push: prune gone subscription failed",
 				"subscriptionId", sub.ID.String(),
-				"endpointPrefix", maskEndpoint(sub.Endpoint),
+				"endpointRef", endpointRef(sub.Endpoint),
 				"status", resp.StatusCode, "error", perr.Error())
 		case removed:
 			slog.InfoContext(ctx, "push: pruned gone subscription",
 				"subscriptionId", sub.ID.String(),
-				"endpointPrefix", maskEndpoint(sub.Endpoint),
+				"endpointRef", endpointRef(sub.Endpoint),
 				"status", resp.StatusCode)
 		default:
 			slog.InfoContext(ctx, "push: gone subscription changed since the send, kept",
 				"subscriptionId", sub.ID.String(),
-				"endpointPrefix", maskEndpoint(sub.Endpoint),
+				"endpointRef", endpointRef(sub.Endpoint),
 				"status", resp.StatusCode)
 		}
 		return fmt.Errorf("push endpoint returned %d: %w", resp.StatusCode, ErrGone)
 	default:
-		return newStatusError(resp, sub.Endpoint)
+		return newStatusError(resp, sub)
 	}
 }
 
 // newStatusError builds the *StatusError of a non-2xx answer: the status,
-// the endpoint's host (never the endpoint) and a redacted, bounded body.
+// the endpoint's host (never the endpoint) and a redacted, bounded body —
+// clean of the endpoint, its token-bearing parts and both keys of sub.
 //
 // The order of the steps is what makes the bounds hold:
 //
@@ -276,12 +305,12 @@ func (s *Sender) Send(ctx context.Context, sub Subscription, payload []byte) err
 // BodyTruncated is true exactly when received text is missing from Body —
 // cut by the read window or by the final bound. A failed read is reported in
 // BodyReadError, a field of its own, so no bound can cut the report away.
-func newStatusError(resp *http.Response, endpoint string) *StatusError {
+func newStatusError(resp *http.Response, sub Subscription) *StatusError {
 	se := &StatusError{StatusCode: resp.StatusCode}
-	if u, err := url.Parse(endpoint); err == nil {
+	if u, err := url.Parse(sub.Endpoint); err == nil {
 		se.Host = u.Host
 	}
-	forms := secretForms(endpoint)
+	forms := secretForms(sub)
 
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxErrorBodyReadBytes+1))
 	if err != nil {
@@ -318,16 +347,17 @@ func newStatusError(resp *http.Response, endpoint string) *StatusError {
 const redactedSecret = "<redacted>"
 
 // secretForms lists the strings that would disclose the subscription if they
-// reached a log: the endpoint itself and its token-bearing path segments and
-// query values, each as written, percent-encoded (query and path rules) and
-// with JSON-escaped slashes. A segment counts as token-bearing when it is the
+// reached a log: the endpoint itself, its token-bearing path segments and
+// query values, and both keys (p256dh, auth), each as written,
+// percent-encoded (query and path rules) and with JSON-escaped slashes. A segment counts as token-bearing when it is the
 // last one or is at least minSecretSegmentLen long — the static parts of the
 // push services' paths ("3", "device", "fcm", "send", "wpush", "v2") are
 // shorter, device tokens are far longer. Longest first, so a whole endpoint is
 // replaced before its parts.
-func secretForms(endpoint string) []string {
+func secretForms(sub Subscription) []string {
 	const minSecretSegmentLen = 8
-	secrets := []string{endpoint}
+	endpoint := sub.Endpoint
+	secrets := []string{endpoint, sub.P256dh, sub.Auth}
 	if u, err := url.Parse(endpoint); err == nil {
 		segs := strings.Split(strings.Trim(u.EscapedPath(), "/"), "/")
 		for i, seg := range segs {
@@ -352,6 +382,9 @@ func secretForms(endpoint string) []string {
 	seen := map[string]bool{}
 	var forms []string
 	for _, sec := range secrets {
+		if sec == "" {
+			continue
+		}
 		for _, f := range []string{
 			sec,
 			url.QueryEscape(sec),
@@ -391,15 +424,48 @@ func trimPartialSecret(s string, forms []string) string {
 	return s
 }
 
-// maskEndpoint returns a short, non-identifying prefix of the endpoint URL
-// for correlation in logs. The full endpoint embeds a per-device token we do
-// not want in log aggregation.
-func maskEndpoint(endpoint string) string {
-	const n = 32
-	if len(endpoint) <= n {
-		return endpoint
+// RedactSubscription returns text with the secrets of sub removed: every
+// form of the whole endpoint becomes its reference (endpointRef), every other
+// secret form — a token-bearing path segment or query value, either key — the
+// redaction marker. Text that is about the delivery, the provider's host
+// included, stays.
+func RedactSubscription(text string, sub Subscription) string {
+	ref := endpointRef(sub.Endpoint)
+	if sub.Endpoint != "" {
+		for _, f := range endpointForms(sub.Endpoint) {
+			text = strings.ReplaceAll(text, f, ref)
+		}
 	}
-	return endpoint[:n] + "…"
+	return redactSubscription(text, secretForms(sub))
+}
+
+// endpointForms are the spellings of the whole endpoint, longest first.
+func endpointForms(endpoint string) []string {
+	forms := []string{
+		endpoint,
+		url.QueryEscape(endpoint),
+		url.PathEscape(endpoint),
+		strings.ReplaceAll(endpoint, "/", `\/`),
+	}
+	sort.Slice(forms, func(i, j int) bool { return len(forms[i]) > len(forms[j]) })
+	return forms
+}
+
+// endpointRefFingerprintBytes is how much of the SHA-256 of the endpoint the
+// reference shows: enough to tell a device's records apart in logs, far too
+// little to recover the endpoint.
+const endpointRefFingerprintBytes = 6
+
+// endpointRef names an endpoint in logs and error texts without disclosing
+// it: the push-service host and a short fingerprint of the whole endpoint
+// ("web.push.apple.com#3f9a1c0b2e7d").
+func endpointRef(endpoint string) string {
+	host := "invalid-endpoint"
+	if u, err := url.Parse(endpoint); err == nil && u.Host != "" {
+		host = u.Host
+	}
+	sum := sha256.Sum256([]byte(endpoint))
+	return host + "#" + hex.EncodeToString(sum[:endpointRefFingerprintBytes])
 }
 
 // ---------------------------------------------------------------------------

@@ -43,7 +43,7 @@ func TestLogSendFailure_RefusalIsDiagnosableWithoutTheEndpoint(t *testing.T) {
 		Host:       "web.push.apple.com",
 		Body:       `{"reason":"BadJwtToken"} for ` + endpoint,
 	})
-	logSendFailure(context.Background(), c, serr)
+	logSendFailure(context.Background(), c, push.Subscription{Endpoint: endpoint}, serr)
 
 	line := buf.String()
 	if !strings.Contains(line, `msg="push send failed"`) {
@@ -75,8 +75,9 @@ func TestLogSendFailure_TransportErrorStillRedactsTheEndpoint(t *testing.T) {
 
 	reason := "mention"
 	c := pushClaim{id: 1, userID: uuid.New(), reason: &reason}
-	logSendFailure(context.Background(), c, fmt.Errorf(
-		"sending web push: Post \"https://fcm.googleapis.com/fcm/send/sk627-fcm-token\": connection refused"))
+	logSendFailure(context.Background(), c,
+		push.Subscription{Endpoint: "https://fcm.googleapis.com/fcm/send/sk627-fcm-token"}, fmt.Errorf(
+			"sending web push: Post \"https://fcm.googleapis.com/fcm/send/sk627-fcm-token\": connection refused"))
 
 	line := buf.String()
 	if !strings.Contains(line, "connection refused") {
@@ -111,6 +112,10 @@ func TestLogSendFailure_EscapedEchoesAreRedactedToo(t *testing.T) {
 
 			reason := "mention"
 			logSendFailure(context.Background(), pushClaim{id: 2, userID: uuid.New(), reason: &reason},
+				// Another device's subscription: the echoed URL is one the
+				// redaction by subscription cannot know, so only the
+				// backstop stands between it and the log.
+				push.Subscription{Endpoint: "https://web.push.apple.com/3/device/another-device-token"},
 				&push.StatusError{StatusCode: 403, Host: "web.push.apple.com", Body: body})
 
 			line := buf.String()
@@ -119,6 +124,82 @@ func TestLogSendFailure_EscapedEchoesAreRedactedToo(t *testing.T) {
 			}
 			if !strings.Contains(line, "status=403") {
 				t.Errorf("the record lost its status: %s", line)
+			}
+		})
+	}
+}
+
+// Row 30 — INV-9 in the delivery log: whatever a failed send's error carries
+// of the subscription — the endpoint, its token-bearing path segment or query
+// value as bare text, either key — no field of the "push send failed" record
+// carries it; the status, the push-service host and the provider's own
+// diagnosis stay.
+func TestLogSendFailure_NoFieldCarriesTheSubscriptionSecrets(t *testing.T) {
+	const (
+		host       = "fcm.googleapis.com"
+		pathToken  = "row30-path-token-0123456789"
+		queryToken = "row30-query-token-9876543210"
+		p256dh     = "BRow30P256dhKeyMaterial_abcdefghijklmnopqrstuvwxyz0123456789"
+		auth       = "row30AuthSecret0"
+	)
+	sub := push.Subscription{
+		Endpoint: "https://" + host + "/fcm/send/" + pathToken + "?token=" + queryToken,
+		P256dh:   p256dh,
+		Auth:     auth,
+	}
+	secrets := []string{sub.Endpoint, pathToken, queryToken, p256dh, auth}
+
+	cases := []struct {
+		name string
+		err  error
+		// keep — diagnostic text the record must still carry.
+		keep []string
+	}{
+		{
+			name: "transport error quoting the endpoint and the keys",
+			err: fmt.Errorf("sending web push: Post %q: handshake with p256dh=%s auth=%s: connection refused",
+				sub.Endpoint, p256dh, auth),
+			keep: []string{"connection refused"},
+		},
+		{
+			name: "query token as bare text",
+			err:  fmt.Errorf("sending web push: token %s rejected: connection reset", queryToken),
+			keep: []string{"connection reset"},
+		},
+		{
+			name: "refusal echoing the endpoint parts and both keys",
+			err: &push.StatusError{
+				StatusCode:    500,
+				Host:          host,
+				Body:          `{"reason":"InternalError","device":"` + pathToken + `","keys":["` + p256dh + `","` + auth + `"]}`,
+				BodyReadError: "unexpected EOF after " + pathToken + " " + auth,
+			},
+			keep: []string{"status=500", "pushHost=" + host, "InternalError", "unexpected EOF"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			prev := slog.Default()
+			slog.SetDefault(slog.New(logging.NewDualHandler(&buf, slog.LevelDebug)))
+			t.Cleanup(func() { slog.SetDefault(prev) })
+
+			reason := "mention"
+			logSendFailure(context.Background(), pushClaim{id: 30, userID: uuid.New(), reason: &reason}, sub, tc.err)
+
+			line := buf.String()
+			if !strings.Contains(line, `msg="push send failed"`) {
+				t.Fatalf("no \"push send failed\" record in %q", line)
+			}
+			for _, secret := range secrets {
+				if strings.Contains(line, secret) {
+					t.Errorf("the record carries the subscription secret %q: %s", secret, line)
+				}
+			}
+			for _, want := range tc.keep {
+				if !strings.Contains(line, want) {
+					t.Errorf("the record lost %q: %s", want, line)
+				}
 			}
 		})
 	}
