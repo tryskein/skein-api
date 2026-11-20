@@ -11,6 +11,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -165,9 +166,9 @@ func TestSend_NoErrorOrLogCarriesTheSubscriptionSecrets(t *testing.T) {
 	}
 }
 
-// Row 29 — INV-9 for a send refused by the address guard: the nested
-// *url.Error quotes the endpoint; the text is clean and the refusal still
-// classifies as ErrBlockedAddress.
+// Row 29 — INV-9 for a send refused by the address guard: the transport's
+// *url.Error quotes the endpoint; no level of the returned chain carries it
+// and the refusal still classifies as ErrBlockedAddress.
 func TestSend_BlockedAddressErrorCarriesNoSecret(t *testing.T) {
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusCreated)
@@ -183,10 +184,28 @@ func TestSend_BlockedAddressErrorCarriesNoSecret(t *testing.T) {
 	if !errors.Is(err, ErrBlockedAddress) {
 		t.Fatalf("Send to a loopback push server: err = %v, want ErrBlockedAddress", err)
 	}
-	var ue *url.Error
-	if !errors.As(err, &ue) {
-		t.Fatalf("err = %v, want the nested *url.Error kept in the chain", err)
+}
+
+// chainTexts is the text of every error reachable from err through Unwrap,
+// single or multiple — what a caller can print at any level of the chain.
+func chainTexts(err error) []string {
+	var out []string
+	queue := []error{err}
+	for len(queue) > 0 {
+		e := queue[0]
+		queue = queue[1:]
+		if e == nil {
+			continue
+		}
+		out = append(out, e.Error())
+		switch u := e.(type) {
+		case interface{ Unwrap() error }:
+			queue = append(queue, u.Unwrap())
+		case interface{ Unwrap() []error }:
+			queue = append(queue, u.Unwrap()...)
+		}
 	}
+	return out
 }
 
 // sendLogged runs Send with the production log handler capturing its
@@ -203,8 +222,8 @@ func sendLogged(t *testing.T, s *Sender, sub Subscription, secrets []string) err
 
 	var se *StatusError
 	texts := map[string]string{"log": buf.String()}
-	if err != nil {
-		texts["err.Error()"] = err.Error()
+	for i, text := range chainTexts(err) {
+		texts[fmt.Sprintf("chain level %d Error()", i)] = text
 	}
 	if errors.As(err, &se) {
 		texts["StatusError.Body"] = se.Body

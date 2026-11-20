@@ -187,7 +187,9 @@ func (s *Sender) Enabled() bool {
 // a part of it that carries the subscription token, nor the keys reach a log
 // record or the text of a returned error: they are replaced by the endpoint
 // reference (push-service host + fingerprint, endpointRef) and a redaction
-// marker. errors.Is / errors.As see the original error chain.
+// marker. errors.Is still classifies the error (ErrGone, ErrForbidden,
+// ErrBlockedAddress, ErrInvalidEndpoint, context errors) and errors.As finds
+// a *StatusError; the original chain itself is not returned.
 func (s *Sender) Send(ctx context.Context, sub Subscription, payload []byte) error {
 	if !s.Enabled() {
 		return ErrDisabled
@@ -200,18 +202,38 @@ func (s *Sender) Send(ctx context.Context, sub Subscription, payload []byte) err
 		// Built by newStatusError: its text and fields are already clean.
 		return err
 	}
-	return &redactedError{msg: RedactSubscription(err.Error(), sub), err: err}
+	return newRedactedError(err, sub)
 }
 
-// redactedError is an error whose text has the subscription's secrets
-// removed while the wrapped chain stays classifiable.
+// classifiedAs are the conditions a caller may test a Send error for with
+// errors.Is. A redacted error carries exactly these of them — never the
+// original chain, whose levels (a *url.Error first of all) hold the endpoint
+// in their fields and texts.
+var classifiedAs = []error{
+	ErrGone, ErrForbidden, ErrBlockedAddress, ErrInvalidEndpoint,
+	context.Canceled, context.DeadlineExceeded,
+}
+
+// redactedError is a Send error with the subscription's secrets removed: its
+// text is the redacted text of the original, and its chain is the list of
+// conditions the original matched (classifiedAs), each a fixed sentinel.
 type redactedError struct {
-	msg string
-	err error
+	msg   string
+	kinds []error
 }
 
-func (e *redactedError) Error() string { return e.msg }
-func (e *redactedError) Unwrap() error { return e.err }
+func newRedactedError(err error, sub Subscription) *redactedError {
+	re := &redactedError{msg: RedactSubscription(err.Error(), sub)}
+	for _, k := range classifiedAs {
+		if errors.Is(err, k) {
+			re.kinds = append(re.kinds, k)
+		}
+	}
+	return re
+}
+
+func (e *redactedError) Error() string   { return e.msg }
+func (e *redactedError) Unwrap() []error { return e.kinds }
 
 // send is Send before its error text is redacted.
 func (s *Sender) send(ctx context.Context, sub Subscription, payload []byte) error {
