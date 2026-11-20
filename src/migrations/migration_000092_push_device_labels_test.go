@@ -140,7 +140,10 @@ UPDATE users SET deleted_at = now(), pseudonym = 'deleted-' || substr(md5(id::te
 	deactivatedSub := seedM92Subscription(t, pool, deactivated)
 	deletedSub := seedM92Subscription(t, pool, deleted)
 
-	m59Up(t, m, "first up")
+	// Checked steps stop at 92; m59Migrator returns to head in t.Cleanup.
+	if err := m.Migrate(92); err != nil {
+		t.Fatalf("first up: Migrate(92): %v", err)
+	}
 
 	t.Run("up: schema, unlabelled version-1 rows, inactive owners lose subscriptions", func(t *testing.T) {
 		assertM92Schema(t, pool, "after up")
@@ -205,7 +208,9 @@ INSERT INTO push_device_revocations (user_id, device_label) VALUES ($1, $2)`, ac
 			t.Errorf("after down: active user's subscriptions = %d, want %d", n, len(kept))
 		}
 
-		m59Up(t, m, "up after down")
+		if err := m.Migrate(92); err != nil {
+			t.Fatalf("up after down: Migrate(92): %v", err)
+		}
 		assertM92Schema(t, pool, "after re-up")
 		for _, id := range kept {
 			assertM92Unlabelled(t, pool, id, "after re-up")
