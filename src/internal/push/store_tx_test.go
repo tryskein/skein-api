@@ -829,3 +829,58 @@ func TestRemoveChannelAndRegister_OverlappingFollowSerialOrder(t *testing.T) {
 		})
 	}
 }
+
+// Two registrations of an endpoint no subscription has yet, in two
+// overlapping transactions: the second waits on the first's insert of the
+// endpoint and, once the first commits, is ordered after it — another
+// owner is refused (INV-1), the same owner updates the record.
+func TestRegister_OverlappingFirstRegistrationsOfAnEndpoint(t *testing.T) {
+	w := newTxWorld(t)
+	ctx := context.Background()
+	reg := func(user uuid.UUID, epoch int64, endpoint string, label uuid.UUID, key string) func(*push.Store) error {
+		return func(s *push.Store) error {
+			_, err := s.Register(ctx, push.RegisterInput{
+				UserID: user, SessionEpoch: epoch, Endpoint: endpoint,
+				P256dh: "p256dh-" + key, Auth: "auth-" + key, DeviceLabel: &label, Mode: push.ModeUpsert,
+			})
+			return err
+		}
+	}
+
+	t.Run("two owners: the second is taken", func(t *testing.T) {
+		first, firstEpoch := w.user(t)
+		second, secondEpoch := w.user(t)
+		endpoint := newEndpoint()
+		firstErr, secondErr := overlap(t, w,
+			reg(first, firstEpoch, endpoint, uuid.New(), "first"),
+			reg(second, secondEpoch, endpoint, uuid.New(), "second"))
+		if firstErr != nil {
+			t.Errorf("first registration: %v, want nil", firstErr)
+		}
+		if !errors.Is(secondErr, push.ErrEndpointTaken) {
+			t.Errorf("second registration: %v, want ErrEndpointTaken", secondErr)
+		}
+		r, ok := w.byEndpoint(t, endpoint)
+		if !ok || r.Owner != first || r.P256dh != "p256dh-first" || r.Version != 1 {
+			t.Errorf("record = %+v (present %v), want the first owner's at version 1", r, ok)
+		}
+	})
+	t.Run("one owner: the second updates the record", func(t *testing.T) {
+		user, epoch := w.user(t)
+		endpoint := newEndpoint()
+		label := uuid.New()
+		firstErr, secondErr := overlap(t, w,
+			reg(user, epoch, endpoint, label, "first"),
+			reg(user, epoch, endpoint, label, "second"))
+		if firstErr != nil || secondErr != nil {
+			t.Fatalf("registrations: %v, %v; want both nil", firstErr, secondErr)
+		}
+		r, ok := w.byEndpoint(t, endpoint)
+		if !ok || r.Owner != user || r.P256dh != "p256dh-second" || r.Version != 2 {
+			t.Errorf("record = %+v (present %v), want the second keys at version 2", r, ok)
+		}
+		if n := w.count(t, `SELECT count(*) FROM push_subscriptions WHERE endpoint = $1`, endpoint); n != 1 {
+			t.Errorf("records with the endpoint = %d, want 1", n)
+		}
+	})
+}
