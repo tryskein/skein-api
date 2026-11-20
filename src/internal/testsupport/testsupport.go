@@ -724,6 +724,36 @@ VALUES ($1, $2, $3, 'fake-p256dh', 'fake-auth', 'test-ua', now(), now())`,
 	return id
 }
 
+// SeedLabeledPushSubscription inserts one push_subscriptions row for userID
+// carrying deviceLabel (000092), at version 1, with the endpoint
+// "https://push.test.local/<row id>". Returns the row id. SeedPushSubscription
+// keeps writing the unlabelled row of a subscription registered before 000092.
+func SeedLabeledPushSubscription(t *testing.T, pool *pgxpool.Pool, userID, deviceLabel uuid.UUID) uuid.UUID {
+	t.Helper()
+	id := uuid.Must(uuid.NewRandom())
+	endpoint := "https://push.test.local/" + id.String()
+	_, err := pool.Exec(context.Background(), `
+INSERT INTO push_subscriptions (id, user_id, endpoint, p256dh, auth, ua, created_at, last_seen_at, device_label)
+VALUES ($1, $2, $3, 'fake-p256dh', 'fake-auth', 'test-ua', now(), now(), $4)`,
+		id, userID, endpoint, deviceLabel)
+	if err != nil {
+		t.Fatalf("seed labeled push subscription for user %s: %v", userID, err)
+	}
+	return id
+}
+
+// SeedPushDeviceRevocation inserts the revocation of deviceLabel for userID
+// into push_device_revocations (000092). The row goes with the user
+// (ON DELETE CASCADE).
+func SeedPushDeviceRevocation(t *testing.T, pool *pgxpool.Pool, userID, deviceLabel uuid.UUID) {
+	t.Helper()
+	if _, err := pool.Exec(context.Background(), `
+INSERT INTO push_device_revocations (user_id, device_label) VALUES ($1, $2)`,
+		userID, deviceLabel); err != nil {
+		t.Fatalf("seed push device revocation for user %s: %v", userID, err)
+	}
+}
+
 // pushSettleMaxTicks bounds TickPushUntilSettled: a queue the runner cannot
 // get through in this many batches is a defect to look at, not to wait out.
 const pushSettleMaxTicks = 200

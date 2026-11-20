@@ -432,15 +432,23 @@ type ProjectWatcher struct {
 	EventTypes []string           `json:"event_types"`
 }
 
+type PushDeviceRevocation struct {
+	UserID      pgtype.UUID        `json:"user_id"`
+	DeviceLabel pgtype.UUID        `json:"device_label"`
+	RevokedAt   pgtype.Timestamptz `json:"revoked_at"`
+}
+
 type PushSubscription struct {
-	ID         pgtype.UUID        `json:"id"`
-	UserID     pgtype.UUID        `json:"user_id"`
-	Endpoint   string             `json:"endpoint"`
-	P256dh     string             `json:"p256dh"`
-	Auth       string             `json:"auth"`
-	Ua         *string            `json:"ua"`
-	CreatedAt  pgtype.Timestamptz `json:"created_at"`
-	LastSeenAt pgtype.Timestamptz `json:"last_seen_at"`
+	ID          pgtype.UUID        `json:"id"`
+	UserID      pgtype.UUID        `json:"user_id"`
+	Endpoint    string             `json:"endpoint"`
+	P256dh      string             `json:"p256dh"`
+	Auth        string             `json:"auth"`
+	Ua          *string            `json:"ua"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+	LastSeenAt  pgtype.Timestamptz `json:"last_seen_at"`
+	DeviceLabel pgtype.UUID        `json:"device_label"`
+	Version     int64              `json:"version"`
 }
 
 type Reminder struct {

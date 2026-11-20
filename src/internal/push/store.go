@@ -28,6 +28,12 @@ type Subscription struct {
 	UA         *string   `json:"ua,omitempty"`
 	CreatedAt  time.Time `json:"createdAt"`
 	LastSeenAt time.Time `json:"lastSeenAt"`
+	// DeviceLabel is the device consent label created by the browser; nil
+	// for a subscription registered without one.
+	DeviceLabel *uuid.UUID `json:"deviceLabel"`
+	// Version grows with every write of the record; conditional removals
+	// match on id and version.
+	Version int64 `json:"version"`
 }
 
 // Store is the push-subscriptions repository over a pgx pool.
@@ -40,7 +46,7 @@ func NewStore(pool *pgxpool.Pool) *Store {
 	return &Store{pool: pool}
 }
 
-const subscriptionColumns = `id, user_id, endpoint, p256dh, auth, ua, created_at, last_seen_at`
+const subscriptionColumns = `id, user_id, endpoint, p256dh, auth, ua, created_at, last_seen_at, device_label, version`
 
 // scanSubscription reads one row into a Subscription.
 func scanSubscription(row pgx.Row) (Subscription, error) {
@@ -48,7 +54,7 @@ func scanSubscription(row pgx.Row) (Subscription, error) {
 		s  Subscription
 		ua *string
 	)
-	if err := row.Scan(&s.ID, &s.UserID, &s.Endpoint, &s.P256dh, &s.Auth, &ua, &s.CreatedAt, &s.LastSeenAt); err != nil {
+	if err := row.Scan(&s.ID, &s.UserID, &s.Endpoint, &s.P256dh, &s.Auth, &ua, &s.CreatedAt, &s.LastSeenAt, &s.DeviceLabel, &s.Version); err != nil {
 		return Subscription{}, err
 	}
 	s.UA = ua
