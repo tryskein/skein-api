@@ -34,8 +34,8 @@ func TestBuildSubject_IssueClosed(t *testing.T) {
 		EntityID:   "demo-42.1",
 		ProjectID:  &pid,
 	})
-	if !strings.HasSuffix(got, ".issue.closed.demo-42.1") {
-		t.Errorf("expected suffix '.issue.closed.demo-42.1', got %q", got)
+	if !strings.HasSuffix(got, ".issue.closed.demo-42%2E1") {
+		t.Errorf("expected suffix '.issue.closed.demo-42%%2E1', got %q", got)
 	}
 	if !strings.HasPrefix(got, "skein.events.project."+pid.String()) {
 		t.Errorf("expected project-scoped prefix, got %q", got)
@@ -306,5 +306,60 @@ func TestSanitizeToken(t *testing.T) {
 		if got := sanitizeToken(c.in); got != c.want {
 			t.Errorf("sanitizeToken(%q) = %q, want %q", c.in, got, c.want)
 		}
+	}
+}
+
+// TestBuildSubject_EntityTailIsOneToken — sk-977.7.74: whatever the entity
+// id holds (dots anywhere, "..", a trailing dot, "%", nothing at all), the
+// project-scoped subject has exactly one non-empty token after the action
+// (lifecycle) or the field name (field_changed), the token is the documented
+// %XX encoding, and distinct ids give distinct tokens.
+func TestBuildSubject_EntityTailIsOneToken(t *testing.T) {
+	pid := fixedProjectID
+	for _, tc := range []struct {
+		id   string
+		want string
+	}{
+		{"demo-42", "demo-42"},
+		{"demo-42.1", "demo-42%2E1"},
+		{"demo-42.1.3", "demo-42%2E1%2E3"},
+		{"demo-a..b", "demo-a%2E%2Eb"},
+		{"demo-x.", "demo-x%2E"},
+		{"demo-a%2Eb", "demo-a%252Eb"},
+		{"%", "%25"},
+		{"", "%"},
+		{"a b*>", "a%20b%2A%3E"},
+		{"\u00e9", "%C3%A9"},
+		{"11111111-2222-3333-4444-555555555555", "11111111-2222-3333-4444-555555555555"},
+		{"demo-1::demo-2::blocks", "demo-1::demo-2::blocks"},
+	} {
+		lifecycle := BuildSubject(SubjectInput{EventType: "issue.closed", EntityType: "issue", EntityID: tc.id, ProjectID: &pid})
+		field := BuildSubject(SubjectInput{EventType: "issue.field_changed", EntityType: "issue", EntityID: tc.id, ProjectID: &pid, Field: "priority"})
+		for shape, subject := range map[string]struct {
+			s      string
+			tokens int
+		}{"lifecycle": {lifecycle, 7}, "field": {field, 8}} {
+			parts := strings.Split(subject.s, ".")
+			if len(parts) != subject.tokens {
+				t.Fatalf("%s subject of %q = %q: %d tokens, want %d", shape, tc.id, subject.s, len(parts), subject.tokens)
+			}
+			for _, p := range parts {
+				if p == "" || strings.ContainsAny(p, " \t*>") {
+					t.Fatalf("%s subject of %q = %q has an empty or wildcard token", shape, tc.id, subject.s)
+				}
+			}
+			if got := parts[len(parts)-1]; got != tc.want {
+				t.Fatalf("%s tail of %q = %q, want %q", shape, tc.id, got, tc.want)
+			}
+		}
+	}
+	// Ids that the raw scheme collapsed into the same token sequence.
+	seen := map[string]string{}
+	for _, id := range []string{"a.b", "a%2Eb", "a..b", "a.", "a", "", "%", "%25"} {
+		tail := EncodeEntityToken(id)
+		if prev, ok := seen[tail]; ok {
+			t.Fatalf("ids %q and %q share the token %q", prev, id, tail)
+		}
+		seen[tail] = id
 	}
 }

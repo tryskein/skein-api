@@ -30,8 +30,9 @@ type SubjectInput struct {
 
 	// EntityID is the row's primary key in string form. For issues this is
 	// the hierarchical id ("demo-42.1"); for everything else it is a uuid
-	// stringification. Used as the trailing token in project-scoped
-	// subjects so subscribers can wildcard-match a specific entity.
+	// stringification. Encoded by EncodeEntityToken into the trailing token
+	// of project-scoped subjects so subscribers can wildcard-match a
+	// specific entity.
 	EntityID string
 
 	// ProjectID is required for every entity except "user". When nil for a
@@ -59,6 +60,11 @@ type SubjectInput struct {
 //	skein.user.{uid}.field.{kebab}                          user-global per-field child
 //	skein.user.{uid}.membership_changed                     side-channel (synthetic)
 //	skein.user.{uid}.notification                           reserved for R3.3
+//
+// {eid} is EncodeEntityToken(EntityID): always exactly one non-empty NATS
+// token, whatever the id holds ("demo-42.1" → "demo-42%2E1"). Subscribers
+// that need the id decode it (EncodeEntityToken describes the format) or
+// read entityId from the envelope body.
 //
 // "Entity" in the subject is the short-name from EventType's first segment
 // (e.g. "issue.created" → "issue"). EntityType from the row is only
@@ -100,10 +106,10 @@ func BuildSubject(in SubjectInput) string {
 
 	pid := in.ProjectID.String()
 	actionTok := fieldifyAction(action, in.Field)
-	// Byte-identical to the prior fmt.Sprintf("skein.events.project.%s.%s.%s.%s", ...).
 	const prefix = "skein.events.project."
 	var b strings.Builder
-	b.Grow(len(prefix) + len(pid) + 1 + len(entity) + 1 + len(actionTok) + 1 + len(in.EntityID))
+	eid := EncodeEntityToken(in.EntityID)
+	b.Grow(len(prefix) + len(pid) + 1 + len(entity) + 1 + len(actionTok) + 1 + len(eid))
 	b.WriteString(prefix)
 	b.WriteString(pid)
 	b.WriteByte('.')
@@ -111,7 +117,44 @@ func BuildSubject(in SubjectInput) string {
 	b.WriteByte('.')
 	b.WriteString(actionTok)
 	b.WriteByte('.')
-	b.WriteString(in.EntityID)
+	b.WriteString(eid)
+	return b.String()
+}
+
+// EncodeEntityToken encodes an entity id as the trailing token of a
+// project-scoped subject. The format is a contract with the subscribers
+// (skein-web SubjectParser decodes it):
+//
+//   - the bytes A-Z, a-z, 0-9, "_", ":" and "-" stand for themselves;
+//   - every other byte of the UTF-8 id, "%" and "." among them, is "%"
+//     followed by two upper-case hex digits ("." → "%2E", "%" → "%25");
+//   - the empty id is the lone token "%".
+//
+// The result is always one non-empty NATS token (no ".", no whitespace,
+// no wildcard) and the encoding is injective: distinct ids give distinct
+// tokens, since "%" never stands for itself and a lone "%" is never the
+// encoding of a non-empty id. Ids made only of the unescaped bytes —
+// UUIDs, dependency ids "from::to::type", top-level issue ids such as
+// "demo-42" — are unchanged.
+func EncodeEntityToken(id string) string {
+	if id == "" {
+		return "%"
+	}
+	const hex = "0123456789ABCDEF"
+	var b strings.Builder
+	b.Grow(len(id))
+	for i := 0; i < len(id); i++ {
+		c := id[i]
+		switch {
+		case c >= 'A' && c <= 'Z', c >= 'a' && c <= 'z', c >= '0' && c <= '9',
+			c == '_', c == ':', c == '-':
+			b.WriteByte(c)
+		default:
+			b.WriteByte('%')
+			b.WriteByte(hex[c>>4])
+			b.WriteByte(hex[c&0x0F])
+		}
+	}
 	return b.String()
 }
 

@@ -303,6 +303,72 @@ func TestDispatcher_PublishesPendingEvent(t *testing.T) {
 	}
 }
 
+// TestDispatcher_DeliversEntityIDsWithEmptyDotTokens — sk-977.7.74: an
+// entity id with "..", a trailing dot or a run of dots used to become a
+// subject with an empty token, which the NATS server accepts and silently
+// delivers to nobody (Publish and Flush return nil, the row is marked
+// published). Every such event must now reach a project subscriber, with
+// the real id in the envelope and the documented %XX tail on the subject.
+func TestDispatcher_DeliversEntityIDsWithEmptyDotTokens(t *testing.T) {
+	pool := newTestPool(t)
+	_, nc := startEmbeddedNATS(t)
+
+	owner := seedUser(t, pool)
+	pid := seedProject(t, pool, owner)
+	resetOutbox(t, pool, pid)
+
+	sub, err := nc.SubscribeSync(fmt.Sprintf("skein.events.project.%s.>", pid.String()))
+	if err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+	if err := nc.Flush(); err != nil {
+		t.Fatalf("flush sub: %v", err)
+	}
+
+	type want struct {
+		eventType, entityID, field, tail string
+	}
+	wants := []want{
+		{"issue.created", "dots-42.1", "", ".issue.created.dots-42%2E1"},
+		{"issue.created", "dots-a..b", "", ".issue.created.dots-a%2E%2Eb"},
+		{"issue.created", "dots-1.", "", ".issue.created.dots-1%2E"},
+		{"issue.created", "dots-1..1", "", ".issue.created.dots-1%2E%2E1"},
+		{"issue.created", "dots-a...", "", ".issue.created.dots-a%2E%2E%2E"},
+		{"issue.field_changed", "dots-a..b", "priority", ".issue.field.priority.dots-a%2E%2Eb"},
+	}
+	for _, w := range wants {
+		insertEvent(t, pool, owner, pid, w.eventType, "issue", w.entityID, w.field, time.Time{})
+	}
+
+	d := New(pool, nc, Options{BatchSize: 50})
+	drainProject(t, d, pool, pid)
+
+	// The outbox is drained, so every publish has been flushed; whatever
+	// has not arrived within the wait below was not delivered.
+	got := map[string]string{} // eventType + " " + entityId -> subject
+	for len(got) < len(wants) {
+		msg, err := sub.NextMsg(2 * time.Second)
+		if err != nil {
+			break
+		}
+		var env Envelope
+		if err := json.Unmarshal(msg.Data, &env); err != nil {
+			t.Fatalf("unmarshal envelope: %v\nbody=%s", err, string(msg.Data))
+		}
+		got[env.EventType+" "+env.EntityID] = msg.Subject
+	}
+	for _, w := range wants {
+		subject, ok := got[w.eventType+" "+w.entityID]
+		if !ok {
+			t.Errorf("%s for %q was not delivered to the project subscriber", w.eventType, w.entityID)
+			continue
+		}
+		if !strings.HasSuffix(subject, w.tail) {
+			t.Errorf("%s for %q arrived on %q, want the suffix %q", w.eventType, w.entityID, subject, w.tail)
+		}
+	}
+}
+
 func TestDispatcher_DrainsBatchUpToLimit(t *testing.T) {
 	pool := newTestPool(t)
 	_, nc := startEmbeddedNATS(t)
