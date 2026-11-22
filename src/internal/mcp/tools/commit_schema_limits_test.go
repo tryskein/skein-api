@@ -44,35 +44,31 @@ func TestCommitItemSchema_AcceptsPaddedValuesAtTheLimit(t *testing.T) {
 	var raw []byte
 	for _, tool := range res.Tools {
 		if tool.Name == "skein_commits_attach" {
-			raw, err = json.Marshal(tool.InputSchema.Properties["commits"])
+			raw, err = json.Marshal(tool.InputSchema)
 			if err != nil {
-				t.Fatalf("marshal commits schema: %v", err)
+				t.Fatalf("marshal input schema: %v", err)
 			}
 		}
 	}
 	if raw == nil {
-		t.Fatal("skein_commits_attach with a commits property is not in the listing")
+		t.Fatal("skein_commits_attach is not in the listing")
 	}
-	var commits openapi3.Schema
-	if err := json.Unmarshal(raw, &commits); err != nil {
-		t.Fatalf("commits schema: %v", err)
+	var input openapi3.Schema
+	if err := json.Unmarshal(raw, &input); err != nil {
+		t.Fatalf("input schema: %v", err)
 	}
-	if commits.Items == nil || commits.Items.Value == nil {
-		t.Fatal("commits declares no item schema")
+	// A whole arguments object, validated with JSON Schema 2020-12, so the
+	// constraints of the enclosing object and array take part.
+	args := map[string]any{
+		"issueId": "demo-1",
+		"commits": []any{map[string]any{
+			"hash":    "abcdef1",
+			"url":     "https://example.com/" + strings.Repeat("a", 2048-len("https://example.com/")) + " ",
+			"message": strings.Repeat("m", 1000) + " ",
+			"author":  strings.Repeat("a", 256) + " ",
+		}},
 	}
-	item := commits.Items.Value
-	for field, value := range map[string]string{
-		"url":     "https://example.com/" + strings.Repeat("a", 2048-len("https://example.com/")) + " ",
-		"message": strings.Repeat("m", 1000) + " ",
-		"author":  strings.Repeat("a", 256) + " ",
-	} {
-		prop := item.Properties[field]
-		if prop == nil || prop.Value == nil {
-			t.Errorf("%s is not in the commit item schema", field)
-			continue
-		}
-		if err := prop.Value.VisitJSON(value); err != nil {
-			t.Errorf("%s of %d characters with a trailing space is refused by the schema: %v", field, len(value), err)
-		}
+	if err := input.VisitJSON(args, openapi3.EnableJSONSchema2020()); err != nil {
+		t.Errorf("arguments with commit fields at the limit plus a trailing space are refused by the schema: %v", err)
 	}
 }

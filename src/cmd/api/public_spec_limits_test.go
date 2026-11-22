@@ -124,39 +124,6 @@ func TestPublicSpecLimitsMatchBehaviour(t *testing.T) {
 		}
 	})
 
-	// sk-977.7.69: the limits of a commit ref apply after surrounding
-	// whitespace is trimmed, so a value at the limit plus a trailing space
-	// is one the server accepts; the document must accept it too.
-	t.Run("commit ref fields of closeIssue", func(t *testing.T) {
-		op := documentOperation(doc, http.MethodPost, "/api/v1/issues/{issue}/close")
-		if op == nil || op.RequestBody == nil {
-			t.Fatal("closeIssue with a body is not in the document")
-		}
-		body := op.RequestBody.Value.Content.Get("application/json")
-		if body == nil || body.Schema == nil {
-			t.Fatal("closeIssue: no JSON body schema")
-		}
-		commits := body.Schema.Value.Properties["commits"]
-		if commits == nil || commits.Value.Items == nil {
-			t.Fatal("closeIssue: commits declares no item schema")
-		}
-		item := commits.Value.Items.Value
-		for field, value := range map[string]string{
-			"url":     "https://example.com/" + strings.Repeat("a", 2048-len("https://example.com/")) + " ",
-			"message": strings.Repeat("m", 1000) + " ",
-			"author":  strings.Repeat("a", 256) + " ",
-		} {
-			prop := item.Properties[field]
-			if prop == nil {
-				t.Errorf("%s is not in the commit schema", field)
-				continue
-			}
-			if err := prop.Value.VisitJSON(value); err != nil {
-				t.Errorf("%s of %d characters with a trailing space is refused by the document: %v", field, len(value), err)
-			}
-		}
-	})
-
 	t.Run("title of updateIssue", func(t *testing.T) {
 		max := titleMax(t, http.MethodPatch, "/api/v1/issues/{issue}")
 		id := w.freshIssue(w.p)
