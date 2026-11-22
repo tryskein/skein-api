@@ -363,3 +363,69 @@ func TestBuildSubject_EntityTailIsOneToken(t *testing.T) {
 		seen[tail] = id
 	}
 }
+
+// TestEncodeEntityToken_DigestBeyondTokenBound — sk-977.7.74: an id whose
+// %XX encoding fits EntityTokenMaxBytes (1024) keeps it; one byte more and
+// the token is "%%" + the upper-case hex SHA-256 of the id (reference
+// digests computed outside this code).
+func TestEncodeEntityToken_DigestBeyondTokenBound(t *testing.T) {
+	fits := strings.Repeat(".", 341) + "a" // 341*3 + 1 = 1024 bytes encoded
+	if got := EncodeEntityToken(fits); got != strings.Repeat("%2E", 341)+"a" {
+		t.Fatalf("id encoding to exactly 1024 bytes: got a %d-byte token %.20q…", len(got), got)
+	}
+	for _, tc := range []struct{ id, want string }{
+		{strings.Repeat(".", 342), "%%833A0585255E446C16E719145EFBFFAE39C44FCE96540C01F4E46AF7090D1626"},
+		{"x" + strings.Repeat(".", 999), "%%332FF9623BE7D94CB3AAA2CB47D0A54C7F53E1810EB0EA366A28A3BB897E7239"},
+	} {
+		if got := EncodeEntityToken(tc.id); got != tc.want {
+			t.Fatalf("id of %d bytes: got %q, want %q", len(tc.id), got, tc.want)
+		}
+	}
+}
+
+// TestBuildSubject_LongestIdsOfEachKindStayPublishable — sk-977.7.74: for
+// the longest id of each entity kind (issue ids are varchar(1000), a
+// dependency id joins two of them with the longest dependency type,
+// everything else is a UUID) and the longest field the writers use, the
+// subject keeps its project route, ends in one token and stays within
+// SubjectMaxBytes (2048), far below NATS's 4096-byte control line.
+func TestBuildSubject_LongestIdsOfEachKindStayPublishable(t *testing.T) {
+	pid := fixedProjectID
+	longIssue := "x" + strings.Repeat(".", 999)
+	plainIssue := strings.Repeat("a", 1000)
+	for _, tc := range []struct {
+		name, eventType, entityType, entityID, field string
+	}{
+		{"issue, dotted", "issue.created", "issue", longIssue, ""},
+		{"issue, plain", "issue.created", "issue", plainIssue, ""},
+		{"issue field", "issue.field_changed", "issue", longIssue, "includeDeps"},
+		{"dependency, dotted", "dependency.created", "dep", longIssue + "::" + longIssue + "::discovered-from", ""},
+		{"dependency, plain", "dependency.created", "dep", plainIssue + "::" + plainIssue + "::discovered-from", ""},
+		{"comment", "comment.created", "comment", "abcd1234-0000-0000-0000-aabbccddeeff", ""},
+		{"project", "project.member_role_changed", "project", pid.String(), ""},
+	} {
+		got := BuildSubject(SubjectInput{EventType: tc.eventType, EntityType: tc.entityType, EntityID: tc.entityID, ProjectID: &pid, Field: tc.field})
+		if len(got) > 2048 {
+			t.Errorf("%s: subject of %d bytes exceeds 2048", tc.name, len(got))
+		}
+		if !strings.HasPrefix(got, "skein.events.project."+pid.String()+".") {
+			t.Errorf("%s: subject lost its project route: %.80q…", tc.name, got)
+		}
+		tail := got[strings.LastIndexByte(got, '.')+1:]
+		if tail == "" || len(tail) > 1024 {
+			t.Errorf("%s: tail of %d bytes", tc.name, len(tail))
+		}
+	}
+}
+
+// TestBuildSubject_OverlongHeadGoesToMalformed — sk-977.7.74: a subject
+// that would exceed SubjectMaxBytes whatever the entity token (an event
+// type far outside the writers' constants) is published on the malformed
+// root rather than on a line the NATS server refuses.
+func TestBuildSubject_OverlongHeadGoesToMalformed(t *testing.T) {
+	pid := fixedProjectID
+	got := BuildSubject(SubjectInput{EventType: "issue." + strings.Repeat("a", 2100), EntityType: "issue", EntityID: "demo-1", ProjectID: &pid})
+	if got != "skein.events.malformed.subject_too_long" {
+		t.Fatalf("got %.80q…", got)
+	}
+}

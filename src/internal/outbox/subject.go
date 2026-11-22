@@ -1,6 +1,8 @@
 package outbox
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"strings"
 	"time"
@@ -62,9 +64,18 @@ type SubjectInput struct {
 //	skein.user.{uid}.notification                           reserved for R3.3
 //
 // {eid} is EncodeEntityToken(EntityID): always exactly one non-empty NATS
-// token, whatever the id holds ("demo-42.1" → "demo-42%2E1"). Subscribers
-// that need the id decode it (EncodeEntityToken describes the format) or
-// read entityId from the envelope body.
+// token of at most EntityTokenMaxBytes bytes, whatever the id holds
+// ("demo-42.1" → "demo-42%2E1"; an id whose encoding is longer becomes a
+// digest token). Subscribers that need the id decode it
+// (EncodeEntityToken describes the format) or read entityId from the
+// envelope body, which always carries the id itself.
+//
+// Every subject BuildSubject returns is at most SubjectMaxBytes bytes: one
+// that would be longer (only an event type or field far outside the
+// writers' constants can make one) is replaced by
+// "skein.events.malformed.subject_too_long". A NATS server closes the
+// connection of a client whose PUB line exceeds its max_control_line
+// (4096 bytes by default), which would stall the whole outbox on one row.
 //
 // "Entity" in the subject is the short-name from EventType's first segment
 // (e.g. "issue.created" → "issue"). EntityType from the row is only
@@ -75,6 +86,30 @@ type SubjectInput struct {
 // BuildSubject is pure — no DB, no network, no time. It is safe to call
 // from any goroutine and trivial to test exhaustively.
 func BuildSubject(in SubjectInput) string {
+	subject := buildSubject(in)
+	if len(subject) > SubjectMaxBytes {
+		return "skein.events.malformed.subject_too_long"
+	}
+	return subject
+}
+
+// SubjectMaxBytes bounds every subject BuildSubject returns. With the PUB
+// verb, the payload size and the separators it keeps a published line well
+// under the NATS server's default max_control_line of 4096 bytes. A
+// project-scoped subject is the fixed head (prefix, project UUID, entity,
+// action or "field.<kebab>") plus one token of at most EntityTokenMaxBytes,
+// so the writers' event types and field names leave it far below this
+// bound.
+const SubjectMaxBytes = 2048
+
+// EntityTokenMaxBytes bounds the trailing entity token of a project-scoped
+// subject. An id whose %XX encoding would be longer is published under its
+// digest token (EncodeEntityToken). Issue ids are up to 1000 characters and
+// a dependency id joins two of them, so the encoding of real ids can exceed
+// any bound that keeps the subject publishable.
+const EntityTokenMaxBytes = 1024
+
+func buildSubject(in SubjectInput) string {
 	// Parse "<entity>.<action>" from event_type. action may itself contain
 	// dots (e.g. "field_changed" stays one token), so SplitN with n=2.
 	parts := strings.SplitN(in.EventType, ".", 2)
@@ -128,34 +163,57 @@ func BuildSubject(in SubjectInput) string {
 //   - the bytes A-Z, a-z, 0-9, "_", ":" and "-" stand for themselves;
 //   - every other byte of the UTF-8 id, "%" and "." among them, is "%"
 //     followed by two upper-case hex digits ("." → "%2E", "%" → "%25");
-//   - the empty id is the lone token "%".
+//   - the empty id is the lone token "%";
+//   - an id whose encoding by the rules above would be longer than
+//     EntityTokenMaxBytes is the digest token instead: "%%" followed by the
+//     64 upper-case hex digits of the SHA-256 of the id's bytes. The id
+//     cannot be read back from it; the envelope's entityId carries it.
 //
 // The result is always one non-empty NATS token (no ".", no whitespace,
-// no wildcard) and the encoding is injective: distinct ids give distinct
-// tokens, since "%" never stands for itself and a lone "%" is never the
-// encoding of a non-empty id. Ids made only of the unescaped bytes —
+// no wildcard) of at most EntityTokenMaxBytes bytes. Distinct ids give
+// distinct tokens: "%" never stands for itself, a lone "%" is never the
+// encoding of a non-empty id, and "%%" never starts an encoding, so the
+// digest form shares no token with the others (two digest tokens collide
+// only on a SHA-256 collision). Ids made only of the unescaped bytes —
 // UUIDs, dependency ids "from::to::type", top-level issue ids such as
-// "demo-42" — are unchanged.
+// "demo-42" — are unchanged while they fit.
 func EncodeEntityToken(id string) string {
 	if id == "" {
 		return "%"
 	}
-	const hex = "0123456789ABCDEF"
-	var b strings.Builder
-	b.Grow(len(id))
+	n := 0
 	for i := 0; i < len(id); i++ {
-		c := id[i]
-		switch {
-		case c >= 'A' && c <= 'Z', c >= 'a' && c <= 'z', c >= '0' && c <= '9',
-			c == '_', c == ':', c == '-':
-			b.WriteByte(c)
-		default:
-			b.WriteByte('%')
-			b.WriteByte(hex[c>>4])
-			b.WriteByte(hex[c&0x0F])
+		if isUnescapedEntityByte(id[i]) {
+			n++
+		} else {
+			n += 3
 		}
 	}
+	if n > EntityTokenMaxBytes {
+		sum := sha256.Sum256([]byte(id))
+		return "%%" + strings.ToUpper(hex.EncodeToString(sum[:]))
+	}
+	const hexDigits = "0123456789ABCDEF"
+	var b strings.Builder
+	b.Grow(n)
+	for i := 0; i < len(id); i++ {
+		c := id[i]
+		if isUnescapedEntityByte(c) {
+			b.WriteByte(c)
+			continue
+		}
+		b.WriteByte('%')
+		b.WriteByte(hexDigits[c>>4])
+		b.WriteByte(hexDigits[c&0x0F])
+	}
 	return b.String()
+}
+
+// isUnescapedEntityByte reports the bytes that stand for themselves in an
+// entity token.
+func isUnescapedEntityByte(c byte) bool {
+	return c >= 'A' && c <= 'Z' || c >= 'a' && c <= 'z' || c >= '0' && c <= '9' ||
+		c == '_' || c == ':' || c == '-'
 }
 
 // fieldifyAction handles the field-changed case. When the action is

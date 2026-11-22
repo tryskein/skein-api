@@ -369,6 +369,71 @@ func TestDispatcher_DeliversEntityIDsWithEmptyDotTokens(t *testing.T) {
 	}
 }
 
+// TestDispatcher_DeliversLongEntityIDsAndKeepsDraining — sk-977.7.74: a
+// dependency between two 1000-character dotted issue ids encoded in full
+// made a subject longer than the server's 4096-byte control line; the
+// server closed the connection, the batch rolled back and the same row
+// came first on every tick, so the outbox stopped for everybody. Such
+// events must now be delivered (under the digest token) and the events
+// after them too.
+func TestDispatcher_DeliversLongEntityIDsAndKeepsDraining(t *testing.T) {
+	pool := newTestPool(t)
+	_, nc := startEmbeddedNATS(t)
+
+	owner := seedUser(t, pool)
+	pid := seedProject(t, pool, owner)
+	resetOutbox(t, pool, pid)
+
+	sub, err := nc.SubscribeSync(fmt.Sprintf("skein.events.project.%s.>", pid.String()))
+	if err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+	if err := nc.Flush(); err != nil {
+		t.Fatalf("flush sub: %v", err)
+	}
+
+	longIssue := "x" + strings.Repeat(".", 999)
+	depID := longIssue + "::" + longIssue + "::discovered-from"
+	type want struct{ eventType, entityType, entityID string }
+	wants := []want{
+		{"dependency.created", "dep", depID},
+		{"issue.created", "issue", longIssue},
+		{"issue.created", "issue", "dots-after-long"},
+	}
+	for _, w := range wants {
+		insertEvent(t, pool, owner, pid, w.eventType, w.entityType, w.entityID, "", time.Time{})
+	}
+
+	d := New(pool, nc, Options{BatchSize: 50})
+	drainProject(t, d, pool, pid)
+
+	got := map[string]string{} // eventType + " " + entityId -> subject
+	for len(got) < len(wants) {
+		msg, err := sub.NextMsg(2 * time.Second)
+		if err != nil {
+			break
+		}
+		var env Envelope
+		if err := json.Unmarshal(msg.Data, &env); err != nil {
+			t.Fatalf("unmarshal envelope: %v", err)
+		}
+		got[env.EventType+" "+env.EntityID] = msg.Subject
+	}
+	for _, w := range wants {
+		subject, ok := got[w.eventType+" "+w.entityID]
+		if !ok {
+			t.Errorf("%s for an id of %d bytes was not delivered", w.eventType, len(w.entityID))
+			continue
+		}
+		if len(subject) > 2048 {
+			t.Errorf("%s arrived on a subject of %d bytes", w.eventType, len(subject))
+		}
+	}
+	if subject := got["dependency.created "+depID]; subject != "" && !strings.Contains(subject, ".dependency.created.%%") {
+		t.Errorf("dependency event arrived on %.120q…, want the digest token", subject)
+	}
+}
+
 func TestDispatcher_DrainsBatchUpToLimit(t *testing.T) {
 	pool := newTestPool(t)
 	_, nc := startEmbeddedNATS(t)
