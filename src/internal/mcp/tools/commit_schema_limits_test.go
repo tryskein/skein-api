@@ -8,15 +8,16 @@ package tools
 // schema would otherwise refuse a call the server takes.
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"strings"
 	"testing"
 
-	"github.com/getkin/kin-openapi/openapi3"
 	"github.com/mark3labs/mcp-go/client"
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
+	"github.com/santhosh-tekuri/jsonschema/v6"
 )
 
 func TestCommitItemSchema_AcceptsPaddedValuesAtTheLimit(t *testing.T) {
@@ -53,9 +54,27 @@ func TestCommitItemSchema_AcceptsPaddedValuesAtTheLimit(t *testing.T) {
 	if raw == nil {
 		t.Fatal("skein_commits_attach is not in the listing")
 	}
-	var input openapi3.Schema
-	if err := json.Unmarshal(raw, &input); err != nil {
-		t.Fatalf("input schema: %v", err)
+	parsed, err := jsonschema.UnmarshalJSON(bytes.NewReader(raw))
+	if err != nil {
+		t.Fatalf("input schema is not JSON: %v", err)
+	}
+	commits, _ := parsed.(map[string]any)["properties"].(map[string]any)["commits"].(map[string]any)
+	item, _ := commits["items"].(map[string]any)
+	props, _ := item["properties"].(map[string]any)
+	for _, field := range []string{"url", "message", "author"} {
+		if props[field] == nil {
+			t.Errorf("commits[].%s is not declared", field)
+		}
+	}
+	const schemaURL = "https://example.invalid/skein_commits_attach.json"
+	comp := jsonschema.NewCompiler()
+	comp.DefaultDraft(jsonschema.Draft2020)
+	if err := comp.AddResource(schemaURL, parsed); err != nil {
+		t.Fatalf("add the input schema: %v", err)
+	}
+	schema, err := comp.Compile(schemaURL)
+	if err != nil {
+		t.Fatalf("compile the input schema: %v", err)
 	}
 	// A whole arguments object, validated with JSON Schema 2020-12, so the
 	// constraints of the enclosing object and array take part.
@@ -68,7 +87,7 @@ func TestCommitItemSchema_AcceptsPaddedValuesAtTheLimit(t *testing.T) {
 			"author":  strings.Repeat("a", 256) + " ",
 		}},
 	}
-	if err := input.VisitJSON(args, openapi3.EnableJSONSchema2020()); err != nil {
+	if err := schema.Validate(args); err != nil {
 		t.Errorf("arguments with commit fields at the limit plus a trailing space are refused by the schema: %v", err)
 	}
 }

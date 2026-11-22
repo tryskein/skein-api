@@ -22,6 +22,7 @@ require (
 	github.com/pgvector/pgvector-go v0.4.1
 	github.com/prometheus/client_golang v1.25.0
 	github.com/prometheus/client_model v0.6.3
+	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3
 	go.uber.org/goleak v1.3.0
 	golang.org/x/crypto v0.59.0
 	golang.org/x/sync v0.25.0
@@ -68,7 +69,6 @@ require (
 	github.com/prometheus/procfs v0.23.0 // indirect
 	github.com/rs/xid v1.6.0 // indirect
 	github.com/russross/blackfriday/v2 v2.1.0 // indirect
-	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3 // indirect
 	github.com/spf13/cast v1.10.0 // indirect
 	github.com/sv-tools/openapi v0.4.0 // indirect
 	github.com/swaggo/swag v1.16.6 // indirect
