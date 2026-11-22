@@ -146,9 +146,9 @@ type (
 		Name *string `json:"name,omitempty"`
 		// Filter: projects (UUIDs), event_types, types, labels, components
 		// (UUIDs), priority_max. No projects — any project, which needs a key
-		// of scope all. At most 50 values per array, each label by the rule
-		// of issue labels (at most 100 characters), at most 16384 bytes
-		// encoded. Required.
+		// of scope all. At most 50 values per array, each type of the closed
+		// set of issue types, each label by the rule of issue labels (at most
+		// 100 characters), at most 16384 bytes encoded. Required.
 		Filter map[string]any `json:"filter,omitempty"`
 		// Kind of the write: directed or autonomous (checked).
 		Kind *string `json:"kind,omitempty"`
@@ -766,7 +766,7 @@ func (a *issueWrites) listWatchFilters(w http.ResponseWriter, r *http.Request) {
 // @Failure 400 {object} ProblemDocument "Malformed body, unknown field or parameter, a kind outside directed|autonomous (code validation_error)"
 // @Failure 401 {object} ProblemDocument "No key, or the key is invalid, expired or revoked (code unauthenticated)"
 // @Failure 403 {object} ProblemDocument "The key lacks write (code insufficient_scope); a filter over any project under a narrower scope (code forbidden)"
-// @Failure 422 {object} ProblemDocument "A project of the filter is missing or out of reach (code project_not_found); the name or the filter is invalid, or the cap is reached (code validation_error; a limit of the filter carries the case in validation: filter_too_many_values — more than 50 values in an array, with field, cap and got; invalid_label — a label empty or over 100 characters, with field, index and maxLength; filter_too_large — the filter over 16384 bytes encoded, with cap and got)"
+// @Failure 422 {object} ProblemDocument "A project of the filter is missing or out of reach (code project_not_found); the name or the filter is invalid, or the cap is reached (code validation_error; a limit of the filter carries the case in validation: filter_too_many_values — more than 50 values in an array, with field, cap and got; invalid_type — a type outside the closed set of issue types, with field and index; invalid_label — a label empty or over 100 characters, with field, index and maxLength; filter_too_large — the filter over 16384 bytes encoded, with cap and got)"
 // @Failure 429 {object} ProblemDocument "Rate limited (code rate_limited, Retry-After)"
 // @Failure 500 {object} ProblemDocument "Internal error (code internal_error)"
 // @Failure 503 {object} ProblemDocument "The database is unavailable (code database_unavailable)"

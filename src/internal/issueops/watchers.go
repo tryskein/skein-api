@@ -339,6 +339,7 @@ const (
 	WatchFilterInvalidUUIDCode        = "invalid_uuid"
 	WatchFilterInvalidPriorityMaxCode = "invalid_priority_max"
 	WatchFilterInvalidLabelCode       = "invalid_label"
+	WatchFilterInvalidTypeCode        = "invalid_type"
 	WatchFilterTooManyValuesCode      = "filter_too_many_values"
 	WatchFilterTooLargeCode           = "filter_too_large"
 )
@@ -370,12 +371,13 @@ func (e *WatchFilterError) Details() map[string]any {
 	return d
 }
 
-// IsLimit says whether the refusal is one of the size limits of a filter
-// (labels, values per array, total size), as opposed to the checks of the
-// catalogue, the UUIDs and priority_max.
+// IsLimit says whether the refusal is one of the value limits of a filter
+// (labels, issue types outside the closed set, values per array, total
+// size), as opposed to the checks of the event catalogue, the UUIDs and
+// priority_max.
 func (e *WatchFilterError) IsLimit() bool {
 	switch e.Code {
-	case WatchFilterInvalidLabelCode, WatchFilterTooManyValuesCode, WatchFilterTooLargeCode:
+	case WatchFilterInvalidLabelCode, WatchFilterInvalidTypeCode, WatchFilterTooManyValuesCode, WatchFilterTooLargeCode:
 		return true
 	}
 	return false
@@ -449,8 +451,11 @@ func DecodeCustomWatcherFilter(raw any) (notifications.CustomWatcherFilter, *Wat
 // at most WatchFilterMaxValues values in each array; event_types of the
 // subscription catalogue (undeliverable types are refused so a filter
 // cannot become a dead toggle, T001 / sk-303.13); projects and components
-// as UUIDs; each label by the rule of issue labels (issues.ValidateLabel,
-// stored trimmed as issue labels are); priority_max in [0, 1000]; the
+// as UUIDs; each type of the closed set of issue types (issues.ValidateType,
+// stored trimmed), since a filter is matched against the issue's type and
+// any other value never matches; each label by the rule of issue labels
+// (issues.ValidateLabel, stored trimmed as issue labels are); priority_max
+// in [0, 1000]; the
 // encoded filter at most WatchFilterMaxBytes. It answers the filter to
 // store. Filters already stored are not re-checked.
 func ValidateCustomWatcherFilter(in notifications.CustomWatcherFilter) (notifications.CustomWatcherFilter, *WatchFilterError) {
@@ -498,6 +503,21 @@ func ValidateCustomWatcherFilter(in notifications.CustomWatcherFilter) (notifica
 	}
 	if err := uuids("components", in.Components); err != nil {
 		return out, err
+	}
+	if len(in.Types) > 0 {
+		types := make([]string, len(in.Types))
+		for i, typ := range in.Types {
+			canonical, err := issues.ValidateType(typ)
+			if err != nil {
+				return out, &WatchFilterError{
+					Code:    WatchFilterInvalidTypeCode,
+					Message: "types[" + strconv.Itoa(i) + "]: " + err.Error(),
+					Fields:  map[string]any{"field": "types", "index": i},
+				}
+			}
+			types[i] = canonical
+		}
+		out.Types = types
 	}
 	if len(in.Labels) > 0 {
 		labels := make([]string, len(in.Labels))

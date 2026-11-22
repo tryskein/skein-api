@@ -44,6 +44,9 @@ func TestCreateWatchFilter_RefusesOverLimitFilters(t *testing.T) {
 		{"51 event types", map[string]any{"event_types": repeatStrings("issue.created", 51)}, "filter_too_many_values", "event_types"},
 		{"label of 101 characters", map[string]any{"labels": []any{strings.Repeat("a", 101)}}, "invalid_label", "labels"},
 		{"blank label", map[string]any{"labels": []any{"  "}}, "invalid_label", "labels"},
+		// One type well within the size limits but outside the closed set.
+		{"type outside the set", map[string]any{"types": []any{strings.Repeat("t", 1000)}}, "invalid_type", "types"},
+		{"type in another case", map[string]any{"types": []any{"Bug"}}, "invalid_type", "types"},
 		// 50 labels of 100 four-byte characters: each label and each count
 		// is within its own limit, the whole is about 20 KB.
 		{"over 16 KiB encoded", map[string]any{"labels": repeatStrings(strings.Repeat("\U0001F600", 100), 50)}, "filter_too_large", ""},

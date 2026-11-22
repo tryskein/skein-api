@@ -153,7 +153,7 @@ func RegisterWatchers(
 				"Filter-watcher matching rules. Required for filter_create. All "+
 					"fields optional, an omitted field means \"no constraint\": "+
 					"event_types[] | projects[] | types[] | labels[] | components[] | priority_max. "+
-					"At most 50 values per array, labels of 100 characters, 16 KiB encoded; "+
+					"At most 50 values per array, types of the issue type set, labels of 100 characters, 16 KiB encoded; "+
 					"over a limit: validation_error, the case in code.",
 			),
 		),

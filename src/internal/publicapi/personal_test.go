@@ -571,3 +571,48 @@ VALUES ($1, $2, 'related', '{}'::jsonb, 1, $3, now())`, issue, other, w.owner)
 		}
 	}
 }
+
+// TestPersonal_CreateWatchFilterRefusesALimitWithItsCase — sk-977.7.73:
+// the public createWatchFilter answers a filter over one of its limits with
+// 422 validation_error, the case in the `validation` extension and the
+// fields the operation documents, and stores nothing.
+func TestPersonal_CreateWatchFilterRefusesALimitWithItsCase(t *testing.T) {
+	rg, w := seedPersonalWorld(t)
+	key := w.key(w.owner, apikeys.LevelWrite)
+	labels := make([]string, 51)
+	for i := range labels {
+		labels[i] = "l" + strconv.Itoa(i)
+	}
+	for _, tc := range []struct {
+		name       string
+		filter     map[string]any
+		validation string
+		fields     map[string]any
+	}{
+		{"51 labels", map[string]any{"labels": labels}, "filter_too_many_values",
+			map[string]any{"field": "labels", "cap": float64(50), "got": float64(51)}},
+		{"a type outside the set", map[string]any{"types": []string{"Bug"}}, "invalid_type",
+			map[string]any{"field": "types", "index": float64(0)}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			name := "limit " + uuid.NewString()[:8]
+			got := rg.rest(key, http.MethodPost, "/api/v1/me/watch-filters", map[string]any{"name": name, "filter": tc.filter}, nil)
+			if got.status != http.StatusUnprocessableEntity || got.code() != "validation_error" {
+				t.Fatalf("status %d code %q, want 422 validation_error: %s", got.status, got.code(), got.body)
+			}
+			body := got.json(t)
+			if body["validation"] != tc.validation {
+				t.Errorf("validation = %v, want %s: %s", body["validation"], tc.validation, got.body)
+			}
+			for k, v := range tc.fields {
+				if body[k] != v {
+					t.Errorf("%s = %v, want %v", k, body[k], v)
+				}
+			}
+			var n int
+			if err := w.pool.QueryRow(context.Background(), `SELECT count(*) FROM custom_watchers WHERE user_id = $1 AND name = $2`, w.owner, name).Scan(&n); err != nil || n != 0 {
+				t.Errorf("refused filter stored: %d (%v)", n, err)
+			}
+		})
+	}
+}

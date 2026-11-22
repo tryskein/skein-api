@@ -740,8 +740,9 @@ type createCustomWatcherRequest struct {
 // 422 invalid_event_type — an event type outside the subscription catalogue.
 // 422 validation_error   — a size limit of the filter, the case in `code`:
 //
-//	filter_too_many_values (field, cap 50, got), invalid_label (field,
-//	index, maxLength), filter_too_large (cap 16384 bytes, got).
+//	filter_too_many_values (field, cap 50, got), invalid_type (field,
+//	index; a type outside the closed set of issue types), invalid_label
+//	(field, index, maxLength), filter_too_large (cap 16384 bytes, got).
 //
 // 400 validation_error   — malformed body, bad uuid, priority_max outside [0, 1000].
 func (h *NotificationsHandler) CreateCustomWatcher(w http.ResponseWriter, r *http.Request) {
