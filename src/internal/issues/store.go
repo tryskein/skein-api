@@ -6616,13 +6616,8 @@ func validateCloseStep(input CloseInput) error {
 			Message: fmt.Sprintf("at most %d commits per close call (got %d)", MaxCommitsPerClose, len(input.Commits)),
 		}
 	}
-	for i, c := range input.Commits {
-		if !commitHashRegex.MatchString(c.Hash) {
-			return &ValidationError{
-				Code:    "invalid_commit_hash",
-				Message: fmt.Sprintf("commits[%d].hash must be lowercase hex of length 7..64 (got %q)", i, c.Hash),
-			}
-		}
+	if err := validateCommitRefs(input.Commits); err != nil {
+		return err
 	}
 	if strings.TrimSpace(input.CloseTarget) != "" && input.DependenciesCaller == nil {
 		return fmt.Errorf("DependenciesCaller is required when CloseTarget is set")
@@ -6893,7 +6888,8 @@ UPDATE issues
 // Validation (up-front, before tx opens):
 //
 //   - len(Commits) in [1, MaxCommitsPerClose] → ValidationError
-//   - every hash matches commitHashRegex → ValidationError
+//   - every commit passes validateCommitRefs (hash, url, author,
+//     message) → ValidationError
 //
 // Success:
 //
@@ -6922,13 +6918,8 @@ func (s *Store) AttachCommits(ctx context.Context, input AttachCommitsInput) (*I
 			Message: fmt.Sprintf("at most %d commits per attach call (got %d)", MaxCommitsPerClose, len(input.Commits)),
 		}
 	}
-	for i, c := range input.Commits {
-		if !commitHashRegex.MatchString(c.Hash) {
-			return nil, &ValidationError{
-				Code:    "invalid_commit_hash",
-				Message: fmt.Sprintf("commits[%d].hash must be lowercase hex of length 7..64 (got %q)", i, c.Hash),
-			}
-		}
+	if err := validateCommitRefs(input.Commits); err != nil {
+		return nil, err
 	}
 
 	// Capture distinct hashes (in input order) for the event payload.

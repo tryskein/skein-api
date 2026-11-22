@@ -609,6 +609,7 @@
             "issues.CommitRef": {
                 "properties": {
                     "author": {
+                        "description": "Author as the closer gave it: untrusted text of at most 256\ncharacters (older refs as stored).",
                         "type": "string"
                     },
                     "committedAt": {
@@ -627,6 +628,7 @@
                         "type": "string"
                     },
                     "message": {
+                        "description": "Message, the subject line as the closer gave it: untrusted text of at\nmost 1000 characters (older refs as stored).",
                         "type": "string"
                     },
                     "repoId": {
@@ -636,6 +638,7 @@
                         "type": "string"
                     },
                     "url": {
+                        "description": "URL of the commit as the closer gave it: untrusted input. Refs written\nsince the check carry an absolute http or https URL of at most 2048\ncharacters; older refs are served as stored. Validate the scheme\nbefore rendering it as a link.",
                         "type": "string"
                     }
                 },
@@ -3723,7 +3726,8 @@
             "publicapi.commitInput": {
                 "properties": {
                     "author": {
-                        "description": "Author of the commit.",
+                        "description": "Author of the commit, at most 256 characters (case\ninvalid_commit_author). Untrusted text.",
+                        "maxLength": 256,
                         "type": "string"
                     },
                     "committedAt": {
@@ -3735,7 +3739,8 @@
                         "type": "string"
                     },
                     "message": {
-                        "description": "Message, the subject line.",
+                        "description": "Message, the subject line, at most 1000 characters (case\ninvalid_commit_message). Untrusted text.",
+                        "maxLength": 1000,
                         "type": "string"
                     },
                     "repoId": {
@@ -3747,7 +3752,8 @@
                         "type": "string"
                     },
                     "url": {
-                        "description": "URL of the commit.",
+                        "description": "URL of the commit: an absolute http or https URL with a host, at most\n2048 characters (validation_error, case invalid_commit_url). Stored as\ngiven and served to every reader of the card as untrusted input.",
+                        "maxLength": 2048,
                         "type": "string"
                     }
                 },

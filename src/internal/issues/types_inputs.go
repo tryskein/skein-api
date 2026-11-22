@@ -432,11 +432,19 @@ type CloseCommitInput struct {
 // LinkedBy carries the actor's username (resolved via LEFT JOIN users
 // on linked_by). nil for system-initiated links.
 type CommitRef struct {
-	Hash         string     `json:"hash"`
-	RepoID       uuid.UUID  `json:"repoId"`
-	RepoURL      string     `json:"repoUrl,omitempty"`
-	URL          *string    `json:"url,omitempty"`
-	Message      *string    `json:"message,omitempty"`
+	Hash    string    `json:"hash"`
+	RepoID  uuid.UUID `json:"repoId"`
+	RepoURL string    `json:"repoUrl,omitempty"`
+	// URL of the commit as the closer gave it: untrusted input. Refs written
+	// since the check carry an absolute http or https URL of at most 2048
+	// characters; older refs are served as stored. Validate the scheme
+	// before rendering it as a link.
+	URL *string `json:"url,omitempty"`
+	// Message, the subject line as the closer gave it: untrusted text of at
+	// most 1000 characters (older refs as stored).
+	Message *string `json:"message,omitempty"`
+	// Author as the closer gave it: untrusted text of at most 256
+	// characters (older refs as stored).
 	Author       *string    `json:"author,omitempty"`
 	CommittedAt  *time.Time `json:"committedAt,omitempty"`
 	LinkedAt     time.Time  `json:"linkedAt"`

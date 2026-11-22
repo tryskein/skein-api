@@ -48,15 +48,18 @@ func commitInputItemSchema() map[string]any {
 			},
 			"url": map[string]any{
 				"type":        "string",
-				"description": "Canonical commit URL.",
+				"description": "Canonical commit URL: absolute http(s).",
+				"maxLength":   issues.CommitURLMaxLength,
 			},
 			"message": map[string]any{
 				"type":        "string",
 				"description": "Commit subject line.",
+				"maxLength":   issues.CommitMessageMaxLength,
 			},
 			"author": map[string]any{
 				"type":        "string",
 				"description": "Commit author (name or email).",
+				"maxLength":   issues.CommitAuthorMaxLength,
 			},
 			"committedAt": map[string]any{
 				"type":        "string",
