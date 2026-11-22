@@ -72,7 +72,7 @@ func TestCreateWatchFilter_RefusesOverLimitFilters(t *testing.T) {
 
 // TestValidateCustomWatcherFilter_AcceptsLimits — a filter at every limit
 // of ordinary values is accepted: 50 values in each array, labels of 100
-// characters; labels are stored trimmed, as issue labels are.
+// characters; labels and types are stored trimmed, as on issues.
 func TestValidateCustomWatcherFilter_AcceptsLimits(t *testing.T) {
 	fill := func(s string) []string {
 		out := make([]string, 50)
@@ -85,7 +85,7 @@ func TestValidateCustomWatcherFilter_AcceptsLimits(t *testing.T) {
 	in := notifications.CustomWatcherFilter{
 		EventTypes:  fill("issue.status_changed"),
 		Projects:    fill(uuid.NewString()),
-		Types:       fill("decision"),
+		Types:       append(fill("decision")[:49], "  idea  "),
 		Labels:      append(fill(strings.Repeat("a", 100))[:49], "  release  "),
 		Components:  fill(uuid.NewString()),
 		PriorityMax: &prio,
@@ -96,5 +96,8 @@ func TestValidateCustomWatcherFilter_AcceptsLimits(t *testing.T) {
 	}
 	if got := out.Labels[49]; got != "release" {
 		t.Fatalf("label stored as %q, want it trimmed to %q", got, "release")
+	}
+	if got := out.Types[49]; got != "idea" {
+		t.Fatalf("type stored as %q, want it trimmed to %q", got, "idea")
 	}
 }
