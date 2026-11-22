@@ -16,6 +16,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"skein-api/internal/issueops"
 	"skein-api/internal/notifications"
 	"skein-api/internal/projects"
 	"skein-api/internal/push"
@@ -731,9 +732,18 @@ type createCustomWatcherRequest struct {
 
 // CreateCustomWatcher handles POST /api/v1/me/custom-watchers.
 //
-// 422 too_many_watchers — caller has hit the per-user cap of 10.
-// 422 duplicate_name      — name already used by the caller.
-// 400 validation_error    — filter has unknown event type / bad uuid.
+// The filter is checked by issueops.ValidateCustomWatcherFilter, the same
+// check as MCP filter_create and the public API createWatchFilter.
+//
+// 422 too_many_watchers  — caller has hit the per-user cap of 10.
+// 422 duplicate_name     — name already used by the caller.
+// 422 invalid_event_type — an event type outside the subscription catalogue.
+// 422 validation_error   — a size limit of the filter, the case in `code`:
+//
+//	filter_too_many_values (field, cap 50, got), invalid_label (field,
+//	index, maxLength), filter_too_large (cap 16384 bytes, got).
+//
+// 400 validation_error   — malformed body, bad uuid, priority_max outside [0, 1000].
 func (h *NotificationsHandler) CreateCustomWatcher(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	c, ok := caller(r)
@@ -754,43 +764,27 @@ func (h *NotificationsHandler) CreateCustomWatcher(w http.ResponseWriter, r *htt
 		writeProblem(w, http.StatusBadRequest, "validation_error", "name must be 100 characters or fewer", nil)
 		return
 	}
-	// Validate filter event types against the subscription catalogue
-	// (T001 / sk-303.13): only types that actually deliver to a subscriber
-	// may be stored, so a filter can never become a toggle without effect.
-	// A well-formed request naming an unknown or undeliverable type is a
-	// BUSINESS error — 422, not 400 (the project guidelines).
-	for _, t := range req.Filter.EventTypes {
-		if !notifications.IsSubscriptionEventType(t) {
-			writeProblem(w, http.StatusUnprocessableEntity, "invalid_event_type",
-				"unknown or undeliverable event type: "+t, nil)
-			return
+	// The one check of a filter, shared with MCP and the public API
+	// (issueops.ValidateCustomWatcherFilter). An unknown or undeliverable
+	// event type (T001 / sk-303.13) is a BUSINESS error — 422
+	// invalid_event_type; a size limit is 422 validation_error with the case
+	// in `code`; a malformed UUID or priority_max stays 400 validation_error.
+	filter, ferr := issueops.ValidateCustomWatcherFilter(req.Filter)
+	if ferr != nil {
+		switch {
+		case ferr.Code == issueops.WatchFilterInvalidEventTypeCode:
+			writeProblem(w, http.StatusUnprocessableEntity, "invalid_event_type", ferr.Message, nil)
+		case ferr.IsLimit():
+			writeProblem(w, http.StatusUnprocessableEntity, "validation_error", ferr.Message, ferr.Details())
+		default:
+			writeProblem(w, http.StatusBadRequest, "validation_error", ferr.Message, nil)
 		}
-	}
-	// Validate UUIDs in projects / components — reject early instead of
-	// storing junk that the SQL @> never matches.
-	for _, p := range req.Filter.Projects {
-		if _, err := uuid.Parse(p); err != nil {
-			writeProblem(w, http.StatusBadRequest, "validation_error",
-				"projects must be UUIDs: "+p, nil)
-			return
-		}
-	}
-	for _, comp := range req.Filter.Components {
-		if _, err := uuid.Parse(comp); err != nil {
-			writeProblem(w, http.StatusBadRequest, "validation_error",
-				"components must be UUIDs: "+comp, nil)
-			return
-		}
-	}
-	if req.Filter.PriorityMax != nil && (*req.Filter.PriorityMax < 0 || *req.Filter.PriorityMax > 1000) {
-		writeProblem(w, http.StatusBadRequest, "validation_error",
-			"priority_max must be in [0, 1000]", nil)
 		return
 	}
 
 	dto, err := h.store.AddCustomWatcher(ctx, c.UserID, notifications.CreateCustomWatcherInput{
 		Name:   req.Name,
-		Filter: req.Filter,
+		Filter: filter,
 	})
 	if err != nil {
 		if errors.Is(err, notifications.ErrWatcherProjectNotFound) {

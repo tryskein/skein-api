@@ -8,13 +8,17 @@ package issueops
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
 
+	"skein-api/internal/issues"
 	"skein-api/internal/notifications"
 	"skein-api/internal/projects"
 )
@@ -283,7 +287,7 @@ func CreateWatchFilter(ctx context.Context, d Deps, userID uuid.UUID, a Args) (*
 	}
 	filter, ferr := DecodeCustomWatcherFilter(filterRaw)
 	if ferr != nil {
-		return nil, Fail(ErrCodeValidationError, ferr.Error(), nil)
+		return nil, Fail(ErrCodeValidationError, ferr.Message, ferr.Details())
 	}
 	dto, err := d.Notifications.AddCustomWatcher(ctx, userID, notifications.CreateCustomWatcherInput{Name: name, Filter: filter})
 	if err != nil {
@@ -307,99 +311,226 @@ func CreateWatchFilter(ctx context.Context, d Deps, userID uuid.UUID, a Args) (*
 	return dto, nil
 }
 
-// DecodeCustomWatcherFilter checks the loose JSON of a filter: event_types
-// of the subscription catalogue, projects and components as UUIDs, types
-// and labels as strings, priority_max in [0, 1000].
-func DecodeCustomWatcherFilter(raw any) (notifications.CustomWatcherFilter, error) {
+// WatchFilterMaxValues is the most values each array of a subscription
+// filter (event_types, projects, types, labels, components) may hold.
+const WatchFilterMaxValues = 50
+
+// WatchFilterMaxBytes is the most bytes the JSON of a subscription filter
+// may take, measured on the encoding the store writes (encoding/json of
+// notifications.CustomWatcherFilter). Every filter is matched against each
+// event inside the writer's transaction (notifications fan-out, the
+// custom_watchers branch), so its size is bounded on top of the per-array
+// cap. The value covers the largest filter of ordinary values: every array
+// at WatchFilterMaxValues — event types of at most 20 characters (the
+// longest of the subscription catalogue), project and component UUIDs,
+// types of the closed set and labels of issues.LabelMaxLength ASCII
+// characters — encodes to about 10.6 KiB; the rest is room for labels with
+// multi-byte or escaped characters. A filter that reaches every per-array
+// maximum with such labels (up to 4 bytes a character) is the one this cap
+// refuses.
+const WatchFilterMaxBytes = 16 << 10
+
+// The validation cases of a subscription filter, carried beside its
+// validation_error as `code` (MCP, the internal REST API) or `validation`
+// (the public API); the internal REST API answers invalid_event_type as its
+// own top-level code, as before.
+const (
+	WatchFilterInvalidEventTypeCode   = "invalid_event_type"
+	WatchFilterInvalidUUIDCode        = "invalid_uuid"
+	WatchFilterInvalidPriorityMaxCode = "invalid_priority_max"
+	WatchFilterInvalidLabelCode       = "invalid_label"
+	WatchFilterTooManyValuesCode      = "filter_too_many_values"
+	WatchFilterTooLargeCode           = "filter_too_large"
+)
+
+// WatchFilterError is the refusal of a subscription filter. Code is one of
+// the WatchFilter*Code cases, or empty for a malformed shape (not an
+// object, not an array of strings), which carries no case; Fields are the
+// details beside the code.
+type WatchFilterError struct {
+	Code    string
+	Message string
+	Fields  map[string]any
+}
+
+// Error implements error.
+func (e *WatchFilterError) Error() string { return e.Message }
+
+// Details is the details object of the refusal: the code and the fields,
+// nil for a malformed shape.
+func (e *WatchFilterError) Details() map[string]any {
+	if e.Code == "" {
+		return nil
+	}
+	d := make(map[string]any, len(e.Fields)+1)
+	for k, v := range e.Fields {
+		d[k] = v
+	}
+	d["code"] = e.Code
+	return d
+}
+
+// IsLimit says whether the refusal is one of the size limits of a filter
+// (labels, values per array, total size), as opposed to the checks of the
+// catalogue, the UUIDs and priority_max.
+func (e *WatchFilterError) IsLimit() bool {
+	switch e.Code {
+	case WatchFilterInvalidLabelCode, WatchFilterTooManyValuesCode, WatchFilterTooLargeCode:
+		return true
+	}
+	return false
+}
+
+func watchFilterShapeError(msg string) *WatchFilterError {
+	return &WatchFilterError{Message: msg}
+}
+
+// DecodeCustomWatcherFilter decodes the loose JSON of a filter (MCP and the
+// public API) — an object whose event_types, projects, types, labels and
+// components are arrays of strings and whose priority_max is a number — and
+// checks it with ValidateCustomWatcherFilter.
+func DecodeCustomWatcherFilter(raw any) (notifications.CustomWatcherFilter, *WatchFilterError) {
 	out := notifications.CustomWatcherFilter{}
 	m, ok := raw.(map[string]any)
 	if !ok {
-		return out, errors.New("filter must be an object")
+		return out, watchFilterShapeError("filter must be an object")
 	}
-	asStringSlice := func(field string, v any) ([]string, error) {
+	asStringSlice := func(field string, v any) ([]string, *WatchFilterError) {
 		if v == nil {
 			return nil, nil
 		}
 		arr, ok := v.([]any)
 		if !ok {
-			return nil, errors.New(field + " must be an array of strings")
+			return nil, watchFilterShapeError(field + " must be an array of strings")
 		}
 		res := make([]string, 0, len(arr))
 		for _, e := range arr {
 			s, ok := e.(string)
 			if !ok {
-				return nil, errors.New(field + " must contain only strings")
+				return nil, watchFilterShapeError(field + " must contain only strings")
 			}
 			res = append(res, s)
 		}
 		return res, nil
 	}
-	uuids := func(field string, arr []string) error {
-		for _, s := range arr {
-			if _, err := uuid.Parse(s); err != nil {
-				return errors.New(field + " must be UUIDs: " + s)
-			}
+	for _, f := range []struct {
+		field string
+		dst   *[]string
+	}{
+		{"event_types", &out.EventTypes},
+		{"projects", &out.Projects},
+		{"types", &out.Types},
+		{"labels", &out.Labels},
+		{"components", &out.Components},
+	} {
+		v, ok := m[f.field]
+		if !ok {
+			continue
 		}
-		return nil
-	}
-	if v, ok := m["event_types"]; ok {
-		arr, err := asStringSlice("event_types", v)
+		arr, err := asStringSlice(f.field, v)
 		if err != nil {
 			return out, err
 		}
-		for _, t := range arr {
-			// Undeliverable types are refused so a filter cannot become a
-			// dead toggle (T001 / sk-303.13).
-			if !notifications.IsSubscriptionEventType(t) {
-				return out, errors.New("unknown or undeliverable event type: " + t)
-			}
-		}
-		out.EventTypes = arr
-	}
-	if v, ok := m["projects"]; ok {
-		arr, err := asStringSlice("projects", v)
-		if err != nil {
-			return out, err
-		}
-		if err := uuids("projects", arr); err != nil {
-			return out, err
-		}
-		out.Projects = arr
-	}
-	if v, ok := m["types"]; ok {
-		arr, err := asStringSlice("types", v)
-		if err != nil {
-			return out, err
-		}
-		out.Types = arr
-	}
-	if v, ok := m["labels"]; ok {
-		arr, err := asStringSlice("labels", v)
-		if err != nil {
-			return out, err
-		}
-		out.Labels = arr
-	}
-	if v, ok := m["components"]; ok {
-		arr, err := asStringSlice("components", v)
-		if err != nil {
-			return out, err
-		}
-		if err := uuids("components", arr); err != nil {
-			return out, err
-		}
-		out.Components = arr
+		*f.dst = arr
 	}
 	if v, ok := m["priority_max"]; ok && v != nil {
 		f, ok := v.(float64)
 		if !ok {
-			return out, errors.New("priority_max must be a number")
+			return out, watchFilterShapeError("priority_max must be a number")
 		}
 		n := int(f)
-		if n < 0 || n > 1000 {
-			return out, errors.New("priority_max must be in [0, 1000]")
-		}
 		out.PriorityMax = &n
+	}
+	return ValidateCustomWatcherFilter(out)
+}
+
+// ValidateCustomWatcherFilter is the one check of a subscription filter
+// being created, shared by MCP, the public API and the internal REST API:
+// at most WatchFilterMaxValues values in each array; event_types of the
+// subscription catalogue (undeliverable types are refused so a filter
+// cannot become a dead toggle, T001 / sk-303.13); projects and components
+// as UUIDs; each label by the rule of issue labels (issues.ValidateLabel,
+// stored trimmed as issue labels are); priority_max in [0, 1000]; the
+// encoded filter at most WatchFilterMaxBytes. It answers the filter to
+// store. Filters already stored are not re-checked.
+func ValidateCustomWatcherFilter(in notifications.CustomWatcherFilter) (notifications.CustomWatcherFilter, *WatchFilterError) {
+	out := in
+	for _, f := range []struct {
+		field string
+		vals  []string
+	}{
+		{"event_types", in.EventTypes},
+		{"projects", in.Projects},
+		{"types", in.Types},
+		{"labels", in.Labels},
+		{"components", in.Components},
+	} {
+		if len(f.vals) > WatchFilterMaxValues {
+			return out, &WatchFilterError{
+				Code:    WatchFilterTooManyValuesCode,
+				Message: fmt.Sprintf("%s must hold at most %d values", f.field, WatchFilterMaxValues),
+				Fields:  map[string]any{"field": f.field, "cap": WatchFilterMaxValues, "got": len(f.vals)},
+			}
+		}
+	}
+	for _, t := range in.EventTypes {
+		if !notifications.IsSubscriptionEventType(t) {
+			return out, &WatchFilterError{
+				Code:    WatchFilterInvalidEventTypeCode,
+				Message: "unknown or undeliverable event type: " + t,
+			}
+		}
+	}
+	uuids := func(field string, arr []string) *WatchFilterError {
+		for _, s := range arr {
+			if _, err := uuid.Parse(s); err != nil {
+				return &WatchFilterError{
+					Code:    WatchFilterInvalidUUIDCode,
+					Message: field + " must be UUIDs: " + s,
+					Fields:  map[string]any{"field": field},
+				}
+			}
+		}
+		return nil
+	}
+	if err := uuids("projects", in.Projects); err != nil {
+		return out, err
+	}
+	if err := uuids("components", in.Components); err != nil {
+		return out, err
+	}
+	if len(in.Labels) > 0 {
+		labels := make([]string, len(in.Labels))
+		for i, l := range in.Labels {
+			canonical, err := issues.ValidateLabel(l)
+			if err != nil {
+				return out, &WatchFilterError{
+					Code:    WatchFilterInvalidLabelCode,
+					Message: "labels[" + strconv.Itoa(i) + "]: " + err.Error(),
+					Fields:  map[string]any{"field": "labels", "index": i, "maxLength": issues.LabelMaxLength},
+				}
+			}
+			labels[i] = canonical
+		}
+		out.Labels = labels
+	}
+	if in.PriorityMax != nil && (*in.PriorityMax < 0 || *in.PriorityMax > 1000) {
+		return out, &WatchFilterError{
+			Code:    WatchFilterInvalidPriorityMaxCode,
+			Message: "priority_max must be in [0, 1000]",
+		}
+	}
+	encoded, err := json.Marshal(out)
+	if err != nil {
+		// A struct of strings and an *int always encodes.
+		return out, watchFilterShapeError("filter cannot be encoded")
+	}
+	if len(encoded) > WatchFilterMaxBytes {
+		return out, &WatchFilterError{
+			Code:    WatchFilterTooLargeCode,
+			Message: fmt.Sprintf("filter must take at most %d bytes encoded, got %d", WatchFilterMaxBytes, len(encoded)),
+			Fields:  map[string]any{"cap": WatchFilterMaxBytes, "got": len(encoded)},
+		}
 	}
 	return out, nil
 }

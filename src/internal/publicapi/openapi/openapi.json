@@ -4436,7 +4436,7 @@
                 "properties": {
                     "filter": {
                         "additionalProperties": {},
-                        "description": "Filter: projects (UUIDs), event_types, types, labels, components\n(UUIDs), priority_max. No projects — any project, which needs a key\nof scope all. Required.",
+                        "description": "Filter: projects (UUIDs), event_types, types, labels, components\n(UUIDs), priority_max. No projects — any project, which needs a key\nof scope all. At most 50 values per array, each label by the rule\nof issue labels (at most 100 characters), at most 16384 bytes\nencoded. Required.",
                         "type": "object"
                     },
                     "kind": {
@@ -10768,7 +10768,7 @@
                                 }
                             }
                         },
-                        "description": "A project of the filter is missing or out of reach (code project_not_found); the name or the filter is invalid, or the cap is reached (code validation_error)"
+                        "description": "A project of the filter is missing or out of reach (code project_not_found); the name or the filter is invalid, or the cap is reached (code validation_error; a limit of the filter carries the case in validation: filter_too_many_values — more than 50 values in an array, with field, cap and got; invalid_label — a label empty or over 100 characters, with field, index and maxLength; filter_too_large — the filter over 16384 bytes encoded, with cap and got)"
                     },
                     "429": {
                         "content": {
