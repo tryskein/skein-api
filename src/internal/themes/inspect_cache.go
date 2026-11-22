@@ -90,8 +90,8 @@ type InspectCache struct {
 
 // inspectEntry is one stored click.
 type inspectEntry struct {
-	user       uuid.UUID
-	raw json.RawMessage
+	user uuid.UUID
+	raw  json.RawMessage
 	// capturedAt is the acceptance time as c.now returned it — with the
 	// monotonic reading in production — used for age only.
 	capturedAt time.Time
