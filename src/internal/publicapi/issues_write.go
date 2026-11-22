@@ -831,14 +831,18 @@ type commitInput struct {
 	// RepoID, the UUID of the project's repo; wins over repoUrl.
 	RepoID *string `json:"repoId,omitempty"`
 	// URL of the commit: an absolute http or https URL with a host, at most
-	// 2048 characters (validation_error, case invalid_commit_url). Stored as
-	// given and served to every reader of the card as untrusted input.
+	// 2048 characters (validation_error, case invalid_commit_url). Surrounding
+	// whitespace is trimmed before the check and the trimmed value is stored;
+	// a blank value is not stored. Served to every reader of the card as
+	// untrusted input.
 	URL *string `json:"url,omitempty" maxLength:"2048"`
-	// Message, the subject line, at most 1000 characters (case
-	// invalid_commit_message). Untrusted text.
+	// Message, the subject line, at most 1000 characters after trimming
+	// surrounding whitespace (case invalid_commit_message); a blank value is
+	// not stored. Untrusted text.
 	Message *string `json:"message,omitempty" maxLength:"1000"`
-	// Author of the commit, at most 256 characters (case
-	// invalid_commit_author). Untrusted text.
+	// Author of the commit, at most 256 characters after trimming
+	// surrounding whitespace (case invalid_commit_author); a blank value is
+	// not stored. Untrusted text.
 	Author *string `json:"author,omitempty" maxLength:"256"`
 	// CommittedAt, RFC 3339.
 	CommittedAt *string `json:"committedAt,omitempty"`
