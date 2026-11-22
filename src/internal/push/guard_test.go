@@ -19,8 +19,10 @@ import (
 	"net/netip"
 	"net/url"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 )
 
@@ -400,29 +402,158 @@ func TestPortOf(t *testing.T) {
 	}
 }
 
-// A proxy whose answer to CONNECT has an endless head is cut off at
-// maxConnectResponseBytes instead of being read without bound.
+// pipeProxyClient is a push client whose proxy is serve, reached over an
+// in-memory pipe: inside a synctest bubble the proxy's silence is durable
+// blocking, so the bubble's clock shows when the client gives up on it.
+func pipeProxyClient(serve func(net.Conn)) *http.Client {
+	c := newPushClientWith(checkPublicAddr, func(*http.Request) (*url.URL, error) {
+		return url.Parse("http://proxy.test:3128")
+	}, staticLookup(map[string][]string{"push.example": {"8.8.8.8"}}))
+	c.Transport.(*pushTransport).dialProxy = func(context.Context, string) (net.Conn, error) {
+		client, proxy := net.Pipe()
+		go serve(proxy)
+		return client, nil
+	}
+	return c
+}
+
+// A proxy that answers CONNECT with a head of 64 KiB, four times
+// maxConnectResponseBytes, and then holds the connection open gets an error
+// at once, not at the delivery deadline, and its connection is closed.
 func TestPushClient_ProxyAnswerHeadIsBounded(t *testing.T) {
-	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		conn, rw, err := w.(http.Hijacker).Hijack()
-		if err != nil {
-			return
-		}
-		defer conn.Close()
-		_, _ = rw.WriteString("HTTP/1.1 200 Connection established\r\n")
-		filler := "X-Filler: " + strings.Repeat("a", 1000) + "\r\n"
-		for i := 0; i < 64; i++ {
-			if _, err := rw.WriteString(filler); err != nil {
+	synctest.Test(t, func(t *testing.T) {
+		start := time.Now()
+		proxyClosedAfter := make(chan time.Duration, 1)
+		c := pipeProxyClient(func(conn net.Conn) {
+			defer conn.Close()
+			if _, err := http.ReadRequest(bufio.NewReader(conn)); err != nil {
+				proxyClosedAfter <- -1
 				return
 			}
+			_, _ = io.WriteString(conn, "HTTP/1.1 200 Connection established\r\n")
+			filler := "X-Filler: " + strings.Repeat("a", 1000) + "\r\n"
+			for i := 0; i < (64<<10)/len(filler); i++ {
+				if _, err := io.WriteString(conn, filler); err != nil {
+					break
+				}
+			}
+			// The head stays unfinished and the connection open: only the
+			// client closing it ends this read.
+			_, _ = conn.Read(make([]byte, 1))
+			proxyClosedAfter <- time.Since(start)
+		})
+
+		_, err := c.Get("http://push.example/x")
+		if err == nil {
+			t.Fatal("a 64 KiB CONNECT answer head was accepted")
 		}
-		_ = rw.Flush()
-	}))
-	defer proxy.Close()
-	c := newPushClientWith(checkPublicAddr, func(*http.Request) (*url.URL, error) {
-		return url.Parse(proxy.URL)
-	}, staticLookup(map[string][]string{"push.example": {"8.8.8.8"}}))
-	if _, err := c.Get("http://push.example/x"); err == nil {
-		t.Fatal("a 64 KiB CONNECT answer head was accepted")
+		if took := time.Since(start); took >= pushSendTimeout {
+			t.Fatalf("the oversized head failed the delivery after %v, want before the %v deadline", took, pushSendTimeout)
+		}
+		if d := <-proxyClosedAfter; d < 0 || d >= pushSendTimeout {
+			t.Fatalf("the proxy connection was closed after %v, want before the %v deadline", d, pushSendTimeout)
+		}
+	})
+}
+
+// A delivery cancelled while a silent proxy has not yet answered CONNECT
+// fails with the cancellation, and the proxy connection is closed at once,
+// not at the delivery deadline.
+func TestPushClient_CancelledDeliveryInterruptsProxyConnect(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		start := time.Now()
+		proxyClosedAfter := make(chan time.Duration, 1)
+		c := pipeProxyClient(func(conn net.Conn) {
+			defer conn.Close()
+			if _, err := http.ReadRequest(bufio.NewReader(conn)); err != nil {
+				proxyClosedAfter <- -1
+				return
+			}
+			// The proxy has the CONNECT and stays silent; the delivery is
+			// cancelled now.
+			cancel()
+			_, _ = conn.Read(make([]byte, 1))
+			proxyClosedAfter <- time.Since(start)
+		})
+
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://push.example/x", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := c.Do(req); !errors.Is(err, context.Canceled) {
+			t.Fatalf("cancelled delivery: err = %v, want context.Canceled", err)
+		}
+		if d := <-proxyClosedAfter; d < 0 || d >= pushSendTimeout {
+			t.Fatalf("the proxy connection was closed after %v, want before the %v deadline", d, pushSendTimeout)
+		}
+	})
+}
+
+// answeredBeforeCancelConn is a proxy connection whose whole answer to
+// CONNECT had arrived when the delivery was cancelled, as on a socket whose
+// data came in before the cancellation set its deadline: the first Read
+// cancels the delivery, waits until the cancellation has reached the
+// connection (a deadline in the past) and still returns the answer.
+type answeredBeforeCancelConn struct {
+	cancel    context.CancelFunc
+	cancelled bool
+	expired   chan struct{}
+	expireOne sync.Once
+	answer    *strings.Reader
+	closed    atomic.Bool
+}
+
+func (c *answeredBeforeCancelConn) Read(p []byte) (int, error) {
+	if !c.cancelled {
+		c.cancelled = true
+		c.cancel()
+		select {
+		case <-c.expired:
+		case <-time.After(2 * pushSendTimeout):
+		}
 	}
+	return c.answer.Read(p)
+}
+
+func (c *answeredBeforeCancelConn) Write(p []byte) (int, error)      { return len(p), nil }
+func (c *answeredBeforeCancelConn) Close() error                     { c.closed.Store(true); return nil }
+func (c *answeredBeforeCancelConn) LocalAddr() net.Addr              { return &net.TCPAddr{} }
+func (c *answeredBeforeCancelConn) RemoteAddr() net.Addr             { return &net.TCPAddr{} }
+func (c *answeredBeforeCancelConn) SetReadDeadline(time.Time) error  { return nil }
+func (c *answeredBeforeCancelConn) SetWriteDeadline(time.Time) error { return nil }
+func (c *answeredBeforeCancelConn) SetDeadline(t time.Time) error {
+	if !t.IsZero() && t.Before(time.Now()) {
+		c.expireOne.Do(func() { close(c.expired) })
+	}
+	return nil
+}
+
+// A delivery cancelled after the proxy has already answered CONNECT 200
+// gets no tunnel: the setup fails with the cancellation and the proxy
+// connection is closed.
+func TestConnectVia_CancelledAfterProxyAnswerGetsNoTunnel(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		conn := &answeredBeforeCancelConn{
+			cancel:  cancel,
+			expired: make(chan struct{}),
+			answer:  strings.NewReader("HTTP/1.1 200 Connection established\r\n\r\n"),
+		}
+		p, err := url.Parse("http://proxy.test:3128")
+		if err != nil {
+			t.Fatal(err)
+		}
+		dial := func(context.Context, string) (net.Conn, error) { return conn, nil }
+
+		tunnel, err := connectVia(ctx, dial, p, nil, netip.MustParseAddrPort("8.8.8.8:443"))
+		if tunnel != nil || !errors.Is(err, context.Canceled) {
+			t.Fatalf("connectVia = %v, %v; want no tunnel and context.Canceled", tunnel, err)
+		}
+		if !conn.closed.Load() {
+			t.Fatal("the proxy connection of the cancelled setup was left open")
+		}
+	})
 }
