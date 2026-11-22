@@ -835,15 +835,15 @@ type commitInput struct {
 	// whitespace is trimmed before the check and the trimmed value is stored;
 	// a blank value is not stored. Served to every reader of the card as
 	// untrusted input.
-	URL *string `json:"url,omitempty" maxLength:"2048"`
+	URL *string `json:"url,omitempty"`
 	// Message, the subject line, at most 1000 characters after trimming
 	// surrounding whitespace (case invalid_commit_message); a blank value is
 	// not stored. Untrusted text.
-	Message *string `json:"message,omitempty" maxLength:"1000"`
+	Message *string `json:"message,omitempty"`
 	// Author of the commit, at most 256 characters after trimming
 	// surrounding whitespace (case invalid_commit_author); a blank value is
 	// not stored. Untrusted text.
-	Author *string `json:"author,omitempty" maxLength:"256"`
+	Author *string `json:"author,omitempty"`
 	// CommittedAt, RFC 3339.
 	CommittedAt *string `json:"committedAt,omitempty"`
 }

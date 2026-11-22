@@ -3727,7 +3727,6 @@
                 "properties": {
                     "author": {
                         "description": "Author of the commit, at most 256 characters after trimming\nsurrounding whitespace (case invalid_commit_author); a blank value is\nnot stored. Untrusted text.",
-                        "maxLength": 256,
                         "type": "string"
                     },
                     "committedAt": {
@@ -3740,7 +3739,6 @@
                     },
                     "message": {
                         "description": "Message, the subject line, at most 1000 characters after trimming\nsurrounding whitespace (case invalid_commit_message); a blank value is\nnot stored. Untrusted text.",
-                        "maxLength": 1000,
                         "type": "string"
                     },
                     "repoId": {
@@ -3753,7 +3751,6 @@
                     },
                     "url": {
                         "description": "URL of the commit: an absolute http or https URL with a host, at most\n2048 characters (validation_error, case invalid_commit_url). Surrounding\nwhitespace is trimmed before the check and the trimmed value is stored;\na blank value is not stored. Served to every reader of the card as\nuntrusted input.",
-                        "maxLength": 2048,
                         "type": "string"
                     }
                 },

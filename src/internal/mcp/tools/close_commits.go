@@ -1,6 +1,8 @@
 package tools
 
 import (
+	"fmt"
+
 	"skein-api/internal/issueops"
 	"skein-api/internal/issues"
 )
@@ -46,20 +48,20 @@ func commitInputItemSchema() map[string]any {
 				"description": "Repo UUID from project.gitRepos[].id. Wins over repoUrl.",
 				"format":      "uuid",
 			},
+			// The limits are checked after trimming surrounding whitespace,
+			// so they are stated in the descriptions, not as maxLength of
+			// the raw value.
 			"url": map[string]any{
 				"type":        "string",
-				"description": "Canonical commit URL: absolute http(s).",
-				"maxLength":   issues.CommitURLMaxLength,
+				"description": fmt.Sprintf("Canonical commit URL: absolute http(s), at most %d characters after trimming.", issues.CommitURLMaxLength),
 			},
 			"message": map[string]any{
 				"type":        "string",
-				"description": "Commit subject line.",
-				"maxLength":   issues.CommitMessageMaxLength,
+				"description": fmt.Sprintf("Commit subject line, at most %d characters after trimming.", issues.CommitMessageMaxLength),
 			},
 			"author": map[string]any{
 				"type":        "string",
-				"description": "Commit author (name or email).",
-				"maxLength":   issues.CommitAuthorMaxLength,
+				"description": fmt.Sprintf("Commit author (name or email), at most %d characters after trimming.", issues.CommitAuthorMaxLength),
 			},
 			"committedAt": map[string]any{
 				"type":        "string",
