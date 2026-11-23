@@ -55,8 +55,12 @@ POSTGRES_INITDB_ARGS = "--locale-provider=builtin --builtin-locale=C.UTF-8 --lc-
 # Mutation testing with gomutants (needs Go 1.26+). One worker at a time:
 # the packages are not safe to mutate in parallel. The same Postgres fixture
 # and migrations as integ, so DB-backed tests take part in the measurement.
+# No incremental state: gomutants keys its cached coverage on the Go inputs
+# only, not on TEST_DATABASE_URL, so a cache filled while DB-backed tests
+# skipped would mark the lines only they reach as not covered.
 [kind.mutation]
 adapter = "gomutants"
+incremental = false
 prepare = [
   "go install -tags postgres github.com/golang-migrate/migrate/v4/cmd/migrate@v4.20.1",
   "\"$(go env GOPATH)/bin/migrate\" -path migrations -database \"$TEST_DATABASE_URL\" up",
