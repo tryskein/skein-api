@@ -90,6 +90,9 @@ func TestFindNULInValue(t *testing.T) {
 			if found := errors.As(err, &ne); found != c.found {
 				t.Fatalf("FindNULInValue = %v, want found=%v", err, c.found)
 			}
+			if !c.found && err != nil {
+				t.Fatalf("FindNULInValue = %v, want nil", err)
+			}
 			if c.found && (ne.Field != c.field || ne.InName != c.inName) {
 				t.Errorf("FindNULInValue = field %q inName %v, want %q %v", ne.Field, ne.InName, c.field, c.inName)
 			}
@@ -128,8 +131,38 @@ func TestFindNULInURL(t *testing.T) {
 		if found := errors.As(err, &ne); found != c.found {
 			t.Fatalf("FindNULInURL(%q) = %v, want found=%v", c.raw, err, c.found)
 		}
+		if !c.found && err != nil {
+			t.Fatalf("FindNULInURL(%q) = %v, want nil", c.raw, err)
+		}
 		if c.found && (ne.Field != c.field || ne.InName != c.inName) {
 			t.Errorf("FindNULInURL(%q) = field %q inName %v, want %q %v", c.raw, ne.Field, ne.InName, c.field, c.inName)
+		}
+	}
+}
+
+// TestFirstNUL_SortedChoiceIsStable — with many competing offending members
+// or parameters, built in different orders, the named field is always the
+// first in sorted order. Go randomises map iteration, so a choice that
+// followed it would name different fields across these inputs and calls.
+func TestFirstNUL_SortedChoiceIsStable(t *testing.T) {
+	names := []string{"q", "d", "m", "b", "x", "k", "f", "z", "h"}
+	for rot := range names {
+		order := append(append([]string{}, names[rot:]...), names[:rot]...)
+		value := map[string]any{}
+		query := url.Values{}
+		for _, n := range order {
+			value[n] = "bad\x00"
+			query.Add(n, "bad\x00")
+		}
+		for call := 0; call < 5; call++ {
+			var ne *NULError
+			if err := FindNULInValue(value); !errors.As(err, &ne) || ne.Field != "b" {
+				t.Fatalf("FindNULInValue (order %v) = %v, want field b", order, err)
+			}
+			u := &url.URL{Path: "/api/v1/issues", RawQuery: query.Encode()}
+			if err := FindNULInURL(u); !errors.As(err, &ne) || ne.Field != "b" {
+				t.Fatalf("FindNULInURL (order %v) = %v, want field b", order, err)
+			}
 		}
 	}
 }
