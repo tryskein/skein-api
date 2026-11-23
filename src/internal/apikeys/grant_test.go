@@ -39,6 +39,16 @@ func TestGrantValidate(t *testing.T) {
 		{"spaces scope listing a project", apikeys.Grant{Level: apikeys.LevelRead, Scope: apikeys.Scope{Mode: apikeys.ScopeSpaces, Spaces: []uuid.UUID{s}, Projects: []uuid.UUID{p}}}, apikeys.ErrInvalidScope},
 		{"scope all listing a project", apikeys.Grant{Level: apikeys.LevelRead, Scope: apikeys.Scope{Mode: apikeys.ScopeAll, Projects: []uuid.UUID{p}}}, apikeys.ErrInvalidScope},
 		{"unknown scope mode", apikeys.Grant{Level: apikeys.LevelRead, Scope: apikeys.Scope{Mode: "instance"}}, apikeys.ErrInvalidScope},
+		// Every mode with an empty and with a foreign member list, one
+		// predicate of the scope rule at a time.
+		{"scope all listing a space", apikeys.Grant{Level: apikeys.LevelRead, Scope: apikeys.Scope{Mode: apikeys.ScopeAll, Spaces: []uuid.UUID{s}}}, apikeys.ErrInvalidScope},
+		{"projects scope listing a space", apikeys.Grant{Level: apikeys.LevelRead, Scope: apikeys.Scope{Mode: apikeys.ScopeProjects, Projects: []uuid.UUID{p}, Spaces: []uuid.UUID{s}}}, apikeys.ErrInvalidScope},
+		{"spaces scope without spaces", apikeys.Grant{Level: apikeys.LevelRead, Scope: apikeys.Scope{Mode: apikeys.ScopeSpaces}}, apikeys.ErrInvalidScope},
+		{"spaces scope with only a project", apikeys.Grant{Level: apikeys.LevelRead, Scope: apikeys.Scope{Mode: apikeys.ScopeSpaces, Projects: []uuid.UUID{p}}}, apikeys.ErrInvalidScope},
+		{"projects scope with only a space", apikeys.Grant{Level: apikeys.LevelRead, Scope: apikeys.Scope{Mode: apikeys.ScopeProjects, Spaces: []uuid.UUID{s}}}, apikeys.ErrInvalidScope},
+		{"admin with scope all listing a project", apikeys.Grant{Admin: true, Scope: apikeys.Scope{Mode: apikeys.ScopeAll, Projects: []uuid.UUID{p}}}, apikeys.ErrInvalidScope},
+		{"projects scope with several projects", apikeys.Grant{Level: apikeys.LevelRead, Scope: apikeys.Scope{Mode: apikeys.ScopeProjects, Projects: []uuid.UUID{p, uuid.New()}}}, nil},
+		{"spaces scope with several spaces", apikeys.Grant{Level: apikeys.LevelRead, Scope: apikeys.Scope{Mode: apikeys.ScopeSpaces, Spaces: []uuid.UUID{s, uuid.New()}}}, nil},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
