@@ -766,3 +766,71 @@ func TestShow_UnchangedCommentModesStillBehave(t *testing.T) {
 		}
 	})
 }
+
+// TestShow_CommentsArgumentEdges — the comment arguments of skein_show at the
+// tool boundary. A commentsSince with surrounding whitespace selects exactly
+// the slice the same timestamp without it selects; a commentsLimit outside
+// the supported range, a negative one or a non-numeric one, and a
+// commentsSince that is not an RFC3339 string are validation_error naming the
+// offending argument in "field".
+func TestShow_CommentsArgumentEdges(t *testing.T) {
+	pool := newTestPool(t)
+	userID, uname := seedUser(t, pool, "admin")
+	pid, prefix := seedProject(t, pool, userID, "shedge")
+	issueID := prefix + "-1"
+	seedIssue(t, pool, pid, userID, issueID, "edges", "open", 2)
+
+	store := issues.NewStore(pool)
+	handler := handleShow(pool, store, dependencies.NewStore(pool))
+	ctx := withCtx(t, userID, "admin")
+	base := time.Date(2026, 7, 13, 12, 0, 0, 0, time.UTC)
+	seedShowCommentThread(t, store, pool, issueID, userID, uname, []string{"e1", "e2", "e3", "e4"}, base)
+	since := base.Add(time.Second).Format(time.RFC3339)
+
+	bodies := func(body map[string]any) []string {
+		var out []string
+		for _, c := range body["comments"].([]any) {
+			out = append(out, c.(map[string]any)["body"].(string))
+		}
+		return out
+	}
+
+	t.Run("whitespace around commentsSince selects the same slice", func(t *testing.T) {
+		plain := callShow(t, handler, ctx, map[string]any{"id": issueID, "commentsSince": since, "commentsLimit": 10})
+		padded := callShow(t, handler, ctx, map[string]any{"id": issueID, "commentsSince": " \t" + since + " \n", "commentsLimit": 10})
+		want := []string{"e3", "e4"}
+		if got := bodies(plain); strings.Join(got, ",") != strings.Join(want, ",") {
+			t.Fatalf("plain since = %v, want %v", got, want)
+		}
+		if got := bodies(padded); strings.Join(got, ",") != strings.Join(want, ",") {
+			t.Errorf("padded since = %v, want the same slice %v", got, want)
+		}
+		if metaInt(t, padded, "commentsTotal") != metaInt(t, plain, "commentsTotal") {
+			t.Errorf("commentsTotal padded %v, plain %v", padded["commentsTotal"], plain["commentsTotal"])
+		}
+	})
+
+	for _, tc := range []struct {
+		name, field string
+		args        map[string]any
+	}{
+		{"limit above the int range", "commentsLimit", map[string]any{"commentsLimit": 1e19}},
+		{"limit below the int range", "commentsLimit", map[string]any{"commentsLimit": -1e19}},
+		{"negative whole limit", "commentsLimit", map[string]any{"commentsLimit": float64(-1)}},
+		{"limit as a non-numeric string", "commentsLimit", map[string]any{"commentsLimit": "ten"}},
+		{"limit as a bool", "commentsLimit", map[string]any{"commentsLimit": true}},
+		{"since not RFC3339", "commentsSince", map[string]any{"commentsSince": "yesterday"}},
+		{"since not a string", "commentsSince", map[string]any{"commentsSince": 1752400000}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			args := map[string]any{"id": issueID}
+			for k, v := range tc.args {
+				args[k] = v
+			}
+			body := callShowErr(t, handler, ctx, args)
+			if body["error"] != ErrCodeValidationError || body["field"] != tc.field {
+				t.Errorf("error = %v, field = %v; want %s naming %s", body["error"], body["field"], ErrCodeValidationError, tc.field)
+			}
+		})
+	}
+}
