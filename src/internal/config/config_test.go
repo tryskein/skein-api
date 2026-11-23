@@ -1331,6 +1331,109 @@ func TestLoad_PublicAPIRefusals(t *testing.T) {
 	}
 }
 
+// TestLoad_PublicAPIBoundaries — matrix row 4 at its edges: each setting of
+// the public API and the key lifetimes loads at the extreme value it allows,
+// with that value parsed into the config, and is refused at the nearest value
+// it does not. The bounds are the ones the variables are documented with:
+// a port in [1, 65535], rate and auth-failure limits and the write timeout
+// > 0, SKEIN_API_KEY_MAX_TTL in (0, 365 days], SKEIN_API_KEY_DEFAULT_TTL in
+// (0, max]. A port that equals the operator API's is a clash only while the
+// operator API is on.
+func TestLoad_PublicAPIBoundaries(t *testing.T) {
+	loads := []struct {
+		name  string
+		env   map[string]string
+		check func(t *testing.T, cfg *Config)
+	}{
+		{"lowest port", map[string]string{"SKEIN_PUBLIC_API_PORT": "1"}, func(t *testing.T, cfg *Config) {
+			if cfg.PublicAPIPort != "1" {
+				t.Errorf("PublicAPIPort = %q, want 1", cfg.PublicAPIPort)
+			}
+		}},
+		{"highest port", map[string]string{"SKEIN_PUBLIC_API_PORT": "65535"}, func(t *testing.T, cfg *Config) {
+			if cfg.PublicAPIPort != "65535" {
+				t.Errorf("PublicAPIPort = %q, want 65535", cfg.PublicAPIPort)
+			}
+		}},
+		{"the operator port while the operator API is off", map[string]string{
+			"SKEIN_OPERATOR_API_ENABLED": "false", "SKEIN_OPERATOR_API_PORT": "5101", "SKEIN_PUBLIC_API_PORT": "5101",
+		}, func(t *testing.T, cfg *Config) {
+			if cfg.OperatorAPIEnabled || cfg.PublicAPIPort != "5101" {
+				t.Errorf("OperatorAPIEnabled = %v, PublicAPIPort = %q; want false, 5101", cfg.OperatorAPIEnabled, cfg.PublicAPIPort)
+			}
+		}},
+		{"lowest rate limit", map[string]string{"SKEIN_PUBLIC_API_RATE_LIMIT_PER_MINUTE": "1"}, func(t *testing.T, cfg *Config) {
+			if cfg.PublicAPIRateLimitPerMinute != 1 {
+				t.Errorf("PublicAPIRateLimitPerMinute = %d, want 1", cfg.PublicAPIRateLimitPerMinute)
+			}
+		}},
+		{"lowest auth-failure limit", map[string]string{"SKEIN_PUBLIC_API_AUTH_FAILURES_PER_MINUTE": "1"}, func(t *testing.T, cfg *Config) {
+			if cfg.PublicAPIAuthFailuresPerMinute != 1 {
+				t.Errorf("PublicAPIAuthFailuresPerMinute = %d, want 1", cfg.PublicAPIAuthFailuresPerMinute)
+			}
+		}},
+		{"shortest write timeout", map[string]string{"SKEIN_PUBLIC_API_WRITE_TIMEOUT": "1ns"}, func(t *testing.T, cfg *Config) {
+			if cfg.PublicAPIWriteTimeout != time.Nanosecond {
+				t.Errorf("PublicAPIWriteTimeout = %s, want 1ns", cfg.PublicAPIWriteTimeout)
+			}
+		}},
+		{"shortest key max TTL, default unset", map[string]string{"SKEIN_API_KEY_MAX_TTL": "1ns"}, func(t *testing.T, cfg *Config) {
+			if cfg.APIKeyMaxTTL != time.Nanosecond || cfg.APIKeyDefaultTTL != time.Nanosecond {
+				t.Errorf("APIKeyMaxTTL = %s, APIKeyDefaultTTL = %s; want 1ns, 1ns (the default capped by the max)",
+					cfg.APIKeyMaxTTL, cfg.APIKeyDefaultTTL)
+			}
+		}},
+		{"longest key max TTL", map[string]string{"SKEIN_API_KEY_MAX_TTL": "8760h"}, func(t *testing.T, cfg *Config) {
+			if cfg.APIKeyMaxTTL != 8760*time.Hour {
+				t.Errorf("APIKeyMaxTTL = %s, want 8760h", cfg.APIKeyMaxTTL)
+			}
+		}},
+		{"shortest key default TTL", map[string]string{"SKEIN_API_KEY_DEFAULT_TTL": "1ns"}, func(t *testing.T, cfg *Config) {
+			if cfg.APIKeyDefaultTTL != time.Nanosecond {
+				t.Errorf("APIKeyDefaultTTL = %s, want 1ns", cfg.APIKeyDefaultTTL)
+			}
+		}},
+	}
+	for _, c := range loads {
+		t.Run("loads: "+c.name, func(t *testing.T) {
+			withPublicAPIEnv(t, c.env)
+			cfg, err := Load()
+			if err != nil {
+				t.Fatalf("Load() = %v, want success", err)
+			}
+			if !cfg.PublicAPIEnabled {
+				t.Fatal("PublicAPIEnabled = false, want true")
+			}
+			c.check(t, cfg)
+		})
+	}
+
+	refusals := []struct {
+		name string
+		env  map[string]string
+	}{
+		{"port below the range", map[string]string{"SKEIN_PUBLIC_API_PORT": "0"}},
+		{"port above the range", map[string]string{"SKEIN_PUBLIC_API_PORT": "65536"}},
+		{"key max TTL zero", map[string]string{"SKEIN_API_KEY_MAX_TTL": "0s"}},
+		{"key max TTL negative", map[string]string{"SKEIN_API_KEY_MAX_TTL": "-1ns"}},
+		{"key max TTL one step above 365 days", map[string]string{"SKEIN_API_KEY_MAX_TTL": "8760h0m0.000000001s"}},
+		{"key default TTL negative", map[string]string{"SKEIN_API_KEY_DEFAULT_TTL": "-1ns"}},
+		{"key default TTL one step above the max", map[string]string{"SKEIN_API_KEY_MAX_TTL": "720h", "SKEIN_API_KEY_DEFAULT_TTL": "720h0m0.000000001s"}},
+	}
+	for _, c := range refusals {
+		t.Run("refused: "+c.name, func(t *testing.T) {
+			withPublicAPIEnv(t, c.env)
+			cfg, err := Load()
+			if err == nil {
+				t.Fatalf("Load() succeeded, want a startup refusal")
+			}
+			if cfg != nil {
+				t.Errorf("Load() returned a config alongside the refusal")
+			}
+		})
+	}
+}
+
 // TestLoad_PublicAPITrustedProxiesParsed — the CIDR list reaches the config as
 // prefixes: items trimmed, empty ones dropped, a single host kept as /32.
 func TestLoad_PublicAPITrustedProxiesParsed(t *testing.T) {
