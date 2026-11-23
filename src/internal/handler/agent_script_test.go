@@ -98,6 +98,53 @@ func TestAgentScript_CadenceFloor(t *testing.T) {
 	}
 }
 
+// TestAgentScript_DurationsAsWholeSecondsAtLeastOne — the backoff ceiling,
+// the per-request limit and the stall threshold reach the served runner as
+// whole seconds, truncated, floored at 1 (a 0 would mean no cap, no wait or an
+// instant stall). Each row sets one duration and reads the line the runner
+// takes it from; the other two stay at values well above the floor.
+func TestAgentScript_DurationsAsWholeSecondsAtLeastOne(t *testing.T) {
+	const (
+		backoff = "BACKOFF_CEILING_SEC"
+		limit   = "REQUEST_LIMIT_SEC"
+		stall   = "STALL_THRESHOLD_SEC"
+	)
+	cases := []struct {
+		name string
+		d    time.Duration
+		want string
+	}{
+		{"zero", 0, "1"},
+		{"one nanosecond", time.Nanosecond, "1"},
+		{"just below a second", 999 * time.Millisecond, "1"},
+		{"exactly one second", time.Second, "1"},
+		{"a fraction above one second", 1999 * time.Millisecond, "1"},
+		{"exactly two seconds", 2 * time.Second, "2"},
+		{"a fraction above two seconds", 2500 * time.Millisecond, "2"},
+	}
+	for _, v := range []string{backoff, limit, stall} {
+		for _, c := range cases {
+			t.Run(v+"/"+c.name, func(t *testing.T) {
+				b, l, s := 10*time.Second, 15*time.Second, 3*time.Minute
+				switch v {
+				case backoff:
+					b = c.d
+				case limit:
+					l = c.d
+				case stall:
+					s = c.d
+				}
+				rec := httptest.NewRecorder()
+				NewAgentScriptHandler(2, b, l, s).Script(rec, httptest.NewRequest(http.MethodGet, "/agent/v1/monitor-script", nil))
+				want := v + ` = int("` + c.want + `")`
+				if !strings.Contains(rec.Body.String(), want) {
+					t.Errorf("served runner lacks %s for %s", want, c.d)
+				}
+			})
+		}
+	}
+}
+
 // TestAgentScript_Unauthorized wires the real RequireMonitorToken middleware
 // over a CLOSED pool so any store/DB hit would surface as 5xx. A 401 on a
 // missing / malformed / ska_-shaped token therefore proves the shape gate
