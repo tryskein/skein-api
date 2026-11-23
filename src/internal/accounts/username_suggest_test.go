@@ -178,6 +178,9 @@ func TestUsernameSuggestions_DomainVariants(t *testing.T) {
 	}{
 		{"a long domain label", "dev@" + longLabel + ".test", takenSet{"dev": true, "dev2": true}, []string{"devq", "dev3", "dev4"}},
 		{"the domain is the stem", "corp@corp.test", takenSet{"corp": true, "corp2": true}, []string{"corp3", "corp4", "corp5"}},
+		// stem-domain here has the shape of a deleted account's pseudonym,
+		// which no new account may take (INV-18): it is not offered.
+		{"a variant of the pseudonym shape", "deleted@abcdef12.test", takenSet{"deleted": true, "deleted2": true}, []string{"deleteda", "deleted3", "deleted4"}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
