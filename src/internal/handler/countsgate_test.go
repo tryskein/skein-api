@@ -336,3 +336,126 @@ func TestCountsGate_PanickingComputationReleasesWaiters(t *testing.T) {
 		}
 	})
 }
+
+// TestCountsGate_CancelledWaitersReportTheirRole — a waiter whose own context
+// is cancelled gets context.Canceled, and computed still tells whether it
+// opened the batch (true) or joined it (false); the remaining waiter of the
+// batch gets the batch's result.
+func TestCountsGate_CancelledWaitersReportTheirRole(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		cancelOpener bool
+	}{
+		{"the opener is cancelled", true},
+		{"the joiner is cancelled", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				g := newCountsGate[int](countsGateWindow)
+				f := &fakeCompute{base: 100}
+				u := uuid.New()
+				ctx, cancel := context.WithCancel(context.Background())
+				defer cancel()
+
+				do := func(c context.Context) <-chan gateCall {
+					out := make(chan gateCall, 1)
+					go func() {
+						v, comp, err := g.Do(c, u, f.fn)
+						out <- gateCall{v, comp, err}
+					}()
+					return out
+				}
+				openerCtx, joinerCtx := context.Background(), context.Background()
+				if tc.cancelOpener {
+					openerCtx = ctx
+				} else {
+					joinerCtx = ctx
+				}
+				opener := do(openerCtx)
+				synctest.Wait() // the opener's batch is open
+				joiner := do(joinerCtx)
+				synctest.Wait()
+				cancel()
+
+				o, j := <-opener, <-joiner
+				cancelled, kept := o, j
+				if !tc.cancelOpener {
+					cancelled, kept = j, o
+				}
+				if !errors.Is(cancelled.err, context.Canceled) {
+					t.Errorf("cancelled waiter err = %v, want context.Canceled", cancelled.err)
+				}
+				if cancelled.computed != tc.cancelOpener {
+					t.Errorf("cancelled waiter computed = %v, want %v", cancelled.computed, tc.cancelOpener)
+				}
+				if kept.err != nil || kept.val != 101 || kept.computed == tc.cancelOpener {
+					t.Errorf("remaining waiter = %+v, want 101 with computed=%v", kept, !tc.cancelOpener)
+				}
+			})
+		})
+	}
+}
+
+// TestCountsGate_StopWaitsForACancelledComputation — after the service stops,
+// the gate's done channel closes only once a computation that has been
+// cancelled but has not yet returned (a driver unwinding a query) actually
+// returns; and a request after the stop gets errCountsGateStopped without a
+// computation being started.
+func TestCountsGate_StopWaitsForACancelledComputation(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		g := newCountsGate[int](countsGateWindow)
+		life, stop := context.WithCancel(context.Background())
+		done := g.bindLifetime(life)
+		u := uuid.New()
+
+		sawCancel := make(chan struct{})
+		release := make(chan struct{})
+		var starts atomic.Int32
+		held := func(ctx context.Context) (int, error) {
+			starts.Add(1)
+			<-ctx.Done()
+			close(sawCancel)
+			<-release // the barrier: cancelled, still running
+			return 0, ctx.Err()
+		}
+		waiter := make(chan gateCall, 1)
+		go func() {
+			v, comp, err := g.Do(context.Background(), u, held)
+			waiter <- gateCall{v, comp, err}
+		}()
+		time.Sleep(countsGateWindow + time.Millisecond) // sealed, computing
+		synctest.Wait()
+
+		stop()
+		synctest.Wait()
+		select {
+		case <-sawCancel:
+		default:
+			t.Fatal("the running computation was not cancelled by the stop")
+		}
+		select {
+		case <-done:
+			t.Fatal("gate reported stopped while a cancelled computation still runs")
+		default:
+		}
+
+		close(release)
+		synctest.Wait()
+		select {
+		case <-done:
+		default:
+			t.Fatal("gate done channel not closed after the computation returned")
+		}
+		if r := <-waiter; r.err == nil {
+			t.Errorf("waiter = %+v, want an error", r)
+		}
+
+		v, computed, err := g.Do(context.Background(), u, held)
+		if !errors.Is(err, errCountsGateStopped) || computed || v != 0 {
+			t.Errorf("request after the stop = %d, %v, %v; want 0, false, errCountsGateStopped", v, computed, err)
+		}
+		if n := starts.Load(); n != 1 {
+			t.Errorf("computations started = %d, want 1 (none after the stop)", n)
+		}
+	})
+}
