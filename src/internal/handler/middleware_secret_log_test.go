@@ -148,3 +148,59 @@ func TestSessionGuards_LogNoInvitationToken(t *testing.T) {
 		t.Errorf("the link after the refused session: %+v %v, want valid", p, err)
 	}
 }
+
+// TestRequireInternalSecret_RefusalLogsTheLoggablePath — the "path" field of
+// the refusal record, segment by segment (K-11). A segment that could be a
+// link token — 20 or more characters of the base64url alphabet, not a UUID —
+// is written as {redacted}; a UUID, an id, a word and anything with a
+// character outside that alphabet stay as they are. All values are synthetic.
+func TestRequireInternalSecret_RefusalLogsTheLoggablePath(t *testing.T) {
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	gate := RequireInternalSecret("the-right-internal-secret", "")(
+		http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }))
+
+	const uuidSeg = "0b4f3c1e-8d2a-4e6f-9a7b-1c2d3e4f5a6b"
+	cases := []struct {
+		name, seg, want string
+	}{
+		{"lower-case letters", "abcdefghijklmnopqrstuvwxyz", "{redacted}"},
+		{"upper-case letters", "ABCDEFGHIJKLMNOPQRSTUVWXYZ", "{redacted}"},
+		{"digits", "01234567890123456789", "{redacted}"},
+		{"dashes", "--------------------", "{redacted}"},
+		{"underscores", "____________________", "{redacted}"},
+		{"the edges of every range", "azAZ09-_azAZ09-_azAZ", "{redacted}"},
+		{"a token of the issued length", "abcdefghijklmnopqrstuvwxyzABCDEFGHIJ0123456", "{redacted}"},
+		{"exactly 20 characters", "aaaaaaaaaaaaaaaaaaaa", "{redacted}"},
+		{"19 characters", "aaaaaaaaaaaaaaaaaaa", "aaaaaaaaaaaaaaaaaaa"},
+		{"a UUID", uuidSeg, uuidSeg},
+		{"a dot inside", "aaaaaaaaaa.aaaaaaaaaa", "aaaaaaaaaa.aaaaaaaaaa"},
+		{"a plus inside", "aaaaaaaaaa+aaaaaaaaaa", "aaaaaaaaaa+aaaaaaaaaa"},
+		{"a tilde inside", "aaaaaaaaaa~aaaaaaaaaa", "aaaaaaaaaa~aaaaaaaaaa"},
+		{"a colon inside", "aaaaaaaaaa:aaaaaaaaaa", "aaaaaaaaaa:aaaaaaaaaa"},
+		{"a backtick inside", "aaaaaaaaaa`aaaaaaaaaa", "aaaaaaaaaa`aaaaaaaaaa"},
+		{"an at sign inside", "aaaaaaaaaa@aaaaaaaaaa", "aaaaaaaaaa@aaaaaaaaaa"},
+		{"a bracket inside", "AAAAAAAAAA[AAAAAAAAAA", "AAAAAAAAAA[AAAAAAAAAA"},
+		{"a brace inside", "zzzzzzzzzz{zzzzzzzzzz", "zzzzzzzzzz{zzzzzzzzzz"},
+		{"a non-ASCII letter inside", "aaaaaaaaaaéaaaaaaaaaa", "aaaaaaaaaaéaaaaaaaaaa"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			buf.Reset()
+			req := httptest.NewRequest(http.MethodPost, "/", nil)
+			req.URL.Path = "/api/v1/projects/" + uuidSeg + "/issues/sk-12/" + tc.seg + "/comments"
+			req.Header.Set(auth.HeaderInternalSecret, "a-wrong-internal-secret!!")
+			gate.ServeHTTP(httptest.NewRecorder(), req)
+			var entry map[string]any
+			if err := json.Unmarshal(bytes.TrimSpace(buf.Bytes()), &entry); err != nil {
+				t.Fatalf("refusal log %q is not one JSON record: %v", buf.String(), err)
+			}
+			want := "/api/v1/projects/" + uuidSeg + "/issues/sk-12/" + tc.want + "/comments"
+			if got := entry["path"]; got != want {
+				t.Errorf("path = %v, want %s", got, want)
+			}
+		})
+	}
+}
