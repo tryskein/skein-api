@@ -365,8 +365,16 @@ func TestComponentsREST_Refusals(t *testing.T) {
 			"{", http.StatusBadRequest, "invalid_json"},
 		{"patch with a body that is not JSON", e.owner, http.MethodPatch, item,
 			"{", http.StatusBadRequest, "invalid_json"},
-		{"project id that is not a UUID", e.owner, http.MethodGet,
+		{"project id that is not a UUID on list", e.owner, http.MethodGet,
 			"/ui/v1/projects/not-a-uuid/components", nil, http.StatusBadRequest, "invalid_id"},
+		{"project id that is not a UUID on create", e.owner, http.MethodPost,
+			"/ui/v1/projects/not-a-uuid/components", map[string]any{"name": "x"}, http.StatusBadRequest, "invalid_id"},
+		{"project id that is not a UUID on GET", e.owner, http.MethodGet,
+			"/ui/v1/projects/not-a-uuid/components/" + missing, nil, http.StatusBadRequest, "invalid_id"},
+		{"project id that is not a UUID on PATCH", e.owner, http.MethodPatch,
+			"/ui/v1/projects/not-a-uuid/components/" + missing, map[string]any{"name": "x"}, http.StatusBadRequest, "invalid_id"},
+		{"project id that is not a UUID on archive", e.owner, http.MethodPost,
+			"/ui/v1/projects/not-a-uuid/components/" + missing + "/archive", nil, http.StatusBadRequest, "invalid_id"},
 		{"component id that is not a UUID on GET", e.owner, http.MethodGet,
 			e.base() + "/not-a-uuid", nil, http.StatusBadRequest, "invalid_component_id"},
 		{"component id that is not a UUID on PATCH", e.owner, http.MethodPatch,
@@ -461,6 +469,19 @@ func TestComponentsREST_Refusals(t *testing.T) {
 		o := e.object(t, e.owner, http.MethodGet, e.base()+"/"+other["id"].(string), nil, http.StatusOK)
 		if o["name"] != "other" {
 			t.Errorf("the refused rename changed the other component to %v", o["name"])
+		}
+	})
+
+	t.Run("a known lens is accepted", func(t *testing.T) {
+		for _, lens := range []string{"on-me", "delegated"} {
+			code, out := e.do(t, e.owner, http.MethodGet, e.base()+"?lens="+lens, nil)
+			if code != http.StatusOK {
+				t.Errorf("GET list?lens=%s = %d %v, want 200", lens, code, out)
+				continue
+			}
+			if _, ok := out.([]any); !ok {
+				t.Errorf("GET list?lens=%s: body %#v is not a JSON array", lens, out)
+			}
 		}
 	})
 
