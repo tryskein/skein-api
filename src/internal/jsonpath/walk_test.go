@@ -167,6 +167,7 @@ func TestAtOffset_OnlyAValueEndsThere(t *testing.T) {
 		{"the start of the document", walkDoc, 0, "", false},
 		{"past the document", walkDoc, 40, "", false},
 		{"a nested number", walkDoc, 17, "a[1].b", true},
+		{"a value after closing delimiters", walkDoc, 27, "c", true},
 		{"an opening bracket", walkDoc, 6, "a", true},
 		{"the document's opening brace", walkDoc, 1, "", true},
 		{"a scalar document", `42`, 2, "", true},
@@ -179,5 +180,33 @@ func TestAtOffset_OnlyAValueEndsThere(t *testing.T) {
 				t.Errorf("AtOffset(%s, %d) = %q, %v; want %q, %v", c.raw, c.offset, got, ok, c.want, c.ok)
 			}
 		})
+	}
+}
+
+// TestWalk_StopsWhereVisitSaysSo — visit returning false ends the walk at
+// that token, a member name included: nothing after it is visited.
+func TestWalk_StopsWhereVisitSaysSo(t *testing.T) {
+	for _, stopAt := range []int{1, 3, 5} { // refuse the name "a", the number 1, the name "b"
+		var seen int
+		if err := Walk([]byte(walkDoc), func(Token) bool {
+			seen++
+			return seen <= stopAt
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if seen != stopAt+1 {
+			t.Errorf("visit refused token %d, but %d tokens were visited", stopAt+1, seen)
+		}
+	}
+}
+
+// TestWalk_MalformedDocument — a document that is not JSON is reported with
+// the decoder's error, not as a complete walk and not as truncation.
+func TestWalk_MalformedDocument(t *testing.T) {
+	for _, raw := range []string{`{"a":}`, `[1,,2]`, `{"a" 1}`} {
+		err := Walk([]byte(raw), func(Token) bool { return true })
+		if err == nil || errors.Is(err, io.ErrUnexpectedEOF) {
+			t.Errorf("Walk(%s) = %v, want the decoder's syntax error", raw, err)
+		}
 	}
 }
