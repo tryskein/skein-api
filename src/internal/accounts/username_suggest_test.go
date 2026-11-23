@@ -178,6 +178,9 @@ func TestUsernameSuggestions_DomainVariants(t *testing.T) {
 	}{
 		{"a long domain label", "dev@" + longLabel + ".test", takenSet{"dev": true, "dev2": true}, []string{"devq", "dev3", "dev4"}},
 		{"the domain is the stem", "corp@corp.test", takenSet{"corp": true, "corp2": true}, []string{"corp3", "corp4", "corp5"}},
+		// A valid address whose first domain label has no letter or digit
+		// gives no domain word, so no domain variant.
+		{"a domain label without letters or digits", "ann@_-_.test", takenSet{"ann": true, "ann2": true}, []string{"ann3", "ann4", "ann5"}},
 		// stem-domain here has the shape of a deleted account's pseudonym,
 		// which no new account may take (INV-18): it is not offered.
 		{"a variant of the pseudonym shape", "deleted@abcdef12.test", takenSet{"deleted": true, "deleted2": true}, []string{"deleteda", "deleted3", "deleted4"}},
