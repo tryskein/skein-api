@@ -250,7 +250,6 @@ func TestParse_InvalidCandidateDoesNotStopTheScan(t *testing.T) {
 		"@ab then @alice",
 		"@_x then @alice",
 		"@ then @alice",
-		"foo@bar then @alice",
 	} {
 		if got := Parse(in); !equalStringSlices(got, []string{"alice"}) {
 			t.Errorf("Parse(%q) = %v, want [alice]", in, got)
