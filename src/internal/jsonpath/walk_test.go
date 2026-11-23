@@ -101,3 +101,83 @@ func TestWalkStrings_CostGrowsWithSize(t *testing.T) {
 		t.Fatalf("allocations %v at depth 500, %v at depth 1000: more than linear", small, large)
 	}
 }
+
+// walkDoc is the document of the token-contract tests; the offsets below are
+// counted on it by hand:
+//
+//	{"a":[1,{"b":2.50}],"c":"x"}
+//	0    5 7 9   13   18  23  27
+const walkDoc = `{"a":[1,{"b":2.50}],"c":"x"}`
+
+// TestWalk_TokenSequence — every token of a document with a nested array and
+// object, in order: its path (a member name by its object's path, a closing
+// delimiter by the path of the container it closes), whether it is a name,
+// its value — a number as json.Number with its source text — and the offset
+// just after it.
+func TestWalk_TokenSequence(t *testing.T) {
+	want := []Token{
+		{Path: "", Value: json.Delim('{'), End: 1},
+		{Path: "", Name: true, Value: "a", End: 4},
+		{Path: "a", Value: json.Delim('['), End: 6},
+		{Path: "a[0]", Value: json.Number("1"), End: 7},
+		{Path: "a[1]", Value: json.Delim('{'), End: 9},
+		{Path: "a[1]", Name: true, Value: "b", End: 12},
+		{Path: "a[1].b", Value: json.Number("2.50"), End: 17},
+		{Path: "a[1]", Value: json.Delim('}'), End: 18},
+		{Path: "a", Value: json.Delim(']'), End: 19},
+		{Path: "", Name: true, Value: "c", End: 23},
+		{Path: "c", Value: "x", End: 27},
+		{Path: "", Value: json.Delim('}'), End: 28},
+	}
+	var got []Token
+	if err := Walk([]byte(walkDoc), func(tok Token) bool {
+		got = append(got, tok)
+		return true
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != len(want) {
+		t.Fatalf("Walk gave %d tokens %v, want %d %v", len(got), got, len(want), want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("token %d = %#v, want %#v", i, got[i], want[i])
+		}
+	}
+}
+
+// TestAtOffset_OnlyAValueEndsThere — an offset that is the end of a member
+// name, the end of a closing delimiter, a point between tokens or the start
+// of the document names nothing (ok=false); a value at the top of the
+// document is named by the empty path with ok=true.
+func TestAtOffset_OnlyAValueEndsThere(t *testing.T) {
+	cases := []struct {
+		name   string
+		raw    string
+		offset int64
+		want   string
+		ok     bool
+	}{
+		{"the end of a member name", walkDoc, 4, "", false},
+		{"the end of a nested member name", walkDoc, 12, "", false},
+		{"the end of a closing brace", walkDoc, 18, "", false},
+		{"the end of a closing bracket", walkDoc, 19, "", false},
+		{"the end of the document's closing brace", walkDoc, 28, "", false},
+		{"between a colon and a value", walkDoc, 5, "", false},
+		{"the start of the document", walkDoc, 0, "", false},
+		{"past the document", walkDoc, 40, "", false},
+		{"a nested number", walkDoc, 17, "a[1].b", true},
+		{"an opening bracket", walkDoc, 6, "a", true},
+		{"the document's opening brace", walkDoc, 1, "", true},
+		{"a scalar document", `42`, 2, "", true},
+		{"a string document", `"x"`, 3, "", true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got, ok := AtOffset([]byte(c.raw), c.offset)
+			if got != c.want || ok != c.ok {
+				t.Errorf("AtOffset(%s, %d) = %q, %v; want %q, %v", c.raw, c.offset, got, ok, c.want, c.ok)
+			}
+		})
+	}
+}
