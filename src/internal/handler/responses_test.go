@@ -9,8 +9,9 @@ package handler
 // A client that dispatches on Content-Type (the BFF proxy, fetch wrappers)
 // treats a body without it as text, so the header is part of the contract.
 //
-// The writers are observed on a recorded HTTP response: status, header and the
-// decoded body. Message text is never asserted beyond presence: it is free
+// The writers are observed on a recorded HTTP response: status, the headers as
+// committed with the status (rec.Result(), not the still mutable header map) and
+// the decoded body. Message text is never asserted beyond presence: it is free
 // text (TEST_GUIDELINES §5); the test passes its own value and checks that it
 // arrives.
 
@@ -33,7 +34,7 @@ func recordedJSON(t *testing.T, rec *httptest.ResponseRecorder) map[string]any {
 
 func requireJSONContentType(t *testing.T, rec *httptest.ResponseRecorder) {
 	t.Helper()
-	if got := rec.Header().Get("Content-Type"); got != "application/json" {
+	if got := rec.Result().Header.Get("Content-Type"); got != "application/json" {
 		t.Errorf("Content-Type = %q, want application/json", got)
 	}
 }
@@ -118,7 +119,7 @@ func TestMethod405_WireForm(t *testing.T) {
 	if rec.Code != http.StatusMethodNotAllowed {
 		t.Errorf("status = %d, want 405", rec.Code)
 	}
-	if got := rec.Header().Get("Allow"); got != "GET, PATCH, POST" {
+	if got := rec.Result().Header.Get("Allow"); got != "GET, PATCH, POST" {
 		t.Errorf("Allow = %q, want the given verbs", got)
 	}
 	requireJSONContentType(t, rec)
