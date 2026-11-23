@@ -97,13 +97,20 @@ type endpoint struct {
 
 func newEndpoint(t *testing.T, cert tls.Certificate, implicit, startTLS bool) *endpoint {
 	t.Helper()
+	return newEndpointTLS(t, &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12}, implicit, startTLS)
+}
+
+// newEndpointTLS is newEndpoint with the endpoint's own TLS configuration
+// (the versions it offers).
+func newEndpointTLS(t *testing.T, serverTLS *tls.Config, implicit, startTLS bool) *endpoint {
+	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
 	e := &endpoint{
 		ln:        ln,
-		tlsConfig: &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12},
+		tlsConfig: serverTLS,
 		implicit:  implicit,
 		startTLS:  startTLS,
 	}
@@ -449,4 +456,62 @@ func assertRefusedInTheClear(t *testing.T, e *endpoint, err error) {
 	if data != "" {
 		t.Errorf("the message reached the endpoint: %s", fmt.Sprintf("%q", data))
 	}
+}
+
+// TestSMTPSender_TLSConstraintsSurviveTheBaseConfig — row 68a (K-10): the
+// TLS configuration handed to NewSMTPSender is only a starting point.
+// Certificate verification stays on even when the base disables it, the
+// floor of TLS 1.2 is raised even when the base allows older versions, and a
+// stricter base (TLS 1.3 only) is kept, not lowered to the floor. All
+// certificates are synthetic, for 127.0.0.1.
+func TestSMTPSender_TLSConstraintsSurviveTheBaseConfig(t *testing.T) {
+	cert, trusted := selfSigned(t)
+	_, foreign := selfSigned(t)
+	serverTLS := func(minV, maxV uint16) *tls.Config {
+		return &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: minV, MaxVersion: maxV}
+	}
+	sendWith := func(e *endpoint, base *tls.Config) error {
+		s, err := mail.NewSMTPSender(loadMailConfig(t, e.port(), config.SMTPTLSImplicit), base)
+		if err != nil {
+			t.Fatalf("NewSMTPSender: %v", err)
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		return s.Send(ctx, "someone@example.org", []byte("Subject: probe\r\n\r\nhello relay\r\n"))
+	}
+
+	t.Run("a base that skips verification still verifies", func(t *testing.T) {
+		e := newEndpoint(t, cert, true, false)
+		err := sendWith(e, &tls.Config{RootCAs: foreign, InsecureSkipVerify: true})
+		assertRefusedInTheClear(t, e, err)
+	})
+
+	t.Run("a base that allows TLS 1.0 still requires 1.2", func(t *testing.T) {
+		e := newEndpointTLS(t, serverTLS(tls.VersionTLS10, tls.VersionTLS11), true, false)
+		// Positive control: the endpoint does speak TLS 1.1 to a client that
+		// accepts it, so the refusal below is the floor's.
+		conn, err := tls.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", e.port()),
+			&tls.Config{RootCAs: trusted, MinVersion: tls.VersionTLS10})
+		if err != nil {
+			t.Fatalf("precondition: a TLS 1.0+ client cannot reach the TLS 1.1 endpoint: %v", err)
+		}
+		_ = conn.Close()
+		e.mu.Lock()
+		e.accepted = 0
+		e.mu.Unlock()
+
+		err = sendWith(e, &tls.Config{RootCAs: trusted, MinVersion: tls.VersionTLS10})
+		assertRefusedInTheClear(t, e, err)
+	})
+
+	t.Run("a stricter base is kept", func(t *testing.T) {
+		e := newEndpointTLS(t, serverTLS(tls.VersionTLS12, tls.VersionTLS12), true, false)
+		err := sendWith(e, &tls.Config{RootCAs: trusted, MinVersion: tls.VersionTLS13})
+		assertRefusedInTheClear(t, e, err)
+
+		ok := newEndpointTLS(t, serverTLS(tls.VersionTLS12, tls.VersionTLS13), true, false)
+		if err := sendWith(ok, &tls.Config{RootCAs: trusted, MinVersion: tls.VersionTLS13}); err != nil {
+			t.Errorf("TLS 1.3 base against a TLS 1.3 endpoint: %v, want delivery", err)
+		}
+	})
 }
