@@ -121,51 +121,39 @@ func field(t *testing.T, where string, body map[string]any, key string, want any
 	}
 }
 
-// TestTimezoneREST pins the time zone contract: the factory state, the
-// manual and detected roads, and the refusals that leave the stored zone
-// unchanged.
-func TestTimezoneREST(t *testing.T) {
+// TestTimezoneREST_Roads pins the time zone contract in one ordered
+// scenario: the factory state, detection while nothing is hand-set, a manual
+// edit replacing detection, detection yielding to the hand-set value (the
+// answer carries the zone in effect), and a manual edit replacing a manual one.
+func TestTimezoneREST_Roads(t *testing.T) {
 	c := newQuietCaller(t)
+	expect := func(where string, body map[string]any, tz, source any) {
+		t.Helper()
+		field(t, where, body, "timezone", tz)
+		field(t, where, body, "source", source)
+	}
 
-	t.Run("an account without a zone reads both fields as null", func(t *testing.T) {
-		got := c.ok(t, http.MethodGet, "/timezone", nil)
-		field(t, "GET", got, "timezone", nil)
-		field(t, "GET", got, "source", nil)
-	})
+	expect("GET factory", c.ok(t, http.MethodGet, "/timezone", nil), nil, nil)
 
-	t.Run("detection writes while no hand-set value exists", func(t *testing.T) {
-		put := c.ok(t, http.MethodPut, "/timezone", map[string]any{"timezone": "Asia/Tokyo", "source": "detected"})
-		field(t, "PUT", put, "timezone", "Asia/Tokyo")
-		field(t, "PUT", put, "source", "detected")
-		got := c.ok(t, http.MethodGet, "/timezone", nil)
-		field(t, "GET", got, "timezone", "Asia/Tokyo")
-		field(t, "GET", got, "source", "detected")
-	})
+	expect("PUT detected", c.ok(t, http.MethodPut, "/timezone", map[string]any{"timezone": "Asia/Tokyo", "source": "detected"}), "Asia/Tokyo", "detected")
+	expect("GET after detection", c.ok(t, http.MethodGet, "/timezone", nil), "Asia/Tokyo", "detected")
 
-	t.Run("a write without source is a manual edit and replaces detection", func(t *testing.T) {
-		put := c.ok(t, http.MethodPut, "/timezone", map[string]any{"timezone": "Europe/Moscow"})
-		field(t, "PUT", put, "timezone", "Europe/Moscow")
-		field(t, "PUT", put, "source", "manual")
-		got := c.ok(t, http.MethodGet, "/timezone", nil)
-		field(t, "GET", got, "timezone", "Europe/Moscow")
-		field(t, "GET", got, "source", "manual")
-	})
+	expect("PUT without source", c.ok(t, http.MethodPut, "/timezone", map[string]any{"timezone": "Europe/Moscow"}), "Europe/Moscow", "manual")
+	expect("GET after the manual edit", c.ok(t, http.MethodGet, "/timezone", nil), "Europe/Moscow", "manual")
 
-	t.Run("detection yields to the hand-set value and answers the zone in effect", func(t *testing.T) {
-		put := c.ok(t, http.MethodPut, "/timezone", map[string]any{"timezone": "America/New_York", "source": "detected"})
-		field(t, "PUT", put, "timezone", "Europe/Moscow")
-		field(t, "PUT", put, "source", "manual")
-		got := c.ok(t, http.MethodGet, "/timezone", nil)
-		field(t, "GET", got, "timezone", "Europe/Moscow")
-		field(t, "GET", got, "source", "manual")
-	})
+	expect("PUT detected over manual", c.ok(t, http.MethodPut, "/timezone", map[string]any{"timezone": "America/New_York", "source": "detected"}), "Europe/Moscow", "manual")
+	expect("GET after the yielded detection", c.ok(t, http.MethodGet, "/timezone", nil), "Europe/Moscow", "manual")
 
-	t.Run("an explicit manual edit replaces the hand-set value", func(t *testing.T) {
-		c.ok(t, http.MethodPut, "/timezone", map[string]any{"timezone": "Europe/Berlin", "source": "manual"})
-		got := c.ok(t, http.MethodGet, "/timezone", nil)
-		field(t, "GET", got, "timezone", "Europe/Berlin")
-		field(t, "GET", got, "source", "manual")
-	})
+	expect("PUT manual over manual", c.ok(t, http.MethodPut, "/timezone", map[string]any{"timezone": "Europe/Berlin", "source": "manual"}), "Europe/Berlin", "manual")
+	expect("GET after the second manual edit", c.ok(t, http.MethodGet, "/timezone", nil), "Europe/Berlin", "manual")
+}
+
+// TestTimezoneREST_Refusals — each refused write answers its status and
+// machine code and leaves the stored zone as it was. The zone is set in the
+// parent, so every case can be run on its own.
+func TestTimezoneREST_Refusals(t *testing.T) {
+	c := newQuietCaller(t)
+	c.ok(t, http.MethodPut, "/timezone", map[string]any{"timezone": "Europe/Berlin", "source": "manual"})
 
 	refusals := []struct {
 		name     string
@@ -180,7 +168,7 @@ func TestTimezoneREST(t *testing.T) {
 		{"a body that is not JSON", "{", http.StatusBadRequest, "invalid_json"},
 	}
 	for _, tc := range refusals {
-		t.Run("refused: "+tc.name, func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			c.refused(t, http.MethodPut, "/timezone", tc.body, tc.want, tc.wantCode)
 			got := c.ok(t, http.MethodGet, "/timezone", nil)
 			field(t, "GET after the refusal", got, "timezone", "Europe/Berlin")
@@ -189,39 +177,39 @@ func TestTimezoneREST(t *testing.T) {
 	}
 }
 
-// TestQuietHoursREST pins the quiet window contract: off by default, a zone
-// required, a window crossing midnight stored as given, refusals that keep
-// the stored window, and clearing.
-func TestQuietHoursREST(t *testing.T) {
+// TestQuietHoursREST_Lifecycle pins the quiet window in one ordered
+// scenario: off by default, refused while no zone is stored, a window across
+// midnight stored with its zone, cleared by two nulls with the zone kept.
+func TestQuietHoursREST_Lifecycle(t *testing.T) {
 	c := newQuietCaller(t)
+	window := func(where string, body map[string]any, start, end, tz any) {
+		t.Helper()
+		field(t, where, body, "start", start)
+		field(t, where, body, "end", end)
+		field(t, where, body, "timezone", tz)
+	}
 
-	t.Run("quiet hours are off by default", func(t *testing.T) {
-		got := c.ok(t, http.MethodGet, "/quiet-hours", nil)
-		field(t, "GET", got, "start", nil)
-		field(t, "GET", got, "end", nil)
-		field(t, "GET", got, "timezone", nil)
-	})
+	window("GET factory", c.ok(t, http.MethodGet, "/quiet-hours", nil), nil, nil, nil)
 
-	t.Run("a window without a stored zone is refused", func(t *testing.T) {
-		c.refused(t, http.MethodPut, "/quiet-hours", map[string]any{"start": "22:00", "end": "07:00"},
-			http.StatusUnprocessableEntity, "timezone_required")
-		got := c.ok(t, http.MethodGet, "/quiet-hours", nil)
-		field(t, "GET after the refusal", got, "start", nil)
-		field(t, "GET after the refusal", got, "end", nil)
-	})
+	c.refused(t, http.MethodPut, "/quiet-hours", map[string]any{"start": "22:00", "end": "07:00"},
+		http.StatusUnprocessableEntity, "timezone_required")
+	window("GET after timezone_required", c.ok(t, http.MethodGet, "/quiet-hours", nil), nil, nil, nil)
 
 	c.ok(t, http.MethodPut, "/timezone", map[string]any{"timezone": "Europe/Moscow"})
+	window("PUT across midnight", c.ok(t, http.MethodPut, "/quiet-hours", map[string]any{"start": "22:00", "end": "07:00"}), "22:00", "07:00", "Europe/Moscow")
+	window("GET after the window", c.ok(t, http.MethodGet, "/quiet-hours", nil), "22:00", "07:00", "Europe/Moscow")
 
-	t.Run("a window across midnight is stored with its zone", func(t *testing.T) {
-		put := c.ok(t, http.MethodPut, "/quiet-hours", map[string]any{"start": "22:00", "end": "07:00"})
-		field(t, "PUT", put, "start", "22:00")
-		field(t, "PUT", put, "end", "07:00")
-		field(t, "PUT", put, "timezone", "Europe/Moscow")
-		got := c.ok(t, http.MethodGet, "/quiet-hours", nil)
-		field(t, "GET", got, "start", "22:00")
-		field(t, "GET", got, "end", "07:00")
-		field(t, "GET", got, "timezone", "Europe/Moscow")
-	})
+	window("PUT both null", c.ok(t, http.MethodPut, "/quiet-hours", map[string]any{"start": nil, "end": nil}), nil, nil, "Europe/Moscow")
+	window("GET after the clear", c.ok(t, http.MethodGet, "/quiet-hours", nil), nil, nil, "Europe/Moscow")
+}
+
+// TestQuietHoursREST_Refusals — each refused window answers its status and
+// machine code and leaves the stored window as it was. The zone and a window
+// are set in the parent, so every case can be run on its own.
+func TestQuietHoursREST_Refusals(t *testing.T) {
+	c := newQuietCaller(t)
+	c.ok(t, http.MethodPut, "/timezone", map[string]any{"timezone": "Europe/Moscow"})
+	c.ok(t, http.MethodPut, "/quiet-hours", map[string]any{"start": "22:00", "end": "07:00"})
 
 	refusals := []struct {
 		name     string
@@ -240,21 +228,11 @@ func TestQuietHoursREST(t *testing.T) {
 		{"a body that is not JSON", "{", http.StatusBadRequest, "invalid_json"},
 	}
 	for _, tc := range refusals {
-		t.Run("refused: "+tc.name, func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			c.refused(t, http.MethodPut, "/quiet-hours", tc.body, tc.want, tc.wantCode)
 			got := c.ok(t, http.MethodGet, "/quiet-hours", nil)
 			field(t, "GET after the refusal", got, "start", "22:00")
 			field(t, "GET after the refusal", got, "end", "07:00")
 		})
 	}
-
-	t.Run("both bounds null clear the window and keep the zone", func(t *testing.T) {
-		put := c.ok(t, http.MethodPut, "/quiet-hours", map[string]any{"start": nil, "end": nil})
-		field(t, "PUT", put, "start", nil)
-		field(t, "PUT", put, "end", nil)
-		got := c.ok(t, http.MethodGet, "/quiet-hours", nil)
-		field(t, "GET", got, "start", nil)
-		field(t, "GET", got, "end", nil)
-		field(t, "GET", got, "timezone", "Europe/Moscow")
-	})
 }
