@@ -174,7 +174,7 @@ func TestFields_WireFormAndSyntax(t *testing.T) {
 				t.Errorf("GET %s: status %d, want 200 (body %q)", target, rec.Code, rec.Body.String())
 				continue
 			}
-			if ct := rec.Header().Get("Content-Type"); ct != "application/json" {
+			if ct := rec.Result().Header.Get("Content-Type"); ct != "application/json" {
 				t.Errorf("GET %s: Content-Type %q, want application/json", target, ct)
 			}
 		}
