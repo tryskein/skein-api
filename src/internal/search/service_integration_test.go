@@ -18,6 +18,7 @@ package search_test
 
 import (
 	"context"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -474,4 +475,70 @@ func itoa(n int) string {
 		n /= 10
 	}
 	return string(b[i:])
+}
+
+// TestSearch_AcceptanceFiltersReadCurrentMembership — the unaccepted and the
+// accepted selections are live: repeating the same first-page query after an
+// issue changed sides answers the new membership under each of the two
+// filters, not a page kept from before the change. A query without either
+// filter keeps the ordinary semantics: both issues, before and after.
+func TestSearch_AcceptanceFiltersReadCurrentMembership(t *testing.T) {
+	svc := newFTSService(t)
+	pool := testsupport.NewTestPool(t)
+
+	owner, _ := testsupport.SeedUser(t, pool, "user")
+	projID, prefix := testsupport.SeedProject(t, pool, owner, "tsacc")
+	tok := token(t)
+	first, second := prefix+"-1", prefix+"-2"
+	testsupport.SeedIssue(t, pool, projID, owner, first, tok+" first", "open", 2)
+	testsupport.SeedIssue(t, pool, projID, owner, second, tok+" second", "open", 2)
+	testsupport.Accept(t, pool, first, owner, true)
+	testsupport.Accept(t, pool, second, owner, false)
+
+	yes := true
+	ids := func(t *testing.T, f search.Filters) []string {
+		t.Helper()
+		res, err := svc.Search(ctx(), search.Params{
+			Query: tok, Project: &projID, Kinds: []search.Kind{search.KindIssue},
+			Limit: 50, CallerID: owner, Filters: f,
+		})
+		if err != nil {
+			t.Fatalf("Search: %v", err)
+		}
+		var out []string
+		for _, it := range res.Items {
+			out = append(out, it.ID)
+		}
+		sort.Strings(out)
+		return out
+	}
+	unaccepted := search.Filters{AcceptedAtNull: &yes}
+	accepted := search.Filters{AcceptedAtNotNull: &yes}
+	both := []string{first, second}
+	sort.Strings(both)
+	same := func(a, b []string) bool { return strings.Join(a, ",") == strings.Join(b, ",") }
+
+	if got := ids(t, unaccepted); !same(got, []string{second}) {
+		t.Fatalf("unaccepted before the change = %v, want [%s]", got, second)
+	}
+	if got := ids(t, accepted); !same(got, []string{first}) {
+		t.Fatalf("accepted before the change = %v, want [%s]", got, first)
+	}
+	if got := ids(t, search.Filters{}); !same(got, both) {
+		t.Fatalf("no acceptance filter before the change = %v, want %v", got, both)
+	}
+
+	// The two issues change sides.
+	testsupport.Accept(t, pool, first, owner, false)
+	testsupport.Accept(t, pool, second, owner, true)
+
+	if got := ids(t, unaccepted); !same(got, []string{first}) {
+		t.Errorf("unaccepted after the change = %v, want [%s]: the page read before the change was reused", got, first)
+	}
+	if got := ids(t, accepted); !same(got, []string{second}) {
+		t.Errorf("accepted after the change = %v, want [%s]: the page read before the change was reused", got, second)
+	}
+	if got := ids(t, search.Filters{}); !same(got, both) {
+		t.Errorf("no acceptance filter after the change = %v, want %v", got, both)
+	}
 }
