@@ -142,25 +142,30 @@ SELECT (new_data->>'by')::uuid FROM events
 	type path struct {
 		name     string
 		releases bool
-		call     func(a testsupport.Actor, p testsupport.TenancyProject, id string) forceCell
+		// status is the stored status the path leaves on an allowed force:
+		// unlock keeps in_progress (it moves no status), a close closes, a
+		// transition sets its target, unclaim sets nextStatus, an update keeps
+		// in_progress.
+		status string
+		call   func(a testsupport.Actor, p testsupport.TenancyProject, id string) forceCell
 	}
 	issuePath := func(p testsupport.TenancyProject, id string) string {
 		return "/ui/v1/projects/" + p.ID.String() + "/issues/" + id
 	}
 	paths := []path{
-		{"REST unlock", true, func(a testsupport.Actor, p testsupport.TenancyProject, id string) forceCell {
+		{"REST unlock", true, "in_progress", func(a testsupport.Actor, p testsupport.TenancyProject, id string) forceCell {
 			return restCell(s.rest(a, http.MethodPost, issuePath(p, id)+"/unlock", nil))
 		}},
-		{"REST transitions?force → closed", true, func(a testsupport.Actor, p testsupport.TenancyProject, id string) forceCell {
+		{"REST transitions?force → closed", true, "closed", func(a testsupport.Actor, p testsupport.TenancyProject, id string) forceCell {
 			return restCell(s.restWith(a, http.MethodPost, issuePath(p, id)+"/transitions?force=true",
 				map[string]any{"status": "closed", "closeOutcome": "done", "reason": "forced"},
 				map[string]string{"If-Match": fmt.Sprint(version(id))}))
 		}},
-		{"REST transitions?force → deferred", false, func(a testsupport.Actor, p testsupport.TenancyProject, id string) forceCell {
+		{"REST transitions?force → deferred", false, "deferred", func(a testsupport.Actor, p testsupport.TenancyProject, id string) forceCell {
 			return restCell(s.restWith(a, http.MethodPost, issuePath(p, id)+"/transitions?force=true",
 				map[string]any{"status": "deferred"}, map[string]string{"If-Match": fmt.Sprint(version(id))}))
 		}},
-		{"REST bulk close force", true, func(a testsupport.Actor, p testsupport.TenancyProject, id string) forceCell {
+		{"REST bulk close force", true, "closed", func(a testsupport.Actor, p testsupport.TenancyProject, id string) forceCell {
 			c := restCell(s.rest(a, http.MethodPost, "/ui/v1/projects/"+p.ID.String()+"/issues/bulk",
 				map[string]any{"ids": []string{id}, "action": "close", "force": true, "closeOutcome": "done"}))
 			if c.ok {
@@ -174,23 +179,23 @@ SELECT (new_data->>'by')::uuid FROM events
 			}
 			return c
 		}},
-		{"MCP skein_unclaim force", true, func(a testsupport.Actor, _ testsupport.TenancyProject, id string) forceCell {
+		{"MCP skein_unclaim force", true, "open", func(a testsupport.Actor, _ testsupport.TenancyProject, id string) forceCell {
 			return toolCell(s.tool(a, sessionOf(a), "skein_unclaim", map[string]any{
 				"id": id, "force": true, "nextStatus": "open", "reason": "forced"}))
 		}},
-		{"MCP skein_update force", false, func(a testsupport.Actor, _ testsupport.TenancyProject, id string) forceCell {
+		{"MCP skein_update force", false, "in_progress", func(a testsupport.Actor, _ testsupport.TenancyProject, id string) forceCell {
 			return toolCell(s.tool(a, sessionOf(a), "skein_update", map[string]any{
 				"id": id, "expectedVersion": version(id), "force": true, "priority": 1}))
 		}},
-		{"MCP skein_close force", true, func(a testsupport.Actor, _ testsupport.TenancyProject, id string) forceCell {
+		{"MCP skein_close force", true, "closed", func(a testsupport.Actor, _ testsupport.TenancyProject, id string) forceCell {
 			return toolCell(s.tool(a, sessionOf(a), "skein_close", map[string]any{
 				"id": id, "expectedVersion": version(id), "force": true, "closeOutcome": "done", "reason": "forced"}))
 		}},
-		{"MCP skein_update_many force", false, func(a testsupport.Actor, _ testsupport.TenancyProject, id string) forceCell {
+		{"MCP skein_update_many force", false, "in_progress", func(a testsupport.Actor, _ testsupport.TenancyProject, id string) forceCell {
 			return toolCell(s.tool(a, sessionOf(a), "skein_update_many", map[string]any{
 				"force": true, "items": []any{map[string]any{"id": id, "expectedVersion": version(id), "priority": 1}}}))
 		}},
-		{"MCP skein_close_many force", true, func(a testsupport.Actor, _ testsupport.TenancyProject, id string) forceCell {
+		{"MCP skein_close_many force", true, "closed", func(a testsupport.Actor, _ testsupport.TenancyProject, id string) forceCell {
 			return toolCell(s.tool(a, sessionOf(a), "skein_close_many", map[string]any{
 				"force": true, "items": []any{map[string]any{
 					"id": id, "expectedVersion": version(id), "closeOutcome": "done", "reason": "forced"}}}))
@@ -217,6 +222,9 @@ SELECT (new_data->>'by')::uuid FROM events
 				}
 				after := snap(id)
 				by := releasedBy(id)
+				if after.status != p.status {
+					t.Errorf("%s: status %s after the forced path, want %s", a, after.status, p.status)
+				}
 				if p.releases {
 					if after.lockedBy != nil {
 						t.Errorf("%s: the claim is still held after a releasing path", a)
@@ -224,8 +232,13 @@ SELECT (new_data->>'by')::uuid FROM events
 					if len(by) != 1 || by[0] != s.f.User(t, a).ID {
 						t.Errorf("%s: issue.lock_force_released by %v, want exactly one by the releaser", a, by)
 					}
-				} else if len(by) != 0 {
-					t.Errorf("%s: a bypass that keeps the claim wrote issue.lock_force_released %v", a, by)
+				} else {
+					if deref(after.lockedBy) != holderSession {
+						t.Errorf("%s: the claim is %q after a bypass, want the holder's %q kept", a, deref(after.lockedBy), holderSession)
+					}
+					if len(by) != 0 {
+						t.Errorf("%s: a bypass that keeps the claim wrote issue.lock_force_released %v", a, by)
+					}
 				}
 			}
 			for _, r := range refused {

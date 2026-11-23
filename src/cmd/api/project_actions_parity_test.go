@@ -26,11 +26,15 @@ package main
 //
 // The force_unlock row is asked in force_unlock_test.go
 // (TestForceUnlock_EveryBypassPathFollowsTheRight) on every bypass path, REST
-// and MCP, with the claim, the status and the audit event checked: vP, vPr
-// and adm0 (and admA) succeed; the member column is uAB there, because uA is
-// the holder of the claim and releases his own without the right; vnsh is
-// refused on A.members; uc¬p is refused on A.space — on A.members he does not
-// see the project at all, which is the "see the project" row above.
+// and MCP. vP, vPr and adm0 (and admA) succeed, and each path leaves its
+// stored status; a releasing path clears the claim and writes one
+// issue.lock_force_released naming the releaser, a bypass keeps the holder's
+// claim and writes none. The member column is uAB there, because uA is the
+// holder of the claim and releases his own without the right; vnsh is refused
+// on A.members and uc¬p on A.space (on A.members he does not see the project
+// at all, which is the "see the project" row above), each with
+// force_unlock_forbidden and the claim, the status and the event count
+// unchanged.
 
 import (
 	"bytes"
