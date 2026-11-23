@@ -143,6 +143,8 @@ func TestUsernameSuggestions_ConventionalOrder(t *testing.T) {
 		{"only the stem free", taken(append(upTo(2, 9), "dev-corp", "devc")...), []string{"dev", "dev10", "dev11"}},
 		{"the first ten taken: the numbered fallback from 10", taken(conventional...), []string{"dev10", "dev11", "dev12"}},
 		{"everything up to 98 taken: 99 is still offered", taken(append(conventional, upTo(10, 98)...)...), []string{"dev99"}},
+		{"stem9 is the last of the first group", taken(append([]string{"dev", "dev-corp", "devc"}, upTo(2, 8)...)...), []string{"dev9", "dev10", "dev11"}},
+		{"numbers continue across the groups without a gap", taken(append(conventional, upTo(10, 18)...)...), []string{"dev19", "dev20", "dev21"}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -157,6 +159,31 @@ func TestUsernameSuggestions_ConventionalOrder(t *testing.T) {
 				if c.taken[s] {
 					t.Errorf("suggestion %q is taken", s)
 				}
+			}
+		})
+	}
+}
+
+// TestUsernameSuggestions_DomainVariants — the domain variants follow the
+// username rule and the stem: a domain label too long to fit beside the stem
+// gives no candidate (never an empty or invalid one), and a domain equal to
+// the stem adds no variant of itself.
+func TestUsernameSuggestions_DomainVariants(t *testing.T) {
+	longLabel := strings.Repeat("q", 40)
+	cases := []struct {
+		name  string
+		email string
+		taken takenSet
+		want  []string
+	}{
+		{"a long domain label", "dev@" + longLabel + ".test", takenSet{"dev": true, "dev2": true}, []string{"devq", "dev3", "dev4"}},
+		{"the domain is the stem", "corp@corp.test", takenSet{"corp": true, "corp2": true}, []string{"corp3", "corp4", "corp5"}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := suggestionsWith(t, c.taken, c.email)
+			if strings.Join(got, ",") != strings.Join(c.want, ",") {
+				t.Errorf("suggestions = %q, want %q", got, c.want)
 			}
 		})
 	}
