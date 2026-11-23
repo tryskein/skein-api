@@ -810,6 +810,14 @@ func TestShow_CommentsArgumentEdges(t *testing.T) {
 		}
 	})
 
+	t.Run("null arguments are absent arguments", func(t *testing.T) {
+		body := callShow(t, handler, ctx, map[string]any{"id": issueID, "commentsLimit": nil, "commentsSince": nil})
+		// Absent: the last 3 comments of the whole thread.
+		if got, want := bodies(body), []string{"e2", "e3", "e4"}; strings.Join(got, ",") != strings.Join(want, ",") {
+			t.Errorf("null limit and since = %v, want the default last three %v", got, want)
+		}
+	})
+
 	for _, tc := range []struct {
 		name, field string
 		args        map[string]any
