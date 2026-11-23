@@ -152,3 +152,62 @@ func TestFields_Projection(t *testing.T) {
 		}
 	})
 }
+
+// TestFields_WireFormAndSyntax — the HTTP boundary of fields= (US-8): every
+// successful read, whole or projected, single or list, answers with the JSON
+// Content-Type; the names of fields= may carry spaces around them; a repeated
+// fields parameter or an empty name in the list is 400 validation_error
+// (parseFields: one parameter, a comma-separated list of non-empty names).
+func TestFields_WireFormAndSyntax(t *testing.T) {
+	var called bool
+	h := fieldsRouter(&called)
+
+	t.Run("successful reads answer application/json", func(t *testing.T) {
+		for _, target := range []string{
+			"/api/v1/things/t1",
+			"/api/v1/things/t1?fields=a",
+			"/api/v1/things",
+			"/api/v1/things?fields=a",
+		} {
+			rec, obj := getJSON(t, h, http.MethodGet, target)
+			if obj == nil {
+				t.Errorf("GET %s: status %d, want 200 (body %q)", target, rec.Code, rec.Body.String())
+				continue
+			}
+			if ct := rec.Header().Get("Content-Type"); ct != "application/json" {
+				t.Errorf("GET %s: Content-Type %q, want application/json", target, ct)
+			}
+		}
+	})
+
+	t.Run("spaces around the names are not part of them", func(t *testing.T) {
+		rec, obj := getJSON(t, h, http.MethodGet, "/api/v1/things/t1?fields=%20a%20,%20b%20")
+		if obj == nil {
+			t.Fatalf("status %d, want 200 (body %q)", rec.Code, rec.Body.String())
+		}
+		if got := keysOf(obj); got != "a,b,id" {
+			t.Errorf("members %s, want a,b,id", got)
+		}
+		if string(obj["a"]) != `"a1"` || string(obj["b"]) != `"b1"` {
+			t.Errorf("values %s, want a a1, b b1", rec.Body.String())
+		}
+	})
+
+	for _, tc := range []struct{ name, query string }{
+		{"a repeated fields parameter", "fields=a&fields=b"},
+		{"an empty name between two commas", "fields=a,,b"},
+		{"a trailing comma", "fields=a,"},
+		{"a name of spaces only", "fields=a,%20%20"},
+		{"an empty list", "fields="},
+	} {
+		t.Run(tc.name+": 400", func(t *testing.T) {
+			rec, _ := getJSON(t, h, http.MethodGet, "/api/v1/things/t1?"+tc.query)
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status %d, want 400 (body %q)", rec.Code, rec.Body.String())
+			}
+			if code := problemCode(t, rec); code != "validation_error" {
+				t.Errorf("code %q, want validation_error", code)
+			}
+		})
+	}
+}
