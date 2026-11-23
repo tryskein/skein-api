@@ -97,3 +97,67 @@ func TestUsernameSuggestions_OnlyOneConventionalFree(t *testing.T) {
 		t.Errorf("suggestions = %v, want the one free conventional name dev57 among them", got)
 	}
 }
+
+// takenSet marks taken exactly the names it holds.
+type takenSet map[string]bool
+
+func (takenSet) EmailTaken(context.Context, string) (bool, error) { return false, nil }
+
+func (d takenSet) TakenUsernames(_ context.Context, cands []string) (map[string]bool, error) {
+	out := map[string]bool{}
+	for _, c := range cands {
+		out[c] = d[c]
+	}
+	return out, nil
+}
+
+// TestUsernameSuggestions_ConventionalOrder — the conventional candidates in
+// the order the contract gives them (the stem, stem2, stem-domain, stem +
+// the domain's initial, stem3 … stem9, then stem10 … stem99), the first free
+// ones first: a free conventional name is never skipped for a later one or
+// for the random fallback.
+func TestUsernameSuggestions_ConventionalOrder(t *testing.T) {
+	taken := func(names ...string) takenSet {
+		s := takenSet{}
+		for _, n := range names {
+			s[n] = true
+		}
+		return s
+	}
+	upTo := func(from, to int) []string {
+		var out []string
+		for n := from; n <= to; n++ {
+			out = append(out, "dev"+strconv.Itoa(n))
+		}
+		return out
+	}
+	conventional := append([]string{"dev", "dev-corp", "devc"}, upTo(2, 9)...)
+
+	cases := []struct {
+		name  string
+		taken takenSet
+		want  []string
+	}{
+		{"nothing taken", taken(), []string{"dev", "dev2", "dev-corp"}},
+		{"the stem and stem2 taken: the domain variants next", taken("dev", "dev2"), []string{"dev-corp", "devc", "dev3"}},
+		{"only the stem free", taken(append(upTo(2, 9), "dev-corp", "devc")...), []string{"dev", "dev10", "dev11"}},
+		{"the first ten taken: the numbered fallback from 10", taken(conventional...), []string{"dev10", "dev11", "dev12"}},
+		{"everything up to 98 taken: 99 is still offered", taken(append(conventional, upTo(10, 98)...)...), []string{"dev99"}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := suggestionsWith(t, c.taken, "dev@corp.test")
+			if len(got) < len(c.want) {
+				t.Fatalf("suggestions = %v, want them to start with %v", got, c.want)
+			}
+			if prefix := got[:len(c.want)]; strings.Join(prefix, ",") != strings.Join(c.want, ",") {
+				t.Errorf("suggestions = %v, want them to start with %v", got, c.want)
+			}
+			for _, s := range got {
+				if c.taken[s] {
+					t.Errorf("suggestion %q is taken", s)
+				}
+			}
+		})
+	}
+}
