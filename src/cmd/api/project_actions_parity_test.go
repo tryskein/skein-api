@@ -21,9 +21,16 @@ package main
 // actor's API key) — and both must give the table's answer. Requests that
 // change state are chosen idempotent (the current name, the current
 // visibility, an existing member's role) so the order of actors does not
-// change the cell. force_unlock waits for T034 (the unlock route and the
-// table's rule for it). The issue write paths answer the table since T066
+// change the cell. The issue write paths answer the table since T066
 // (sk-689.37); every such path is in issue_write_actions_test.go.
+//
+// The force_unlock row is asked in force_unlock_test.go
+// (TestForceUnlock_EveryBypassPathFollowsTheRight) on every bypass path, REST
+// and MCP, with the claim, the status and the audit event checked: vP, vPr
+// and adm0 (and admA) succeed; the member column is uAB there, because uA is
+// the holder of the claim and releases his own without the right; vnsh is
+// refused on A.members; uc¬p is refused on A.space — on A.members he does not
+// see the project at all, which is the "see the project" row above.
 
 import (
 	"bytes"
@@ -254,9 +261,6 @@ func TestProjectActions_TableIsOneInRESTAndMCP(t *testing.T) {
 					}
 				})
 			}
-			t.Run("force_unlock", func(t *testing.T) {
-				t.Skip("waiting for narrowing: T034 (the unlock route and the table's rule for force_unlock)")
-			})
 		})
 	}
 }
