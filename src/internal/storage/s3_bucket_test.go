@@ -9,7 +9,9 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
@@ -259,11 +261,31 @@ func TestEnsureBucket_CreatedBucketGetsCORS(t *testing.T) {
 	}
 }
 
+// TestNewS3Client_RejectsEmptyRegion — an empty region is refused before
+// any request reaches the storage. The endpoint is a local server that counts
+// requests and refuses each one at once (403, which minio-go does not retry),
+// and the call has a short deadline: if the early check were lost, the
+// constructor would reach the probe, get an immediate refusal that is not
+// ErrEmptyRegion, and the test would fail on its assertions, not on a timeout.
 func TestNewS3Client_RejectsEmptyRegion(t *testing.T) {
-	_, err := NewS3Client(context.Background(), S3Config{
-		Endpoint: "http://127.0.0.1:1", AccessKey: "k", SecretKey: "s", Bucket: "b",
+	var requests atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests.Add(1)
+		w.Header().Set("Content-Type", "application/xml")
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(`<?xml version="1.0" encoding="UTF-8"?><Error><Code>AccessDenied</Code><Message>denied</Message></Error>`))
+	}))
+	t.Cleanup(srv.Close)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	_, err := NewS3Client(ctx, S3Config{
+		Endpoint: srv.URL, AccessKey: "k", SecretKey: "s", Bucket: "b",
 	})
 	if !errors.Is(err, ErrEmptyRegion) {
-		t.Fatalf("NewS3Client without region = %v, want ErrEmptyRegion", err)
+		t.Errorf("NewS3Client without region = %v, want ErrEmptyRegion", err)
+	}
+	if n := requests.Load(); n != 0 {
+		t.Errorf("the storage got %d requests, want none: an empty region is refused before the probe", n)
 	}
 }
