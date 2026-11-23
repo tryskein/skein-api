@@ -1388,6 +1388,13 @@ func TestLoad_PublicAPIBoundaries(t *testing.T) {
 				t.Errorf("APIKeyMaxTTL = %s, want 8760h", cfg.APIKeyMaxTTL)
 			}
 		}},
+		{"key default TTL equal to the key max TTL, both set", map[string]string{
+			"SKEIN_API_KEY_MAX_TTL": "720h", "SKEIN_API_KEY_DEFAULT_TTL": "720h",
+		}, func(t *testing.T, cfg *Config) {
+			if cfg.APIKeyMaxTTL != 720*time.Hour || cfg.APIKeyDefaultTTL != 720*time.Hour {
+				t.Errorf("APIKeyMaxTTL = %s, APIKeyDefaultTTL = %s; want 720h, 720h", cfg.APIKeyMaxTTL, cfg.APIKeyDefaultTTL)
+			}
+		}},
 		{"shortest key default TTL", map[string]string{"SKEIN_API_KEY_DEFAULT_TTL": "1ns"}, func(t *testing.T, cfg *Config) {
 			if cfg.APIKeyDefaultTTL != time.Nanosecond {
 				t.Errorf("APIKeyDefaultTTL = %s, want 1ns", cfg.APIKeyDefaultTTL)
