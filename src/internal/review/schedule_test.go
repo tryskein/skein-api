@@ -634,3 +634,52 @@ func TestSchedule_DegenerateInputRejected(t *testing.T) {
 		t.Error("scale computed from out-of-bounds settings")
 	}
 }
+
+// TestSettings_StoredInvalidValueStopsTheSchedule — Settings may be assembled
+// from a stored row without Resolve; Validate guards that path. Each of the
+// three fields, set out of the documented range on otherwise valid settings,
+// is refused with an *InvalidSettingError naming the field and wrapping its
+// kind, and the schedule calculation (MarkAt, NextReminderAt) for either
+// category returns that same refusal instead of a moment.
+func TestSettings_StoredInvalidValueStopsTheSchedule(t *testing.T) {
+	cases := []struct {
+		name  string
+		set   func(*Settings)
+		param string
+		kind  error
+	}{
+		{"burst count below 0", func(s *Settings) { s.BurstCount = -1 }, "burstCount", ErrBurstCountOutOfRange},
+		{"burst count above 6", func(s *Settings) { s.BurstCount = 7 }, "burstCount", ErrBurstCountOutOfRange},
+		{"unaccepted interval below 15 minutes", func(s *Settings) { s.UnacceptedInterval = 14 * time.Minute }, "unacceptedIntervalMinutes", ErrIntervalTooShort},
+		{"unaccepted interval above 366 days", func(s *Settings) { s.UnacceptedInterval = 367 * 24 * time.Hour }, "unacceptedIntervalMinutes", ErrIntervalTooLong},
+		{"unreviewed interval below 15 minutes", func(s *Settings) { s.UnreviewedInterval = 0 }, "unreviewedIntervalMinutes", ErrIntervalTooShort},
+		{"unreviewed interval above 366 days", func(s *Settings) { s.UnreviewedInterval = 367 * 24 * time.Hour }, "unreviewedIntervalMinutes", ErrIntervalTooLong},
+	}
+	base := time.Date(2026, 3, 1, 9, 0, 0, 0, time.UTC)
+	check := func(t *testing.T, where string, err error, param string, kind error) {
+		t.Helper()
+		var ise *InvalidSettingError
+		if !errors.As(err, &ise) {
+			t.Fatalf("%s = %v, want an *InvalidSettingError", where, err)
+		}
+		if ise.Param != param || !errors.Is(err, kind) {
+			t.Errorf("%s = param %q, %v; want param %q wrapping %v", where, ise.Param, err, param, kind)
+		}
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			s := Defaults()
+			if err := s.Validate(); err != nil {
+				t.Fatalf("precondition: the defaults are refused: %v", err)
+			}
+			c.set(&s)
+			check(t, "Validate", s.Validate(), c.param, c.kind)
+			for _, cat := range []Category{CategoryUnaccepted, CategoryUnreviewed} {
+				_, err := s.MarkAt(cat, base, 1)
+				check(t, "MarkAt("+string(cat)+")", err, c.param, c.kind)
+				_, err = s.NextReminderAt(cat, base, time.Time{})
+				check(t, "NextReminderAt("+string(cat)+")", err, c.param, c.kind)
+			}
+		})
+	}
+}
