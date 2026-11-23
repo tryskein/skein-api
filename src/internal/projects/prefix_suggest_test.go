@@ -123,6 +123,27 @@ func TestSuggestPrefixes_OrderAndExhaustion(t *testing.T) {
 		}
 	})
 
+	t.Run("a two-word name up to the 10-character candidate", func(t *testing.T) {
+		got, err := suggestFree("Abcdefgh Ijklmnop", 0, 9, takenSet())
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := []string{"ai", "abi", "abij", "abcij", "abcijk", "abcdijk", "abcdijkl", "abcdeijkl", "abcdeijklm"}
+		if !slices.Equal(got, want) {
+			t.Errorf("got %v, want %v", got, want)
+		}
+	})
+
+	t.Run("numbers continue across the groups of candidates without a gap or a repeat", func(t *testing.T) {
+		got, err := suggestFree("App", 0, 3, takenSet(numberedTaken("app", 10)...))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if want := []string{"app11", "app12", "app13"}; !slices.Equal(got, want) {
+			t.Errorf("got %v, want %v", got, want)
+		}
+	})
+
 	t.Run("a numbered candidate cuts its base to stay within 10", func(t *testing.T) {
 		got, err := suggestFree("Supercalifragilistic", 10, 2, takenSet("supercalif"))
 		if err != nil {
