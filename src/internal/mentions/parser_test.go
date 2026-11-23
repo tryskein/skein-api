@@ -188,16 +188,73 @@ func TestParse_Cap25(t *testing.T) {
 		}
 		b.WriteString(itoa(i))
 	}
-	got := Parse(b.String())
-	if len(got) != MaxMentionsPerText {
-		t.Fatalf("Parse capped slice length = %d, want %d", len(got), MaxMentionsPerText)
+	// The §F-7 ceiling is 25 unique mentions in first-seen order: the
+	// expected result is written out from the plan, not read from the
+	// constant under test.
+	want := []string{
+		"name00", "name01", "name02", "name03", "name04",
+		"name05", "name06", "name07", "name08", "name09",
+		"name10", "name11", "name12", "name13", "name14",
+		"name15", "name16", "name17", "name18", "name19",
+		"name20", "name21", "name22", "name23", "name24",
 	}
-	// First mention is "name00", 25th is "name24".
-	if got[0] != "name00" {
-		t.Errorf("Parse[0] = %q, want %q", got[0], "name00")
+	if got := Parse(b.String()); !equalStringSlices(got, want) {
+		t.Errorf("Parse(30 unique mentions) = %v (%d), want the first 25 %v", got, len(got), want)
 	}
-	if got[24] != "name24" {
-		t.Errorf("Parse[24] = %q, want %q", got[24], "name24")
+}
+
+// TestParse_AdjacentByteBoundary pins the rule for the one byte right before
+// `@`: a word byte [0-9A-Za-z_] makes it part of a word (an address, an
+// identifier) and not a mention; any other byte starts a mention. Each input
+// has exactly that one byte before `@`, so the position right after the start
+// of the text is checked too. The bytes are the edges of every word range and
+// their ASCII neighbours just outside it.
+func TestParse_AdjacentByteBoundary(t *testing.T) {
+	cases := []struct {
+		before  string
+		mention bool
+	}{
+		{"0", false}, {"5", false}, {"9", false},
+		{"A", false}, {"M", false}, {"Z", false},
+		{"a", false}, {"m", false}, {"z", false},
+		{"_", false},
+		{"/", true}, // just below '0'
+		{":", true}, // just above '9'
+		{"@", true}, // just below 'A'
+		{"[", true}, // just above 'Z'
+		{"^", true}, // just below '_'
+		{"`", true}, // just below 'a', just above '_'
+		{"{", true}, // just above 'z'
+		{"-", true}, // a username byte, but not a word byte
+		{" ", true}, // whitespace
+		{"é", true}, // a multibyte UTF-8 letter is not a word byte
+	}
+	for _, tc := range cases {
+		t.Run("before="+tc.before, func(t *testing.T) {
+			in := tc.before + "@alice"
+			var want []string
+			if tc.mention {
+				want = []string{"alice"}
+			}
+			if got := Parse(in); !equalStringSlices(got, want) {
+				t.Errorf("Parse(%q) = %v, want %v", in, got, want)
+			}
+		})
+	}
+}
+
+// TestParse_InvalidCandidateDoesNotStopTheScan — an `@` that is not followed
+// by a username body is skipped, and the scan goes on to the next mention.
+func TestParse_InvalidCandidateDoesNotStopTheScan(t *testing.T) {
+	for _, in := range []string{
+		"@ab then @alice",
+		"@_x then @alice",
+		"@ then @alice",
+		"foo@bar then @alice",
+	} {
+		if got := Parse(in); !equalStringSlices(got, []string{"alice"}) {
+			t.Errorf("Parse(%q) = %v, want [alice]", in, got)
+		}
 	}
 }
 
