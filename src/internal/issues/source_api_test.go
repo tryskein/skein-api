@@ -54,13 +54,21 @@ func TestSourceAPI_PureRules(t *testing.T) {
 	})
 
 	t.Run("the human-driven group includes api, agent-autonomous does not", func(t *testing.T) {
-		human, _ := OriginGroupsToSources([]string{OriginHumanDriven})
+		human, humanNoFilter := OriginGroupsToSources([]string{OriginHumanDriven})
 		if !slices.Contains(human, SourceAPI) || !slices.Contains(human, SourceHuman) || !slices.Contains(human, SourceAgentDirected) {
 			t.Errorf("human-driven = %v, want human, agent_directed and api", human)
 		}
-		auto, _ := OriginGroupsToSources([]string{OriginAgentAutonomous})
-		if slices.Contains(auto, SourceAPI) {
-			t.Errorf("agent-autonomous = %v, want no api", auto)
+		if humanNoFilter {
+			t.Error("human-driven reports no filter, want an active source filter")
+		}
+		// The agent-autonomous group is exactly the autonomous source: an
+		// empty set would also have no api, and would filter every issue out.
+		auto, autoNoFilter := OriginGroupsToSources([]string{OriginAgentAutonomous})
+		if !slices.Equal(auto, []string{"agent_autonomous"}) {
+			t.Errorf("agent-autonomous = %v, want exactly [agent_autonomous]", auto)
+		}
+		if autoNoFilter {
+			t.Error("agent-autonomous reports no filter, want an active source filter")
 		}
 	})
 
