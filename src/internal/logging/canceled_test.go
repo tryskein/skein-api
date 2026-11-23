@@ -70,3 +70,73 @@ func TestClientCanceled_BelowTheLevelIsDropped(t *testing.T) {
 		t.Errorf("got %q, want nothing", buf.String())
 	}
 }
+
+// TestClientCanceled_DowngradedLineKeepsTheRecord — the INFO line a cancelled
+// request's ERROR record becomes is the same record: the attributes before the
+// error, the error itself and the ones after it are all on the line, plus the
+// marker cancel=client_canceled (the key and value the journal is filtered on).
+func TestClientCanceled_DowngradedLineKeepsTheRecord(t *testing.T) {
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	var buf bytes.Buffer
+	newTestLogger(&buf).ErrorContext(canceled, "list all issues failed",
+		"userId", "u1", "error", "counting all issues: context canceled", "projectId", "p1", "page", 3)
+	out := buf.String()
+	for _, want := range []string{
+		"level=INFO",
+		`msg="list all issues failed"`,
+		" userId=u1",
+		` error="counting all issues: context canceled"`,
+		" projectId=p1",
+		" page=3",
+		" cancel=client_canceled",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("line %q lacks %q", out, want)
+		}
+	}
+}
+
+// TestClientCanceled_LevelBoundaries — the downgraded record is written by a
+// handler whose minimum level is exactly INFO and dropped by one above it; a
+// record below ERROR is never touched by the rule: it keeps its level, its
+// fields and gets no cancel marker.
+func TestClientCanceled_LevelBoundaries(t *testing.T) {
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	t.Run("a handler at INFO writes the downgraded record", func(t *testing.T) {
+		var buf bytes.Buffer
+		slog.New(NewDualHandler(&buf, slog.LevelInfo)).ErrorContext(canceled, "x failed",
+			"error", fmt.Errorf("reading: %w", context.Canceled))
+		out := buf.String()
+		if !strings.Contains(out, "level=INFO") || !strings.Contains(out, " cancel=client_canceled") {
+			t.Errorf("got %q, want an INFO line with cancel=client_canceled", out)
+		}
+	})
+
+	for _, c := range []struct {
+		name  string
+		level slog.Level
+		want  string
+	}{
+		{"WARN", slog.LevelWarn, "level=WARN"},
+		{"INFO", slog.LevelInfo, "level=INFO"},
+		{"DEBUG", slog.LevelDebug, "level=DEBUG"},
+	} {
+		t.Run("a "+c.name+" record of a cancelled request stays as it is", func(t *testing.T) {
+			var buf bytes.Buffer
+			newTestLogger(&buf).Log(canceled, c.level, "x interrupted",
+				"userId", "u1", "error", "reading: context canceled", "projectId", "p1")
+			out := buf.String()
+			for _, want := range []string{c.want, " userId=u1", ` error="reading: context canceled"`, " projectId=p1"} {
+				if !strings.Contains(out, want) {
+					t.Errorf("line %q lacks %q", out, want)
+				}
+			}
+			if strings.Contains(out, CancelKey+"=") {
+				t.Errorf("line %q carries the cancel marker, want the record untouched", out)
+			}
+		})
+	}
+}
