@@ -31,6 +31,7 @@ package handler
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -204,9 +205,29 @@ func pathsOf(t *testing.T, obj map[string]any) [][2]string {
 	return out
 }
 
+// componentState is the stored state a refused write must not change.
+type componentState struct {
+	name, description string
+	archived          bool
+	paths             int
+}
+
+// state reads one component back over HTTP as the owner.
+func (e *compEnv) state(t *testing.T, id string) componentState {
+	t.Helper()
+	got := e.object(t, e.owner, http.MethodGet, e.base()+"/"+id, nil, http.StatusOK)
+	_, archived := got["archivedAt"]
+	return componentState{
+		name:        got["name"].(string),
+		description: got["description"].(string),
+		archived:    archived,
+		paths:       len(pathsOf(t, got)),
+	}
+}
+
 // TestComponentsREST_Lifecycle walks one component through create, read,
-// update, archive, restore and the DELETE alias, reading the stored state
-// back after every write.
+// update, archive, restore and the DELETE alias in one ordered scenario,
+// reading the stored state back after every write.
 func TestComponentsREST_Lifecycle(t *testing.T) {
 	e := newCompEnv(t)
 
@@ -221,125 +242,163 @@ func TestComponentsREST_Lifecycle(t *testing.T) {
 	}
 	item := e.base() + "/" + id
 
-	t.Run("create is stored and read back", func(t *testing.T) {
-		got := e.object(t, e.member, http.MethodGet, item, nil, http.StatusOK)
-		if got["id"] != id || got["projectId"] != e.project.String() {
-			t.Errorf("GET id/projectId = %v/%v, want %s/%s", got["id"], got["projectId"], id, e.project)
-		}
-		if got["name"] != "billing" || got["description"] != "payment flows" {
-			t.Errorf("GET name/description = %v/%v, want billing/payment flows", got["name"], got["description"])
-		}
-		if got["createdBy"] != e.owner.String() {
-			t.Errorf("GET createdBy = %v, want the creator %s", got["createdBy"], e.owner)
-		}
-		if p := pathsOf(t, got); len(p) != 1 || p[0] != [2]string{e.repo.String(), "billing/**"} {
-			t.Errorf("GET paths = %v, want one path {%s billing/**}", p, e.repo)
-		}
-		if _, archived := got["archivedAt"]; archived {
-			t.Errorf("a new component carries archivedAt = %v", got["archivedAt"])
-		}
-		if ids := e.listIDs(t, e.member, ""); !ids[id] {
-			t.Errorf("the default list (active components) misses the new component %s", id)
-		}
-	})
+	// Created: read back by a member of the project.
+	got := e.object(t, e.member, http.MethodGet, item, nil, http.StatusOK)
+	if got["id"] != id || got["projectId"] != e.project.String() {
+		t.Errorf("GET id/projectId = %v/%v, want %s/%s", got["id"], got["projectId"], id, e.project)
+	}
+	if got["name"] != "billing" || got["description"] != "payment flows" {
+		t.Errorf("GET name/description = %v/%v, want billing/payment flows", got["name"], got["description"])
+	}
+	if got["createdBy"] != e.owner.String() {
+		t.Errorf("GET createdBy = %v, want the creator %s", got["createdBy"], e.owner)
+	}
+	if p := pathsOf(t, got); len(p) != 1 || p[0] != [2]string{e.repo.String(), "billing/**"} {
+		t.Errorf("GET paths = %v, want one path {%s billing/**}", p, e.repo)
+	}
+	if _, archived := got["archivedAt"]; archived {
+		t.Errorf("a new component carries archivedAt = %v", got["archivedAt"])
+	}
+	if ids := e.listIDs(t, e.member, ""); !ids[id] {
+		t.Errorf("the member's default list misses the new component %s", id)
+	}
 
-	t.Run("patch changes only the fields it carries", func(t *testing.T) {
-		patched := e.object(t, e.owner, http.MethodPatch, item, map[string]any{
-			"name": "billing-core",
-		}, http.StatusOK)
-		if patched["name"] != "billing-core" {
-			t.Errorf("PATCH answer name = %v, want billing-core", patched["name"])
-		}
-		got := e.object(t, e.owner, http.MethodGet, item, nil, http.StatusOK)
-		if got["name"] != "billing-core" {
-			t.Errorf("GET after PATCH name = %v, want billing-core", got["name"])
-		}
-		if got["description"] != "payment flows" {
-			t.Errorf("a PATCH without description changed it to %v", got["description"])
-		}
-		if p := pathsOf(t, got); len(p) != 1 {
-			t.Errorf("a PATCH without paths changed them to %v", p)
-		}
-	})
+	// A patch changes only the fields it carries.
+	patched := e.object(t, e.owner, http.MethodPatch, item, map[string]any{"name": "billing-core"}, http.StatusOK)
+	if patched["name"] != "billing-core" {
+		t.Errorf("PATCH answer name = %v, want billing-core", patched["name"])
+	}
+	if st := e.state(t, id); st != (componentState{name: "billing-core", description: "payment flows", paths: 1}) {
+		t.Errorf("after PATCH name: %+v, want only the name changed", st)
+	}
 
-	t.Run("patch with an empty paths array clears the paths", func(t *testing.T) {
-		e.object(t, e.owner, http.MethodPatch, item, map[string]any{
-			"description": "",
-			"paths":       []any{},
-		}, http.StatusOK)
-		got := e.object(t, e.owner, http.MethodGet, item, nil, http.StatusOK)
-		if p := pathsOf(t, got); len(p) != 0 {
-			t.Errorf("GET after PATCH paths=[] = %v, want no paths", p)
-		}
-		if got["description"] != "" {
-			t.Errorf("GET after PATCH description=\"\" = %v, want empty", got["description"])
-		}
-		if got["name"] != "billing-core" {
-			t.Errorf("a PATCH without name changed it to %v", got["name"])
-		}
-	})
+	// An empty paths array and an empty description clear them.
+	e.object(t, e.owner, http.MethodPatch, item, map[string]any{"description": "", "paths": []any{}}, http.StatusOK)
+	if st := e.state(t, id); st != (componentState{name: "billing-core"}) {
+		t.Errorf("after PATCH description=\"\" paths=[]: %+v, want both cleared and the name kept", st)
+	}
 
-	t.Run("archive hides the component from the active list", func(t *testing.T) {
-		e.noContent(t, e.owner, http.MethodPost, item+"/archive")
-		got := e.object(t, e.owner, http.MethodGet, item, nil, http.StatusOK)
-		if s, _ := got["archivedAt"].(string); s == "" {
-			t.Errorf("GET after archive: archivedAt = %#v, want a timestamp", got["archivedAt"])
-		}
-		if ids := e.listIDs(t, e.owner, ""); ids[id] {
-			t.Error("the default list still shows the archived component")
-		}
-		if ids := e.listIDs(t, e.owner, "?archived=true"); !ids[id] {
-			t.Error("archived=true does not show the archived component")
-		}
-		if ids := e.listIDs(t, e.owner, "?archived=all"); !ids[id] {
-			t.Error("archived=all does not show the archived component")
-		}
-		e.refusal(t, e.owner, http.MethodPost, item+"/archive", nil,
-			http.StatusUnprocessableEntity, "already_archived")
-	})
+	// Archive hides it from the active list; a second archive is refused.
+	e.noContent(t, e.owner, http.MethodPost, item+"/archive")
+	if st := e.state(t, id); !st.archived {
+		t.Error("GET after archive: no archivedAt")
+	}
+	if ids := e.listIDs(t, e.owner, ""); ids[id] {
+		t.Error("the default list still shows the archived component")
+	}
+	e.refusal(t, e.owner, http.MethodPost, item+"/archive", nil, http.StatusUnprocessableEntity, "already_archived")
 
-	t.Run("unarchive restores the component", func(t *testing.T) {
-		e.noContent(t, e.owner, http.MethodPost, item+"/unarchive")
-		got := e.object(t, e.owner, http.MethodGet, item, nil, http.StatusOK)
-		if _, archived := got["archivedAt"]; archived {
-			t.Errorf("GET after unarchive still carries archivedAt = %v", got["archivedAt"])
-		}
-		if ids := e.listIDs(t, e.owner, ""); !ids[id] {
-			t.Error("the default list misses the restored component")
-		}
-		if ids := e.listIDs(t, e.owner, "?archived=true"); ids[id] {
-			t.Error("archived=true still shows the restored component")
-		}
-		e.refusal(t, e.owner, http.MethodPost, item+"/unarchive", nil,
-			http.StatusUnprocessableEntity, "not_archived")
-	})
+	// Unarchive restores it; a second unarchive is refused.
+	e.noContent(t, e.owner, http.MethodPost, item+"/unarchive")
+	if st := e.state(t, id); st.archived {
+		t.Error("GET after unarchive still carries archivedAt")
+	}
+	if ids := e.listIDs(t, e.owner, ""); !ids[id] {
+		t.Error("the default list misses the restored component")
+	}
+	e.refusal(t, e.owner, http.MethodPost, item+"/unarchive", nil, http.StatusUnprocessableEntity, "not_archived")
 
-	t.Run("DELETE soft-archives and keeps the row", func(t *testing.T) {
-		e.noContent(t, e.owner, http.MethodDelete, item)
-		got := e.object(t, e.owner, http.MethodGet, item, nil, http.StatusOK)
-		if s, _ := got["archivedAt"].(string); s == "" {
-			t.Errorf("GET after DELETE: archivedAt = %#v, want a timestamp", got["archivedAt"])
+	// DELETE is the soft-archive alias: the row stays, archived.
+	e.noContent(t, e.owner, http.MethodDelete, item)
+	if st := e.state(t, id); !st.archived || st.name != "billing-core" {
+		t.Errorf("GET after DELETE: %+v, want the same component archived", st)
+	}
+	e.refusal(t, e.owner, http.MethodDelete, item, nil, http.StatusUnprocessableEntity, "already_archived")
+}
+
+// TestComponentsREST_ArchivedFilter — the archived parameter of the list over
+// a project with one active and one archived component: absent and "false"
+// list the active one, "true" the archived one, "all" both.
+func TestComponentsREST_ArchivedFilter(t *testing.T) {
+	e := newCompEnv(t)
+	active := e.object(t, e.owner, http.MethodPost, e.base(), map[string]any{"name": "active"}, http.StatusCreated)["id"].(string)
+	archived := e.object(t, e.owner, http.MethodPost, e.base(), map[string]any{"name": "archived"}, http.StatusCreated)["id"].(string)
+	e.noContent(t, e.owner, http.MethodPost, e.base()+"/"+archived+"/archive")
+
+	for _, c := range []struct {
+		query string
+		want  []string
+	}{
+		{"", []string{active}},
+		{"?archived=false", []string{active}},
+		{"?archived=true", []string{archived}},
+		{"?archived=all", []string{active, archived}},
+	} {
+		got := e.listIDs(t, e.owner, c.query)
+		if len(got) != len(c.want) {
+			t.Errorf("GET list%s = %v, want exactly %v", c.query, got, c.want)
+			continue
 		}
-		if ids := e.listIDs(t, e.owner, ""); ids[id] {
-			t.Error("the default list still shows the component after DELETE")
+		for _, id := range c.want {
+			if !got[id] {
+				t.Errorf("GET list%s = %v, want exactly %v", c.query, got, c.want)
+			}
 		}
-		e.refusal(t, e.owner, http.MethodDelete, item, nil,
-			http.StatusUnprocessableEntity, "already_archived")
-	})
+	}
+}
+
+// TestComponentsREST_Lens — the lens of the list narrows the rows to the
+// components with at least one matching issue: on-me — an accepted open issue
+// someone else created and assigned to the caller; delegated — an open issue
+// the caller created and assigned to someone else. A component without such
+// an issue is in neither.
+func TestComponentsREST_Lens(t *testing.T) {
+	e := newCompEnv(t)
+	ctx := context.Background()
+	onMe := e.object(t, e.owner, http.MethodPost, e.base(), map[string]any{"name": "on-me"}, http.StatusCreated)["id"].(string)
+	delegated := e.object(t, e.owner, http.MethodPost, e.base(), map[string]any{"name": "delegated"}, http.StatusCreated)["id"].(string)
+	quiet := e.object(t, e.owner, http.MethodPost, e.base(), map[string]any{"name": "quiet"}, http.StatusCreated)["id"].(string)
+
+	var prefix string
+	if err := e.pool.QueryRow(ctx, `SELECT id_prefix FROM projects WHERE id = $1`, e.project).Scan(&prefix); err != nil {
+		t.Fatal(err)
+	}
+	attach := func(issueID, componentID string) {
+		if _, err := e.pool.Exec(ctx, `INSERT INTO issue_components (issue_id, component_id) VALUES ($1, $2)`,
+			issueID, componentID); err != nil {
+			t.Fatalf("attach %s to %s: %v", issueID, componentID, err)
+		}
+	}
+	toOwner := testsupport.SeedIssue(t, e.pool, e.project, e.member, prefix+"-1", "on the owner", "open", 2)
+	testsupport.SetAssignee(t, e.pool, toOwner, e.names[e.owner])
+	testsupport.Accept(t, e.pool, toOwner, e.owner, true)
+	attach(toOwner, onMe)
+	fromOwner := testsupport.SeedIssue(t, e.pool, e.project, e.owner, prefix+"-2", "given to the member", "open", 2)
+	testsupport.SetAssignee(t, e.pool, fromOwner, e.names[e.member])
+	attach(fromOwner, delegated)
+	plain := testsupport.SeedIssue(t, e.pool, e.project, e.owner, prefix+"-3", "nobody's", "open", 2)
+	attach(plain, quiet)
+
+	for _, c := range []struct {
+		lens string
+		want string
+	}{
+		{"on-me", onMe},
+		{"delegated", delegated},
+	} {
+		got := e.listIDs(t, e.owner, "?lens="+c.lens)
+		if len(got) != 1 || !got[c.want] {
+			t.Errorf("GET list?lens=%s = %v, want exactly [%s]", c.lens, got, c.want)
+		}
+	}
+	if got := e.listIDs(t, e.owner, ""); len(got) != 3 {
+		t.Errorf("GET list without a lens = %v, want all three components", got)
+	}
 }
 
 // TestComponentsREST_Refusals pins the status and machine code of every
-// expected refusal and checks that a refused write changed nothing.
+// expected refusal; each refused request is followed by a read showing that
+// it changed nothing.
 func TestComponentsREST_Refusals(t *testing.T) {
 	e := newCompEnv(t)
 
 	existing := e.object(t, e.owner, http.MethodPost, e.base(), map[string]any{
 		"name": "taken",
-	}, http.StatusCreated)
+	}, http.StatusCreated)["id"].(string)
 	other := e.object(t, e.owner, http.MethodPost, e.base(), map[string]any{
 		"name": "other",
-	}, http.StatusCreated)
-	item := e.base() + "/" + existing["id"].(string)
+	}, http.StatusCreated)["id"].(string)
+	item := e.base() + "/" + existing
 
 	// A component of another project, addressed through this project's path.
 	foreignProject, _ := testsupport.SeedProject(t, e.pool, e.owner, "compforeign")
@@ -347,6 +406,8 @@ func TestComponentsREST_Refusals(t *testing.T) {
 
 	missing := uuid.Must(uuid.NewV7()).String()
 	missingItem := e.base() + "/" + missing
+	wantExisting := componentState{name: "taken"}
+	wantOther := componentState{name: "other"}
 	before := e.componentCount(t)
 
 	tests := []struct {
@@ -401,7 +462,7 @@ func TestComponentsREST_Refusals(t *testing.T) {
 		// Business refusals.
 		{"create with a taken name", e.owner, http.MethodPost, e.base(),
 			map[string]any{"name": "taken"}, http.StatusUnprocessableEntity, "component_name_taken"},
-		{"rename onto a taken name", e.owner, http.MethodPatch, e.base() + "/" + other["id"].(string),
+		{"rename onto a taken name", e.owner, http.MethodPatch, e.base() + "/" + other,
 			map[string]any{"name": "taken"}, http.StatusUnprocessableEntity, "component_name_taken"},
 
 		// Unknown component.
@@ -449,46 +510,15 @@ func TestComponentsREST_Refusals(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			e.refusal(t, tc.user, tc.method, tc.path, tc.body, tc.want, tc.wantCode)
+			if got := e.componentCount(t); got != before {
+				t.Errorf("components in the project = %d after the refusal, want %d", got, before)
+			}
+			if st := e.state(t, existing); st != wantExisting {
+				t.Errorf("the addressed component after the refusal: %+v, want %+v", st, wantExisting)
+			}
+			if st := e.state(t, other); st != wantOther {
+				t.Errorf("the other component after the refusal: %+v, want %+v", st, wantOther)
+			}
 		})
 	}
-
-	t.Run("refused writes changed nothing", func(t *testing.T) {
-		if got := e.componentCount(t); got != before {
-			t.Errorf("components in the project = %d after the refusals, want %d", got, before)
-		}
-		got := e.object(t, e.owner, http.MethodGet, item, nil, http.StatusOK)
-		if got["name"] != "taken" {
-			t.Errorf("name = %v after refused patches, want taken", got["name"])
-		}
-		if _, archived := got["archivedAt"]; archived {
-			t.Errorf("a refused archive archived the component: archivedAt = %v", got["archivedAt"])
-		}
-		if p := pathsOf(t, got); len(p) != 0 {
-			t.Errorf("a refused patch stored paths %v", p)
-		}
-		o := e.object(t, e.owner, http.MethodGet, e.base()+"/"+other["id"].(string), nil, http.StatusOK)
-		if o["name"] != "other" {
-			t.Errorf("the refused rename changed the other component to %v", o["name"])
-		}
-	})
-
-	t.Run("a known lens is accepted", func(t *testing.T) {
-		for _, lens := range []string{"on-me", "delegated"} {
-			code, out := e.do(t, e.owner, http.MethodGet, e.base()+"?lens="+lens, nil)
-			if code != http.StatusOK {
-				t.Errorf("GET list?lens=%s = %d %v, want 200", lens, code, out)
-				continue
-			}
-			if _, ok := out.([]any); !ok {
-				t.Errorf("GET list?lens=%s: body %#v is not a JSON array", lens, out)
-			}
-		}
-	})
-
-	t.Run("a member reads the components", func(t *testing.T) {
-		e.object(t, e.member, http.MethodGet, item, nil, http.StatusOK)
-		if ids := e.listIDs(t, e.member, ""); !ids[existing["id"].(string)] {
-			t.Error("the member's list misses the project's component")
-		}
-	})
 }
