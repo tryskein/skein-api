@@ -155,7 +155,9 @@ The profile is `.progon/api.toml`; run from the repository root:
 `integ` starts a `pgvector/pgvector:pg18` fixture with `pg_trgm` and `vector`,
 applies `src/migrations` with golang-migrate and runs the packages serially
 (`-p 1`, set in the profile). `mutation` runs gomutants with one worker and
-`GOFLAGS=-p=1`; a full run takes hours, so name packages or use `--since`.
+`GOFLAGS=-p=1` against the same Postgres fixture and migrations as `integ`, so
+DB-backed tests take part; a full run takes hours, so name packages or use
+`--since`.
 Python runner tests are not part of the profile; run them as described above.
 
 ### Project specifics

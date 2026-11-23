@@ -53,13 +53,36 @@ PGDATA = "/var/lib/postgresql/data/pgdata"
 POSTGRES_INITDB_ARGS = "--locale-provider=builtin --builtin-locale=C.UTF-8 --lc-collate=C.UTF-8 --lc-ctype=C.UTF-8"
 
 # Mutation testing with gomutants (needs Go 1.26+). One worker at a time:
-# the packages are not safe to mutate in parallel.
+# the packages are not safe to mutate in parallel. The same Postgres fixture
+# and migrations as integ, so DB-backed tests take part in the measurement.
 [kind.mutation]
 adapter = "gomutants"
+prepare = [
+  "go install -tags postgres github.com/golang-migrate/migrate/v4/cmd/migrate@v4.20.1",
+  "\"$(go env GOPATH)/bin/migrate\" -path migrations -database \"$TEST_DATABASE_URL\" up",
+]
 cpu = 4
 memory_mib = 4096
 timeout_seconds = 7200
 [kind.mutation.env]
 GOFLAGS = "-buildvcs=false -p=1"
+TEST_DATABASE_URL = "postgres://skein:test@pg:5432/skein?sslmode=disable"
 [kind.mutation.options]
 workers = 1
+[[kind.mutation.fixture]]
+name = "pg"
+image = "pgvector/pgvector:pg18"
+pull = true
+cpu = 1
+memory_mib = 2048
+tmpfs = ["/var/lib/postgresql/data"]
+ready = ["pg_isready", "-U", "skein", "-d", "skein", "-h", "127.0.0.1"]
+init = [
+  ["psql", "-v", "ON_ERROR_STOP=1", "-U", "skein", "-d", "skein", "-c", "CREATE EXTENSION IF NOT EXISTS pg_trgm; CREATE EXTENSION IF NOT EXISTS vector;"],
+]
+[kind.mutation.fixture.env]
+POSTGRES_USER = "skein"
+POSTGRES_PASSWORD = "test"
+POSTGRES_DB = "skein"
+PGDATA = "/var/lib/postgresql/data/pgdata"
+POSTGRES_INITDB_ARGS = "--locale-provider=builtin --builtin-locale=C.UTF-8 --lc-collate=C.UTF-8 --lc-ctype=C.UTF-8"
