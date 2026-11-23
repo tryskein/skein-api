@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"strconv"
 	"sync/atomic"
@@ -302,6 +303,100 @@ FROM generate_series(1, 101) g`, actor, projectID, issueID); err != nil {
 	if len(env.Notifications) != 100 {
 		t.Fatalf("expected exactly 100 rows (clamp applied over 101 eligible), got %d", len(env.Notifications))
 	}
+}
+
+// TestAgentPoll_DefaultAndMinimalPages — the page size of the poll as the
+// endpoint documents it ("limit 1..100, default 50"): without limit a page is
+// exactly 50 rows over a backlog of 51; limit=1 is a valid page of one row;
+// the cursor each page returns resumes right after its last row, so the pages
+// neither repeat nor skip a row.
+func TestAgentPoll_DefaultAndMinimalPages(t *testing.T) {
+	pool := newDashboardTestPool(t)
+	caller, _ := seedDashboardUser(t, pool, "user")
+	actor, _ := seedDashboardUser(t, pool, "user")
+	apRegisterRowCleanup(t, pool, caller, actor)
+	projectID, _ := seedDashboardProject(t, pool, caller)
+
+	const issueID = "appage1"
+	ctx := context.Background()
+	if _, err := pool.Exec(ctx, `
+INSERT INTO events (occurred_at, type, entity_type, entity_id, project_id,
+                    actor, actor_user_id, actor_type, payload)
+SELECT now() - interval '5 minutes', 'issue.status_changed', 'issue', $3,
+       $2, 'tester', $1, 'human', '{}'::jsonb
+FROM generate_series(1, 51) g`, actor, projectID, issueID); err != nil {
+		t.Fatalf("bulk seed: %v", err)
+	}
+
+	h := NewAgentPollHandler(pool, 5*time.Second)
+	claims := apMintClaims(t, pool, monitorcreds.Claims{
+		UserID:       caller,
+		ProjectID:    projectID,
+		ScopeIssueID: issueID,
+		EventTypes:   []string{"issue.status_changed"},
+	})
+	page := func(query string) pollEnvelope {
+		t.Helper()
+		rec := doPoll(t, h, claims, query)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("poll %s: status = %d, want 200 (body=%s)", query, rec.Code, rec.Body.String())
+		}
+		var env pollEnvelope
+		if err := json.Unmarshal(rec.Body.Bytes(), &env); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		return env
+	}
+	after := func(env pollEnvelope) string {
+		return "since_ts=" + url.QueryEscape(env.Cursor.TS.Format(time.RFC3339Nano)) +
+			"&since_id=" + strconv.FormatInt(env.Cursor.ID, 10)
+	}
+	ids := func(env pollEnvelope) []int64 {
+		out := make([]int64, 0, len(env.Notifications))
+		for _, n := range env.Notifications {
+			out = append(out, n.ID)
+		}
+		return out
+	}
+	const fromStart = "since_ts=1970-01-01T00:00:00Z&since_id=0"
+
+	t.Run("without limit a page is 50 rows and the cursor resumes after them", func(t *testing.T) {
+		first := page(fromStart)
+		if len(first.Notifications) != 50 {
+			t.Fatalf("default page has %d rows, want 50", len(first.Notifications))
+		}
+		firstIDs := ids(first)
+		if last := firstIDs[len(firstIDs)-1]; first.Cursor.ID != last {
+			t.Errorf("cursor id = %d, want the last row's id %d", first.Cursor.ID, last)
+		}
+		second := page(after(first))
+		if len(second.Notifications) != 1 {
+			t.Fatalf("the page after the default page has %d rows, want the 1 left", len(second.Notifications))
+		}
+		for _, id := range firstIDs {
+			if id == second.Notifications[0].ID {
+				t.Fatalf("row %d is on both pages", id)
+			}
+		}
+	})
+
+	t.Run("limit=1 pages one row at a time without repeats", func(t *testing.T) {
+		all := ids(page(fromStart + "&limit=100"))
+		if len(all) != 51 {
+			t.Fatalf("the whole backlog has %d rows, want 51", len(all))
+		}
+		query := fromStart
+		for i := 0; i < 3; i++ {
+			env := page(query + "&limit=1")
+			if len(env.Notifications) != 1 {
+				t.Fatalf("page %d with limit=1 has %d rows, want 1", i, len(env.Notifications))
+			}
+			if got := env.Notifications[0].ID; got != all[i] {
+				t.Errorf("page %d with limit=1 = row %d, want row %d", i, got, all[i])
+			}
+			query = after(env)
+		}
+	})
 }
 
 // TestAgentPoll_FloorHonored proves the handler passes claims.CreatedAt to the
