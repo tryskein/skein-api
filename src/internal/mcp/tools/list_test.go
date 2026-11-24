@@ -914,3 +914,58 @@ func TestList_CrossProjectSpaceFilter(t *testing.T) {
 		t.Errorf("project + space: error %v, want %s", code, ErrCodeValidationError)
 	}
 }
+
+// sk-1086 — in a project `q` was silently ignored and the whole project came
+// back, as if it had matched. The project-scoped listing has no full-text
+// search, so `q` is refused like `space`, with validation_error.
+func TestList_ProjectModeRefusesQ(t *testing.T) {
+	pool := newTestPool(t)
+	owner, _ := seedUser(t, pool, "admin")
+	pid, prefix := seedProject(t, pool, owner, "lsq")
+	seedIssue(t, pool, pid, owner, prefix+"-1", "issue 1", "open", 2)
+
+	req := mcpgo.CallToolRequest{}
+	req.Params.Arguments = map[string]any{"project": pid.String(), "q": "nothing matches this"}
+	res, err := handleList(pool, issues.NewStore(pool), projects.NewStore(pool), nil)(withCtx(t, owner, "admin"), req)
+	if err != nil {
+		t.Fatalf("handler error: %v", err)
+	}
+	if !res.IsError {
+		t.Fatalf("project + q accepted: %+v", extractToolJSON(t, res))
+	}
+	if code := extractToolJSON(t, res)["error"]; code != ErrCodeValidationError {
+		t.Errorf("project + q: error %v, want %s", code, ErrCodeValidationError)
+	}
+}
+
+// sk-1086 — in a project `type` was silently ignored and every type came
+// back. The project listing filters by type, as cross-project mode does.
+func TestList_ProjectModeFiltersByType(t *testing.T) {
+	pool := newTestPool(t)
+	owner, _ := seedUser(t, pool, "admin")
+	pid, prefix := seedProject(t, pool, owner, "lst")
+	bug := seedIssue(t, pool, pid, owner, prefix+"-1", "a bug", "open", 2)
+	task := seedIssue(t, pool, pid, owner, prefix+"-2", "a task", "open", 2)
+	if _, err := pool.Exec(context.Background(),
+		`UPDATE issues SET type = 'bug' WHERE id = $1`, bug); err != nil {
+		t.Fatalf("make %s a bug: %v", bug, err)
+	}
+
+	ids := listItemIDs(t, callListTool(t, pool, owner, map[string]any{"project": pid.String(), "type": "bug"}))
+	if len(ids) != 1 || ids[0] != bug {
+		t.Fatalf("type=bug lists %v, want only %s (not the task %s)", ids, bug, task)
+	}
+
+	req := mcpgo.CallToolRequest{}
+	req.Params.Arguments = map[string]any{"project": pid.String(), "type": "story"}
+	res, err := handleList(pool, issues.NewStore(pool), projects.NewStore(pool), nil)(withCtx(t, owner, "admin"), req)
+	if err != nil {
+		t.Fatalf("handler error: %v", err)
+	}
+	if !res.IsError {
+		t.Fatalf("an unknown type was accepted: %+v", extractToolJSON(t, res))
+	}
+	if code := extractToolJSON(t, res)["error"]; code != ErrCodeValidationError {
+		t.Errorf("unknown type: error %v, want %s", code, ErrCodeValidationError)
+	}
+}

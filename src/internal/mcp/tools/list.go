@@ -70,8 +70,10 @@ func RegisterList(s *server.MCPServer, pool *pgxpool.Pool, issuesStore *issues.S
 				"issue whole with skein_show.\n\n"+
 				"Two modes:\n"+
 				"  - Project-scoped (default): pass `project` — paginated list "+
-				"of issues in that one project, with status / priority / "+
-				"assignee / labels / parent / source / text / pinned filters.\n"+
+				"of issues in that one project, with status / priority / type / "+
+				"assignee / labels / parent / source / text / pinned filters "+
+				"(no `q`: use `text` for a title fragment, crossProject for "+
+				"full-text).\n"+
 				"  - Cross-project: pass `crossProject: true` (omit `project`) — "+
 				"paginated list of every issue visible to the caller across "+
 				"every project they can see. Supports an FTS `q` over title + "+
@@ -101,13 +103,14 @@ func RegisterList(s *server.MCPServer, pool *pgxpool.Pool, issuesStore *issues.S
 				"`spaceId`."),
 		),
 		mcpgo.WithString("q",
-			mcpgo.Description("Full-text search query (cross-project mode only). "+
+			mcpgo.Description("Full-text search query (cross-project mode only; "+
+				"refused with a project — use `text` there for a title fragment). "+
 				"Matches against title + description + acceptance_criteria + "+
 				"design + notes via tsvector (ru + en). Exact issue id matches "+
 				"(e.g. \"demo-2.5\") are boosted to the top."),
 		),
 		mcpgo.WithString("type",
-			mcpgo.Description("Single type filter (cross-project mode only). "+
+			mcpgo.Description("Single type filter, in both modes. "+
 				"One of bug | feature | task | epic | chore | decision | idea | note."),
 			mcpgo.Enum("bug", "feature", "task", "epic", "chore", "decision", "idea", "note"),
 		),
@@ -231,8 +234,8 @@ func handleList(pool *pgxpool.Pool, issuesStore *issues.Store, projectsStore *pr
 
 		// Cross-project mode short-circuit — drives the new shell's "All
 		// projects" Tasks column. Project handle is forbidden in this
-		// mode (visibility-filtered already); accept `q`, `type` and the
-		// shared status/origin/assignee/createdBy/acceptedAt filters.
+		// mode (visibility-filtered already); accept `q`, `space` and the
+		// shared type/status/origin/assignee/createdBy/acceptedAt filters.
 		if req.GetBool("crossProject", false) {
 			if strings.TrimSpace(req.GetString("project", "")) != "" {
 				return skmcp.ToolError(ErrCodeValidationError,
@@ -243,6 +246,13 @@ func handleList(pool *pgxpool.Pool, issuesStore *issues.Store, projectsStore *pr
 		if strings.TrimSpace(req.GetString("space", "")) != "" {
 			return skmcp.ToolError(ErrCodeValidationError,
 				"space applies only when crossProject=true (a project already names its space)", nil), nil
+		}
+		// sk-1086: the project-scoped listing has no full-text search, so
+		// `q` is refused rather than silently ignored.
+		if strings.TrimSpace(req.GetString("q", "")) != "" {
+			return skmcp.ToolError(ErrCodeValidationError,
+				"q applies only when crossProject=true (in a project, use text for a title fragment, "+
+					"or crossProject=true for full-text search)", nil), nil
 		}
 
 		project, err := req.RequireString("project")
@@ -270,6 +280,16 @@ func handleList(pool *pgxpool.Pool, issuesStore *issues.Store, projectsStore *pr
 				canon = append(canon, v)
 			}
 			args.Statuses = canon
+		}
+
+		// sk-1086: the store filters a project by type (a set); this tool
+		// offers one type, the same single value as cross-project mode.
+		if v := strings.TrimSpace(req.GetString("type", "")); v != "" {
+			canon, vErr := issues.ValidateType(v)
+			if vErr != nil {
+				return skmcp.ToolError(ErrCodeValidationError, vErr.Error(), nil), nil
+			}
+			args.Types = []string{canon}
 		}
 
 		if v, ok := req.GetArguments()["priority"]; ok && v != nil {
