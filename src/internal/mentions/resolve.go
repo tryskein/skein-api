@@ -14,7 +14,7 @@ import (
 // Querier is the minimal pgx surface Resolve needs. Both *pgxpool.Pool
 // and pgx.Tx satisfy this contract (Query is on both). Letting Resolve
 // accept either keeps the write path inside the source mutation's
-// SERIALIZABLE tx (atomicity for the watcher graph) while letting the
+// SERIALIZABLE tx (the mention events and notifications commit with it) while letting the
 // read path (GetIssue / ListComments hydration) go straight against
 // the pool — no spurious tx for a pure SELECT.
 type Querier interface {
@@ -23,8 +23,8 @@ type Querier interface {
 
 // ResolvedUser is one entry in the Resolve() result. Username is the
 // lowercase canonical form (matches users.username); UserID is the
-// users.id that the mention resolves to. Callers feed this into
-// AddIssueWatcher and the WriteMentionNotification helper.
+// users.id that the mention resolves to. Callers feed this into the
+// mention events and the WriteMentionNotification helper.
 type ResolvedUser struct {
 	Username string
 	UserID   uuid.UUID
@@ -42,7 +42,7 @@ type ResolvedUser struct {
 //     but the DB stores lowercase so we lowercase the input first).
 //
 //  2. The user is NOT deactivated (`deactivated_at IS NULL`). A
-//     deactivated user has no inbox and shouldn't accumulate watcher /
+//     deactivated user has no inbox and shouldn't accumulate
 //     notification rows that would re-fire on reactivation.
 //
 //  3. The user sees projectID now (authz.RecipientEligibleExpr — the
@@ -80,8 +80,8 @@ func Resolve(
 	// captures only [a-z0-9_-]. We pass the slice directly — pgx maps it
 	// to a Postgres text[] which the = ANY($2) predicate consumes.
 	// A mention target passes the recipient filter of authz (sk-674.18
-	// T010): an active user who sees the project — deactivated users stay
-	// out of the watcher graph (see ResolvedUser), and the reach of an admin
+	// T010): an active user who sees the project — deactivated users get
+	// no mention notification (see Resolve), and the reach of an admin
 	// is the access relation's, not a role arm here.
 	//
 	// INV-9 (sk-674.18 T027): the person must also belong to the issue's
@@ -164,8 +164,9 @@ SELECT u.username, u.id, `+person.StatusInProjectExpr("u", "$1::uuid")+`
 }
 
 // FilterOutSelf returns a new slice with the actor's own user removed.
-// Plan §F-5: a user mentioning themselves doesn't get a notification or
-// auto-watch (matches the self-action exclusion in FanOut). actorID ==
+// Plan §F-5: a user mentioning themselves doesn't get a notification
+// (matches the self-action exclusion in FanOut); the caller decides whose
+// mention that is (issues.selfMentionSuppressed). actorID ==
 // uuid.Nil leaves the slice unchanged — system events have no actor.
 //
 // Order is preserved. Returns the input slice itself when no filter
@@ -280,9 +281,9 @@ func HydrateManyWithParses(
 // Diff returns the set difference (newSet \ oldSet) by username — the
 // usernames that appear in `newCandidates` but not in `oldCandidates`.
 // Plan §F-9 / R4.3b PatchIssue: only newly-introduced mentions trigger
-// notifications and auto-watches; mentions already present in the old
-// text are no-ops (the user is presumably already watching, and we
-// don't want a re-fire on every PATCH that touches the same field).
+// notifications; mentions already present in the old text are no-ops
+// (the user was notified when they were introduced, and we don't want a
+// re-fire on every PATCH that touches the same field).
 //
 // Inputs are expected to be Parse() output: lowercase, deduplicated,
 // first-seen order. Output preserves the order of newCandidates.

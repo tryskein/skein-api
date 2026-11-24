@@ -1118,9 +1118,10 @@ SET reasons =
 //     eventID.
 //
 //  3. Have skipped a human's self-mention (actor == recipient) per plan
-//     §F-5 before calling; an agent naming its own owner is delivered
-//     (issues.selfMentionSuppressed). This helper does NOT re-check actor
-//     identity.
+//     §F-5 before calling; an agent naming its own owner is not skipped
+//     (issues.selfMentionSuppressed) and is handled like any recipient,
+//     the preferences below included. This helper does NOT re-check
+//     actor identity.
 //
 // projectID is denormalised onto the notifications row so the inbox
 // query's project filter joins cheaply (mirrors the FanOut INSERT).

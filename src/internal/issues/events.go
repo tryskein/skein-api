@@ -132,8 +132,9 @@ const (
 	// new_data={"body":<new>,"id":...,"issueId":...}. Authorship columns
 	// are never rewritten; the editor is recorded only via the event
 	// actor. Newly-introduced @mentions in the edited body fire the same
-	// comment.mention + autowatch path AddComment uses (mentions removed
-	// in the edit are NOT un-notified).
+	// comment.mention event and addressed notification AddComment writes,
+	// with no subscription (mentions removed in the edit are NOT
+	// un-notified).
 	EventCommentEdited  = "comment.edited"
 	EventCommentDeleted = "comment.deleted"
 
@@ -567,8 +568,8 @@ func writeMentionEvent(
 // way, since the frontend still wants to render @self as a clickable
 // mention.
 //
-// Inline in the source mutation's tx — atomicity is load-bearing for
-// the watcher-graph invariant (plan §F-13).
+// Inline in the source mutation's tx (plan §F-13): the events and
+// notifications commit or roll back with the comment.
 func emitCommentMentions(
 	ctx context.Context,
 	tx pgx.Tx,

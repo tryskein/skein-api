@@ -1058,8 +1058,8 @@ ON CONFLICT DO NOTHING`, chosenID, label); err != nil {
 
 		// Step 9: R4.3 — scan description / notes / acceptance_criteria
 		// / design for @username mentions, resolve against project
-		// membership, auto-watch, emit issue.mention events, and write
-		// directed notifications. Inline in the SERIALIZABLE tx (plan
+		// membership, emit issue.mention events, and write directed
+		// notifications — no subscription (INV-8). Inline in the SERIALIZABLE tx (plan
 		// §F-13) so a mention failure rolls back the issue create.
 		if err := HandleIssueMentions(ctx, tx, chosenID, projectID, actor,
 			IssueMentionTexts{
@@ -4921,11 +4921,12 @@ RETURNING id, issue_id, author, author_user_id, author_type, author_kind, body, 
 		}
 
 		// R4.3 — parse @username mentions in the comment body, resolve
-		// against project membership (admin bypass), auto-watch each
-		// resolved user with reason='mention', and write directed
-		// notification rows. Inline in the same SERIALIZABLE tx (plan
-		// §F-13) so a mention failure rolls back the comment write —
-		// atomicity is load-bearing for the watcher graph invariant.
+		// them to the people who may be named here (mentions.Resolve) and,
+		// per resolved person, write the comment.mention event and the
+		// addressed notification (emitCommentMentions). No subscription is
+		// created (US-8 / INV-8). Inline in the same SERIALIZABLE tx (plan
+		// §F-13) so a mention failure rolls back the comment write — the
+		// events and notifications never outlive or miss the comment.
 		//
 		// We capture the resolved set into the returned dto.Mentions
 		// using the same tx (no re-resolve after commit). The frontend
@@ -4937,10 +4938,13 @@ RETURNING id, issue_id, author, author_user_id, author_type, author_kind, body, 
 		if err != nil {
 			return err
 		}
-		// A human's self-mention is excluded from notifications (an
-		// agent naming its own owner is delivered — selfMentionSuppressed)
-		// but every mention remains in the wire-DTO mentions list — the
-		// frontend still renders @self as a clickable mention.
+		// A human's self-mention is left out of the notifications; an
+		// agent naming its own owner goes the normal mention-notification
+		// way (selfMentionSuppressed), where the owner's feed and push
+		// toggles still decide whether a row is written. Every resolved
+		// mention, a self-mention included, stays in the wire-DTO mentions
+		// list — the frontend still renders @self as a clickable mention. A
+		// name Resolve does not accept is in neither.
 		if err := emitCommentMentions(ctx, tx, commentID, issueID, projectID, actor, resolved); err != nil {
 			return err
 		}
@@ -5071,8 +5075,9 @@ SELECT c.id, c.issue_id, c.author, c.author_user_id, c.author_type, c.author_kin
 // Emits EventCommentEdited (old_data={"body":<old>},
 // new_data={"body":<new>,"id":...,"issueId":...}). @mentions newly
 // introduced in the edited body (present in new, absent in old) run the
-// same comment.mention emit + auto-watch path AddComment uses; mentions
-// removed by the edit are NOT un-notified.
+// same comment.mention event and addressed-notification path AddComment
+// uses, with no subscription; mentions removed by the edit are NOT
+// un-notified.
 func (s *Store) UpdateComment(
 	ctx context.Context,
 	commentID uuid.UUID,
