@@ -2,6 +2,8 @@ package issues
 
 import (
 	"errors"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -299,5 +301,69 @@ func TestAccept_AssigneeIsUUIDHandle_OwnerCanAccept(t *testing.T) {
 			got = *accepted.AcceptedBy
 		}
 		t.Fatalf("acceptedBy = %v, want %v", got, owner)
+	}
+}
+
+// TestClaim_OnBehalfOverrideOfALabel: a handle that names no user is a label,
+// and the claim-on-behalf branch compares it with the override by the same
+// rule as every "same assignee?" question in this package: two labels are
+// the same assignee when they differ only in case, and a label is never the
+// same assignee as a real user, whichever side holds it.
+func TestClaim_OnBehalfOverrideOfALabel(t *testing.T) {
+	pool := newTestPool(t)
+	admin := seedUser(t, pool)
+	adminName := readUsername(t, pool, admin)
+	bob := seedUser(t, pool)
+	bobName := readUsername(t, pool, bob)
+	pid, prefix := seedProject(t, pool, admin)
+	addMember(t, pool, pid, bob, admin)
+	store := NewStore(pool)
+
+	label := "ghost-" + uuid.Must(uuid.NewRandom()).String()[:8]
+	otherLabel := "ghost-" + uuid.Must(uuid.NewRandom()).String()[:8]
+	upperLabel := strings.ToUpper(label)
+
+	cases := []struct {
+		name, assigned, override string
+		same                     bool
+	}{
+		{"one label in two cases", label, upperLabel, true},
+		{"two different labels", label, otherLabel, false},
+		{"a label, then a user", label, bobName, false},
+		{"a user, then a label", bobName, label, false},
+	}
+	for i, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			assigned := c.assigned
+			dto, err := store.CreateIssue(t.Context(), pid, prefix, "counter",
+				CreateIssueInput{Title: "label override " + c.name, Type: "task", Priority: 2, Assignee: &assigned},
+				admin, HumanActor(admin, adminName))
+			if err != nil {
+				t.Fatalf("CreateIssue: %v", err)
+			}
+			override := c.override
+			claimed, err := store.Claim(t.Context(), ClaimInput{
+				ID:               dto.ID,
+				SessionID:        "sess-label-override-" + strconv.Itoa(i),
+				OptionalAssignee: &override,
+				Actor:            HumanActor(admin, adminName),
+			})
+			if c.same {
+				if err != nil {
+					t.Fatalf("Claim(%q over %q): %v, want the same assignee", c.override, c.assigned, err)
+				}
+				if claimed.Assignee == nil || *claimed.Assignee != c.override {
+					t.Fatalf("assignee = %v, want %q (override applies)", claimed.Assignee, c.override)
+				}
+				return
+			}
+			var ac *AlreadyClaimedError
+			if !errors.As(err, &ac) {
+				t.Fatalf("Claim(%q over %q) err = %v, want AlreadyClaimedError", c.override, c.assigned, err)
+			}
+			if ac.Branch != "assignee_vs_override" {
+				t.Fatalf("branch = %q, want assignee_vs_override", ac.Branch)
+			}
+		})
 	}
 }
