@@ -882,10 +882,15 @@ func TestRace_ProjectFilter_CommitsMetric(t *testing.T) {
 
 	now := time.Now().UTC()
 
-	// In-scope: 3 commits on an issue in `proj`.
+	// In-scope: 3 commits on an issue in `proj`. The issue is created two
+	// days before now, as in real data where a commit is linked to an
+	// issue that already exists: Race starts the window at the UTC day of
+	// the reach's first event, so without this event a run before 03:00
+	// UTC would seed commits on the previous UTC day, outside the window.
 	{
 		issueID := "pf-commits-in-" + uuid.Must(uuid.NewRandom()).String()[:8]
 		seedDashboardIssue(t, pool, proj, caller, issueID, "human")
+		seedRaceCreatedEvent(t, pool, issueID, proj, callerUname, caller, now.Add(-48*time.Hour))
 		for i := 0; i < 3; i++ {
 			seedRaceIssueCommit(t, pool, issueID, caller, now.Add(-time.Duration(i+1)*time.Hour))
 		}
