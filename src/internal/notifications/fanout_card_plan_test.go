@@ -252,8 +252,9 @@ const cardPlanBackground = 20000
 const cardPlanBackgroundUsers = 100000
 
 // seedCardPlanBackgroundUsers adds cardPlanBackgroundUsers plain users,
-// members of nothing, and removes them at cleanup.
-func seedCardPlanBackgroundUsers(t *testing.T, pool *pgxpool.Pool) {
+// members of nothing, removes them at cleanup and returns the username
+// prefix they share.
+func seedCardPlanBackgroundUsers(t *testing.T, pool *pgxpool.Pool) string {
 	t.Helper()
 	tag := "cpbu" + strings.ReplaceAll(uuid.Must(uuid.NewRandom()).String()[:8], "-", "")
 	t.Cleanup(func() {
@@ -267,12 +268,24 @@ SELECT gen_random_uuid(), $1 || g || '@test.local', $1 || g, $1 || g, 'user', 'f
 			t.Fatalf("seed background users: %v", err)
 		}
 	}
+	return tag
 }
 
+// cardPlanBackground issues each get this many watchers from the background
+// users, unrelated to the corpus. The fan-out probes issue_watchers by issue,
+// and the corpus alone is a few thousand rows. Each run deletes the
+// 200 000-row corpus of the 1 000-subscription measurement, and the pages it
+// leaves stay in the table. On a later run on the same database the small
+// corpus would lie spread over those pages (2 200 rows in 2 887 pages,
+// measured), the planner would estimate a sequential pass cheaper than the
+// probes, and the Seq Scan gate would judge the fixture the earlier run left.
+const cardPlanBackgroundWatchersPerIssue = 5
+
 // seedCardPlanBackground adds cardPlanBackground issues in parent-child
-// chains, unrelated to the corpus; the project's cleanup removes them and
-// their edges.
-func seedCardPlanBackground(t *testing.T, pool *pgxpool.Pool, projectID, owner uuid.UUID, tag string) {
+// chains, unrelated to the corpus, and their watchers from the background
+// users (prefix usersTag); the project's cleanup removes the issues, their
+// edges and, by cascade, their watchers.
+func seedCardPlanBackground(t *testing.T, pool *pgxpool.Pool, projectID, owner uuid.UUID, tag, usersTag string) {
 	t.Helper()
 	ctx := context.Background()
 	prefix := "cpbg" + tag + strings.ReplaceAll(uuid.Must(uuid.NewRandom()).String()[:8], "-", "")
@@ -292,17 +305,24 @@ SELECT $1 || '-b' || g, $1 || '-b' || (g - 1), 'parent-child', '{}'::jsonb, 1, $
  WHERE g % 20 <> 1`, prefix, owner, cardPlanBackground); err != nil {
 		t.Fatalf("seed background edges: %v", err)
 	}
+	if _, err := pool.Exec(ctx, `
+INSERT INTO issue_watchers (issue_id, user_id, reasons, since, scope)
+SELECT $1 || '-b' || (1 + (n - 1) % $3), u.id, ARRAY['manual']::text[], now(), 'issue'
+  FROM (SELECT id, row_number() OVER (ORDER BY id) AS n FROM users WHERE username LIKE $2 || '%') u
+ WHERE n <= $3 * $4`, prefix, usersTag, cardPlanBackground, cardPlanBackgroundWatchersPerIssue); err != nil {
+		t.Fatalf("seed background watchers: %v", err)
+	}
 }
 
 // measureCardPlan runs one fan-out on the leaf, captures its statements, and
 // returns the summed pages of their EXPLAIN (ANALYZE, BUFFERS) re-runs and
 // the guarded Seq Scans found. It also checks that the fan-out wrote every
 // recipient's row with the root as card, so the measurement is of real work.
-func measureCardPlan(t *testing.T, pool *pgxpool.Pool, capture *cardPlanCapture, tag string, subs int) (int64, []string) {
+func measureCardPlan(t *testing.T, pool *pgxpool.Pool, capture *cardPlanCapture, usersTag, tag string, subs int) (int64, []string) {
 	t.Helper()
 	ctx := context.Background()
 	projectID, owner, root, leaf := seedCardPlanCorpus(t, pool, tag, subs)
-	seedCardPlanBackground(t, pool, projectID, owner, tag)
+	seedCardPlanBackground(t, pool, projectID, owner, tag, usersTag)
 	for _, tbl := range []string{"notifications", "issue_watchers", "issue_watch_optouts", "issues", "dependencies", "users", "project_members"} {
 		if _, err := pool.Exec(ctx, "ANALYZE "+tbl); err != nil {
 			t.Fatalf("analyze %s: %v", tbl, err)
@@ -387,10 +407,10 @@ func firstLine(s string) string {
 // TestFanOutCardPlan_PagesBoundedBySubscriptionsAndNoSeqScan — No. 15.
 func TestFanOutCardPlan_PagesBoundedBySubscriptionsAndNoSeqScan(t *testing.T) {
 	pool, capture := newCardPlanPool(t)
-	seedCardPlanBackgroundUsers(t, pool)
+	usersTag := seedCardPlanBackgroundUsers(t, pool)
 
-	few, fewSeq := measureCardPlan(t, pool, capture, "f", cardPlanFewSubs)
-	many, manySeq := measureCardPlan(t, pool, capture, "m", cardPlanManySubs)
+	few, fewSeq := measureCardPlan(t, pool, capture, usersTag, "f", cardPlanFewSubs)
+	many, manySeq := measureCardPlan(t, pool, capture, usersTag, "m", cardPlanManySubs)
 
 	if few == 0 {
 		t.Fatalf("pages with %d subscriptions = 0 — the measurement read nothing", cardPlanFewSubs)
