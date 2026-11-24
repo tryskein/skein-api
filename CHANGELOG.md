@@ -2,6 +2,39 @@
 
 All notable changes to **skein-api** (Go REST + MCP backend).
 
+## [2.1.0] - 2026-11-24
+
+- New passwords need at least 12 characters and are checked against known
+  breaches (Have I Been Pwned) by default (sk-977.7.20).
+- The owner gets an email when an API key is created or reissued
+  (sk-977.7.49).
+- Push notifications go only to active accounts; deactivating, deleting an
+  account or resetting a password by link removes its push subscriptions
+  (sk-984.2).
+- Push deliveries can no longer reach private or internal addresses, and
+  push endpoints and keys no longer appear in logs (sk-977.7.8,
+  sk-984.2.4.2).
+- Feeds, notifications and Watching show the current text of an edited or
+  deleted comment (sk-977.7.3, sk-1024).
+- Stricter input checks: commit refs (`http`/`https` URL, length limits),
+  subscription filters and the theme inspector are bounded (sk-977.7.69,
+  sk-977.7.73, sk-977.7.10).
+- Live updates are no longer lost for issues whose id contains a dot
+  (sk-977.7.74).
+
+### Upgrade notes
+
+- Existing shorter passwords keep working until they are changed
+  (sk-977.7.20).
+- The breach check calls `api.pwnedpasswords.com`; turn it off with
+  `SKEIN_PWNED_PASSWORDS_ENABLED=false` or point
+  `SKEIN_PWNED_PASSWORDS_BASE_URL` at a mirror (sk-977.7.20).
+- Migrations 000091 and 000092 run at startup; both can be rolled back
+  (sk-977.7.49, sk-984.2).
+- New optional `SKEIN_THEME_INSPECT_*` limits, see `docs/env-reference.md`
+  (sk-977.7.10).
+- A `socks5://` proxy for push is no longer supported (sk-977.7.8).
+
 ## [2.0.0] - 2026-11-22
 
 - Public REST API. skein-api serves a versioned REST API under `/api/v1` on a
