@@ -4937,10 +4937,10 @@ RETURNING id, issue_id, author, author_user_id, author_type, author_kind, body, 
 		if err != nil {
 			return err
 		}
-		// Self-mentions are excluded from notifications/watchers but
-		// remain in the wire-DTO mentions list — the frontend still
-		// renders @self as a clickable mention; we just don't ping
-		// the actor about their own write.
+		// A human's self-mention is excluded from notifications (an
+		// agent naming its own owner is delivered — selfMentionSuppressed)
+		// but every mention remains in the wire-DTO mentions list — the
+		// frontend still renders @self as a clickable mention.
 		if err := emitCommentMentions(ctx, tx, commentID, issueID, projectID, actor, resolved); err != nil {
 			return err
 		}

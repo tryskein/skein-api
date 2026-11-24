@@ -1117,8 +1117,10 @@ SET reasons =
 //     issue.mention) inside the same SERIALIZABLE tx and captured its
 //     eventID.
 //
-//  3. Have skipped self-mentions (actor == recipient) per plan §F-5
-//     before calling — this helper does NOT re-check actor identity.
+//  3. Have skipped a human's self-mention (actor == recipient) per plan
+//     §F-5 before calling; an agent naming its own owner is delivered
+//     (issues.selfMentionSuppressed). This helper does NOT re-check actor
+//     identity.
 //
 // projectID is denormalised onto the notifications row so the inbox
 // query's project filter joins cheaply (mirrors the FanOut INSERT).

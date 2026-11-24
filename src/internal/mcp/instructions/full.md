@@ -196,10 +196,10 @@ A wrong hash is removed with `skein_commits_detach`.
   exception: see the index cap above).
   `skein_show` by default: card + `depsCounts` (no edges) + last 3
   comments; `commentsLimit: 0` → index + last 3.
-- **Mentions**: `@username` in a comment or in `description` / `notes` /
-  `acceptanceCriteria` / `design` notifies (does not subscribe);
-  a human's self-mention does not notify, but an agent naming its own
-  owner does; non-members silently dropped.
+- **Mentions**: New `@username` mentions in comments, `description`, `notes`,
+  `acceptanceCriteria` or `design` can notify without subscribing. Human
+  self-mentions and ineligible recipients are silently skipped. Agents can
+  notify their owners.
 - **Stale locks** auto-release after 30 min of both the lock untouched
   and your session silent (`issue.unclaimed`, `actorType: "system"`).
 - **Batches** commit row by row: a row marked `batch_deadline_exceeded`

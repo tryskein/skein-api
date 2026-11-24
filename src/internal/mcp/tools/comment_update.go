@@ -40,7 +40,7 @@ func RegisterCommentUpdate(s *server.MCPServer, pool *pgxpool.Pool, issuesStore 
 				"Editing a deleted comment fails with a validation error. "+
 				"Authorship is never rewritten — the edit is recorded only in "+
 				"the comment.edited event actor. @mentions newly introduced "+
-				"by the edit fire the usual mention notification + auto-watch; "+
+				"by the edit fire the usual mention notification; "+
 				"mentions removed by the edit are left alone.\n\n"+
 				"`kind` mirrors skein_comment (REQUIRED for agent callers): "+
 				"\"directed\" = the human told you to make this edit; "+
