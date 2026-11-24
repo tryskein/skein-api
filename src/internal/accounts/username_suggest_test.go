@@ -164,6 +164,65 @@ func TestUsernameSuggestions_ConventionalOrder(t *testing.T) {
 	}
 }
 
+// probeRecorder answers like taken and records, in order, every name the
+// service asked the directory about.
+type probeRecorder struct {
+	taken  takenSet
+	probed []string
+}
+
+func (*probeRecorder) EmailTaken(context.Context, string) (bool, error) { return false, nil }
+
+func (r *probeRecorder) TakenUsernames(ctx context.Context, cands []string) (map[string]bool, error) {
+	r.probed = append(r.probed, cands...)
+	return r.taken.TakenUsernames(ctx, cands)
+}
+
+// TestUsernameSuggestions_NumberedFallbackEndsAt99 — the numbered fallback
+// is stem10 … stem99; past it only the random fallback remains. The
+// deterministic probes are the part every request shares: three requests
+// against the same directory ask about the same names up to the first
+// random one, so their common prefix is the deterministic pass whatever the
+// size of its groups. With every conventional name taken, that pass must
+// end at dev99 and hold dev10 … dev99 in order.
+func TestUsernameSuggestions_NumberedFallbackEndsAt99(t *testing.T) {
+	taken := takenSet{"dev": true, "dev-corp": true, "devc": true}
+	var numbered []string
+	for n := 2; n <= 99; n++ {
+		taken["dev"+strconv.Itoa(n)] = true
+		if n >= 10 {
+			numbered = append(numbered, "dev"+strconv.Itoa(n))
+		}
+	}
+	var common []string
+	for run := 0; run < 3; run++ {
+		rec := &probeRecorder{taken: taken}
+		suggestionsWith(t, rec, "dev@corp.test")
+		if run == 0 {
+			common = rec.probed
+			continue
+		}
+		n := 0
+		for n < len(common) && n < len(rec.probed) && common[n] == rec.probed[n] {
+			n++
+		}
+		common = common[:n]
+	}
+	if len(common) == 0 || common[len(common)-1] != "dev99" {
+		t.Fatalf("deterministic probes = %v, want them to end at dev99", common)
+	}
+	var gotNumbered []string
+	for _, c := range common {
+		rest, _ := strings.CutPrefix(c, "dev")
+		if n, err := strconv.Atoi(rest); err == nil && n >= 10 {
+			gotNumbered = append(gotNumbered, c)
+		}
+	}
+	if strings.Join(gotNumbered, ",") != strings.Join(numbered, ",") {
+		t.Errorf("numbered probes = %v, want dev10 … dev99 in order", gotNumbered)
+	}
+}
+
 // TestUsernameSuggestions_DomainVariants — the domain variants follow the
 // username rule and the stem: a domain label too long to fit beside the stem
 // gives no candidate (never an empty or invalid one), and a domain equal to
