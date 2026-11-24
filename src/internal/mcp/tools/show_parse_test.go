@@ -44,6 +44,14 @@ func TestParseOptionalWholeInt(t *testing.T) {
 		// The whole float just below MinInt: Floor keeps it whole on 32-bit too,
 		// so the case reaches the lower-bound check instead of the non-integer one.
 		{"float just below MinInt", map[string]any{"commentsLimit": math.Floor(math.Nextafter(float64(math.MinInt), math.Inf(-1)))}, 3, 0, true},
+		// float32 meets the same checks as float64 (sk-1083).
+		{"float32 whole", map[string]any{"commentsLimit": float32(7)}, 3, 7, false},
+		{"float32 non-int", map[string]any{"commentsLimit": float32(3.5)}, 3, 0, true},
+		{"float32 +Inf", map[string]any{"commentsLimit": float32(math.Inf(1))}, 3, 0, true},
+		{"float32 -Inf", map[string]any{"commentsLimit": float32(math.Inf(-1))}, 3, 0, true},
+		{"float32 NaN", map[string]any{"commentsLimit": float32(math.NaN())}, 3, 0, true},
+		{"float32 whole above the int range", map[string]any{"commentsLimit": float32(1e20)}, 3, 0, true},
+		{"float32 whole below the int range", map[string]any{"commentsLimit": float32(-1e20)}, 3, 0, true},
 		{"string above the int range", map[string]any{"commentsLimit": "10000000000000000000"}, 3, 0, true},
 		{"string below the int range", map[string]any{"commentsLimit": "-10000000000000000000"}, 3, 0, true},
 	}

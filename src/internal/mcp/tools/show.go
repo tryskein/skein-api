@@ -609,27 +609,11 @@ func parseOptionalWholeInt(args map[string]any, key string, defaultVal int) (int
 	case int64:
 		return int(v), nil
 	case float64:
-		if math.IsNaN(v) || math.IsInf(v, 0) {
-			return 0, fmt.Errorf("%s must be a whole integer ≥ 0", key)
-		}
-		if v != math.Trunc(v) {
-			return 0, fmt.Errorf("%s must be a whole integer (got non-integer %v)", key, v)
-		}
-		// On 64-bit float64(math.MaxInt) rounds up to 2^63, which is itself
-		// out of range, so MaxInt cannot serve as the bound. -MinInt (2^63 on
-		// 64-bit, 2^31 on 32-bit) is the first integer past the int range on
-		// either width; MinInt is a power of two, so both bounds are exact in
-		// float64 and the upper one is exclusive.
-		if v >= -float64(math.MinInt) || v < float64(math.MinInt) {
-			return 0, fmt.Errorf("%s out of int range", key)
-		}
-		return int(v), nil
+		return wholeIntFromFloat(key, v, v)
 	case float32:
-		f := float64(v)
-		if f != math.Trunc(f) {
-			return 0, fmt.Errorf("%s must be a whole integer (got non-integer %v)", key, v)
-		}
-		return int(f), nil
+		// Widening to float64 is exact, so NaN, ±Inf and whole values past
+		// the int range meet the same checks as a float64.
+		return wholeIntFromFloat(key, float64(v), v)
 	case string:
 		// Some MCP clients stringify numbers; accept base-10 integers only.
 		s := strings.TrimSpace(v)
@@ -646,6 +630,29 @@ func parseOptionalWholeInt(args map[string]any, key string, defaultVal int) (int
 	default:
 		return 0, fmt.Errorf("%s must be a whole integer", key)
 	}
+}
+
+// wholeIntFromFloat converts a JSON number decoded as a float to int for
+// parseOptionalWholeInt: NaN, ±Inf, non-integers and whole values outside
+// the int range are refused rather than converted (a float-to-int
+// conversion of those is implementation-defined in Go). shown is the value
+// as the caller received it, printed in the non-integer error.
+func wholeIntFromFloat(key string, v float64, shown any) (int, error) {
+	if math.IsNaN(v) || math.IsInf(v, 0) {
+		return 0, fmt.Errorf("%s must be a whole integer ≥ 0", key)
+	}
+	if v != math.Trunc(v) {
+		return 0, fmt.Errorf("%s must be a whole integer (got non-integer %v)", key, shown)
+	}
+	// On 64-bit float64(math.MaxInt) rounds up to 2^63, which is itself
+	// out of range, so MaxInt cannot serve as the bound. -MinInt (2^63 on
+	// 64-bit, 2^31 on 32-bit) is the first integer past the int range on
+	// either width; MinInt is a power of two, so both bounds are exact in
+	// float64 and the upper one is exclusive.
+	if v >= -float64(math.MinInt) || v < float64(math.MinInt) {
+		return 0, fmt.Errorf("%s out of int range", key)
+	}
+	return int(v), nil
 }
 
 // looksLikeHierarchicalID rejects bare numeric ids (e.g. "42") which would
