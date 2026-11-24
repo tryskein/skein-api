@@ -969,3 +969,83 @@ func TestList_ProjectModeFiltersByType(t *testing.T) {
 		t.Errorf("unknown type: error %v, want %s", code, ErrCodeValidationError)
 	}
 }
+
+// sk-1086 — the server does not validate arguments against the input schema,
+// and a non-string `q`, `type` or `space` read as omitted, so the listing came
+// back unfiltered as if it had matched. Such a value is refused in both modes
+// with validation_error, code filter_not_string, naming the argument — before
+// any read, so no store is needed here.
+func TestList_NonStringFilterRefused(t *testing.T) {
+	caller := uuid.New()
+	cases := []struct {
+		name  string
+		args  map[string]any
+		field string
+	}{
+		{"project, q number", map[string]any{"project": "p", "q": 42.0}, "q"},
+		{"project, q array", map[string]any{"project": "p", "q": []any{"bug"}}, "q"},
+		{"project, q object", map[string]any{"project": "p", "q": map[string]any{"text": "bug"}}, "q"},
+		{"project, q boolean", map[string]any{"project": "p", "q": true}, "q"},
+		{"project, type number", map[string]any{"project": "p", "type": 1.0}, "type"},
+		{"project, type array", map[string]any{"project": "p", "type": []any{"bug"}}, "type"},
+		{"project, type object", map[string]any{"project": "p", "type": map[string]any{}}, "type"},
+		{"project, space boolean", map[string]any{"project": "p", "space": false}, "space"},
+		{"cross-project, q number", map[string]any{"crossProject": true, "q": 7.0}, "q"},
+		{"cross-project, type boolean", map[string]any{"crossProject": true, "type": true}, "type"},
+		{"cross-project, space number", map[string]any{"crossProject": true, "space": 5.0}, "space"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			req := mcpgo.CallToolRequest{}
+			req.Params.Arguments = tc.args
+			// No store: a handler that goes on to read has not refused.
+			defer func() {
+				if p := recover(); p != nil {
+					t.Fatalf("a non-string %s was not refused; the handler went on to read: %v", tc.field, p)
+				}
+			}()
+			res, err := handleList(nil, nil, nil, nil)(withCtx(t, caller, "user"), req)
+			if err != nil {
+				t.Fatalf("handler error: %v", err)
+			}
+			if !res.IsError {
+				t.Fatalf("a non-string %s was accepted: %+v", tc.field, res)
+			}
+			body := extractToolJSON(t, res)
+			if body["error"] != ErrCodeValidationError || body["code"] != "filter_not_string" || body["field"] != tc.field {
+				t.Errorf("refusal = error %v, code %v, field %v; want %s, filter_not_string, %s",
+					body["error"], body["code"], body["field"], ErrCodeValidationError, tc.field)
+			}
+		})
+	}
+}
+
+// sk-1086 — in a project, an omitted, null or blank `q`, `type` or `space`
+// is no filter: the whole project is listed, not refused.
+func TestList_ProjectModeNullOrBlankFilterIsNone(t *testing.T) {
+	pool := newTestPool(t)
+	owner, _ := seedUser(t, pool, "admin")
+	pid, prefix := seedProject(t, pool, owner, "lsn")
+	bug := seedIssue(t, pool, pid, owner, prefix+"-1", "a bug", "open", 2)
+	task := seedIssue(t, pool, pid, owner, prefix+"-2", "a task", "open", 2)
+	if _, err := pool.Exec(context.Background(),
+		`UPDATE issues SET type = 'bug' WHERE id = $1`, bug); err != nil {
+		t.Fatalf("make %s a bug: %v", bug, err)
+	}
+
+	for _, extra := range []map[string]any{
+		{},
+		{"q": nil}, {"q": ""}, {"q": "   "},
+		{"type": nil}, {"type": ""}, {"type": " \t "},
+		{"space": nil}, {"space": "  "},
+	} {
+		args := map[string]any{"project": pid.String()}
+		for k, v := range extra {
+			args[k] = v
+		}
+		ids := listItemIDs(t, callListTool(t, pool, owner, args))
+		if len(ids) != 2 {
+			t.Errorf("%v lists %v, want both %s and %s", extra, ids, bug, task)
+		}
+	}
+}

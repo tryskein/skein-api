@@ -100,18 +100,19 @@ func RegisterList(s *server.MCPServer, pool *pgxpool.Pool, issuesStore *issues.S
 				"issues of that space's projects (the space of the issue's "+
 				"project, not of its id prefix). An unknown or unseen space "+
 				"yields nothing. The row's space is the selectable field "+
-				"`spaceId`."),
+				"`spaceId`. "+listStringFilterRule),
 		),
 		mcpgo.WithString("q",
 			mcpgo.Description("Full-text search query (cross-project mode only; "+
 				"refused with a project — use `text` there for a title fragment). "+
 				"Matches against title + description + acceptance_criteria + "+
 				"design + notes via tsvector (ru + en). Exact issue id matches "+
-				"(e.g. \"demo-2.5\") are boosted to the top."),
+				"(e.g. \"demo-2.5\") are boosted to the top. "+listStringFilterRule),
 		),
 		mcpgo.WithString("type",
 			mcpgo.Description("Single type filter, in both modes. "+
-				"One of bug | feature | task | epic | chore | decision | idea | note."),
+				"One of bug | feature | task | epic | chore | decision | idea | note. "+
+				listStringFilterRule),
 			mcpgo.Enum("bug", "feature", "task", "epic", "chore", "decision", "idea", "note"),
 		),
 		mcpgo.WithArray("statuses",
@@ -136,7 +137,8 @@ func RegisterList(s *server.MCPServer, pool *pgxpool.Pool, issuesStore *issues.S
 			mcpgo.Min(0),
 			mcpgo.Max(4),
 		),
-		// types[] filter deferred to R2.2b — needs ListIssuesArgs.Type plumbing.
+		// A multi-value `types[]` option is not offered: the wire takes one
+		// `type` in both modes (the store already filters a project by a set).
 		mcpgo.WithString("assignee",
 			mcpgo.Description("Assignee filter. Use the literal \"me\" to match issues "+
 				"assigned to the calling user (resolved via users.id, case-insensitive "+
@@ -223,6 +225,35 @@ func RegisterList(s *server.MCPServer, pool *pgxpool.Pool, issuesStore *issues.S
 	addTool(s, tool, handleList(pool, issuesStore, projectsStore, embedder))
 }
 
+// listStringFilters are the string filters of skein_list whose value of
+// another JSON type would otherwise read as omitted (see
+// checkListStringFilter).
+var listStringFilters = []string{"q", "type", "space"}
+
+// listStringFilterRule is the sentence of the descriptions of
+// listStringFilters that states the rule checkListStringFilter applies.
+const listStringFilterRule = "Omitted, null or blank (whitespace only) means no filter; " +
+	"a non-string value returns validation_error with code filter_not_string."
+
+// listFilterNotStringCode is the `code` of the refusal of a non-string
+// value of one of listStringFilters; `field` names the argument.
+const listFilterNotStringCode = "filter_not_string"
+
+// checkListStringFilter refuses a supplied value of field that is neither
+// a string nor null. Omitted and null pass, and so does a blank string: the
+// readers trim it and treat it as omitted.
+func checkListStringFilter(args map[string]any, field string) *mcpgo.CallToolResult {
+	raw, ok := args[field]
+	if !ok || raw == nil {
+		return nil
+	}
+	if _, isString := raw.(string); isString {
+		return nil
+	}
+	return skmcp.ToolError(ErrCodeValidationError, field+" must be a string or null",
+		map[string]any{"code": listFilterNotStringCode, "field": field})
+}
+
 func handleList(pool *pgxpool.Pool, issuesStore *issues.Store, projectsStore *projects.Store, embedder issues.QueryEmbedder) server.ToolHandlerFunc {
 	return func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 		start := time.Now()
@@ -231,6 +262,17 @@ func handleList(pool *pgxpool.Pool, issuesStore *issues.Store, projectsStore *pr
 			return errResp, nil
 		}
 		role := callerRole(ctx)
+
+		// sk-1086: the server does not validate arguments against the input
+		// schema, and GetString answers its default for a value of another
+		// type, so a non-string filter would read as omitted and the listing
+		// would come back unfiltered. These are checked as supplied, in both
+		// modes, before anything else reads them.
+		for _, field := range listStringFilters {
+			if errRes := checkListStringFilter(req.GetArguments(), field); errRes != nil {
+				return errRes, nil
+			}
+		}
 
 		// Cross-project mode short-circuit — drives the new shell's "All
 		// projects" Tasks column. Project handle is forbidden in this
