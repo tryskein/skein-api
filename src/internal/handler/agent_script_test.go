@@ -99,49 +99,85 @@ func TestAgentScript_CadenceFloor(t *testing.T) {
 }
 
 // TestAgentScript_DurationsAsWholeSecondsAtLeastOne — the backoff ceiling,
-// the per-request limit and the stall threshold reach the served runner as
-// whole seconds, truncated, floored at 1 (a 0 would mean no cap, no wait or an
-// instant stall). Each row sets one duration and reads the line the runner
-// takes it from; the other two stay at values well above the floor.
+// the per-request limit and the stall threshold take effect in the served
+// runner as whole seconds, truncated and floored at 1 (a 0 would mean no
+// wait, no limit or an instant stall). Observed by executing the runner
+// under the virtual clock: each row sets one duration, the other two keep
+// servedTimings.
+//
+//   - ceiling: every request fails at once; each backoff sleep is the
+//     ceiling (P=4 doubles to 8, capped).
+//   - limit: the request's connection carries the limit as its read
+//     timeout (the probing socket reports it and expires at once).
+//   - stall: every request fails at once; with the ceiling at 1s and the
+//     jitter at its low end the polls are ~0.5s apart, so the single
+//     degraded line comes on the first poll past the threshold and reports
+//     the whole seconds failed — the threshold itself.
 func TestAgentScript_DurationsAsWholeSecondsAtLeastOne(t *testing.T) {
-	const (
-		backoff = "BACKOFF_CEILING_SEC"
-		limit   = "REQUEST_LIMIT_SEC"
-		stall   = "STALL_THRESHOLD_SEC"
-	)
 	cases := []struct {
 		name string
 		d    time.Duration
-		want string
+		want int
 	}{
-		{"zero", 0, "1"},
-		{"one nanosecond", time.Nanosecond, "1"},
-		{"just below a second", 999 * time.Millisecond, "1"},
-		{"exactly one second", time.Second, "1"},
-		{"a fraction above one second", 1999 * time.Millisecond, "1"},
-		{"exactly two seconds", 2 * time.Second, "2"},
-		{"a fraction above two seconds", 2500 * time.Millisecond, "2"},
+		{"zero", 0, 1},
+		{"just below a second", 999 * time.Millisecond, 1},
+		{"exactly one second", time.Second, 1},
+		{"a fraction above one second", 1500 * time.Millisecond, 1},
+		{"exactly two seconds", 2 * time.Second, 2},
 	}
-	for _, v := range []string{backoff, limit, stall} {
-		for _, c := range cases {
-			t.Run(v+"/"+c.name, func(t *testing.T) {
-				b, l, s := 10*time.Second, 15*time.Second, 3*time.Minute
-				switch v {
-				case backoff:
-					b = c.d
-				case limit:
-					l = c.d
-				case stall:
-					s = c.d
+	failAtOnce := "SKEIN_TEST_URLOPEN_TIMEOUT=1"
+	for _, c := range cases {
+		t.Run("backoff ceiling/"+c.name, func(t *testing.T) {
+			tm := servedTimings
+			tm.backoffCeiling = c.d
+			run := runServedRunnerWith(t, tm, "http://127.0.0.1:9", 6*time.Second, failAtOnce)
+			if len(run.sleeps) == 0 {
+				t.Fatalf("no backoff sleep within the budget; lines %v", run.lines)
+			}
+			for _, s := range run.sleeps {
+				if s != float64(c.want) {
+					t.Fatalf("backoff sleeps = %v, want each %ds", run.sleeps, c.want)
 				}
-				rec := httptest.NewRecorder()
-				NewAgentScriptHandler(2, b, l, s).Script(rec, httptest.NewRequest(http.MethodGet, "/agent/v1/monitor-script", nil))
-				want := v + ` = int("` + c.want + `")`
-				if !strings.Contains(rec.Body.String(), want) {
-					t.Errorf("served runner lacks %s for %s", want, c.d)
+			}
+		})
+
+		t.Run("request limit/"+c.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				writePoll(w, []map[string]any{})
+			}))
+			defer srv.Close()
+			tm := servedTimings
+			tm.requestLimit = c.d
+			connectLog := filepath.Join(t.TempDir(), "connect")
+			runServedRunnerWith(t, tm, srv.URL, 3*time.Second, "SKEIN_TEST_CONNECT_LOG="+connectLog)
+			raw, err := os.ReadFile(connectLog)
+			if err != nil {
+				t.Fatalf("no request reached a connection: %v", err)
+			}
+			lines := strings.Fields(strings.ReplaceAll(string(raw), "timeout ", ""))
+			if len(lines) == 0 {
+				t.Fatalf("connect log is empty")
+			}
+			for _, l := range lines {
+				if v, err := strconv.ParseFloat(l, 64); err != nil || v != float64(c.want) {
+					t.Fatalf("request read timeouts = %q, want each %ds", raw, c.want)
 				}
-			})
-		}
+			}
+		})
+
+		t.Run("stall threshold/"+c.name, func(t *testing.T) {
+			tm := servedTimings
+			tm.backoffCeiling = time.Second
+			tm.stallAge = c.d
+			budget := time.Duration(c.want+5) * time.Second
+			got := runServedRunnerWith(t, tm, "http://127.0.0.1:9", budget, failAtOnce, "SKEIN_TEST_RANDOM=0.0").events("degraded")
+			if len(got) != 1 {
+				t.Fatalf("degraded lines = %v, want exactly one", got)
+			}
+			if f, _ := got[0]["failingForSec"].(float64); f != float64(c.want) {
+				t.Errorf("degraded after %v s of failures, want after %d s (line %v)", got[0]["failingForSec"], c.want, got[0])
+			}
+		})
 	}
 }
 
@@ -289,10 +325,26 @@ func (r runnerRun) events(name string) []map[string]any {
 	return out
 }
 
-// runServedRunner serves a body built by NewAgentScriptHandler(4, 13s, 7s, 4m)
-// through Script, then executes it against serverURL until the virtual budget
-// runs out. extraEnv adds sitecustomize switches.
+// scriptTimings are the arguments of NewAgentScriptHandler.
+type scriptTimings struct {
+	pollIntervalSec                        int
+	backoffCeiling, requestLimit, stallAge time.Duration
+}
+
+// servedTimings are values the runner's own formula max(5·P, 10) cannot
+// produce: cadence 4s, ceiling 13s, request limit 7s, stall threshold 4m.
+var servedTimings = scriptTimings{4, 13 * time.Second, 7 * time.Second, 4 * time.Minute}
+
+// runServedRunner serves a body built with servedTimings through Script, then
+// executes it against serverURL until the virtual budget runs out. extraEnv
+// adds sitecustomize switches; a later value of a variable wins.
 func runServedRunner(t *testing.T, serverURL string, budget time.Duration, extraEnv ...string) runnerRun {
+	t.Helper()
+	return runServedRunnerWith(t, servedTimings, serverURL, budget, extraEnv...)
+}
+
+// runServedRunnerWith is runServedRunner with the handler built from tm.
+func runServedRunnerWith(t *testing.T, tm scriptTimings, serverURL string, budget time.Duration, extraEnv ...string) runnerRun {
 	t.Helper()
 	py, err := osexec.LookPath("python3")
 	if err != nil {
@@ -303,7 +355,7 @@ func runServedRunner(t *testing.T, serverURL string, budget time.Duration, extra
 		t.Fatalf("site dir: %v", err)
 	}
 
-	h := NewAgentScriptHandler(4, 13*time.Second, 7*time.Second, 4*time.Minute)
+	h := NewAgentScriptHandler(tm.pollIntervalSec, tm.backoffCeiling, tm.requestLimit, tm.stallAge)
 	rec := httptest.NewRecorder()
 	h.Script(rec, httptest.NewRequest(http.MethodGet, "/agent/v1/monitor-script", nil))
 	if rec.Code != http.StatusOK {
