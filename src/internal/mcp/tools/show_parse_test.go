@@ -41,7 +41,9 @@ func TestParseOptionalWholeInt(t *testing.T) {
 		// -MinInt (2^63 on 64-bit), the first value past the int range.
 		{"float at -MinInt, just above the int range", map[string]any{"commentsLimit": -float64(math.MinInt)}, 3, 0, true},
 		{"float at MinInt, the lowest int", map[string]any{"commentsLimit": float64(math.MinInt)}, 3, math.MinInt, false},
-		{"float just below MinInt", map[string]any{"commentsLimit": math.Nextafter(float64(math.MinInt), math.Inf(-1))}, 3, 0, true},
+		// The whole float just below MinInt: Floor keeps it whole on 32-bit too,
+		// so the case reaches the lower-bound check instead of the non-integer one.
+		{"float just below MinInt", map[string]any{"commentsLimit": math.Floor(math.Nextafter(float64(math.MinInt), math.Inf(-1)))}, 3, 0, true},
 		{"string above the int range", map[string]any{"commentsLimit": "10000000000000000000"}, 3, 0, true},
 		{"string below the int range", map[string]any{"commentsLimit": "-10000000000000000000"}, 3, 0, true},
 	}
