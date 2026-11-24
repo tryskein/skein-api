@@ -409,13 +409,23 @@ func TestCountsGate_StopWaitsForACancelledComputation(t *testing.T) {
 		u := uuid.New()
 
 		sawCancel := make(chan struct{})
-		release := make(chan struct{})
+		barrier := make(chan struct{})
+		// release opens the barrier once; deferred, so a failing check
+		// below still lets the computation return and the bubble end with
+		// that check's own message rather than a deadlock.
+		release := sync.OnceFunc(func() { close(barrier) })
+		defer release()
+		defer stop()
 		var starts atomic.Int32
 		held := func(ctx context.Context) (int, error) {
 			starts.Add(1)
-			<-ctx.Done()
+			select {
+			case <-ctx.Done():
+			case <-barrier: // released without a cancellation: a failed check
+				return 0, errors.New("released before cancellation")
+			}
 			close(sawCancel)
-			<-release // the barrier: cancelled, still running
+			<-barrier // the barrier: cancelled, still running
 			return 0, ctx.Err()
 		}
 		waiter := make(chan gateCall, 1)
@@ -439,7 +449,7 @@ func TestCountsGate_StopWaitsForACancelledComputation(t *testing.T) {
 		default:
 		}
 
-		close(release)
+		release()
 		synctest.Wait()
 		select {
 		case <-done:
