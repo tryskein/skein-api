@@ -119,6 +119,15 @@ func TestActivityFeeds_CommentBodyComesFromTheComment(t *testing.T) {
 				if it.Type != issues.EventCommentCreated {
 					continue
 				}
+				// The dashboard feed also carries rows of other projects of
+				// the space, redacted: their content, the comment text
+				// included, must not reach the wire.
+				if it.Redacted {
+					if it.NewValue != nil {
+						t.Errorf("redacted comment.created row %d carries newValue %v", it.ID, it.NewValue)
+					}
+					continue
+				}
 				nv, ok := it.NewValue.(map[string]any)
 				if !ok {
 					t.Fatalf("comment.created newValue is %T, want an object", it.NewValue)
