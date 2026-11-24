@@ -3,6 +3,7 @@ package tools
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -36,6 +37,11 @@ func TestParseOptionalWholeInt(t *testing.T) {
 		// Whole numbers past the int range are refused, not wrapped.
 		{"float above the int range", map[string]any{"commentsLimit": 1e19}, 3, 0, true},
 		{"float below the int range", map[string]any{"commentsLimit": -1e19}, 3, 0, true},
+		// float64 cannot hold MaxInt: the nearest whole float above it is
+		// -MinInt (2^63 on 64-bit), the first value past the int range.
+		{"float at -MinInt, just above the int range", map[string]any{"commentsLimit": -float64(math.MinInt)}, 3, 0, true},
+		{"float at MinInt, the lowest int", map[string]any{"commentsLimit": float64(math.MinInt)}, 3, math.MinInt, false},
+		{"float just below MinInt", map[string]any{"commentsLimit": math.Nextafter(float64(math.MinInt), math.Inf(-1))}, 3, 0, true},
 		{"string above the int range", map[string]any{"commentsLimit": "10000000000000000000"}, 3, 0, true},
 		{"string below the int range", map[string]any{"commentsLimit": "-10000000000000000000"}, 3, 0, true},
 	}

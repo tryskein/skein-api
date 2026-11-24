@@ -615,7 +615,10 @@ func parseOptionalWholeInt(args map[string]any, key string, defaultVal int) (int
 		if v != math.Trunc(v) {
 			return 0, fmt.Errorf("%s must be a whole integer (got non-integer %v)", key, v)
 		}
-		if v > float64(math.MaxInt) || v < float64(math.MinInt) {
+		// float64(math.MaxInt) rounds up to 2^63 (2^31 on 32-bit), which is
+		// itself out of range, so the upper bound is exclusive at -MinInt.
+		// MinInt is a power of two, so both bounds are exact in float64.
+		if v >= -float64(math.MinInt) || v < float64(math.MinInt) {
 			return 0, fmt.Errorf("%s out of int range", key)
 		}
 		return int(v), nil
