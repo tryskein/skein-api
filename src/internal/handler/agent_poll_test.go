@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"slices"
 	"strconv"
 	"sync/atomic"
 	"testing"
@@ -319,14 +320,24 @@ func TestAgentPoll_DefaultAndMinimalPages(t *testing.T) {
 
 	const issueID = "appage1"
 	ctx := context.Background()
-	if _, err := pool.Exec(ctx, `
+	// One statement, one occurred_at for all 51 rows: the poll's order
+	// (occurred_at, id) is then the order of the ids, and the ids the insert
+	// returns are the reference every page is checked against.
+	rows, err := pool.Query(ctx, `
 INSERT INTO events (occurred_at, type, entity_type, entity_id, project_id,
                     actor, actor_user_id, actor_type, payload)
 SELECT now() - interval '5 minutes', 'issue.status_changed', 'issue', $3,
        $2, 'tester', $1, 'human', '{}'::jsonb
-FROM generate_series(1, 51) g`, actor, projectID, issueID); err != nil {
+FROM generate_series(1, 51) g
+RETURNING id`, actor, projectID, issueID)
+	if err != nil {
 		t.Fatalf("bulk seed: %v", err)
 	}
+	seeded, err := pgx.CollectRows(rows, pgx.RowTo[int64])
+	if err != nil {
+		t.Fatalf("bulk seed ids: %v", err)
+	}
+	slices.Sort(seeded)
 
 	h := NewAgentPollHandler(pool, 5*time.Second)
 	claims := apMintClaims(t, pool, monitorcreds.Claims{
@@ -362,29 +373,19 @@ FROM generate_series(1, 51) g`, actor, projectID, issueID); err != nil {
 
 	t.Run("without limit a page is 50 rows and the cursor resumes after them", func(t *testing.T) {
 		first := page(fromStart)
-		if len(first.Notifications) != 50 {
-			t.Fatalf("default page has %d rows, want 50", len(first.Notifications))
+		if got := ids(first); !slices.Equal(got, seeded[:50]) {
+			t.Fatalf("default page = %v, want the first 50 seeded rows %v", got, seeded[:50])
 		}
-		firstIDs := ids(first)
-		if last := firstIDs[len(firstIDs)-1]; first.Cursor.ID != last {
-			t.Errorf("cursor id = %d, want the last row's id %d", first.Cursor.ID, last)
+		if first.Cursor.ID != seeded[49] {
+			t.Errorf("cursor id = %d, want the last row's id %d", first.Cursor.ID, seeded[49])
 		}
-		second := page(after(first))
-		if len(second.Notifications) != 1 {
-			t.Fatalf("the page after the default page has %d rows, want the 1 left", len(second.Notifications))
-		}
-		for _, id := range firstIDs {
-			if id == second.Notifications[0].ID {
-				t.Fatalf("row %d is on both pages", id)
-			}
+		if got := ids(page(after(first))); !slices.Equal(got, seeded[50:]) {
+			t.Fatalf("the page after the default page = %v, want the row left %v", got, seeded[50:])
 		}
 	})
 
 	t.Run("limit=1 pages one row at a time without repeats", func(t *testing.T) {
-		all := ids(page(fromStart + "&limit=100"))
-		if len(all) != 51 {
-			t.Fatalf("the whole backlog has %d rows, want 51", len(all))
-		}
+		all := seeded
 		query := fromStart
 		for i := 0; i < 3; i++ {
 			env := page(query + "&limit=1")
