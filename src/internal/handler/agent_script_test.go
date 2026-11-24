@@ -148,8 +148,13 @@ func TestAgentScript_DurationsAsWholeSecondsAtLeastOne(t *testing.T) {
 			defer srv.Close()
 			tm := servedTimings
 			tm.requestLimit = c.d
+			// The executor wait is bounded by the request limit in virtual
+			// time; the clock holds until the executor has connected, so a
+			// slow start of the executor process cannot exhaust a limit of
+			// one second before any request is made.
 			connectLog := filepath.Join(t.TempDir(), "connect")
-			runServedRunnerWith(t, tm, srv.URL, 3*time.Second, "SKEIN_TEST_CONNECT_LOG="+connectLog)
+			runServedRunnerWith(t, tm, srv.URL, 3*time.Second,
+				"SKEIN_TEST_CONNECT_LOG="+connectLog, "SKEIN_TEST_VCLOCK_HOLD_UNTIL="+connectLog)
 			raw, err := os.ReadFile(connectLog)
 			if err != nil {
 				t.Fatalf("no request reached a connection: %v", err)

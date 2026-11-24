@@ -13,6 +13,12 @@
 #                                  advances the clock by its own length after
 #                                  a tiny real pause, so a real request in
 #                                  flight can still finish.
+#   SKEIN_TEST_VCLOCK_HOLD_UNTIL=<path>
+#                                  with the clock: a sleep shorter than 0.1 s
+#                                  does not advance it until <path> exists, so
+#                                  a wait bounded in virtual time cannot run
+#                                  out before a real event (another process
+#                                  creating <path>) has happened.
 #   SKEIN_TEST_BUDGET_SEC=<s>      with the clock: once virtual time since start
 #                                  reaches <s>, write the probe (below) and
 #                                  _exit(0).
@@ -70,6 +76,7 @@ if os.environ.get("SKEIN_TEST_SITE") == "1":
         _sleep_log = os.environ.get("SKEIN_TEST_SLEEP_LOG", "")
         _probe = os.environ.get("SKEIN_TEST_PROBE_FILE", "")
         _dns_log = os.environ.get("SKEIN_TEST_DNS_LOG", "")
+        _hold_until = os.environ.get("SKEIN_TEST_VCLOCK_HOLD_UNTIL", "")
 
         def _first_executor_alive():
             try:
@@ -101,6 +108,8 @@ if os.environ.get("SKEIN_TEST_SITE") == "1":
             seconds = float(seconds)
             if seconds < 0.1:
                 _real_sleep(0.002)
+                if _hold_until and not os.path.exists(_hold_until):
+                    return
             elif _sleep_log:
                 with open(_sleep_log, "a") as fh:
                     fh.write(repr(seconds) + "\n")
