@@ -33,6 +33,11 @@ func TestParseOptionalWholeInt(t *testing.T) {
 		{"empty string", map[string]any{"commentsLimit": ""}, 3, 0, true},
 		{"whitespace string", map[string]any{"commentsLimit": "  "}, 3, 0, true},
 		{"bool", map[string]any{"commentsLimit": true}, 3, 0, true},
+		// Whole numbers past the int range are refused, not wrapped.
+		{"float above the int range", map[string]any{"commentsLimit": 1e19}, 3, 0, true},
+		{"float below the int range", map[string]any{"commentsLimit": -1e19}, 3, 0, true},
+		{"string above the int range", map[string]any{"commentsLimit": "10000000000000000000"}, 3, 0, true},
+		{"string below the int range", map[string]any{"commentsLimit": "-10000000000000000000"}, 3, 0, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
