@@ -19,6 +19,11 @@
 #                                  a wait bounded in virtual time cannot run
 #                                  out before a real event (another process
 #                                  creating <path>) has happened.
+#   SKEIN_TEST_VCLOCK_HOLD_STEPS=1 with the clock: a sleep shorter than 0.1 s
+#                                  never advances it, so the executor wait
+#                                  costs no virtual time however slowly the
+#                                  executor process starts. Only for runs
+#                                  whose executor answers at once.
 #   SKEIN_TEST_BUDGET_SEC=<s>      with the clock: once virtual time since start
 #                                  reaches <s>, write the probe (below) and
 #                                  _exit(0).
@@ -77,6 +82,7 @@ if os.environ.get("SKEIN_TEST_SITE") == "1":
         _probe = os.environ.get("SKEIN_TEST_PROBE_FILE", "")
         _dns_log = os.environ.get("SKEIN_TEST_DNS_LOG", "")
         _hold_until = os.environ.get("SKEIN_TEST_VCLOCK_HOLD_UNTIL", "")
+        _hold_steps = os.environ.get("SKEIN_TEST_VCLOCK_HOLD_STEPS") == "1"
 
         def _first_executor_alive():
             try:
@@ -108,7 +114,7 @@ if os.environ.get("SKEIN_TEST_SITE") == "1":
             seconds = float(seconds)
             if seconds < 0.1:
                 _real_sleep(0.002)
-                if _hold_until and not os.path.exists(_hold_until):
+                if _hold_steps or (_hold_until and not os.path.exists(_hold_until)):
                     return
             elif _sleep_log:
                 with open(_sleep_log, "a") as fh:

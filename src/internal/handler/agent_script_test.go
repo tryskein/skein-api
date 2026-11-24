@@ -113,6 +113,12 @@ func TestAgentScript_CadenceFloor(t *testing.T) {
 //     jitter at its low end the polls are ~0.5s apart, so the single
 //     degraded line comes on the first poll past the threshold and reports
 //     the whole seconds failed — the threshold itself.
+//
+// The ceiling and stall rows hold the virtual clock in the executor wait:
+// their executor answers at once, so only the runner's own sleeps move
+// time, and a slow start of the executor process on a loaded machine can
+// neither use up the budget before the first backoff nor add to the
+// seconds failed.
 func TestAgentScript_DurationsAsWholeSecondsAtLeastOne(t *testing.T) {
 	cases := []struct {
 		name string
@@ -125,12 +131,12 @@ func TestAgentScript_DurationsAsWholeSecondsAtLeastOne(t *testing.T) {
 		{"a fraction above one second", 1500 * time.Millisecond, 1},
 		{"exactly two seconds", 2 * time.Second, 2},
 	}
-	failAtOnce := "SKEIN_TEST_URLOPEN_TIMEOUT=1"
+	failAtOnce := []string{"SKEIN_TEST_URLOPEN_TIMEOUT=1", "SKEIN_TEST_VCLOCK_HOLD_STEPS=1"}
 	for _, c := range cases {
 		t.Run("backoff ceiling/"+c.name, func(t *testing.T) {
 			tm := servedTimings
 			tm.backoffCeiling = c.d
-			run := runServedRunnerWith(t, tm, "http://127.0.0.1:9", 6*time.Second, failAtOnce)
+			run := runServedRunnerWith(t, tm, "http://127.0.0.1:9", 6*time.Second, failAtOnce...)
 			if len(run.sleeps) == 0 {
 				t.Fatalf("no backoff sleep within the budget; lines %v", run.lines)
 			}
@@ -175,7 +181,7 @@ func TestAgentScript_DurationsAsWholeSecondsAtLeastOne(t *testing.T) {
 			tm.backoffCeiling = time.Second
 			tm.stallAge = c.d
 			budget := time.Duration(c.want+5) * time.Second
-			got := runServedRunnerWith(t, tm, "http://127.0.0.1:9", budget, failAtOnce, "SKEIN_TEST_RANDOM=0.0").events("degraded")
+			got := runServedRunnerWith(t, tm, "http://127.0.0.1:9", budget, append(failAtOnce, "SKEIN_TEST_RANDOM=0.0")...).events("degraded")
 			if len(got) != 1 {
 				t.Fatalf("degraded lines = %v, want exactly one", got)
 			}
