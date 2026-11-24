@@ -112,6 +112,160 @@
       "expect": { "outcome": "audit_only" }
     },
     {
+      "id": "update-priority-only/nobody",
+      "note": "an edit of priority reaches subscribers only: a recipient outside that audience gets no reason",
+      "event": { "type": "issue.updated", "changedFields": ["priority"] },
+      "recipient": {},
+      "expect": { "outcome": "no_reason_for_recipient" }
+    },
+    {
+      "id": "update-priority-only/creator",
+      "note": "an edit of priority reaches subscribers only: a recipient outside that audience gets no reason",
+      "event": { "type": "issue.updated", "changedFields": ["priority"] },
+      "recipient": { "creator": true },
+      "expect": { "outcome": "no_reason_for_recipient" }
+    },
+    {
+      "id": "update-priority-only/old-assignee",
+      "note": "an edit of priority reaches subscribers only: a recipient outside that audience gets no reason",
+      "event": { "type": "issue.updated", "changedFields": ["priority"] },
+      "recipient": { "assignee": true },
+      "expect": { "outcome": "no_reason_for_recipient" }
+    },
+    {
+      "id": "update-priority-only/actor",
+      "note": "an edit of priority reaches subscribers only: a recipient outside that audience gets no reason",
+      "event": { "type": "issue.updated", "changedFields": ["priority"] },
+      "recipient": { "actor": true },
+      "expect": { "outcome": "no_reason_for_recipient" }
+    },
+    {
+      "id": "update-priority-only/mentioned",
+      "note": "an edit of priority reaches subscribers only: a recipient outside that audience gets no reason",
+      "event": { "type": "issue.updated", "changedFields": ["priority"] },
+      "recipient": { "mentioned": true },
+      "expect": { "outcome": "no_reason_for_recipient" }
+    },
+    {
+      "id": "update-priority-only/reminder-owner",
+      "note": "an edit of priority reaches subscribers only: a recipient outside that audience gets no reason",
+      "event": { "type": "issue.updated", "changedFields": ["priority"] },
+      "recipient": { "reminderOwner": true },
+      "expect": { "outcome": "no_reason_for_recipient" }
+    },
+    {
+      "id": "update-priority-only/digest-recipient",
+      "note": "an edit of priority reaches subscribers only: a recipient outside that audience gets no reason",
+      "event": { "type": "issue.updated", "changedFields": ["priority"] },
+      "recipient": { "digestRecipient": true },
+      "expect": { "outcome": "no_reason_for_recipient" }
+    },
+    {
+      "id": "update-assignee/nobody",
+      "note": "an assignee change reaches the new assignee and subscribers only: a recipient outside that audience gets no reason",
+      "event": { "type": "issue.updated", "changedFields": ["assignee"] },
+      "recipient": {},
+      "expect": { "outcome": "no_reason_for_recipient" }
+    },
+    {
+      "id": "update-assignee/creator",
+      "note": "an assignee change reaches the new assignee and subscribers only: a recipient outside that audience gets no reason",
+      "event": { "type": "issue.updated", "changedFields": ["assignee"] },
+      "recipient": { "creator": true },
+      "expect": { "outcome": "no_reason_for_recipient" }
+    },
+    {
+      "id": "update-assignee/old-assignee",
+      "note": "an assignee change reaches the new assignee and subscribers only: a recipient outside that audience gets no reason",
+      "event": { "type": "issue.updated", "changedFields": ["assignee"] },
+      "recipient": { "assignee": true },
+      "expect": { "outcome": "no_reason_for_recipient" }
+    },
+    {
+      "id": "update-assignee/actor",
+      "note": "an assignee change reaches the new assignee and subscribers only: a recipient outside that audience gets no reason",
+      "event": { "type": "issue.updated", "changedFields": ["assignee"] },
+      "recipient": { "actor": true },
+      "expect": { "outcome": "no_reason_for_recipient" }
+    },
+    {
+      "id": "update-assignee/mentioned",
+      "note": "an assignee change reaches the new assignee and subscribers only: a recipient outside that audience gets no reason",
+      "event": { "type": "issue.updated", "changedFields": ["assignee"] },
+      "recipient": { "mentioned": true },
+      "expect": { "outcome": "no_reason_for_recipient" }
+    },
+    {
+      "id": "update-assignee/reminder-owner",
+      "note": "an assignee change reaches the new assignee and subscribers only: a recipient outside that audience gets no reason",
+      "event": { "type": "issue.updated", "changedFields": ["assignee"] },
+      "recipient": { "reminderOwner": true },
+      "expect": { "outcome": "no_reason_for_recipient" }
+    },
+    {
+      "id": "update-assignee/digest-recipient",
+      "note": "an assignee change reaches the new assignee and subscribers only: a recipient outside that audience gets no reason",
+      "event": { "type": "issue.updated", "changedFields": ["assignee"] },
+      "recipient": { "digestRecipient": true },
+      "expect": { "outcome": "no_reason_for_recipient" }
+    },
+    {
+      "id": "update-assignee-and-priority/nobody",
+      "note": "an edit of assignee and priority reaches the new assignee and subscribers only: a recipient outside that audience gets no reason",
+      "event": { "type": "issue.updated", "changedFields": ["assignee", "priority"] },
+      "recipient": {},
+      "expect": { "outcome": "no_reason_for_recipient" }
+    },
+    {
+      "id": "update-assignee-and-priority/creator",
+      "note": "an edit of assignee and priority reaches the new assignee and subscribers only: a recipient outside that audience gets no reason",
+      "event": { "type": "issue.updated", "changedFields": ["assignee", "priority"] },
+      "recipient": { "creator": true },
+      "expect": { "outcome": "no_reason_for_recipient" }
+    },
+    {
+      "id": "update-assignee-and-priority/old-assignee",
+      "note": "an edit of assignee and priority reaches the new assignee and subscribers only: a recipient outside that audience gets no reason",
+      "event": { "type": "issue.updated", "changedFields": ["assignee", "priority"] },
+      "recipient": { "assignee": true },
+      "expect": { "outcome": "no_reason_for_recipient" }
+    },
+    {
+      "id": "update-assignee-and-priority/actor",
+      "note": "an edit of assignee and priority reaches the new assignee and subscribers only: a recipient outside that audience gets no reason",
+      "event": { "type": "issue.updated", "changedFields": ["assignee", "priority"] },
+      "recipient": { "actor": true },
+      "expect": { "outcome": "no_reason_for_recipient" }
+    },
+    {
+      "id": "update-assignee-and-priority/mentioned",
+      "note": "an edit of assignee and priority reaches the new assignee and subscribers only: a recipient outside that audience gets no reason",
+      "event": { "type": "issue.updated", "changedFields": ["assignee", "priority"] },
+      "recipient": { "mentioned": true },
+      "expect": { "outcome": "no_reason_for_recipient" }
+    },
+    {
+      "id": "update-assignee-and-priority/reminder-owner",
+      "note": "an edit of assignee and priority reaches the new assignee and subscribers only: a recipient outside that audience gets no reason",
+      "event": { "type": "issue.updated", "changedFields": ["assignee", "priority"] },
+      "recipient": { "reminderOwner": true },
+      "expect": { "outcome": "no_reason_for_recipient" }
+    },
+    {
+      "id": "update-assignee-and-priority/digest-recipient",
+      "note": "an edit of assignee and priority reaches the new assignee and subscribers only: a recipient outside that audience gets no reason",
+      "event": { "type": "issue.updated", "changedFields": ["assignee", "priority"] },
+      "recipient": { "digestRecipient": true },
+      "expect": { "outcome": "no_reason_for_recipient" }
+    },
+    {
+      "id": "update-title-only/new-assignee",
+      "note": "edits of other fields produce no delivery, to the new assignee either",
+      "event": { "type": "issue.updated", "changedFields": ["title"] },
+      "recipient": { "newAssignee": true, "assignee": true },
+      "expect": { "outcome": "audit_only" }
+    },
+    {
       "id": "status-changed/subscriber",
       "note": "the feed of «Delegated issue status» is ANY status change on a watched issue",
       "event": { "type": "issue.status_changed" },
