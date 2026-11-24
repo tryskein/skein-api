@@ -198,7 +198,8 @@ A wrong hash is removed with `skein_commits_detach`.
   comments; `commentsLimit: 0` → index + last 3.
 - **Mentions**: `@username` in a comment or in `description` / `notes` /
   `acceptanceCriteria` / `design` notifies (does not subscribe);
-  self-mentions excluded, non-members silently dropped.
+  a human's self-mention does not notify, but an agent naming its own
+  owner does; non-members silently dropped.
 - **Stale locks** auto-release after 30 min of both the lock untouched
   and your session silent (`issue.unclaimed`, `actorType: "system"`).
 - **Batches** commit row by row: a row marked `batch_deadline_exceeded`
