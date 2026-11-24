@@ -281,9 +281,9 @@ func HydrateManyWithParses(
 // Diff returns the set difference (newSet \ oldSet) by username — the
 // usernames that appear in `newCandidates` but not in `oldCandidates`.
 // Plan §F-9 / R4.3b PatchIssue: only newly-introduced mentions trigger
-// notifications; mentions already present in the old text are no-ops
-// (the user was notified when they were introduced, and we don't want a
-// re-fire on every PATCH that touches the same field).
+// a delivery attempt; a name already present in the old text does not
+// start one again, whatever its first appearance delivered, so a PATCH
+// that touches the same field does not re-fire it.
 //
 // Inputs are expected to be Parse() output: lowercase, deduplicated,
 // first-seen order. Output preserves the order of newCandidates.

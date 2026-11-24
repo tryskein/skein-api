@@ -4922,11 +4922,15 @@ RETURNING id, issue_id, author, author_user_id, author_type, author_kind, body, 
 
 		// R4.3 — parse @username mentions in the comment body, resolve
 		// them to the people who may be named here (mentions.Resolve) and,
-		// per resolved person, write the comment.mention event and the
-		// addressed notification (emitCommentMentions). No subscription is
-		// created (US-8 / INV-8). Inline in the same SERIALIZABLE tx (plan
-		// §F-13) so a mention failure rolls back the comment write — the
-		// events and notifications never outlive or miss the comment.
+		// per resolved person to notify (a human's self-mention is not, see
+		// below), write the comment.mention event and attempt the addressed
+		// notification (emitCommentMentions): the person's feed and push
+		// toggles decide whether a row is written, and an outage of those
+		// settings writes none (notifications.WriteMentionNotification). No
+		// subscription is created (US-8 / INV-8). Inline in the same
+		// SERIALIZABLE tx (plan §F-13) so a mention failure rolls back the
+		// comment write: the events and rows written here commit or roll
+		// back with the comment.
 		//
 		// We capture the resolved set into the returned dto.Mentions
 		// using the same tx (no re-resolve after commit). The frontend
