@@ -205,8 +205,9 @@ func TestWalk_StopsWhereVisitSaysSo(t *testing.T) {
 func TestWalk_MalformedDocument(t *testing.T) {
 	for _, raw := range []string{`{"a":}`, `[1,,2]`, `{"a" 1}`} {
 		err := Walk([]byte(raw), func(Token) bool { return true })
-		if err == nil || errors.Is(err, io.ErrUnexpectedEOF) {
-			t.Errorf("Walk(%s) = %v, want the decoder's syntax error", raw, err)
+		var syntax *json.SyntaxError
+		if !errors.As(err, &syntax) {
+			t.Errorf("Walk(%s) = %v, want the decoder's *json.SyntaxError", raw, err)
 		}
 	}
 }
