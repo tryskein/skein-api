@@ -231,9 +231,15 @@ func RegisterList(s *server.MCPServer, pool *pgxpool.Pool, issuesStore *issues.S
 var listStringFilters = []string{"q", "type", "space"}
 
 // listStringFilterRule is the sentence of the descriptions of
-// listStringFilters that states the rule checkListStringFilter applies.
-const listStringFilterRule = "Omitted, null or blank (whitespace only) means no filter; " +
-	"a non-string value returns validation_error with code filter_not_string."
+// listStringFilters that states the rule checkListStringFilter applies. The
+// published input schema types these fields as strings (`type` also as one
+// of its enum values), so the client contract for "no filter" is omitting
+// the field; null and a blank string, which the schema does not admit, are
+// described only as what the handler tolerates from a caller that skips
+// schema validation.
+const listStringFilterRule = "Omit for no filter. A value that is not a string returns " +
+	"validation_error with code filter_not_string; the handler also reads null or " +
+	"a blank (whitespace only) string as omitted."
 
 // listFilterNotStringCode is the `code` of the refusal of a non-string
 // value of one of listStringFilters; `field` names the argument.
