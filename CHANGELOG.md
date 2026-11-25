@@ -2,6 +2,22 @@
 
 All notable changes to **skein-api** (Go REST + MCP backend).
 
+## [2.2.0] - 2026-11-25
+
+- `skein_list` filters by `type` inside a project too (sk-1086).
+- `skein_list` no longer ignores a filter it cannot apply and returns the
+  whole listing as if it had matched: `q` inside a project, or a `q`,
+  `type` or `space` that is not a string, now gets `validation_error`
+  (sk-1086).
+- `skein_show` refuses out-of-range, `NaN` and infinite numbers instead of
+  overflowing (sk-1064, sk-1083).
+- Docs: a mention notifies the addressee but never subscribes them (sk-808).
+
+### Upgrade notes
+
+- `skein_list` with `q` inside a project now fails: use `text` or
+  `crossProject=true` (sk-1086).
+
 ## [2.1.0] - 2026-11-24
 
 - New passwords need at least 12 characters and are checked against known
