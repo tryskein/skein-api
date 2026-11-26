@@ -153,6 +153,7 @@ The profile is `.progon/api.toml`; run from the repository root:
 | mutation | `progon api mutation ./internal/<pkg>/` | the package patterns are the targets; `--since <ref>` limits it to changed lines |
 | pyunit | `progon api pyunit` | `progon api pyunit <file>` — a path relative to `src`, e.g. `internal/handler/assets/runner_tests/monitor_runner_test.py` |
 | pymutation | `progon api pymutation <mutant pattern>` | the targets are mutmut mutant name patterns, e.g. `'internal.handler.assets.runner.core.x_build_url*'`; no `--since` (mutmut has no diff mode) |
+| py27 | `progon api py27` | none: one script, `scripts/progon/starter-py27.sh`; it runs both modes of the monitor starter (`src/internal/mcp/tools/assets/monitor_starter.py`) with Python 2.7 and prints TAP: an old interpreter gets the stop line `config_invalid`, not a SyntaxError |
 | measure | `progon api measure` | none: one script, `scripts/progon/measure.sh`; it prints `MEASURE_*` lines of `scripts/measure-tools-list.sh` and `scripts/measure-tool-responses.sh` against the same Postgres fixture and migrations as `integ` |
 
 `integ` starts a `pgvector/pgvector:pg18` fixture with `pg_trgm` and `vector`,

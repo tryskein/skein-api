@@ -45,6 +45,52 @@ func monitorLoader() string {
 //go:embed assets/monitor_loader.py assets/monitor_prepare.py assets/loader_parts.txt assets/loader_client/parts.txt assets/loader_client/*.py
 var monitorAssets embed.FS
 
+// monitorStarterSource is the starter of every monitor start command (R-10):
+// short ASCII Python that any Python 3 and Python 2.7 parse. In order it
+// checks the Python version (3.6; 3.12.4 on Windows with `client`), downloads
+// GET <SKEIN_PUBLIC_URL>/agent/v1/monitor-loader without a token, without
+// following a redirect and with a timeout, and runs the body only when its
+// SHA-256 equals SKEIN_LOADER_SHA256, in a fresh __main__ namespace that
+// names the mode of the call (_SKEIN_LOADER_MODE = "client", or nothing for
+// a call without `client`). It reads no token and touches no file; every
+// refusal is one stop line {event, reason, action} of the starter refusal
+// table, with no traceback and no exception text. Without `client` it travels
+// as text in `bootstrap`; with `client` `prepare` writes it as starter.py.
+//
+//go:embed assets/monitor_starter.py
+var monitorStarterSource string
+
+// starterClientPlaceholder is replaced in the starter by 1 for a call with
+// `client` and by 0 for one without: the mode travels in the starter's own
+// text, never in an environment variable of the agent's machine (INV-7).
+const starterClientPlaceholder = "__SKEIN_STARTER_CLIENT__"
+
+// monitorStarterLegacy and monitorStarterClient are the starter of a call
+// without `client` and with it, without the trailing newline.
+var (
+	monitorStarterLegacy = mustStarter("0")
+	monitorStarterClient = mustStarter("1")
+)
+
+// monitorStarter returns the starter of a call with `client` (client) or
+// without it.
+func monitorStarter(client bool) string {
+	if client {
+		return monitorStarterClient
+	}
+	return monitorStarterLegacy
+}
+
+// mustStarter substitutes the mode into the starter. The asset is compiled
+// into the binary, so a placeholder that is missing or repeated is a defect
+// of the build: it panics at start-up.
+func mustStarter(mode string) string {
+	if strings.Count(monitorStarterSource, starterClientPlaceholder) != 1 {
+		panic("monitor starter: the starter must carry the mode placeholder exactly once")
+	}
+	return strings.TrimRight(strings.Replace(monitorStarterSource, starterClientPlaceholder, mode, 1), "\n")
+}
+
 // servedLoaderSource is the loader GET /agent/v1/monitor-loader serves: the
 // parts listed in assets/loader_parts.txt, joined in order. It is static code
 // of this build, the same for every caller; the starter runs it with its mode

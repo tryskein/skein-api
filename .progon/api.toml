@@ -122,6 +122,17 @@ timeout_seconds = 7200
 [kind.pymutation.options]
 install = "python3 -m pip install --user mutmut==3.8.1"
 
+# The monitor starter under Python 2.7 (R-9): scripts/progon/starter-py27.sh
+# runs both modes of the starter with python2.7 and prints TAP; an old
+# interpreter must get the stop line config_invalid, not a SyntaxError. Run
+# from the repository root.
+[kind.py27]
+adapter = "shell"
+image = "python:2.7.18-slim-buster"
+workdir = "."
+[kind.py27.selection]
+default = ["scripts/progon/starter-py27.sh"]
+
 # Size measurements of the MCP surface: scripts/progon/measure.sh runs
 # scripts/measure-tools-list.sh and scripts/measure-tool-responses.sh and
 # prints MEASURE_* lines. Run from the repository root (the scripts address
