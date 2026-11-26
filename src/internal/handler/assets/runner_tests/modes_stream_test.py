@@ -11,6 +11,7 @@ Run on its own: python3 internal/handler/assets/runner_tests/modes_stream_test.p
 Standard library of Python 3.6 only.
 """
 
+import io
 import json
 import os
 import shutil
@@ -471,7 +472,7 @@ class ReservedSlotTest(unittest.TestCase):
         box = Box(self)
         clock = FakeClock()
         out = Out(clock)
-        output = box.output(self.LIMITS, "exit-on-event", clock=clock, out=out)
+        output = box.output(self.LIMITS, "stream", clock=clock, out=out)
         output.batch(["x" * 950], reserve=True)
         output.lifecycle({"event": "degraded", "cause": "poll_failing", "issue": ISSUE, "action": "y" * 300})
         self.assertEqual(len(self.groups(out)), 2)
@@ -511,6 +512,80 @@ class PageRestTest(unittest.TestCase):
         unfit = [l for l in box.journal_lines() if l.get("notificationId") == 9 and l.get("status") == "unfit"]
         self.assertEqual(len(unfit), 1)
         self.assertIn("since_id=9", executor.urls[2])
+
+
+class CycleOutputTest(unittest.TestCase):
+    """Review finding 9 of wave 6: the whole stdout of an exit-on-event
+    cycle keeps to the batch limit, an event is shortened to what a batch
+    still holds, the stdout is UTF-8 whatever the locale, and the reserved
+    stop line is written in the window of its batch only."""
+
+    def run_cycle(self, box, limits, answers, out):
+        output = box.output(limits, "exit-on-event", out=out)
+        # As the working start does: room for the stop line, then
+        # monitor_started.
+        output.keep_room(RUNNER.cycle_stop_lines(ISSUE, PREFLIGHT_ID))
+        output.lifecycle({"event": "monitor_started", "preflightId": PREFLIGHT_ID, "method": "exit-on-event",
+                          "channel": "stdout"})
+        return box.cycle(FakeExecutor(answers), output, "exit-on-event")
+
+    def test_the_whole_cycle_keeps_to_the_batch_limit(self):
+        box = Box(self)
+        limits = {"line": {"max": 400, "unit": "chars"}, "batch": {"max": 700, "unit": "bytes"}}
+        answer = page([1, 2, 3, 4], 4)
+        for n in answer["notifications"]:
+            n["bodyPreview"] = "привет " * 10
+        got = []
+        for _ in range(4):
+            out = Out()
+            stop, _ = self.run_cycle(box, limits, [answer], out)
+            text = "".join(t for _, t in out.writes)
+            self.assertLessEqual(len(text.encode("utf-8")), 700, text)
+            got += [l["notification"]["id"] for l in out.lines() if l["event"] == "notification"]
+            self.assertEqual(out.lines()[-1]["reason"], "delivered")
+            if stop.reason == "delivered" and got == [1, 2, 3, 4]:
+                break
+        self.assertEqual(got, [1, 2, 3, 4])
+
+    def test_an_event_is_shortened_to_what_the_batch_holds(self):
+        box = Box(self)
+        out = Out()
+        output = box.output({"batch": {"max": 300, "unit": "bytes"}}, "stream", out=out)
+        long_event = event(5, preview="ж" * 400)
+        self.assertEqual(RUNNER.print_events(output, [long_event], False, None), [long_event])
+        (line,) = out.lines()
+        self.assertEqual(line["event"], "notification")
+        self.assertEqual(line["notification"]["id"], 5)
+        self.assertIn("bodyPreview", line["deliveryCut"])
+        self.assertLessEqual(len(out.writes[0][1].encode("utf-8")), 300)
+
+    def test_the_stdout_is_utf8_under_an_ascii_locale(self):
+        box = Box(self)
+        raw = io.BytesIO()
+        ascii_stdout = io.TextIOWrapper(raw, encoding="ascii")
+        output = box.output(None, "stream")
+        output.out = None
+        with mock.patch("sys.stdout", ascii_stdout):
+            RUNNER.print_events(output, [event(6, preview="привет")], False, None)
+        line = json.loads(raw.getvalue().decode("utf-8"))
+        self.assertEqual(line["notification"]["bodyPreview"], "привет")
+
+    def test_the_reserved_line_after_its_window_takes_a_turn(self):
+        box = Box(self)
+        clock = FakeClock()
+        out = Out(clock)
+        limits = {"window": {"lengthMs": 200, "lines": 3, "budget": 4, "refillSec": 20}}
+        output = box.output(limits, "stream", clock=clock, out=out)
+        output.batch(["{}"], reserve=True)
+        # A long state write: the tool has read that window by now.
+        clock.now += 5
+        output.stop_line({"event": "paused", "reason": "delivered"})
+        self.assertGreater(output.pacer.closed_at, clock.now, "the stop line joined a window already read")
+        # Within the window it joins the batch.
+        output.batch(["{}"], reserve=True)
+        closed = output.pacer.closed_at
+        output.stop_line({"event": "paused", "reason": "delivered"})
+        self.assertEqual(output.pacer.closed_at, closed)
 
 
 class WindowModelTest(unittest.TestCase):

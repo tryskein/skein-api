@@ -242,8 +242,10 @@ func wholeSecondsAtLeastOne(d time.Duration) int {
 // @Description  cannot be written holds the run (`degraded`
 // @Description  `state_unavailable`, then `recovered`; 401 and 403 still stop
 // @Description  it): the cursor moves, and exit-on-event prints `delivered`,
-// @Description  only after the state is saved. Every start takes, in this
-// @Description  order: the one-runner lock
+// @Description  only after the state is saved. Their stdout is UTF-8; in
+// @Description  exit-on-event the batch limit holds for the whole output of
+// @Description  the cycle, with room kept for its stop line. Every start
+// @Description  takes, in this order: the one-runner lock
 // @Description  (the stable file skein-monitor/locks/<key>.lock of the token
 // @Description  path), the token (opened, checked private, read, its
 // @Description  descriptor closed), state.lock, a second check of the result

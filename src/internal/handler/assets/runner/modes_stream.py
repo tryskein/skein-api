@@ -140,6 +140,14 @@ class Pacer(object):
         self.window_sec = limits.window_sec
         self.closed_at = None
 
+    def window_open(self):
+        """Whether the window of the last batch is still being read: a line
+        written now joins it. Without a window model every write is read as
+        it comes."""
+        if not self.window_sec:
+            return True
+        return self.closed_at is not None and self.clock() < self.closed_at - WINDOW_MARGIN_SEC
+
     def wait_turn(self):
         """Wait until a batch may be written and take its turn."""
         while True:
@@ -159,6 +167,25 @@ class Pacer(object):
             self.closed_at = self.clock() + self.window_sec + WINDOW_MARGIN_SEC
 
 
+def write_stdout(texts, out=None):
+    """Write the lines as one write. The process's stdout gets UTF-8 bytes
+    whatever the locale says: the limits count UTF-8, and a locale that
+    cannot encode a character must not stop the monitor."""
+    data = "".join(t + "\n" for t in texts)
+    if out is not None:
+        out.write(data)
+        out.flush()
+        return
+    buf = getattr(sys.stdout, "buffer", None)
+    if buf is None:
+        sys.stdout.write(data)
+        sys.stdout.flush()
+        return
+    sys.stdout.flush()
+    buf.write(data.encode("utf-8"))
+    buf.flush()
+
+
 class StreamOutput(object):
     """The stdout of a stream or exit-on-event monitor within its limits."""
 
@@ -174,13 +201,31 @@ class StreamOutput(object):
         # it still fits that batch.
         self.reserved = False
         self.last_batch = []
+        # exit-on-event: the tool takes the whole stdout of the cycle as one
+        # output, so the batch limit holds for everything this process
+        # prints (monitor_started, degraded and recovered included), with
+        # room kept all along for the stop line that ends the cycle.
+        self.cycle = method == METHOD_EXIT_ON_EVENT
+        self.cycle_texts = []
+        self.room = []
         # When the journal stopped taking lines (the pacer's clock), or None.
         self._journal_failed_at = None
 
+    def keep_room(self, stop_lines):
+        """exit-on-event: keep room in the cycle for the longest of the stop
+        lines that may end it."""
+        longest = self.longest_line(stop_lines) if self.cycle else None
+        self.room = [longest] if longest is not None else []
+
+    def fits(self, texts):
+        """Whether texts fit as the next lines: one batch, or in
+        exit-on-event the rest of the cycle's output."""
+        return self.limits.fits(self.cycle_texts + texts if self.cycle else texts)
+
     def _write(self, texts):
-        out = self.out or sys.stdout
-        out.write("".join(t + "\n" for t in texts))
-        out.flush()
+        write_stdout(texts, self.out)
+        if self.cycle:
+            self.cycle_texts.extend(texts)
 
     def batch(self, texts, reserve=False):
         """Write texts as one batch; reserve keeps a line of it for the stop
@@ -195,25 +240,41 @@ class StreamOutput(object):
         event and reason fit."""
         return lifecycle_line(obj, self.limits.line_max, self.limits.line_unit)
 
-    def lifecycle(self, obj):
+    def lifecycle(self, obj, stop=False):
         """A service line: to the journal, and to stdout as a batch of its
         own (or in the reserved place). True when it went to stdout."""
         self._journal_lifecycle(obj)
-        return self._print_service(obj)
+        return self._print_service(obj, stop)
 
-    def _print_service(self, obj):
+    def _print_service(self, obj, stop=False):
         text = self.line(obj)
         if text is None:
             return False
-        if self.reserved and self.limits.fits(self.last_batch + [text]):
+        if self.cycle and not stop and not self.fits([text] + self.room):
+            # The rest of the cycle's output is the room of its stop line:
+            # this line is in the journal only.
+            self.reserved = False
+            return False
+        if self.reserved and self._slot_open(text):
             # The line the batch kept room for: no turn of its own.
             self.reserved = False
             self.last_batch.append(text)
             self._write([text])
         else:
-            # Not reserved, or longer than the room kept: a batch of its own.
+            # Not reserved, longer than the room kept, or later than the
+            # window of that batch: a batch of its own.
             self.batch([text])
         return True
+
+    def _slot_open(self, text):
+        """Whether text may still join the batch just written: it fits, and
+        the tool still reads that batch's window (exit-on-event: the cycle
+        is read as one output)."""
+        if self.cycle:
+            return self.fits([text])
+        if not self.limits.fits(self.last_batch + [text]):
+            return False
+        return self.pacer.window_open()
 
     def longest_line(self, objs):
         """The longest, in the unit of the batch limit, of the service lines
@@ -226,13 +287,25 @@ class StreamOutput(object):
 
     def event_text(self, n):
         """(text, status) of an event: its line, or the stand-in of an event
-        that does not fit (status unfit), or (None, unfit): journal only."""
-        text = notification_line(n, self.limits.line_max, self.limits.line_unit)
-        if text is not None and self.limits.fits([text]):
+        that does not fit (status unfit), or (None, unfit): journal only.
+        The line is shortened to the line limit, and further to what a batch
+        (exit-on-event: the rest of the cycle) still holds beside the room
+        of the stop line, when the batch limit is in characters or bytes."""
+        lim = self.limits
+        text = notification_line(n, lim.line_max, lim.line_unit)
+        if text is not None and self.fits([text] + self.room):
             return text, STATUS_PRINTED
+        if lim.batch_max and lim.batch_unit in _LINE_UNITS:
+            used = lim.batch_size((self.cycle_texts if self.cycle else []) + self.room)
+            budget = lim.batch_max - used - 1
+            if budget > 0:
+                short = notification_line(n, budget, _LINE_UNITS[lim.batch_unit])
+                if (short is not None and (lim.line_max is None or measure(short, lim.line_unit) <= lim.line_max)
+                        and self.fits([short] + self.room)):
+                    return short, STATUS_PRINTED
         nid = n.get("id") if isinstance(n, dict) else None
-        stub = unfit_stub_line(nid, self.limits.line_max, self.limits.line_unit)
-        if stub is not None and self.limits.fits([stub]):
+        stub = unfit_stub_line(nid, lim.line_max, lim.line_unit)
+        if stub is not None and self.fits([stub] + self.room):
             return stub, STATUS_UNFIT
         return None, STATUS_UNFIT
 
@@ -242,7 +315,7 @@ class StreamOutput(object):
         fits alone."""
         tail = [reserve_text] if reserve_text is not None else []
         k = 0
-        while k < len(texts) and self.limits.fits(texts[:k + 1] + tail):
+        while k < len(texts) and self.fits(texts[:k + 1] + tail):
             k += 1
         return k
 
@@ -298,7 +371,7 @@ class StreamOutput(object):
 
     def stop_line(self, line):
         """finish() writes the stop line through here."""
-        self.lifecycle(line)
+        self.lifecycle(line, stop=True)
 
 
 def print_events(output, events, exit_on_event, stop_lines):
@@ -354,8 +427,8 @@ def run_stream_loop(executor, base, token, issue, exclude_session, token_file, d
     exit_on_event = doc.get("method") == METHOD_EXIT_ON_EVENT
     # The stop lines that may follow the batch of an exit-on-event cycle at
     # once: the batch keeps room for the longest.
-    slot_lines = [cycle_stop_line(reason, issue, doc["preflightId"])
-                  for reason in ("delivered", "root_closed", "stopped", "internal_error")]
+    slot_lines = cycle_stop_lines(issue, doc["preflightId"])
+    output.keep_room(slot_lines)
     cursor = load_cursor(token_file)
 
     def hold(save, *args):
@@ -454,6 +527,13 @@ def run_stream_loop(executor, base, token, issue, exclude_session, token_file, d
         time.sleep(jitter(backoff))
 
 
+def cycle_stop_lines(issue, preflight):
+    """The stop lines that may end an exit-on-event cycle right after its
+    batch."""
+    return [cycle_stop_line(reason, issue, preflight)
+            for reason in ("delivered", "root_closed", "stopped", "internal_error")]
+
+
 def cycle_stop_line(reason, issue, preflight):
     """The stop line finish() prints for reason in a client-mode cycle of
     preflight result `preflight`."""
@@ -472,8 +552,7 @@ def limited_write(doc):
     def write(line):
         text = lifecycle_line(line, limits.line_max, limits.line_unit)
         if text is not None:
-            sys.stdout.write(text + "\n")
-            sys.stdout.flush()
+            write_stdout([text])
     return write
 
 
