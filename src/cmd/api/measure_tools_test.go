@@ -47,6 +47,10 @@ const (
 	measureMonitorRunnerSHA256 = "0000000000000000000000000000000000000000000000000000000000000000"
 	measureMonitorLoaderSHA256 = "1111111111111111111111111111111111111111111111111111111111111111"
 	measureMonitorIdleTTL      = 6 * time.Hour
+	// The MCP session of the monitor calls: a literal, so the response and
+	// the working command do not depend on a generated id (SC-009 fixed
+	// inputs).
+	measureMonitorSession = "mcp-session-0123456789abcdef0123456789abcdef"
 )
 
 // TestMeasureToolsList prints the size of the tools/list payload the
@@ -343,7 +347,7 @@ func TestMeasureToolResponses(t *testing.T) {
 	// needs the caller's API key; only this call carries one, so the rows
 	// above keep the context they were baselined with.
 	monitorKey := seedMeasureAPIKey(t, pool, fx.callerID)
-	monitorCtx := auth.WithKeyGrant(auth.WithAPIKeyID(ctx, monitorKey),
+	monitorCtx := auth.WithKeyGrant(auth.WithAPIKeyID(auth.WithSessionID(ctx, measureMonitorSession), monitorKey),
 		apikeys.Grant{Level: apikeys.LevelManage, Scope: apikeys.Scope{Mode: apikeys.ScopeAll}})
 	noClient := m.callCtx(monitorCtx, "skein_get_monitor_script.no_client",
 		"skein_get_monitor_script", map[string]any{"id": fx.referenceID})
@@ -376,10 +380,9 @@ func TestMeasureToolResponses(t *testing.T) {
 //   - starter: the starter source the bootstrap without `client` carries;
 //   - prepare_ready: the ready line the `prepare` of the fixture record
 //     prints (run for real; it creates and then loses its token directory);
-//   - working_command: the `command` of the preflight line the runner builds
-//     from the variables of the fixture record's `preflight` command, with
-//     the result number 1 (the runner's working_command, loaded by the
-//     runner tests' harness).
+//   - working_command: the `command` of the line of a real preflight of the
+//     runner, run with the variables of the fixture record's `preflight`
+//     command in the token directory prepare made.
 func measureMonitorStart(m *respMeasurer, noClient, fixture string) {
 	t := m.t
 	t.Helper()
@@ -410,16 +413,22 @@ func measureMonitorStart(m *respMeasurer, noClient, fixture string) {
 	if named.Prepare == "" || named.Preflight == "" || named.TokenFilePath == "" {
 		t.Fatalf("the response of the fixture record lacks prepare, preflight or tokenFilePath")
 	}
-	t.Cleanup(func() { _ = os.RemoveAll(path.Dir(named.TokenFilePath)) })
 	out, err := exec.Command("sh", "-c", named.Prepare).Output()
 	if err != nil {
+		// prepare refused: the directory, if any, is not one it created.
 		t.Fatalf("run prepare: %v; stdout %q", err, out)
+	}
+	// prepare created the token directory: it is this measurement's to remove.
+	tokenDir := path.Dir(named.TokenFilePath)
+	t.Cleanup(func() { _ = os.RemoveAll(tokenDir) })
+	if err := os.WriteFile(named.TokenFilePath, []byte("skm_"+strings.Repeat("m", 43)), 0o600); err != nil {
+		t.Fatalf("write the token: %v", err)
 	}
 	m.part("skein_get_monitor_script.prepare_ready", strings.TrimRight(string(out), "\n"))
 
 	cmd := exec.Command("python3", "-c", measureWorkingCommandPy)
 	cmd.Dir = "../../internal/handler/assets/runner_tests"
-	cmd.Env = append(os.Environ(), "MEASURE_PREFLIGHT="+named.Preflight)
+	cmd.Env = append(os.Environ(), "MEASURE_PREFLIGHT="+named.Preflight, "MEASURE_STATE_HOME="+t.TempDir())
 	out, err = cmd.Output()
 	if err != nil {
 		t.Fatalf("build the working command: %v; stdout %q", err, out)
@@ -427,19 +436,25 @@ func measureMonitorStart(m *respMeasurer, noClient, fixture string) {
 	m.part("skein_get_monitor_script.working_command", string(out))
 }
 
-// measureWorkingCommandPy prints the working command the runner builds for
-// the variables of the preflight command in MEASURE_PREFLIGHT, result 1.
+// measureWorkingCommandPy runs the runner's preflight (the body the server
+// serves, loaded by the runner tests' harness) in the token directory that
+// prepare made, with the SKEIN_* variables of the preflight command in
+// MEASURE_PREFLIGHT, and prints the command of its line. The state home is a
+// directory of the measurement.
 const measureWorkingCommandPy = `import os, shlex, sys
 sys.path.insert(0, os.getcwd())
 import harness
 R = harness.load_runner()
-env = {}
+env = {"HOME": os.environ["MEASURE_STATE_HOME"], "XDG_STATE_HOME": os.environ["MEASURE_STATE_HOME"],
+       "PATH": os.environ.get("PATH", "")}
 for word in shlex.split(os.environ["MEASURE_PREFLIGHT"]):
     name, sep, value = word.partition("=")
     if sep and name.startswith("SKEIN_"):
         env[name] = value
-settings = R.read_settings(env, R.load_registry(), mode="client")
-sys.stdout.write(R.working_command(env, env["SKEIN_TOKEN_FILE"], 1, settings))
+registry = R.load_registry()
+settings = R.read_settings(env, registry, mode="client")
+line = R.preflight(env["SKEIN_TOKEN_FILE"], env, registry, settings)
+sys.stdout.write(line["command"])
 `
 
 // measureMonitorRealRegistry measures skein_get_monitor_script with `client`
