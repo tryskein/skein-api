@@ -352,7 +352,8 @@ def _note_series(entry, sessions, now):
     session = next(iter(sessions))
     times = series.get("times") or []
     if series.get("session") != session or (times and now - times[-1] > SERIES_SPAN_SEC):
-        times = []
+        # The series ended: a new one starts from this delivery, not long.
+        series, times = {}, []
     times = (times + [now])[-SERIES_COUNT:]
     was = bool(series.get("long"))
     is_long = was or (len(times) >= SERIES_COUNT and times[-1] - times[0] <= SERIES_SPAN_SEC)

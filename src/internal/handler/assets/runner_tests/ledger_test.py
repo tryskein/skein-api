@@ -139,6 +139,41 @@ class ChannelBudgetTest(Base):
 
 
 @unittest.skipUnless(os.name == "posix", "the POSIX ledger")
+class SeriesEndTest(Base):
+    """Review finding 15 of wave 7 (US-13: a series is 30 deliveries of one
+    session within 10 min; it ends with a delivery of another session or
+    after 10 min without one; during it the window is 60 s, else 10 s)."""
+
+    def series(self, led):
+        for i in range(30):
+            d = led.begin([ev("s%d" % i, session="same")], "c1")
+            d.attempt.note_call()
+            d.attempt.finish(QUEUED)
+            d.attempt.release()
+            self.clock.t += 10
+
+    def window_after_one(self, led, eid, session):
+        d = led.begin([ev(eid, session=session)], "c1")
+        d.attempt.note_call()
+        d.attempt.finish(QUEUED)
+        d.attempt.release()
+        t0 = self.clock.t
+        self.clock.t = t0 + 11
+        d = led.begin([ev(eid + "-next", session=session)], "c1")
+        if d.attempt is not None:
+            d.attempt.abandon()
+            d.attempt.release()
+            return 10
+        return d.wait_until - t0
+
+    def test_a_pause_over_ten_minutes_ends_the_series(self):
+        led = self.ledger("mon-a", ident([addr("orca", "t-1")]))
+        self.series(led)
+        self.clock.t += 601
+        self.assertEqual(self.window_after_one(led, "after-pause", "same"), 10)
+
+
+@unittest.skipUnless(os.name == "posix", "the POSIX ledger")
 class BatchHistoryTest(Base):
     """Review finding 16 of wave 7 (INV-8 per event: at most 4 calls within
     the idle window from its own first call): an event without calls is
