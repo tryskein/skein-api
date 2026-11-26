@@ -7,7 +7,56 @@
       "The client name was not found in the registry; the general record is used."
     ]
   },
-  "agents": [],
+  "agents": [
+    {
+      "id": "claude",
+      "about": "Claude Code: the runner's stdout lines become turns through its Monitor tool; Zavod engines claude, kimi and zai-claude run this harness.",
+      "source": "code.claude.com/docs tools-reference, 'Monitor tool' (timeout_ms: 5 minutes by default, at most 30 minutes; deadlines above 1800000 ms are capped; available on Windows only with Git Bash); Claude Code 2.1.331 (native executable 'claude', 'claude.exe' on Windows).",
+      "process": {
+        "executables": [
+          "claude",
+          "claude.exe"
+        ]
+      },
+      "methods": [
+        {
+          "kind": "stream",
+          "conditions": {},
+          "instruction": "Run `command` with the Monitor tool, timeout_ms 1800000 (its maximum, 30 minutes). Each stdout line is an event of the monitor. When Monitor reports the command ended at its deadline, run the same `command` with Monitor again: the cursor is kept, no event is lost."
+        }
+      ],
+      "windowsShell": "git-bash"
+    },
+    {
+      "id": "grok",
+      "about": "Grok Build: the runner's stdout lines become turns through its monitor tool.",
+      "source": "github.com/xai-org/grok-build 2bdd1d6 (1.0.45; npm @xai-official/grok 1.0.92): crates/codegen/xai-grok-tools/src/implementations/grok_build/monitor/tool.rs#MonitorTool (every stdout line is one MonitorEvent), monitor/types.rs#DEFAULT_TIMEOUT_MS (10 h unless persistent), #RATE_LIMIT_CAPACITY (10 events, one more every 2 s, extra lines suppressed), #AUTO_KILL_THRESHOLD_MS (the monitor is killed after 30 s of suppression); executable 'grok' (bin/grok-native).",
+      "process": {
+        "executables": [
+          "grok",
+          "grok-native",
+          "grok.exe"
+        ]
+      },
+      "methods": [
+        {
+          "kind": "stream",
+          "conditions": {},
+          "instruction": "Run `command` with the monitor tool, persistent: true. Each stdout line is an event of the monitor.",
+          "limits": {
+            "batch": {
+              "max": 1,
+              "unit": "lines"
+            },
+            "rate": {
+              "burst": 8,
+              "intervalSec": 3
+            }
+          }
+        }
+      ]
+    }
+  ],
   "channels": [],
   "shells": {
     "source": "POSIX: shells(5), the /etc/shells list of valid login shells (sh, bash, dash, zsh, ksh, mksh, fish, tcsh, csh, nu, pwsh are the names such lists carry); Windows: Microsoft Learn 'cmd' (cmd.exe), 'about_PowerShell_exe' (powershell.exe) and 'about_Pwsh' (pwsh.exe).",
