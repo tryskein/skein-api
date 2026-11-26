@@ -113,8 +113,8 @@ class Box(object):
     def output(self, limits, method, clock=None, out=None):
         clock = clock or FakeClock()
         pacer = RUNNER.Pacer(RUNNER.StreamLimits(limits), clock=clock, sleep=clock.sleep)
-        return RUNNER.StreamOutput(RUNNER.StreamLimits(limits), self.journal, method, self.journal.path,
-                                   out=out or Out(clock), pacer=pacer)
+        return RUNNER.StreamOutput(RUNNER.StreamLimits(limits), self.journal, method,
+                                   out=out or Out(clock), pacer=pacer, issue=ISSUE)
 
     def journal_lines(self):
         try:
@@ -180,6 +180,11 @@ class LimitsTest(unittest.TestCase):
         self.assertEqual(done, [huge])
         (stub,) = out.lines()
         self.assertEqual((stub["event"], stub["notificationId"]), ("notification_unfit", 9))
+        # The journal by reference to the preflight line, not by its path
+        # again (INV-17).
+        self.assertNotIn(box.journal.path, json.dumps(stub))
+        self.assertEqual(stub["action"], "This event does not fit the line limit; read it in the journal "
+                                         "named in the preflight line.")
         # A limit too small even for the stand-in: only the journal.
         out = Out()
         output = box.output({"line": {"max": 20, "unit": "chars"}}, "stream", out=out)

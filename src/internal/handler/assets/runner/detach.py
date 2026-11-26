@@ -504,7 +504,7 @@ def run_foreground(token_file, issue, env, settings, doc=None):
             held.begin(token_file, env, settings, issue)
             limits = StreamLimits(held.doc.get("limits"))
             journal = Journal(token_file, issue, secrets=[held.token], env=env)
-            output = StreamOutput(limits, journal, held.doc.get("method"), held.doc.get("journal"), issue=issue)
+            output = StreamOutput(limits, journal, held.doc.get("method"), issue=issue)
             if output.lifecycle(held.line) and held.full:
                 mark_announced(token_file, held.doc["preflightId"])
             run_stream_loop(executor, os.environ.get("SKEIN_PUBLIC_URL", ""), held.token, issue,

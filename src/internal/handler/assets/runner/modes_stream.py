@@ -162,11 +162,10 @@ class Pacer(object):
 class StreamOutput(object):
     """The stdout of a stream or exit-on-event monitor within its limits."""
 
-    def __init__(self, limits, journal, method, journal_path, out=None, pacer=None, issue=""):
+    def __init__(self, limits, journal, method, out=None, pacer=None, issue=""):
         self.limits = limits
         self.journal = journal
         self.method = method
-        self.journal_path = journal_path
         self.issue = issue
         self.out = out
         self.pacer = pacer or Pacer(limits)
@@ -232,7 +231,7 @@ class StreamOutput(object):
         if text is not None and self.limits.fits([text]):
             return text, STATUS_PRINTED
         nid = n.get("id") if isinstance(n, dict) else None
-        stub = unfit_stub_line(nid, self.journal_path, self.limits.line_max, self.limits.line_unit)
+        stub = unfit_stub_line(nid, self.limits.line_max, self.limits.line_unit)
         if stub is not None and self.limits.fits([stub]):
             return stub, STATUS_UNFIT
         return None, STATUS_UNFIT

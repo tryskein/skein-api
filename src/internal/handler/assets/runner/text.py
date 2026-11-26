@@ -290,13 +290,14 @@ def notification_line(notification, limit=None, unit=UNIT_CHARS):
     return text if measure(text, unit) <= limit else None
 
 
-def unfit_stub_line(notification_id, journal_path, limit=None, unit=UNIT_CHARS):
+def unfit_stub_line(notification_id, limit=None, unit=UNIT_CHARS):
     """The stdout stand-in for an event whose minimal form does not fit: its
-    notification id and where to read it. None when even this does not fit
-    (then the event is only in the journal)."""
+    notification id and where to read it - the journal named by the
+    preflight line, by reference, not by its path again (INV-17). None when
+    even this does not fit (then the event is only in the journal)."""
     for obj in ({"event": "notification_unfit", "notificationId": notification_id,
-                 "action": "This event does not fit the line limit; read it in the journal %s."
-                           % journal_path},
+                 "action": "This event does not fit the line limit; read it in the journal named in the "
+                           "preflight line."},
                 {"event": "notification_unfit", "notificationId": notification_id,
                  "action": SEE_JOURNAL}):
         text = _dumps(obj)
