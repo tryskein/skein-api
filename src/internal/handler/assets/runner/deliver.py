@@ -49,6 +49,9 @@ MAX_CALLS = 1 + len(RETRY_DELAYS_SEC)
 TAILS_EVERY_SEC = 60
 # The step of a wait: the cancel signal is checked between steps.
 WAIT_STEP_SEC = 1.0
+# The file next to the token where the agent writes the session id of its
+# own echo (P-5).
+EXCLUDE_FILE_NAME = "exclude_session"
 # The answer sign of a call that was not made.
 _NOT_SENT = "notSent"
 
@@ -216,7 +219,9 @@ class DeliverySink(object):
         self.channels = [doc.get("channel")] + [c for c in doc.get("fallbacks") or []
                                                 if not registry.is_blind(c)]
         self.identity = doc.get("identity") or {}
-        self.exclude_file = env.get("SKEIN_EXCLUDE_SESSION", "")
+        # The exclusion file of one's own echo (P-5, US-13): its literal path
+        # goes into every plain delivery once.
+        self.exclude_file = os.path.join(os.path.dirname(os.path.abspath(token_file)), EXCLUDE_FILE_NAME)
         # Channels whose budget ran out: a delivery by one writes recovered.
         self.failing = set()
         # After "addressee changed" the process writes only the journal.
