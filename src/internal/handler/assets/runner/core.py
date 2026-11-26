@@ -165,7 +165,8 @@ def open_token(path):
     try:
         fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
     except FileNotFoundError:
-        raise Stop("token_file_missing")
+        # The token is gone: its state and its empty directory go too.
+        raise Stop("token_file_missing", delete_token=True)
     except OSError:
         # Unreadable (a symlink, no permission): not ours to touch.
         raise Stop("token_file_missing")
@@ -291,7 +292,8 @@ def build_url(base, cursor, exclude_session=""):
 # reason              event     exit  token file
 # token_expired       closed    0     deleted
 # visibility_lost     closed    0     deleted
-# token_file_missing  closed    1     missing stays missing; empty → deleted;
+# token_file_missing  closed    1     missing stays missing (its state is
+#                                     deleted); empty → deleted;
 #                                     unreadable → not touched
 # token_file_insecure closed    1     deleted when ours; another user's not touched
 # misconfigured       closed    1     deleted when its path is known

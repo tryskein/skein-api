@@ -65,8 +65,7 @@ def _skein_loader_action(reason, issue):
 
 
 def _skein_loader_rm(path, opened=None):
-    # With opened (the fstat of the file read), delete only that same inode.
-    # Our state file goes with it (st_uid is 0 on Windows).
+    # Only the opened inode, if given; our state goes too (Windows uid: 0).
     import os
     try:
         if opened is not None:
@@ -74,8 +73,10 @@ def _skein_loader_rm(path, opened=None):
             if (cur.st_ino, cur.st_dev) != (opened.st_ino, opened.st_dev):
                 return
         os.remove(path)
-    except OSError:
-        return
+    except OSError as e:
+        # Already gone: still take its state.
+        if opened is not None or not isinstance(e, FileNotFoundError):
+            return
     d = os.path.dirname(os.path.abspath(path))
     s = os.path.join(d, "state.json")
     try:
@@ -115,14 +116,15 @@ def _skein_loader_fetch():
         raise _SkeinLoaderStop("misconfigured", delete_token=bool(path))
     try:
         fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    except FileNotFoundError:
+        raise _SkeinLoaderStop("token_file_missing", delete_token=True)
     except OSError:
         raise _SkeinLoaderStop("token_file_missing")
     try:
         st = os.fstat(fd)
         if not stat.S_ISREG(st.st_mode):
             raise _SkeinLoaderStop("token_file_missing")
-        # No one else may read the token: the file is ours and private, or
-        # sits in a private directory of ours (made by the prepare command).
+        # Private: ours, and 0600 or in our 0700 dir (made by prepare).
         if hasattr(os, "getuid"):
             uid = os.getuid()
             private = st.st_uid == uid and not st.st_mode & 0o077
@@ -147,7 +149,7 @@ def _skein_loader_fetch():
     req = u.Request(base + "/agent/v1/monitor-script", headers={"X-Skein-Api-Key": token})
 
     class NoRedirect(u.HTTPRedirectHandler):
-        # A redirect would carry the token to another host and run its code.
+        # A redirect would leak the token and run foreign code.
         def redirect_request(self, *args):
             return None
     try:

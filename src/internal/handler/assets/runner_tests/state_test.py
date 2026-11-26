@@ -522,6 +522,16 @@ class FileFateTest(unittest.TestCase):
                 self.assertEqual(mon.stop_line()["reason"], reason, mon.lines)
                 self.assert_all_gone(tok, mon)
 
+    def test_missing_token_file_takes_its_state(self):
+        for runner in (True, False):
+            with self.subTest(by="runner" if runner else "inline loader"):
+                tok = TokenDir(self, cursor_id=3)
+                os.remove(tok.token)
+                mon = Monitor(self, self.srv.url(), tok.token, runner=runner)
+                mon.wait_exit()
+                self.assertEqual(mon.stop_line()["reason"], "token_file_missing", mon.lines)
+                self.assert_all_gone(tok, mon)
+
     def test_stops_that_keep_the_token_keep_the_cursor(self):
         with self.subTest(reason="server_unreachable"):
             tok = TokenDir(self, cursor_id=3)
