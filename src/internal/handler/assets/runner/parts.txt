@@ -15,4 +15,5 @@ registry.py
 overrides.py
 proctree.py
 identity.py
+preflight.py
 core.py

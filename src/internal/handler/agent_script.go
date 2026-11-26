@@ -192,6 +192,22 @@ func wholeSecondsAtLeastOne(d time.Duration) int {
 // @Description  environment variable of the agent's machine changes the
 // @Description  runner.
 // @Description
+// @Description  Preflight (`client` mode with SKEIN_MONITOR_MODE=preflight):
+// @Description  the runner does not poll and does not move the cursor; it
+// @Description  chooses how the monitor runs by the method order (override
+// @Description  SKEIN_MONITOR_CHANNEL, the record's stream, own delivery
+// @Description  command and exit-on-event, hosts, blind channels unless
+// @Description  SKEIN_MONITOR_BLIND=off, journal; a channel whose probe says
+// @Description  unavailable is skipped), checks that the token, journal and
+// @Description  ledger directories take a write, saves the result with its
+// @Description  number and the addressee identity in preflight.json next to
+// @Description  the token under state.lock, and prints one line `{event:
+// @Description  "preflight", preflightId, method, channel, reason, warnings,
+// @Description  journal, command}` (`command` is the working command:
+// @Description  the bootstrap with SKEIN_MONITOR_PREFLIGHT and the
+// @Description  overrides). With a live runner of the token it answers
+// @Description  `already_running` and changes nothing.
+// @Description
 // @Description  Stop protocol (sk-579 US-3): every controlled stop prints
 // @Description  exactly one last stdout line `{event, reason, action[, status]}`
 // @Description  — the only line that carries `reason`. `event` is `closed`
@@ -208,7 +224,10 @@ func wholeSecondsAtLeastOne(d time.Duration) int {
 // @Description  (exit 1; deleted when its path is known); `stopped`
 // @Description  (SIGTERM/SIGINT; kept, 0); `internal_error` (kept, 1,
 // @Description  traceback to stderr only); `already_running` (`duplicate`,
-// @Description  file untouched, 0). One runner per token file: the runner
+// @Description  file untouched, 0); `config_invalid` (`client` mode: an
+// @Description  invalid override, client name or platform, a directory
+// @Description  that takes no write, an old Python; `action` names what to
+// @Description  fix; kept, 1). One runner per token file: the runner
 // @Description  takes an exclusive non-blocking flock on the token file it
 // @Description  opened and reads the token once from that descriptor; on a
 // @Description  platform without OS file locks it runs unlocked and says so

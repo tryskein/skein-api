@@ -301,6 +301,8 @@ def build_url(base, cursor, exclude_session=""):
 # internal_error      paused    1     kept
 # root_closed         closed    0     deleted
 # already_running     duplicate 0     not touched
+# config_invalid      closed    1     kept (client mode: a setting, directory
+#                                     or the Python version to fix)
 STOPS = {
     "token_expired": ("closed", 0),
     "visibility_lost": ("closed", 0),
@@ -311,11 +313,15 @@ STOPS = {
     "internal_error": ("paused", 1),
     "root_closed": ("closed", 0),
     "already_running": ("duplicate", 0),
+    "config_invalid": ("closed", 1),
 }
 
 
-def stop_action(reason, issue):
+def stop_action(reason, issue, detail=None):
     mint = 'skein_get_monitor_script(id="%s")' % issue
+    if reason == "config_invalid":
+        return ("The monitor for issue %s did not start: %s. Fix that, then run the preflight again; "
+                "do not mint a new monitor: its token is kept." % (issue, detail or "a setting is invalid"))
     if reason == "token_expired":
         return ("The monitor for issue %s has ended: its token expired or was revoked. If you "
                 "stopped it yourself, do nothing; otherwise mint a new monitor with %s." % (issue, mint))
@@ -352,7 +358,7 @@ class Stop(Exception):
     """A controlled stop: reason (a STOPS key), optional HTTP status, and
     whether the token file is to be deleted."""
 
-    def __init__(self, reason, status=None, delete_token=False):
+    def __init__(self, reason, status=None, delete_token=False, detail=None):
         global _stopping
         # Deciding a stop starts the final phase: from here on a signal no
         # longer raises, so it cannot replace this stop or print a second line.
@@ -361,6 +367,8 @@ class Stop(Exception):
         self.reason = reason
         self.status = status
         self.delete_token = delete_token
+        # What config_invalid names to fix (a variable, a directory).
+        self.detail = detail
 
 
 class StopSignal(BaseException):
@@ -683,12 +691,44 @@ def run():
     return finish(outcome, issue, token_file)
 
 
+def preflight_requested():
+    """Whether this start is a preflight: client mode only (P-4)."""
+    return LOADER_MODE == "client" and os.environ.get("SKEIN_MONITOR_MODE") == "preflight"
+
+
+def run_preflight():
+    """Run the preflight; returns the process exit code. Prints the preflight
+    line, or exactly one stop line."""
+    global _stopping
+    issue = os.environ.get("SKEIN_ISSUE", "")
+    token_file = os.environ.get("SKEIN_TOKEN_FILE", "")
+    try:
+        if not token_file or not os.environ.get("SKEIN_PUBLIC_URL", ""):
+            raise Stop("misconfigured", delete_token=bool(token_file))
+        registry = load_registry()
+        settings = read_settings(os.environ, registry)
+        emit(preflight(token_file, dict(os.environ), registry, settings))
+        return 0
+    except ConfigInvalid as exc:
+        outcome = Stop("config_invalid", detail="%s (%s)" % (exc.variable, exc.detail))
+    except Stop as stop:
+        outcome = stop
+    except StopSignal:
+        outcome = Stop("stopped")
+    except Exception:
+        _stopping = True
+        log_stderr("monitor runner: unexpected error in preflight\n" + traceback.format_exc())
+        outcome = Stop("internal_error")
+    return finish(outcome, issue, token_file)
+
+
 def finish(outcome, issue, token_file):
     """Apply the token-file fate of the stop, print its line, return its code."""
     event, code = STOPS[outcome.reason]
     if outcome.delete_token and token_file:
         remove_token_file(token_file)
-    line = {"event": event, "reason": outcome.reason, "action": stop_action(outcome.reason, issue)}
+    line = {"event": event, "reason": outcome.reason,
+            "action": stop_action(outcome.reason, issue, outcome.detail)}
     if outcome.status is not None:
         line["status"] = outcome.status
     emit(line)
@@ -716,7 +756,7 @@ def main():
                 reconfigure(line_buffering=True)
             except ValueError:
                 pass
-        code = run()
+        code = run_preflight() if preflight_requested() else run()
     except StopSignal:
         code = finish(Stop("stopped"), os.environ.get("SKEIN_ISSUE", ""),
                       os.environ.get("SKEIN_TOKEN_FILE", ""))
