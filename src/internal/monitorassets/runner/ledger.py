@@ -159,6 +159,11 @@ class _FileLock(object):
         except OSError as exc:
             os.close(self.fd)
             raise LedgerUnavailable(exc.strerror or "lock_failed")
+        except BaseException:
+            # A stop signal during the wait for the lock: no descriptor is
+            # left outside the release.
+            os.close(self.fd)
+            raise
         self.path = path
 
     def release(self):
@@ -236,6 +241,11 @@ class Attempt(object):
         # The time of the first call of this delivery on this channel: the
         # budget of INV-8 runs from it.
         self.first_call = first_call
+        # The attempt has its end in the ledger (finish or abandon), and the
+        # text was handed to the channel (set by the delivery's guard): an
+        # owner that ends without either withdraws it (deliver.py).
+        self.settled = False
+        self.handed = False
 
     def note_call(self):
         """Count a call of the channel in the ledger before it is made.
@@ -307,6 +317,7 @@ class Attempt(object):
                     # with it shortens it); another's is only lengthened.
                     entry["window"] = {"until": until}
         self.ledger._change(change)
+        self.settled = True
         return result.get("burst", False)
 
     def abandon(self):
@@ -324,6 +335,7 @@ class Attempt(object):
             if window.get("attempt") == self.key:
                 entry["window"] = {"until": window.get("prev", 0)}
         self.ledger._change(change)
+        self.settled = True
 
     def release(self):
         """Release the attempt lock and remove its file (step 6)."""

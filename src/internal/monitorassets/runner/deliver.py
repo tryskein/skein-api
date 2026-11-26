@@ -174,6 +174,7 @@ class Guard(object):
         self.boundary()
         self.remaining()
         self.handed = True
+        self.attempt.handed = True
 
     def count_call(self):
         self.attempt.note_call()
@@ -557,30 +558,45 @@ class DeliverySink(object):
             except LedgerUnavailable:
                 self._ledger_down()
                 continue
-            done = set()
-            for eid, status in decision.closed.items():
-                self._close(cursor, outcomes, journaled, byid[eid], status, channel_id, None)
-                done.add(eid)
-            for eid, rec in decision.own.items():
-                self._close(cursor, outcomes, journaled, byid[eid], rec.get("outcome"), rec.get("channel"), None)
-                done.add(eid)
-            pending = [n for n in pending if str(n["id"]) not in done]
-            if decision.attempt is None:
-                if decision.wait_until is not None:
-                    self._wait(decision.wait_until)
-                elif decision.pending:
-                    self._wait(self.clock.now() + WAIT_STEP_SEC)
-                continue
+            # The attempt begin published is owned from here to its release on
+            # every path: one that ends before the text was handed over and
+            # before its end was written is withdrawn (P-11).
+            attempt = decision.attempt
             try:
-                self._deliver(cursor, outcomes, journaled, decision.attempt, channel_id, channel,
-                              [byid[e] for e in decision.published], step)
-            except LedgerUnavailable:
-                # Refused before any call (a counted call): nothing was handed
-                # over, the events go to the journal only.
-                self._ledger_step(decision.attempt.abandon)
-                decision.attempt.release()
-                self._ledger_down()
-            pending = [n for n in pending if str(n["id"]) not in outcomes]
+                done = set()
+                for eid, status in decision.closed.items():
+                    self._close(cursor, outcomes, journaled, byid[eid], status, channel_id, None)
+                    done.add(eid)
+                for eid, rec in decision.own.items():
+                    self._close(cursor, outcomes, journaled, byid[eid], rec.get("outcome"), rec.get("channel"),
+                                None)
+                    done.add(eid)
+                pending = [n for n in pending if str(n["id"]) not in done]
+                if attempt is None:
+                    if decision.wait_until is not None:
+                        self._wait(decision.wait_until)
+                    elif decision.pending:
+                        self._wait(self.clock.now() + WAIT_STEP_SEC)
+                    continue
+                try:
+                    self._deliver(cursor, outcomes, journaled, attempt, channel_id, channel,
+                                  [byid[e] for e in decision.published], step)
+                except LedgerUnavailable:
+                    # Refused before any call (a counted call): nothing was
+                    # handed over, the events go to the journal only.
+                    self._ledger_step(attempt.abandon)
+                    self._ledger_down()
+                pending = [n for n in pending if str(n["id"]) not in outcomes]
+            except BaseException:
+                if attempt is not None and not attempt.settled and not attempt.handed:
+                    try:
+                        attempt.abandon()
+                    except LedgerUnavailable:
+                        pass
+                raise
+            finally:
+                if attempt is not None:
+                    attempt.release()
 
     def _own_echo(self, cursor, outcomes, journaled, pending):
         """Give the events of the excluded session among those not yet handed
@@ -624,59 +640,58 @@ class DeliverySink(object):
         guard = Guard(self, channel, attempt, timeout)
         driver = self.drivers.get(channel_id) or ArgvDriver(channel, self.executor)
         try:
-            try:
-                outcome, sign = driver.send(text, guard)
-            except PollStale:
-                self._ledger_step(attempt.abandon)
-                self._wait(self.clock.now() + WAIT_STEP_SEC)
-                return
-            except RefusedBeforeSend as exc:
-                outcome, sign = OUTCOME_REFUSED, {_NOT_SENT: exc.reason}
-            except AddresseeChanged:
-                outcome, sign = "addressee-changed", {_NOT_SENT: "addressee changed"}
-            except AddresseeGone:
-                outcome, sign = OUTCOME_ADDRESSEE_GONE, None
-            except DeliveryCancelled:
+            outcome, sign = driver.send(text, guard)
+        except PollStale:
+            self._ledger_step(attempt.abandon)
+            self._wait(self.clock.now() + WAIT_STEP_SEC)
+            return
+        except RefusedBeforeSend as exc:
+            outcome, sign = OUTCOME_REFUSED, {_NOT_SENT: exc.reason}
+        except AddresseeChanged:
+            outcome, sign = "addressee-changed", {_NOT_SENT: "addressee changed"}
+        except AddresseeGone:
+            outcome, sign = OUTCOME_ADDRESSEE_GONE, None
+        except DeliveryCancelled:
+            self._ledger_step(attempt.abandon)
+            raise
+        except AttemptLost:
+            # Another attempt holds an event of the batch (addressees
+            # merged): nothing was handed over; the events wait for it.
+            self._ledger_step(attempt.abandon)
+            return
+        except (StopSignal, Exception) as exc:
+            # A stop (or an error) while the channel may have the text:
+            # unknown, never a second send (INV-9) - in the ledger, the
+            # state and the journal before the stop goes on, so its
+            # receipt never comes before this outcome.
+            if not guard.handed:
+                # Before the hand-over: nothing reached the channel.
                 self._ledger_step(attempt.abandon)
                 raise
-            except AttemptLost:
-                # Another attempt holds an event of the batch (addressees
-                # merged): nothing was handed over; the events wait for it.
-                self._ledger_step(attempt.abandon)
-                return
-            except (StopSignal, Exception) as exc:
-                # A stop (or an error) while the channel may have the text:
-                # unknown, never a second send (INV-9) - in the ledger, the
-                # state and the journal before the stop goes on, so its
-                # receipt never comes before this outcome.
-                if isinstance(exc, (LedgerUnavailable, JournalUnavailable)):
-                    raise
-                if not guard.handed:
-                    # Before the hand-over: nothing reached the channel.
-                    self._ledger_step(attempt.abandon)
-                    raise
-                self._ledger_step(attempt.finish, OUTCOME_UNKNOWN)
-                self._close_unsure(cursor, outcomes, journaled, batch, channel_id)
+            if isinstance(exc, (LedgerUnavailable, JournalUnavailable)):
                 raise
-            changed = outcome == "addressee-changed"
-            if not changed and outcome != OUTCOME_REFUSED and not self._same_process(channel):
-                # The agent process changed while a one-step call ran: the
-                # text may have reached another process ("unknown", never
-                # sent again), later events go to the journal.
-                changed = True
-            if guard.changed:
-                # Another addressee before the final step: the text was
-                # written, not submitted.
-                changed = True
-            if changed:
-                # Not sent; the event's outcome is "unknown" (the table of
-                # outcomes), later events go to the journal.
-                outcome = OUTCOME_UNKNOWN
-            # The call was made: its outcome stands even when the ledger
-            # refuses to take it.
-            burst = self._ledger_step(attempt.finish, outcome)
-        finally:
-            attempt.release()
+            self._ledger_step(attempt.finish, OUTCOME_UNKNOWN)
+            self._close_unsure(cursor, outcomes, journaled, batch, channel_id)
+            raise
+        changed = outcome == "addressee-changed"
+        if not changed and outcome != OUTCOME_REFUSED and not self._same_process(channel):
+            # The agent process changed while a one-step call ran: the
+            # text may have reached another process ("unknown", never
+            # sent again), later events go to the journal.
+            changed = True
+        if guard.changed:
+            # Another addressee before the final step: the text was
+            # written, not submitted.
+            changed = True
+        if changed:
+            # Not sent; the event's outcome is "unknown" (the table of
+            # outcomes), later events go to the journal.
+            outcome = OUTCOME_UNKNOWN
+        # The call was made: its outcome stands even when the ledger
+        # refuses to take it.
+        burst = self._ledger_step(attempt.finish, outcome)
+        # The owner of the attempt (_page) releases it, after a withdrawal
+        # when nothing was handed over.
         if burst:
             self.lifecycle({"event": "degraded", "cause": "single_session_burst", "issue": self.issue,
                             "actorSessionId": batch[0].get("actorSessionId")})
