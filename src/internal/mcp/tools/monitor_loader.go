@@ -123,10 +123,14 @@ func mustPrepareScript() string {
 // literal, and a string literal spans lines only in triple quotes or after a
 // backslash at the end of a line. The sources that go through here use
 // neither; a source that starts to is refused at start-up instead of being
-// stripped wrongly.
+// stripped wrongly. So is a CR outside CRLF: Python reads a lone CR as a line
+// break, and a comment line would swallow the code after it.
 func stripPythonCommentLines(src string) string {
 	if strings.Contains(src, `"""`) || strings.Contains(src, "'''") {
 		panic("monitor loader: a stripped source must not use triple-quoted strings")
+	}
+	if strings.Count(src, "\r") != strings.Count(src, "\r\n") {
+		panic("monitor loader: a stripped source must not hold a CR outside CRLF (Python reads it as a line break)")
 	}
 	lines := strings.SplitAfter(src, "\n")
 	var b strings.Builder
