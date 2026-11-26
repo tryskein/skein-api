@@ -98,7 +98,9 @@ class PollCancel(object):
                 wait = self.interval
                 if status == 429:
                     wait = max(wait, retry_after_seconds(retry_after, self.interval))
-                self.next_poll = now + wait
+                # From the answer, not from the start of the request: a slow
+                # failed poll does not let the next one follow at once.
+                self.next_poll = self.clock.now() + wait
         return self.stop[0] if self.stop is not None else None
 
     def may_send(self):
