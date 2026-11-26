@@ -646,7 +646,7 @@ class DeliverySink(object):
                 self._wait(due)
                 return
         timeout = min((channel.get("executor") or {}).get("timeoutSec") or self.idle_window,
-                      max(deadline - now, 1))
+                      deadline - now)
         if len(batch) < len(attempt.events):
             batch = [n for n in batch if str(n["id"]) in attempt.events]
         limit, unit = _line_limit(channel)
