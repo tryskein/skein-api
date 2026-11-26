@@ -15,12 +15,14 @@ Standard library of Python 3.6 only.
 """
 
 import hashlib
+import io
 import json
 import os
 import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from unittest import mock
 
@@ -281,6 +283,50 @@ class RunnerLockTest(unittest.TestCase):
         second = self.acquire(token=other)
         self.assertNotEqual(first.path, second.path)
         self.assertEqual(os.path.dirname(first.path), os.path.dirname(second.path))
+
+
+@unittest.skipUnless(sys.platform.startswith("linux"), "reads /proc of Linux")
+class ProcessTest(unittest.TestCase):
+    """The process facts and the detached start of the platform layer."""
+
+    # /proc/<pid>/stat of a sleeping process: ppid 1, pgrp 77, tpgid 77,
+    # starttime 4242 (field 22).
+    STAT = b"123 (my (odd) name) S 1 77 77 34816 77 4194560 1 0 0 0 0 0 0 0 20 0 1 0 4242 0 0"
+
+    def facts(self, stat_bytes=None, error=None):
+        def fake_open(path, mode="r", *args, **kwargs):
+            if error is not None:
+                raise error
+            if path.endswith("/stat"):
+                return io.BytesIO(stat_bytes)
+            return io.StringIO("boot-1\n")
+        with mock.patch.object(RUNNER, "open", fake_open, create=True):
+            return PLATFORM.process_info(123)
+
+    def test_facts_of_a_live_process(self):
+        info = self.facts(self.STAT)
+        self.assertEqual((info.ppid, info.pgid, info.tpgid, info.start, info.name),
+                         (1, 77, 77, "boot-1:4242", "my (odd) name"))
+        self.assertTrue(info.foreground())
+
+    def test_unknown_process_is_none_not_an_error(self):
+        for case, kwargs in (("short stat", {"stat_bytes": b"123 (x) S 1"}),
+                             ("garbled stat", {"stat_bytes": b"123 (x) S one 77 77 1 77 x"}),
+                             ("zombie", {"stat_bytes": self.STAT.replace(b") S ", b") Z ")}),
+                             ("hidden (hidepid)", {"error": PermissionError(13, "denied")}),
+                             ("gone", {"error": FileNotFoundError(2, "gone")})):
+            with self.subTest(case=case):
+                self.assertIsNone(self.facts(**kwargs))
+
+    def test_detached_child_is_reaped(self):
+        pid, receipt = PLATFORM.spawn_detached(
+            [sys.executable, "-c", "import sys; sys.stdin.read(); print('ready')"],
+            b"body", dict(os.environ), 30)
+        self.assertEqual(receipt, "ready")
+        deadline = time.monotonic() + 10
+        while os.path.exists("/proc/%d" % pid) and time.monotonic() < deadline:
+            time.sleep(0.05)
+        self.assertFalse(os.path.exists("/proc/%d" % pid), "the ended child stayed a zombie")
 
 
 if __name__ == "__main__":

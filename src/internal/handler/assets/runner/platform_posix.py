@@ -11,6 +11,7 @@ import select
 import stat
 import subprocess
 import sys
+import threading
 import time
 
 try:
@@ -183,8 +184,9 @@ class PosixPlatform(object):
 
     @staticmethod
     def process_info(pid):
-        """ProcessInfo of a live process, None when there is no such process.
-        Linux reads /proc/<pid>/stat and the boot id; macOS asks ps. Raises
+        """ProcessInfo of a live process; None when it is unknown: no such
+        process, a zombie, or facts that cannot be read or parsed. Linux
+        reads /proc/<pid>/stat and the boot id; macOS asks ps. Raises
         PlatformRefusal (unsupported) on any other system."""
         if sys.platform.startswith("linux"):
             return _linux_process_info(pid)
@@ -199,10 +201,12 @@ class PosixPlatform(object):
         the start receipt. Returns (pid, receipt): receipt is the line without
         its newline, or None when the process closed stdout or was silent for
         the whole wait. The pipes of this process are closed on return; the
-        child outlives it."""
+        child outlives it, and a daemon thread of this process reaps it when
+        it ends first, so it never lingers as a zombie."""
         proc = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                 stderr=subprocess.DEVNULL, env=env, close_fds=True,
                                 start_new_session=True)
+        threading.Thread(target=proc.wait, daemon=True).start()
         try:
             try:
                 proc.stdin.write(stdin_data)
@@ -334,13 +338,23 @@ def _linux_process_info(pid):
             raw = fh.read().decode("utf-8", "replace")
         with open("/proc/sys/kernel/random/boot_id", "r") as fh:
             boot = fh.read().strip()
-    except (FileNotFoundError, ProcessLookupError):
+    except OSError:
+        # Gone, or hidden from us (hidepid): not known.
         return None
+    try:
+        return _parse_linux_stat(pid, raw, boot)
+    except (IndexError, ValueError):
+        return None
+
+
+def _parse_linux_stat(pid, raw, boot):
     # "pid (comm) state ppid pgrp session tty_nr tpgid ... starttime ...":
     # comm may hold spaces and parentheses, so it ends at the LAST ")".
     head, _, rest = raw.rpartition(")")
     name = head.partition("(")[2]
     fields = rest.split()
+    if fields[0] == "Z":
+        return None  # a zombie: it has ended
     # fields[0] is field 3 of proc(5) (state): ppid is field 4, pgrp 5,
     # tpgid 8, starttime 22.
     return ProcessInfo(pid=pid, ppid=int(fields[1]), start="%s:%s" % (boot, fields[19]),
@@ -349,10 +363,17 @@ def _linux_process_info(pid):
 
 def _darwin_process_info(pid):
     env = dict(os.environ, LC_ALL="C")
-    proc = subprocess.run(["ps", "-o", "ppid=,pgid=,tpgid=,lstart=,comm=", "-p", str(pid)],
-                          stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=env)
+    try:
+        proc = subprocess.run(["ps", "-o", "ppid=,pgid=,tpgid=,lstart=,comm=", "-p", str(pid)],
+                              stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=env)
+    except OSError:
+        return None
     fields = proc.stdout.decode("utf-8", "replace").split(None, 8)
     if proc.returncode != 0 or len(fields) < 9:
+        return None
+    try:
+        int(fields[0]), int(fields[1]), int(fields[2])
+    except ValueError:
         return None
     # lstart is five words in the C locale: "Wed Nov 26 11:00:00 2026".
     return ProcessInfo(pid=pid, ppid=int(fields[0]), start=" ".join(fields[3:8]),
