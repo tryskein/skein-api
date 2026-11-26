@@ -262,6 +262,8 @@ class DeliverySink(object):
         self._tails_at = None
         # The answer of the last refusal before send, for channel_failing.
         self._last_refusal = None
+        # The cursor of the last page (the one a cursor_reset rejects).
+        self._cursor = None
 
     # --- lines ----------------------------------------------------------------
 
@@ -270,6 +272,10 @@ class DeliverySink(object):
         event = fields.pop("event")
         try:
             self.journal.lifecycle(event, **fields)
+            if event == "degraded" and fields.get("cause") == "cursor_reset":
+                # The events between the rejected cursor and the new start
+                # have no line of their own: one summary says so.
+                self.journal.summary_cursor_reset(self._cursor)
         except JournalUnavailable:
             pass
 
@@ -367,6 +373,7 @@ class DeliverySink(object):
         JournalUnavailable (the page is not done: the cursor stays), or Stop
         when access is lost or the addressee has ended: the waiting events
         get their outcome first (finalize.py)."""
+        self._cursor = cursor
         if hasattr(self.cancel, "cursor"):
             # A poll during a wait asks from the last fixed outcome.
             self.cancel.cursor = cursor
