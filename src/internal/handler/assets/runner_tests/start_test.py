@@ -103,7 +103,9 @@ class Box(object):
     def start(self, number, before_spawn=None, **extra):
         """The working command with SKEIN_MONITOR_PREFLIGHT=number, run as
         the loader runs it; returns (exit code, printed lines)."""
-        env = self.env(SKEIN_MONITOR_MODE="run", SKEIN_MONITOR_PREFLIGHT=str(number), **extra)
+        run = {"SKEIN_MONITOR_MODE": "run", "SKEIN_MONITOR_PREFLIGHT": str(number)}
+        run.update(extra)
+        env = self.env(**run)
         lines = []
         spawn = RUNNER.PosixPlatform.spawn_detached
 
