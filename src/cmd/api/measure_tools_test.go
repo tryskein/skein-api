@@ -690,11 +690,11 @@ VALUES ($1, $2, 'fake-hash-for-measure', $3, 'measure', now(), 'manage', false, 
 // measureMonitorFixtureClient is the agent record of measureMonitorRegistry.
 const measureMonitorFixtureClient = "measure-fixture"
 
-// measureMonitorRegistry is the embedded registry plus a representative
-// record for the size of a response with `client`: an agent with a stream
-// and an exit-on-event method (instructions as long as the catalogue's
-// streaming tools need) and two warnings, and a host channel the agent can
-// be woken by. Its values describe no real agent.
+// measureMonitorRegistry is the embedded registry with its records replaced
+// by a representative one for the size of a response with `client`: an
+// agent with a stream and an exit-on-event method (instructions as long as
+// the catalogue's streaming tools need) and two warnings, and a host
+// channel the agent can be woken by. Its values describe no real agent.
 func measureMonitorRegistry(t *testing.T) *monitorregistry.Registry {
 	t.Helper()
 	var doc map[string]any
@@ -735,6 +735,9 @@ func measureMonitorRegistry(t *testing.T) *monitorregistry.Registry {
 		"addressee":      map[string]any{"process": "none"},
 		"binaries":       map[string]any{"linux": []any{"measure-host"}},
 	}}
+	// The engine map names agent records; the embedded ones were replaced
+	// above, so the fixture carries a map of its own.
+	doc["zavodEngines"] = map[string]any{}
 	raw, err := json.Marshal(doc)
 	if err != nil {
 		t.Fatalf("encode fixture registry: %v", err)
