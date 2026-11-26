@@ -98,6 +98,22 @@ def load_page_redacted(token_file, cursor):
     return set(doc["redacted"])
 
 
+def load_exclusion(token_file):
+    """The last valid value of the exclusion file of one's own echo the
+    state holds (US-13), or None."""
+    doc = _load_state_doc(token_file)
+    value = doc.get("exclude") if doc is not None else None
+    return value if isinstance(value, str) and value else None
+
+
+def save_exclusion(token_file, value):
+    """Keep the last valid value of the exclusion file in the state, beside
+    what the state holds. Raises OSError or PlatformRefusal when it cannot."""
+    doc = _load_state_doc(token_file) or {"version": STATE_VERSION, "cursor": None}
+    doc["exclude"] = value
+    _save_state_doc(token_file, doc)
+
+
 def _load_state_doc(token_file):
     path = state_file_path(token_file)
     try:
@@ -124,6 +140,11 @@ def save_cursor(token_file, cursor):
 
 
 def _save_state_doc(token_file, doc):
+    if "exclude" not in doc:
+        # A save of the cursor or of a page keeps the exclusion value.
+        kept = load_exclusion(token_file)
+        if kept is not None:
+            doc = dict(doc, exclude=kept)
     data = json.dumps(doc, separators=(",", ":"), sort_keys=True).encode("utf-8")
     path = state_file_path(token_file)
     if os.name == "posix":

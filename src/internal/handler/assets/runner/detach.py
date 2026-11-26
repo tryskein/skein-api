@@ -372,10 +372,12 @@ def _send_receipt(line):
 class JournalSink(object):
     """Where a detached or journal monitor puts its lines: the journal."""
 
-    def __init__(self, journal, method, channel, env=None):
+    def __init__(self, journal, method, channel, env=None, exclusion=None):
         self.journal = journal
         self.method = method
         self.channel = channel
+        # The exclusion of one's own echo in force (echo.py), or None.
+        self.exclusion = exclusion
         self.tails = TailTimer(env) if env is not None else None
 
     def maybe_tails(self):
@@ -393,19 +395,24 @@ class JournalSink(object):
 
     def notification(self, n):
         # Raises JournalUnavailable: the page is not done, the cursor stays.
+        if self.exclusion is not None and self.exclusion.own(n):
+            self.journal.delivery(n, OUTCOME_OWN_ECHO, method=self.method)
+            return
         self.journal.delivery(n, JOURNAL_ONLY_STATUS, method=self.method, channel=self.channel)
 
 
-def delivery_sink(journal, token_file, doc, env, base, issue, token, executor):
+def delivery_sink(journal, token_file, doc, env, base, issue, token, executor, exclusion):
     """The DeliverySink of a detached monitor: the ledger of the server,
-    the addressee of the preflight, this monitor keyed by its journal, and
-    the poll of the access boundary on the runner's request executor."""
+    the addressee of the preflight, this monitor keyed by its journal, the
+    poll of the access boundary on the runner's request executor, and the
+    exclusion of one's own echo that every poll reads again."""
     monitor = os.path.splitext(os.path.basename(journal.path))[0]
     ledger = Ledger(base, monitor, identity_from_doc(doc.get("identity")), env=env)
     clock = SystemClock()
-    cancel = PollCancel(executor, base, token, env.get("SKEIN_EXCLUDE_SESSION", ""), clock)
+    cancel = PollCancel(executor, base, token, exclusion, clock)
     return DeliverySink(journal, token_file, doc, load_registry(), env, ledger,
-                        ArgvExecutor(token_file, env, [token]), issue, cancel=cancel, clock=clock)
+                        ArgvExecutor(token_file, env, [token]), issue, cancel=cancel, clock=clock,
+                        exclusion=exclusion)
 
 
 def run_detached_child():
@@ -436,13 +443,15 @@ def run_detached_child():
                 journal.lifecycle(fields.pop("event"), **fields)
             except JournalUnavailable as exc:
                 raise ConfigInvalid(exc.path, "the journal cannot be written (%s)" % exc.reason)
+            exclusion = Exclusion(token_file, env.get("SKEIN_EXCLUDE_SESSION", ""))
             if held.doc.get("method") == METHOD_DETACHED:
-                sink = delivery_sink(journal, token_file, held.doc, env, base, issue, held.token, executor)
+                sink = delivery_sink(journal, token_file, held.doc, env, base, issue, held.token, executor,
+                                     exclusion)
             else:
-                sink = JournalSink(journal, held.doc.get("method"), held.doc.get("channel"), env)
+                sink = JournalSink(journal, held.doc.get("method"), held.doc.get("channel"), env,
+                                   exclusion=exclusion)
             _send_receipt(held.line)
-            work(executor, base, held.token, issue, os.environ.get("SKEIN_EXCLUDE_SESSION", ""),
-                 token_file, sink=sink)
+            work(executor, base, held.token, issue, exclusion, token_file, sink=sink)
         except ConfigInvalid as exc:
             raise Stop("config_invalid", detail="%s (%s)" % (exc.variable, exc.detail))
     except Stop as stop:
@@ -517,7 +526,8 @@ def run_foreground(token_file, issue, env, settings, doc=None):
             if output.lifecycle(held.line) and held.full:
                 mark_announced(token_file, held.doc["preflightId"])
             run_stream_loop(executor, os.environ.get("SKEIN_PUBLIC_URL", ""), held.token, issue,
-                            os.environ.get("SKEIN_EXCLUDE_SESSION", ""), token_file, held.doc, output, env=env)
+                            Exclusion(token_file, env.get("SKEIN_EXCLUDE_SESSION", "")), token_file,
+                            held.doc, output, env=env)
         except ConfigInvalid as exc:
             raise Stop("config_invalid", detail="%s (%s)" % (exc.variable, exc.detail))
     except Stop as stop:

@@ -319,14 +319,14 @@ class StreamOutput(object):
             k += 1
         return k
 
-    def record(self, n, status):
-        """The outcome of an event in the journal; True when the journal
-        holds it. A journal that cannot be written is said once
+    def record(self, n, status, channel=CHANNEL_STDOUT):
+        """The outcome of an event in the journal (on channel, None for an
+        outcome no channel took); True when the journal holds it. A journal that cannot be written is said once
         (degraded journal_unavailable); the caller decides what the event
         lost: its outcome (unfit, the journal is its only carrier) or a copy
         (printed)."""
         try:
-            self.journal.delivery(n, status, method=self.method, channel=CHANNEL_STDOUT)
+            self.journal.delivery(n, status, method=self.method, channel=channel)
         except JournalUnavailable as exc:
             self._journal_down(exc)
             return False
@@ -421,10 +421,14 @@ def print_events(output, events, exit_on_event, stop_lines):
     return done
 
 
-def run_stream_loop(executor, base, token, issue, exclude_session, token_file, doc, output, env=None):
+def run_stream_loop(executor, base, token, issue, exclusion, token_file, doc, output, env=None):
     """The poll loop of a stream or exit-on-event monitor. Never returns: it
-    ends by raising Stop (delivered ends each exit-on-event cycle). With
-    env it also appends the user's deferred tails periodically (P-12)."""
+    ends by raising Stop (delivered ends each exit-on-event cycle). exclusion
+    is the Exclusion of one's own echo (echo.py): every poll reads it again,
+    and the events of its session are not printed. With env it also appends
+    the user's deferred tails periodically (P-12)."""
+    exclusion = as_exclusion(exclusion)
+    exclude_session = exclusion
     tails = TailTimer(env) if env is not None else None
     exit_on_event = doc.get("method") == METHOD_EXIT_ON_EVENT
     # The stop lines that may follow the batch of an exit-on-event cycle at
@@ -466,7 +470,13 @@ def run_stream_loop(executor, base, token, issue, exclude_session, token_file, d
                 nxt = payload.get("cursor") if isinstance(payload.get("cursor"), dict) else cursor
                 root_closed = payload.get("rootClosed") is True
             events = [n for n in source if not isinstance(n, dict) or n.get("id") not in seen]
-            done = print_events(output, events, exit_on_event, slot_lines)
+            # Events of the excluded session are not printed: their outcome
+            # is "own echo" once the journal holds it (US-13); one the journal
+            # refuses waits like an unprinted event.
+            own = [n for n in events if exclusion.own(n)]
+            others = [n for n in events if not exclusion.own(n)]
+            printed = print_events(output, others, exit_on_event, slot_lines)
+            done = [n for n in own if output.record(n, OUTCOME_OWN_ECHO, channel=None)] + printed
             for n in done:
                 if isinstance(n, dict) and n.get("id") is not None and n.get("id") not in seen:
                     seen.add(n.get("id"))
@@ -480,7 +490,7 @@ def run_stream_loop(executor, base, token, issue, exclude_session, token_file, d
                 if root_closed:
                     raise Stop("root_closed", delete_token=True)
                 hold(save_cursor, nxt)
-                if exit_on_event and events:
+                if exit_on_event and others:
                     raise Stop("delivered", detail=doc["preflightId"])
                 cursor = nxt
                 backoff = float(POLL_INTERVAL_SEC) if events else min(backoff + POLL_INTERVAL_SEC,
@@ -491,7 +501,7 @@ def run_stream_loop(executor, base, token, issue, exclude_session, token_file, d
             # cursor stays before the page, and the next round takes them
             # from here, not from a new poll whose page may differ.
             remainder = (left, nxt, root_closed)
-            if exit_on_event and done:
+            if exit_on_event and printed:
                 # The next cycle takes the rest from the state.
                 hold(save_remainder, cursor, left, nxt, root_closed)
                 raise Stop("delivered", detail=doc["preflightId"])

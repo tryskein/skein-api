@@ -9,6 +9,7 @@ platform.py
 platform_posix.py
 platform_windows.py
 state.py
+echo.py
 journal.py
 text.py
 registry.py

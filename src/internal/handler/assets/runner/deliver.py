@@ -52,9 +52,6 @@ MAX_CALLS = 1 + len(RETRY_DELAYS_SEC)
 TAILS_EVERY_SEC = 60
 # The step of a wait: the cancel signal is checked between steps.
 WAIT_STEP_SEC = 1.0
-# The file next to the token where the agent writes the session id of its
-# own echo (P-5).
-EXCLUDE_FILE_NAME = "exclude_session"
 # The answer sign of a call that was not made.
 _NOT_SENT = "notSent"
 
@@ -275,7 +272,7 @@ class DeliverySink(object):
     """The sink of a detached monitor: work() hands it every page."""
 
     def __init__(self, journal, token_file, doc, registry, env, ledger, executor, issue,
-                 cancel=None, clock=None, drivers=None, idle_window_sec=None):
+                 cancel=None, clock=None, drivers=None, idle_window_sec=None, exclusion=None):
         self.journal = journal
         self.token_file = token_file
         self.doc = doc
@@ -297,7 +294,10 @@ class DeliverySink(object):
         self.identity = doc.get("identity") or {}
         # The exclusion file of one's own echo (P-5, US-13): its literal path
         # goes into every plain delivery once.
-        self.exclude_file = os.path.join(os.path.dirname(os.path.abspath(token_file)), EXCLUDE_FILE_NAME)
+        self.exclude_file = exclude_file_path(token_file)
+        # The exclusion in force (echo.py), shared with the polls that read
+        # it again; None applies none.
+        self.exclusion = as_exclusion(exclusion) if exclusion is not None else None
         # Channels whose budget ran out: a delivery by one writes recovered.
         self.failing = set()
         # After "addressee changed" the process writes only the journal.
@@ -519,6 +519,9 @@ class DeliverySink(object):
         while pending:
             if self.gone:
                 return
+            pending = self._own_echo(cursor, outcomes, journaled, pending)
+            if not pending:
+                return
             if self.journal_only or self.ledger_off:
                 for n in pending:
                     self._close(cursor, outcomes, journaled, n, JOURNAL_ONLY_STATUS, None, None)
@@ -573,6 +576,21 @@ class DeliverySink(object):
                 decision.attempt.release()
                 self._ledger_down()
             pending = [n for n in pending if str(n["id"]) not in outcomes]
+
+    def _own_echo(self, cursor, outcomes, journaled, pending):
+        """Give the events of the excluded session among those not yet handed
+        to a channel the outcome "own echo" (US-13): the value in force now,
+        which a poll during a wait may have changed. Returns the rest."""
+        if self.exclusion is None:
+            return pending
+        own = [n for n in pending if self.exclusion.own(n)]
+        if not own:
+            return pending
+        if not self.ledger_off:
+            self._ledger_step(self.ledger.record, [str(n["id"]) for n in own], OUTCOME_OWN_ECHO, None)
+        for n in own:
+            self._close(cursor, outcomes, journaled, n, OUTCOME_OWN_ECHO, None, None)
+        return [n for n in pending if str(n["id"]) not in outcomes]
 
     def _deliver(self, cursor, outcomes, journaled, attempt, channel_id, channel, batch, step):
         now = self.clock.now()

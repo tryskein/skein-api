@@ -512,14 +512,15 @@ class Executor:
 
 
 def poll_once(executor, base, token, cursor, exclude_session=""):
-    """Issue one poll.
+    """Issue one poll. exclude_session is the mint's session id or the
+    Exclusion of a client-mode monitor, read again for this poll (US-13).
 
     Returns (status, payload, retry_after): status is the HTTP status (0 for a
     network failure, a timeout or a request past its limit); payload is the
     decoded JSON value of a 2xx body, or None when it did not parse;
     retry_after is the raw Retry-After header of an HTTP error, or None.
     """
-    answer = executor.request(build_url(base, cursor, exclude_session), token)
+    answer = executor.request(build_url(base, cursor, exclusion_value(exclude_session)), token)
     status = answer.get("status")
     if not isinstance(status, int):
         return 0, None, None
