@@ -49,10 +49,18 @@ RECEIPT_STOPS = ("root_closed", "stopped", "internal_error")
 _ACCESS_STOPS = {401: "token_expired", 403: "visibility_lost"}
 
 
+def poll_page_ok(payload):
+    """Whether a 200 answer of the poll is a page (what the working loop
+    takes): a successful poll for the access boundary only then."""
+    return isinstance(payload, dict) and isinstance(payload.get("notifications") or [], list)
+
+
 class PollCancel(object):
     """The cancel signal of the working runner: during a wait it polls with
     the cursor of the last fixed outcome once a poll interval has passed,
-    and remembers an answer that says stop."""
+    and remembers an answer that says stop. A poll that failed (no page, a
+    5xx, a 429) is repeated no sooner than a poll interval later, or than
+    its Retry-After."""
 
     def __init__(self, executor, base, token, exclude_session, clock, interval=None):
         self.executor = executor
@@ -65,20 +73,31 @@ class PollCancel(object):
         self.last_ok = clock.now()
         # (reason, status) once a poll answered 401 or 403.
         self.stop = None
+        # The earliest time of the next poll after a failed one.
+        self.next_poll = None
 
     def note_ok(self):
         """A successful poll of the working loop."""
         self.last_ok = self.clock.now()
+        self.next_poll = None
 
     def check(self):
-        if self.stop is None and self.clock.now() - self.last_ok >= self.interval:
-            status, _, _ = poll_once(self.executor, self.base, self.token, self.cursor, self.exclude_session)
-            if status == 200:
+        now = self.clock.now()
+        if (self.stop is None and now - self.last_ok >= self.interval
+                and (self.next_poll is None or now >= self.next_poll)):
+            status, payload, retry_after = poll_once(self.executor, self.base, self.token, self.cursor,
+                                                     self.exclude_session)
+            if status == 200 and poll_page_ok(payload):
                 # The events of this answer are not queued: the page being
                 # delivered holds them, the cursor does not move.
                 self.note_ok()
             elif status in _ACCESS_STOPS:
                 self.stop = (_ACCESS_STOPS[status], status)
+            else:
+                wait = self.interval
+                if status == 429:
+                    wait = max(wait, retry_after_seconds(retry_after, self.interval))
+                self.next_poll = now + wait
         return self.stop[0] if self.stop is not None else None
 
     def may_send(self):

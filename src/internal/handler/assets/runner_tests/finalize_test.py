@@ -102,6 +102,50 @@ class AccessBoundaryTest(unittest.TestCase):
 
 
 @unittest.skipUnless(os.name == "posix", "the POSIX runner")
+class BoundaryPollTest(unittest.TestCase):
+    """Review findings V2 and 32 of wave 7: only a page is a successful poll
+    for the boundary, and a failed poll is not repeated faster than a poll
+    interval (or its Retry-After)."""
+
+    def test_a_200_without_a_page_is_not_a_successful_poll(self):
+        for body in (["not", "a", "page"], {"notifications": "nope"}):
+            with self.subTest(body=body):
+                world = World(self, [chan("A", "chan-a")])
+                server = server_answering(self, [200], page=body)
+                cancel = poll_cancel(self, world, server, stale_by=5)
+                self.assertFalse(cancel.may_send())
+                self.assertIsNone(cancel.check())
+                self.assertEqual(len(server.requests), 1)
+                self.assertFalse(cancel.may_send(), "a 200 without a page opened the boundary")
+
+    def test_a_failed_poll_waits_an_interval(self):
+        world = World(self, [chan("A", "chan-a")])
+        server = server_answering(self, [500])
+        cancel = poll_cancel(self, world, server, stale_by=5)
+        cancel.check()
+        cancel.check()
+        world.clock.t += 0.5
+        cancel.check()
+        self.assertEqual(len(server.requests), 1)
+        world.clock.t += 0.5
+        cancel.check()
+        self.assertEqual(len(server.requests), 2)
+
+    def test_a_429_waits_its_retry_after(self):
+        world = World(self, [chan("A", "chan-a")])
+        server = harness.ScriptedServer(lambda h, qs: h.send_json(429, {}, headers={"Retry-After": "5"}))
+        self.addCleanup(server.stop)
+        cancel = poll_cancel(self, world, server, stale_by=5)
+        cancel.check()
+        world.clock.t += 4.5
+        cancel.check()
+        self.assertEqual(len(server.requests), 1)
+        world.clock.t += 0.5
+        cancel.check()
+        self.assertEqual(len(server.requests), 2)
+
+
+@unittest.skipUnless(os.name == "posix", "the POSIX runner")
 class AccessLostAfterInsertTest(unittest.TestCase):
     """Row #59: a two-step channel, the insert confirmed, the poll during
     the wait answers 401 (or 403): no Enter, "unknown" without the preview,
