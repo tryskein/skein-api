@@ -36,14 +36,38 @@ REGISTRY_JSON = os.path.join(HERE, "..", "..", "..", "monitorregistry", "registr
 # Shared interpreter hooks for runner subprocesses (virtual clock, pinned
 # random, blocked resolver) — see its header.
 SITE_DIR = os.path.join(HERE, "..", "..", "testdata", "runner_site")
-# The bootstrap loader asset (run as `python3 -c`, exactly like the bootstrap).
+# The loader asset (one part of the served loader).
 LOADER_SRC = os.path.join(HERE, "..", "..", "..", "mcp", "tools", "assets", "monitor_loader.py")
+# The manifest of the loader GET /agent/v1/monitor-loader serves
+# (monitor_loader.go#servedLoaderSource); paths relative to its directory.
+LOADER_PARTS_MANIFEST = os.path.join(os.path.dirname(LOADER_SRC), "loader_parts.txt")
 
 # The token renewal window the server templates by default (6 h).
 DEFAULT_TOKEN_IDLE_SEC = 6 * 3600
 
 ROOT = "zz-77"
 EMPTY = {"notifications": [], "cursor": {"ts": "2026-01-01T00:00:00Z", "id": 0}}
+
+
+def served_loader():
+    """The loader the route serves: the parts of loader_parts.txt joined in
+    order, each ending with a newline, the way monitor_loader.go assembles
+    them. The starter runs these bytes; a test that runs the loader runs
+    them too."""
+    assets = os.path.dirname(LOADER_PARTS_MANIFEST)
+    chunks = []
+    with open(LOADER_PARTS_MANIFEST, "r") as fh:
+        for line in fh:
+            name = line.strip()
+            if name and not name.startswith("#"):
+                with open(os.path.join(assets, name), "r") as part:
+                    text = part.read()
+                if text and not text.endswith("\n"):
+                    text += "\n"
+                chunks.append(text)
+    if not chunks:
+        raise AssertionError("the loader manifest lists no part")
+    return "".join(chunks)
 
 
 def part_names():

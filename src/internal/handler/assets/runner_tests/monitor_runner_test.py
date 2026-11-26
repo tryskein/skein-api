@@ -38,8 +38,8 @@ import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
-from harness import (EMPTY, LOADER_SRC, ROOT, SITE_DIR, LoaderServer, PushServer,
-                     ScriptedServer, load_runner, render_runner)
+from harness import (EMPTY, ROOT, SITE_DIR, LoaderServer, PushServer,
+                     ScriptedServer, load_runner, render_runner, served_loader)
 
 _TMPDIRS = []
 
@@ -1060,13 +1060,14 @@ def closed_port_url():
 
 def run_loader(url, token="skm_" + "d" * 43, token_as_dir=False, no_url=False,
                site_env=None, signal_when=None, sig=None, extra_env=None, runner=None, **placement):
-    """Run the loader asset as `python3 -c`; returns (rc, lines, stderr, token path).
+    """Run the served loader (harness.served_loader) as `python3 -c`, the
+    way the starter of a bootstrap without client runs it; returns
+    (rc, lines, stderr, token path).
     signal_when: a threading.Event set once the process may be signalled.
     runner: the body whose digest the bootstrap names (SKEIN_RUNNER_SHA256);
     by default the rendered runner the handover tests serve. placement goes
     to place_token."""
-    with open(LOADER_SRC) as fh:
-        loader = fh.read()
+    loader = served_loader()
     tmpdir = make_tmpdir(prefix="skein-loader-")
     token_path = place_token(tmpdir, token, token_as_dir, **placement)
     env = dict(os.environ)

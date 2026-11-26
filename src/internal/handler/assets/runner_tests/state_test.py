@@ -215,8 +215,7 @@ class Monitor(object):
                 fh.write(RUNNER_BODY)
             argv = [sys.executable, path]
         else:
-            with open(harness.LOADER_SRC) as fh:
-                argv = [sys.executable, "-c", fh.read()]
+            argv = [sys.executable, "-c", harness.served_loader()]
         self.proc = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                      universal_newlines=True,
                                      env=base_env(url, token_path, extra_env))
