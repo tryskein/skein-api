@@ -35,8 +35,11 @@
 #
 # A journal that cannot be written stops new sends and the cursor
 # (JournalUnavailable leaves the page undone; the poll goes on). A ledger
-# that cannot be used (full, unwritable) sends nothing outside: degraded
-# state_unavailable, the events go to the journal only.
+# that cannot be used (full, unwritable) - at any step: the attempt, a
+# counted call, an outcome, a withdrawal, an outcome without a call - sends
+# nothing outside for the rest of the process: degraded state_unavailable
+# once, the events go to the journal only, the poll goes on. An outcome a
+# call already gave keeps its outcome in the state and the journal.
 
 import os
 import time
@@ -258,6 +261,8 @@ class DeliverySink(object):
         self.journal_only = False
         # Set when the channel's check says the addressee has ended.
         self.gone = False
+        # Set once the ledger could not be used: no external delivery.
+        self.ledger_off = False
         self._said = set()
         self._tails_at = None
         # The answer of the last refusal before send, for channel_failing.
@@ -278,6 +283,22 @@ class DeliverySink(object):
                 self.journal.summary_cursor_reset(self._cursor)
         except JournalUnavailable:
             pass
+
+    def _ledger_down(self):
+        """The ledger refused: no external delivery from now on."""
+        self.ledger_off = True
+        self._degraded_once("state_unavailable",
+                            action="The ledger of deliveries cannot be used; events of issue %s "
+                                   "go only to the journal." % self.issue)
+
+    def _ledger_step(self, step, *args):
+        """A step of the ledger whose refusal turns external delivery off;
+        returns its value, or None when it was refused."""
+        try:
+            return step(*args)
+        except LedgerUnavailable:
+            self._ledger_down()
+            return None
 
     def _degraded_once(self, cause, **fields):
         if cause in self._said:
@@ -426,7 +447,7 @@ class DeliverySink(object):
         while pending:
             if self.gone:
                 return
-            if self.journal_only:
+            if self.journal_only or self.ledger_off:
                 for n in pending:
                     self._close(cursor, outcomes, journaled, n, JOURNAL_ONLY_STATUS, None, None)
                 return
@@ -445,7 +466,7 @@ class DeliverySink(object):
             if text is None:
                 step[str(head["id"])] = index + 1
                 if index + 1 >= len(self.channels):
-                    self.ledger.record([str(head["id"])], OUTCOME_UNFIT, channel_id)
+                    self._ledger_step(self.ledger.record, [str(head["id"])], OUTCOME_UNFIT, channel_id)
                     self._close(cursor, outcomes, journaled, head, OUTCOME_UNFIT, channel_id, None)
                     pending.pop(0)
                 continue
@@ -454,12 +475,8 @@ class DeliverySink(object):
                 decision = self.ledger.begin([{"id": str(n["id"]), "session": n.get("actorSessionId")}
                                               for n in batch], channel_id)
             except LedgerUnavailable:
-                self._degraded_once("state_unavailable",
-                                    action="The ledger of deliveries cannot be used; events of issue %s "
-                                           "go only to the journal." % self.issue)
-                for n in pending:
-                    self._close(cursor, outcomes, journaled, n, JOURNAL_ONLY_STATUS, None, None)
-                return
+                self._ledger_down()
+                continue
             done = set()
             for eid, status in decision.closed.items():
                 self._close(cursor, outcomes, journaled, byid[eid], status, channel_id, None)
@@ -474,22 +491,29 @@ class DeliverySink(object):
                 elif decision.pending:
                     self._wait(self.clock.now() + WAIT_STEP_SEC)
                 continue
-            self._deliver(cursor, outcomes, journaled, decision.attempt, channel_id, channel,
-                          [byid[e] for e in decision.published], step)
+            try:
+                self._deliver(cursor, outcomes, journaled, decision.attempt, channel_id, channel,
+                              [byid[e] for e in decision.published], step)
+            except LedgerUnavailable:
+                # Refused before any call (a counted call): nothing was handed
+                # over, the events go to the journal only.
+                self._ledger_step(decision.attempt.abandon)
+                decision.attempt.release()
+                self._ledger_down()
             pending = [n for n in pending if str(n["id"]) not in outcomes]
 
     def _deliver(self, cursor, outcomes, journaled, attempt, channel_id, channel, batch, step):
         now = self.clock.now()
         deadline = (attempt.first_call if attempt.first_call is not None else now) + self.idle_window
         if attempt.calls >= MAX_CALLS or (attempt.calls and now >= deadline):
-            attempt.finish(OUTCOME_REFUSED)
+            self._ledger_step(attempt.finish, OUTCOME_REFUSED)
             attempt.release()
             self._exhausted(channel_id, batch, step)
             return
         if attempt.calls:
             due = (attempt.last_call or now) + RETRY_DELAYS_SEC[attempt.calls - 1]
             if due > now:
-                attempt.abandon()
+                self._ledger_step(attempt.abandon)
                 attempt.release()
                 if due >= deadline:
                     self._exhausted(channel_id, batch, step)
@@ -508,7 +532,7 @@ class DeliverySink(object):
             try:
                 outcome, sign = driver.send(text, guard)
             except PollStale:
-                attempt.abandon()
+                self._ledger_step(attempt.abandon)
                 self._wait(self.clock.now() + WAIT_STEP_SEC)
                 return
             except RefusedBeforeSend as exc:
@@ -518,12 +542,12 @@ class DeliverySink(object):
             except AddresseeGone:
                 outcome, sign = OUTCOME_ADDRESSEE_GONE, None
             except DeliveryCancelled:
-                attempt.abandon()
+                self._ledger_step(attempt.abandon)
                 raise
             except StopSignal:
                 # A stop while the channel may have the text: unknown, never
                 # a second send (INV-9).
-                attempt.finish(OUTCOME_UNKNOWN)
+                self._ledger_step(attempt.finish, OUTCOME_UNKNOWN)
                 raise
             changed = outcome == "addressee-changed"
             if not changed and outcome != OUTCOME_REFUSED and not self._same_process(channel):
@@ -535,7 +559,9 @@ class DeliverySink(object):
                 # Not sent; the event's outcome is "unknown" (the table of
                 # outcomes), later events go to the journal.
                 outcome = OUTCOME_UNKNOWN
-            burst = attempt.finish(outcome)
+            # The call was made: its outcome stands even when the ledger
+            # refuses to take it.
+            burst = self._ledger_step(attempt.finish, outcome)
         finally:
             attempt.release()
         if burst:

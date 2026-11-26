@@ -501,6 +501,50 @@ class JournalAndLedgerTest(unittest.TestCase):
 
 
 @unittest.skipUnless(os.name == "posix", "the POSIX pipeline")
+class LedgerRefusalTest(unittest.TestCase):
+    """Review finding C3 of wave 7: a ledger that refuses at any step while
+    the monitor works - the spec ("Failures": the ledger directory
+    unavailable while the journal is available, at the start and while
+    working): the monitor keeps working, degraded state_unavailable, no
+    external delivery, the events go to the journal."""
+
+    CURSOR2 = {"ts": "2026-01-01T00:00:01Z", "id": 8}
+
+    def refusing(self, world, method):
+        return mock.patch.object(world.runner.Attempt if method != "record" else world.runner.Ledger, method,
+                                 side_effect=world.runner.LedgerUnavailable("write_failed"))
+
+    def test_a_counted_call_refused_sends_nothing(self):
+        world = World(self, two_channels())
+        mon = world.monitor()
+        with self.refusing(world, "note_call"):
+            mon.page([note(1)])
+        mon.page([note(2)], cursor=self.CURSOR2)
+        self.assertEqual(world.prog("chan-a").calls(), [])
+        self.assertEqual(world.prog("chan-b").calls(), [])
+        self.assertEqual([d[:2] for d in mon.deliveries()], [(1, "journal"), (2, "journal")])
+        self.assertEqual(len(mon.degraded("state_unavailable")), 1)
+
+    def test_an_outcome_refused_after_the_call_keeps_it_and_stops_external_delivery(self):
+        world = World(self, two_channels())
+        mon = world.monitor()
+        with self.refusing(world, "finish"):
+            mon.page([note(1)])
+        mon.page([note(2)], cursor=self.CURSOR2)
+        self.assertEqual(len(world.prog("chan-a").calls()), 1)
+        self.assertEqual([d[:2] for d in mon.deliveries()], [(1, "queued"), (2, "journal")])
+        self.assertEqual(len(mon.degraded("state_unavailable")), 1)
+
+    def test_an_outcome_without_a_call_refused(self):
+        world = World(self, two_channels({"limit": 30}, {"limit": 30}))
+        mon = world.monitor()
+        with self.refusing(world, "record"):
+            mon.page([note(1)])
+        self.assertEqual([d[:2] for d in mon.deliveries()], [(1, "does-not-fit")])
+        self.assertEqual(len(mon.degraded("state_unavailable")), 1)
+
+
+@unittest.skipUnless(os.name == "posix", "the POSIX pipeline")
 class CursorResetTest(unittest.TestCase):
     """Row #57: 400 invalid_cursor in a detached monitor — degraded
     cursor_reset, a summary line in the journal, the monitor goes on from
