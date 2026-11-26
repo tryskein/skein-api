@@ -37,6 +37,12 @@ REGISTRY = {
              "instruction": "INSTR-alpha-stream-1c52"},
             {"kind": "exit-on-event", "conditions": {}, "instruction": "INSTR-alpha-exit-2d88"},
         ]},
+        # Two methods of one kind: the instruction is that of the one taken.
+        {"id": "beta", "process": {"executables": ["beta"]}, "methods": [
+            {"kind": "stream", "conditions": {"env": [{"name": "BETA_FIRST"}]}, "instruction": "INSTR-beta-first-7a01"},
+            {"kind": "stream", "conditions": {"env": [{"name": "BETA_SECOND"}]},
+             "instruction": "INSTR-beta-second-7a02"},
+        ]},
     ],
     "channels": [],
     "shells": {"source": "test", "names": ["sh", "bash"]},
@@ -119,6 +125,12 @@ class PreflightLineTest(unittest.TestCase):
                 self.assertNotIn(other, line["instruction"])
                 self.assertNotIn(line["journal"], line["instruction"])
                 self.assertNotIn(os.path.dirname(line["journal"]), line["instruction"])
+
+    def test_the_instruction_of_the_method_taken_among_two_of_a_kind(self):
+        line = self.box.preflight(client="beta", BETA_SECOND="1")
+        self.assertEqual((line["client"], line["method"]), ("beta", "stream"))
+        self.assertIn("INSTR-beta-second-7a02", line["instruction"])
+        self.assertNotIn("INSTR-beta-first-7a01", line["instruction"])
 
     def test_the_general_record_is_its_client_value(self):
         line = self.box.preflight(client="no-such-agent")

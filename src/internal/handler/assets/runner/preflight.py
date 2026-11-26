@@ -166,11 +166,14 @@ class Choice(object):
     were skipped and why this one was taken, fallbacks the next non-blind
     channels found available after it."""
 
-    def __init__(self, method, channel, reasons, fallbacks=None):
+    def __init__(self, method, channel, reasons, fallbacks=None, record_method=None):
         self.method = method
         self.channel = channel
         self.reasons = reasons
         self.fallbacks = fallbacks or []
+        # The method of the record that was chosen (its own stream, delivery
+        # or exit-on-event), None for a host, a blind channel or the journal.
+        self.record_method = record_method
 
     @property
     def reason(self):
@@ -345,7 +348,11 @@ def choose(ctx):
                           ["forced %s unavailable: the binding to its pane is not confirmed" % forced])
         ok, cause = channel_available(ctx, forced)
         if ok:
-            return Choice(METHOD_DETACHED, forced, ["forced: %s" % forced])
+            agent = settings.record.agent if settings.record is not None else None
+            own = [m for m in (agent or {}).get("methods") or []
+                   if m.get("kind") == "delivery" and m.get("channel") == forced]
+            return Choice(METHOD_DETACHED, forced, ["forced: %s" % forced],
+                          record_method=own[0] if own else None)
         # A forced channel has no fallback but the journal.
         return Choice(METHOD_JOURNAL, None, ["forced %s unavailable: %s" % (forced, cause)])
 
@@ -368,9 +375,9 @@ def choose(ctx):
             if _inherited(ctx, m.get("channel")):
                 reasons.append("%s: its id belongs to an outer agent" % m.get("channel"))
                 continue
-            candidates.append((3, kind, m.get("channel")))
+            candidates.append((3, kind, m.get("channel"), m))
         else:
-            candidates.append((_KIND_STEP.get(kind, 9), kind, None))
+            candidates.append((_KIND_STEP.get(kind, 9), kind, None, m))
     # Steps 2-4 first; steps 5-6 and 7 are asked for only when the walk
     # reaches them, so their warnings (ambiguous_terminal) are raised only
     # then.
@@ -380,28 +387,29 @@ def choose(ctx):
         if under:
             hosts.append(under[0])
         hosts.extend(c for c in ctx.detector.hosts(ctx) if c not in hosts)
-        chosen, done = _walk(ctx, [(5, "host", c) for c in hosts], reasons, chosen,
+        chosen, done = _walk(ctx, [(5, "host", c, None) for c in hosts], reasons, chosen,
                              chosen.fallbacks if chosen else [])
     # Condition (2) of US-7: a detected host, available or not, keeps the
     # blind channels off.
     if not done and chosen is None and not hosts and not settings.blind_off:
-        chosen, done = _walk(ctx, [(7, "blind", c) for c in ctx.detector.blind(ctx)], reasons, chosen, [])
+        chosen, done = _walk(ctx, [(7, "blind", c, None) for c in ctx.detector.blind(ctx)], reasons, chosen, [])
     if chosen is None:
         return Choice(METHOD_JOURNAL, None, reasons + ["journal: no other method available"])
     return chosen
 
 
 def _walk(ctx, candidates, reasons, chosen, fallbacks):
-    """Walk candidates (step, kind, channel) in order. The first available
+    """Walk candidates (step, kind, channel, record method) in order. The first available
     one is chosen; after a detached choice the next available non-blind
     channels are its fallbacks. Returns (chosen, done): done when a method
     on stdout was chosen, which ends the order."""
-    for step, kind, channel in candidates:
+    for step, kind, channel, method in candidates:
         if channel is None:
             if chosen is None:
                 # The record's own stream and exit-on-event deliver on the
                 # runner's stdout (US-2, US-3).
-                return Choice(kind, CHANNEL_STDOUT, reasons + ["%s: available" % kind]), True
+                return Choice(kind, CHANNEL_STDOUT, reasons + ["%s: available" % kind],
+                              record_method=method), True
             continue
         if chosen is not None and (kind == "blind" or ctx.registry.is_blind(channel)):
             continue
@@ -411,7 +419,8 @@ def _walk(ctx, candidates, reasons, chosen, fallbacks):
                 reasons.append("%s: %s" % (channel, cause))
             continue
         if chosen is None:
-            chosen = Choice(METHOD_DETACHED, channel, reasons + ["%s: available" % channel])
+            chosen = Choice(METHOD_DETACHED, channel, reasons + ["%s: available" % channel],
+                            record_method=method)
         else:
             fallbacks.append(channel)
     if chosen is not None:
@@ -570,24 +579,13 @@ def working_command(env, token_file, preflight_id, settings):
     return " ".join(parts)
 
 
-def record_method(record, choice):
-    """The method of the record the choice took, or None (a host, a blind
-    channel, the journal)."""
-    agent = record.agent if record is not None else None
-    for m in (agent or {}).get("methods") or []:
-        if choice.method == METHOD_DETACHED:
-            if m.get("kind") == "delivery" and m.get("channel") == choice.channel:
-                return m
-        elif m.get("kind") == choice.method:
-            return m
-    return None
-
-
 def instruction(registry, record, choice):
     """The instruction of the chosen method: the tool and parameters of the
     record's method (or how a detached or journal monitor starts), the
     restart, the warnings of the record and of the chosen channel."""
-    method = record_method(record, choice)
+    # The very method the walk took: two methods of one kind are told
+    # apart by which of them was available.
+    method = choice.record_method
     if method is not None:
         parts = [method.get("instruction") or ""]
     elif choice.method == METHOD_JOURNAL:
