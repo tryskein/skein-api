@@ -1,7 +1,11 @@
 package tools
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -66,6 +70,45 @@ func prepareEvents(lines []map[string]any) []string {
 		out[i], _ = l["event"].(string)
 	}
 	return out
+}
+
+// starterRun is what the reporting loader of runWrittenStarter printed.
+type starterRun struct {
+	Mode *string `json:"mode"`
+	Name string  `json:"name"`
+}
+
+// runWrittenStarter runs a starter file with python3 against a local server
+// whose /agent/v1/monitor-loader body reports _SKEIN_LOADER_MODE and
+// __name__, with SKEIN_LOADER_SHA256 of that body.
+func runWrittenStarter(t *testing.T, path string) struct{ Mode, Name string } {
+	t.Helper()
+	body := []byte("import json, sys\nsys.stdout.write(json.dumps({'mode': globals().get('_SKEIN_LOADER_MODE'), " +
+		"'name': __name__}) + '\\n')\nsys.exit(0)\n")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/agent/v1/monitor-loader" {
+			http.NotFound(w, r)
+			return
+		}
+		_, _ = w.Write(body)
+	}))
+	defer srv.Close()
+	sum := sha256.Sum256(body)
+	cmd := exec.Command("python3", path)
+	cmd.Env = append(os.Environ(), "SKEIN_PUBLIC_URL="+srv.URL, "SKEIN_LOADER_SHA256="+hex.EncodeToString(sum[:]))
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("run %s: %v; stdout %q", path, err, out)
+	}
+	var got starterRun
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatalf("the loader did not report: %q", out)
+	}
+	mode := "<none>"
+	if got.Mode != nil {
+		mode = *got.Mode
+	}
+	return struct{ Mode, Name string }{mode, got.Name}
 }
 
 func requirePython(t *testing.T) {
@@ -157,13 +200,13 @@ func TestServedPrepare_POSIX(t *testing.T) {
 			}
 			t.Fatalf("token directory holds %v, want only starter.py", names)
 		}
-		got, err := os.ReadFile(filepath.Join(dir, "starter.py"))
-		if err != nil {
-			t.Fatalf("read starter.py: %v", err)
-		}
-		if string(got) != monitorStarter(true) {
-			t.Fatalf("starter.py (%d bytes) is not the starter of a call with client (%d bytes)",
-				len(got), len(monitorStarter(true)))
+		// What starter.py does, not what it is: run it as the preflight
+		// command does against a server whose loader reports the mode and
+		// the module name it was given. A starter of a call with client
+		// hands the loader the client mode in a fresh __main__.
+		got := runWrittenStarter(t, filepath.Join(dir, "starter.py"))
+		if got.Mode != "client" || got.Name != "__main__" {
+			t.Fatalf("starter.py ran the loader with mode %q, name %q; want client, __main__", got.Mode, got.Name)
 		}
 	})
 
