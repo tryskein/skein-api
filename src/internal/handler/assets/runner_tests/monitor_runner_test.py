@@ -1634,14 +1634,22 @@ class RestartTest(unittest.TestCase):
                     first.proc.send_signal(getattr(signal, how))
                     first.wait_exit()
                     self.assertTrue(os.path.exists(token), "token file gone after %s" % how)
+                    # The cursor the server handed the first runner last (no
+                    # event was pushed yet, so every answer carried it).
+                    before_stop = str(srv.next_id)
+                    # An event of the break: the restart must deliver it once.
+                    nid = srv.push()
                     seen = len(srv.requests)
                     second = LiveRunner(srv.url(), token)
                     second.wait_for(is_event("monitor_started"))
-                    nid = srv.push()
                     second.wait_for(notification_id(nid))
                     restart_first = srv.requests[seen]
-                    self.assertNotIn("since_ts", restart_first, "the restart continued the old cursor")
-                    self.assertNotIn("since_id", restart_first)
+                    self.assertEqual(restart_first.get("since_id"), [before_stop],
+                                     "the restart did not continue the saved cursor")
+                    self.assertEqual(restart_first.get("since_ts"), ["2026-01-01T00:00:00Z"])
+                    delivered = [l["notification"]["id"] for l in first.lines + second.lines
+                                 if l.get("event") == "notification"]
+                    self.assertEqual(delivered, [nid], "an event was repeated or lost")
                 finally:
                     first.kill()
                     if second:
