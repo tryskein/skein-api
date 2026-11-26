@@ -79,8 +79,6 @@ class RegistryDetector(Detector):
     def __init__(self, binder=None):
         Detector.__init__(self)
         self.binder = binder or PaneBinder()
-        # Set when the preflight is to report degraded: {"cause", "variables"}.
-        self.degraded = None
         self._bindings = None
 
     def _channels(self, ctx, step):

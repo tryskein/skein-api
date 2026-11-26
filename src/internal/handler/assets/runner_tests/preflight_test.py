@@ -87,7 +87,7 @@ class FakeDetector(RUNNER.Detector):
     """Hands the preflight the hosts, blind channels and launching host it is
     given; on_hosts runs while the preflight asks for hosts."""
 
-    def __init__(self, hosts=(), blind=(), under=None, on_hosts=None, bound=None, panes=None):
+    def __init__(self, hosts=(), blind=(), under=None, on_hosts=None, bound=None, panes=None, degraded=None):
         RUNNER.Detector.__init__(self)
         self._hosts = list(hosts)
         self._blind = list(blind)
@@ -97,6 +97,7 @@ class FakeDetector(RUNNER.Detector):
         # unless told otherwise.
         self._bound = list(blind if bound is None else bound)
         self._panes = panes or {}
+        self._degraded = degraded
 
     def under_host(self, ctx):
         return self._under
@@ -104,6 +105,8 @@ class FakeDetector(RUNNER.Detector):
     def hosts(self, ctx):
         if self.on_hosts:
             self.on_hosts()
+        if self._degraded is not None:
+            self.degraded = self._degraded
         return list(self._hosts)
 
     def blind(self, ctx):
@@ -376,7 +379,8 @@ class PreflightLineTest(unittest.TestCase):
             self.assertEqual(fh.read(), before)
 
     def test_preflight_does_not_hold_the_runner_lock(self):
-        env = self.box.env()
+        # No own method: the walk reaches the hosts, where the lock is taken.
+        env = self.box.env(ALPHA_STREAM=None, OWN_Q_ID=None, CFG_DIR=None)
         taken = []
 
         def take_lock():
@@ -388,6 +392,17 @@ class PreflightLineTest(unittest.TestCase):
         self.assertEqual(taken, [True])
         # The working start after the preflight takes it itself.
         RUNNER.PosixPlatform.acquire_runner_lock(self.box.token, 0, env).release()
+
+    def test_degraded_of_the_detection_is_saved(self):
+        degraded = {"cause": "ambiguous_terminal", "variables": ["TERM_X_HANDLE", "TERM_Y_ID"]}
+        env = self.box.env(ALPHA_STREAM=None, OWN_Q_ID=None, CFG_DIR=None)
+        self.run_preflight(env, FakeDetector(degraded=degraded))
+        with open(self.box.preflight_file()) as fh:
+            self.assertEqual(json.load(fh)["degraded"], degraded)
+        # The stream is chosen before steps 5-6: the detection is not asked.
+        self.run_preflight(self.box.env(), FakeDetector(degraded=degraded))
+        with open(self.box.preflight_file()) as fh:
+            self.assertIsNone(json.load(fh)["degraded"])
 
     def test_the_pane_binding_of_a_blind_channel_is_saved(self):
         # "Addressee and check" p. 3: the working runner checks the agent

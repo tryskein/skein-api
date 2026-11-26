@@ -108,6 +108,9 @@ class Detector(object):
     def __init__(self):
         # Warnings of the detection for the preflight line.
         self.warnings = []
+        # What the monitor is to report as degraded, {"cause", "variables"}:
+        # saved with the result for the working runner.
+        self.degraded = None
 
     def under_host(self, ctx):
         """(channel id, kinds of own methods the host keeps) when the agent
@@ -368,23 +371,35 @@ def choose(ctx):
             candidates.append((3, kind, m.get("channel")))
         else:
             candidates.append((_KIND_STEP.get(kind, 9), kind, None))
-    hosts = []
-    if under:
-        hosts.append(under[0])
-    hosts.extend(c for c in ctx.detector.hosts(ctx) if c not in hosts)
-    candidates.extend((5, "host", c) for c in hosts)
-    if not settings.blind_off:
-        candidates.extend((7, "blind", c) for c in ctx.detector.blind(ctx))
+    # Steps 2-4 first; steps 5-6 and 7 are asked for only when the walk
+    # reaches them, so their warnings (ambiguous_terminal) are raised only
+    # then.
+    chosen, done = _walk(ctx, candidates, reasons, None, [])
+    if not done:
+        hosts = []
+        if under:
+            hosts.append(under[0])
+        hosts.extend(c for c in ctx.detector.hosts(ctx) if c not in hosts)
+        chosen, done = _walk(ctx, [(5, "host", c) for c in hosts], reasons, chosen,
+                             chosen.fallbacks if chosen else [])
+    if not done and chosen is None and not settings.blind_off:
+        chosen, done = _walk(ctx, [(7, "blind", c) for c in ctx.detector.blind(ctx)], reasons, chosen, [])
+    if chosen is None:
+        return Choice(METHOD_JOURNAL, None, reasons + ["journal: no other method available"])
+    return chosen
 
-    chosen = None
-    fallbacks = []
+
+def _walk(ctx, candidates, reasons, chosen, fallbacks):
+    """Walk candidates (step, kind, channel) in order. The first available
+    one is chosen; after a detached choice the next available non-blind
+    channels are its fallbacks. Returns (chosen, done): done when a method
+    on stdout was chosen, which ends the order."""
     for step, kind, channel in candidates:
         if channel is None:
             if chosen is None:
                 # The record's own stream and exit-on-event deliver on the
                 # runner's stdout (US-2, US-3).
-                chosen = Choice(kind, CHANNEL_STDOUT, reasons + ["%s: available" % kind])
-                break
+                return Choice(kind, CHANNEL_STDOUT, reasons + ["%s: available" % kind]), True
             continue
         if chosen is not None and (kind == "blind" or ctx.registry.is_blind(channel)):
             continue
@@ -397,10 +412,9 @@ def choose(ctx):
             chosen = Choice(METHOD_DETACHED, channel, reasons + ["%s: available" % channel])
         else:
             fallbacks.append(channel)
-    if chosen is None:
-        return Choice(METHOD_JOURNAL, None, reasons + ["journal: no other method available"])
-    chosen.fallbacks = fallbacks
-    return chosen
+    if chosen is not None:
+        chosen.fallbacks = fallbacks
+    return chosen, False
 
 
 # --- the sandbox ---------------------------------------------------------------
@@ -646,6 +660,7 @@ def preflight(token_file, env, registry, settings, detector=None, prober=None, p
                               "SKEIN_MONITOR_BLIND": BLIND_OFF if settings.blind_off else None},
                 "identity": _identity_doc(ctx.identity),
                 "binding": binding,
+                "degraded": detector.degraded,
             })
     except (PlatformRefusal, OSError) as exc:
         raise ConfigInvalid(os.path.dirname(os.path.abspath(token_file)),

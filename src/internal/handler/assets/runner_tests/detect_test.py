@@ -253,6 +253,16 @@ class AmbiguousTerminalTest(unittest.TestCase):
         self.assertEqual(ctx.prober.calls, [])
         self.assertEqual(ctx.detector.blind(ctx), [])
 
+    def test_no_ambiguity_before_step_6(self):
+        # An own method available: steps 5-6 are not reached, so no
+        # ambiguous_terminal warning advises an override that would turn
+        # the stream into detached.
+        ctx = context({"TERM_X_HANDLE": "t-1", "TERM_Y_ID": "t-2", "ALPHA_STREAM": "1"}, bindings=BOUND)
+        choice = RUNNER.choose(ctx)
+        self.assertEqual((choice.method, choice.channel), ("stream", "stdout"))
+        self.assertIsNone(ctx.detector.degraded)
+        self.assertEqual([w for w in ctx.detector.warnings if "ambiguous_terminal" in w], [])
+
 
 if __name__ == "__main__":
     unittest.main()
