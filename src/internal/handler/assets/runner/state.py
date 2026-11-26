@@ -60,7 +60,7 @@ def save_cursor(token_file, cursor):
                       separators=(",", ":"), sort_keys=True).encode("utf-8")
     path = state_file_path(token_file)
     if os.name == "posix":
-        PosixPlatform.atomic_write(path, data)
+        PosixPlatform.atomic_write(path, data, dir_check=_state_dir_ok)
         return
     tmp = "%s.tmp-%d" % (path, os.getpid())
     try:
@@ -88,8 +88,14 @@ def remove_state_file(token_file):
         pass
 
 
+def _state_dir_ok(dir_st):
+    """The token directory may hold the state: it is ours and no one else
+    can create, replace or remove files in it."""
+    return dir_st.st_uid == os.getuid() and not dir_st.st_mode & 0o022
+
+
 def _state_private(file_st, dir_st):
-    """A state file is read when it is ours (checked by the caller) and has
-    no group/other bits; its directory is the token's, checked by the token
-    rules."""
-    return not file_st.st_mode & 0o077
+    """A state file is read when it is ours (checked by the caller), has no
+    group/other bits and lies in a directory the state may live in. The
+    directory itself is opened without following a link."""
+    return not file_st.st_mode & 0o077 and _state_dir_ok(dir_st)

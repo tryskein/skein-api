@@ -466,6 +466,39 @@ def _restore_env(saved):
             os.environ[k] = v
 
 
+@unittest.skipUnless(os.name == "posix", "the POSIX state checks")
+class StateDirectoryTest(unittest.TestCase):
+    """The state is read and written only in a token directory of the user
+    that no one else can write to, never through a link to it."""
+
+    def setUp(self):
+        self.runner = harness.load_runner()
+
+    def test_state_in_a_directory_others_can_write_is_not_read(self):
+        for mode, want in ((0o700, 7), (0o770, None), (0o757, None)):
+            with self.subTest(mode=oct(mode)):
+                tok = TokenDir(self, cursor_id=7)
+                os.chmod(tok.dir, mode)
+                cursor = self.runner.load_cursor(tok.token)
+                self.assertEqual(cursor and cursor["id"], want)
+
+    def test_state_is_not_written_through_a_linked_directory(self):
+        tok = TokenDir(self)
+        link = os.path.join(os.path.dirname(tok.dir), "linked-dir")
+        os.symlink(tok.dir, link)
+        with self.assertRaises(self.runner.PlatformRefusal):
+            self.runner.save_cursor(os.path.join(link, "token"), {"ts": "2026-01-01T00:00:01Z", "id": 1})
+        self.assertFalse(os.path.exists(tok.state))
+        self.assertEqual(sorted(os.listdir(tok.dir)), ["token"])
+
+    def test_state_is_not_written_into_a_directory_others_can_write(self):
+        tok = TokenDir(self)
+        os.chmod(tok.dir, 0o770)
+        with self.assertRaises(self.runner.PlatformRefusal):
+            self.runner.save_cursor(tok.token, {"ts": "2026-01-01T00:00:01Z", "id": 1})
+        self.assertFalse(os.path.exists(tok.state))
+
+
 class FileFateTest(unittest.TestCase):
     """Matrix row #25: the state file shares the token file's fate."""
 

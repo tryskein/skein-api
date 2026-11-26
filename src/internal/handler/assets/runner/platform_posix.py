@@ -103,30 +103,44 @@ class PosixPlatform(object):
         return _read_checked(path, _own_private)
 
     @staticmethod
-    def atomic_write(path, data):
+    def atomic_write(path, data, dir_check=None):
         """Replace the file at path with data (bytes) atomically: a new 0600
         temporary file in the same directory, written and fsynced, then
-        os.replace. A failure at any point before the replace leaves the old
-        file as it was and no temporary file behind."""
+        os.replace. Everything happens inside the opened directory, which
+        must not be a link and, with dir_check, must pass dir_check(its
+        fstat) (else PlatformRefusal). A failure at any point before the
+        replace leaves the old file as it was and no temporary file behind."""
         directory, name = os.path.split(os.path.abspath(path))
-        tmp = os.path.join(directory, ".%s.tmp-%d-%s" % (name, os.getpid(), os.urandom(6).hex()))
-        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        dir_fd = _open_dir(directory)
         try:
+            if dir_check is not None and not dir_check(os.fstat(dir_fd)):
+                raise PlatformRefusal("open_to_others", directory)
+            tmp = ".%s.tmp-%d-%s" % (name, os.getpid(), os.urandom(6).hex())
+            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=dir_fd)
             try:
-                view = memoryview(data)
-                while view:
-                    view = view[os.write(fd, view):]
-                os.fsync(fd)
-            finally:
-                os.close(fd)
-            os.replace(tmp, path)
-        except BaseException:
+                try:
+                    view = memoryview(data)
+                    while view:
+                        view = view[os.write(fd, view):]
+                    os.fsync(fd)
+                finally:
+                    os.close(fd)
+                os.replace(tmp, name, src_dir_fd=dir_fd, dst_dir_fd=dir_fd)
+            except BaseException:
+                try:
+                    os.unlink(tmp, dir_fd=dir_fd)
+                except OSError:
+                    pass
+                raise
             try:
-                os.unlink(tmp)
-            except OSError:
-                pass
-            raise
-        _fsync_dir(directory)
+                os.fsync(dir_fd)
+            except OSError as exc:
+                # A file system that cannot fsync a directory has nothing
+                # more to give.
+                if exc.errno != errno.EINVAL:
+                    raise
+        finally:
+            os.close(dir_fd)
 
     @staticmethod
     def acquire_runner_lock(token_path, wait_sec=0, env=None):
@@ -298,19 +312,6 @@ def _read_checked(path, private):
             os.close(fd)
     finally:
         os.close(dir_fd)
-
-
-def _fsync_dir(directory):
-    """Make a replace in directory durable. A file system that cannot fsync a
-    directory (EINVAL) has nothing more to give; other errors are raised."""
-    fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
-    try:
-        os.fsync(fd)
-    except OSError as exc:
-        if exc.errno != errno.EINVAL:
-            raise
-    finally:
-        os.close(fd)
 
 
 def _read_line(fd, timeout_sec):
