@@ -12,7 +12,9 @@ Standard library of Python 3.6 only.
 import base64
 import json
 import os
+import shutil
 import sys
+import tempfile
 import unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -96,6 +98,11 @@ def context(env, client="alpha", bindings=None, answers=None, nested=False, blin
 
 BOUND = {"emu-1": (True, False, None)}
 
+# The agent's own Zavod address: a UUID, the same in ZAVOD_ME and
+# ZAVOD_AGENT_ID (US-5).
+ZAVOD_UUID = "0f4c2a8e-3b1d-4e57-9a62-5d8b7c1e2f30"
+ZAVOD_SELF = {"ZAVOD_ME": ZAVOD_UUID, "ZAVOD_AGENT_ID": ZAVOD_UUID}
+
 
 class BlindConditionsTest(unittest.TestCase):
     """Matrix row #35 (INV-3, US-7)."""
@@ -154,15 +161,32 @@ class HostDetectionTest(unittest.TestCase):
                  ("alpha", "unknown", False), ("alpha", "", False), ("no-such-client", "nkimi", True)]
         for client, engine, detected in cases:
             with self.subTest(client=client, engine=engine):
-                env = {"ZAVOD_ME": "z-1"}
+                env = dict(ZAVOD_SELF)
                 if engine:
                     env["ZAVOD_AGENT_ENGINE_ID"] = engine
                 ctx = context(env, client=client)
                 self.assertEqual("zavod" in ctx.detector.hosts(ctx), detected)
 
+    def test_zavod_needs_its_own_uuid_address_and_the_cli(self):
+        empty = tempfile.mkdtemp(prefix="skein-detect-path-")
+        self.addCleanup(shutil.rmtree, empty, True)
+        base = dict(ZAVOD_SELF, ZAVOD_AGENT_ENGINE_ID="kimi")
+        cases = [
+            ("own UUID address, CLI found", {}, True),
+            ("ZAVOD_ME not a UUID", {"ZAVOD_ME": "z-1", "ZAVOD_AGENT_ID": "z-1"}, False),
+            ("ZAVOD_ME of another agent", {"ZAVOD_AGENT_ID": "5e1d9c3a-7b2f-4a68-8d10-2c4b6e8f0a91"}, False),
+            ("no ZAVOD_AGENT_ID", {"ZAVOD_AGENT_ID": None}, False),
+            ("no CLI on PATH", {"PATH": empty}, False),
+        ]
+        for name, extra, detected in cases:
+            with self.subTest(case=name):
+                env = dict(base, **extra)
+                env = dict((k, v) for k, v in env.items() if v is not None)
+                ctx = context(env)
+                self.assertEqual("zavod" in ctx.detector.hosts(ctx), detected)
+
     def test_order_of_hosts(self):
-        ctx = context({"HOST_A_ID": "a-1", "ZAVOD_ME": "z-1", "ZAVOD_AGENT_ENGINE_ID": "kimi",
-                       "TERM_X_HANDLE": "t-1"})
+        ctx = context(dict(ZAVOD_SELF, HOST_A_ID="a-1", ZAVOD_AGENT_ENGINE_ID="kimi", TERM_X_HANDLE="t-1"))
         self.assertEqual(ctx.detector.hosts(ctx), ["zavod", "host-a", "term-x"])
         choice = RUNNER.choose(ctx)
         self.assertEqual(choice.channel, "zavod")

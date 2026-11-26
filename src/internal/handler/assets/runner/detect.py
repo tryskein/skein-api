@@ -25,9 +25,16 @@
 # one blind channel whether the runner is a descendant of the agent process
 # in a pane of that channel. The one here confirms nothing.
 
-# The Zavod host: its channel id and the variable of its engine.
+import re
+
+# The Zavod host: its channel id, the variable of its engine, and the two
+# variables of the agent's own address (US-5: ZAVOD_ME is a UUID equal to
+# ZAVOD_AGENT_ID).
 ZAVOD_CHANNEL = "zavod"
 ZAVOD_ENGINE_VAR = "ZAVOD_AGENT_ENGINE_ID"
+ZAVOD_ME_VAR = "ZAVOD_ME"
+ZAVOD_AGENT_ID_VAR = "ZAVOD_AGENT_ID"
+ZAVOD_UUID = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
 # The cause of the warning about two terminal environments.
 AMBIGUOUS_TERMINAL = "ambiguous_terminal"
 # The warning of a chosen blind channel.
@@ -95,6 +102,18 @@ class RegistryDetector(Detector):
     def in_multiplexer(self, ctx):
         return any(b.confirmed and b.multiplexer for b in self.bindings(ctx))
 
+    def zavod_holds(self, ctx, channel):
+        """The conditions US-5 puts on detecting Zavod: ZAVOD_ME is a UUID
+        equal to ZAVOD_AGENT_ID, the CLI of this platform is found, and the
+        engine matches the client by the engine map."""
+        me = ctx.env.get(ZAVOD_ME_VAR, "")
+        if not ZAVOD_UUID.fullmatch(me) or me != ctx.env.get(ZAVOD_AGENT_ID_VAR, ""):
+            return False
+        binaries = (channel.get("binaries") or {}).get(_platform_key()) or []
+        if not any(program_found(b, ctx.env) for b in binaries):
+            return False
+        return self.engine_matches(ctx)
+
     def engine_matches(self, ctx):
         engines = ctx.registry.doc.get("zavodEngines") or {}
         record = engines.get(ctx.env.get(ZAVOD_ENGINE_VAR, ""))
@@ -116,7 +135,7 @@ class RegistryDetector(Detector):
             return False
         if identity is not None and channel["id"] in identity.inherited:
             return False
-        if channel["id"] == ZAVOD_CHANNEL and not self.engine_matches(ctx):
+        if channel["id"] == ZAVOD_CHANNEL and not self.zavod_holds(ctx, channel):
             return False
         return True
 
