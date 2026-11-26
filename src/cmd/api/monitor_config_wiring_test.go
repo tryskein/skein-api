@@ -795,6 +795,20 @@ func TestMonitorConfigWiring_IdleWindowReachesTheClientPath(t *testing.T) {
 		t.Fatalf("working command = %v", started)
 	}
 
+	// The first poll anchors the live start: the event comes after it.
+	polled := false
+	for wait := time.Now().Add(60 * time.Second); !polled && time.Now().Before(wait); {
+		if err := s.pool.QueryRow(context.Background(),
+			`SELECT last_poll_succeeded_at IS NOT NULL FROM monitor_credentials WHERE id = $1`, monitorID).Scan(&polled); err != nil {
+			t.Fatalf("read the poll stamp: %v", err)
+		}
+		if !polled {
+			time.Sleep(100 * time.Millisecond)
+		}
+	}
+	if !polled {
+		t.Fatalf("the detached runner never polled")
+	}
 	// An event the token sees, past the safety lag.
 	s.exec(`INSERT INTO events (occurred_at, type, entity_type, entity_id, project_id,
                     actor, actor_user_id, actor_session_id, actor_type, payload)
