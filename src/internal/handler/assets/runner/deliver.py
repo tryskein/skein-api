@@ -612,6 +612,11 @@ class DeliverySink(object):
             except DeliveryCancelled:
                 self._ledger_step(attempt.abandon)
                 raise
+            except AttemptLost:
+                # Another attempt holds an event of the batch (addressees
+                # merged): nothing was handed over; the events wait for it.
+                self._ledger_step(attempt.abandon)
+                return
             except (StopSignal, Exception) as exc:
                 # A stop (or an error) while the channel may have the text:
                 # unknown, never a second send (INV-9) - in the ledger, the

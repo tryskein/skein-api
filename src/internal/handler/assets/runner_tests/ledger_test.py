@@ -118,6 +118,36 @@ class AttemptLockTest(Base):
 
 
 @unittest.skipUnless(os.name == "posix", "the POSIX ledger")
+class MergedAttemptsTest(Base):
+    """Review finding V6 of wave 7 (INV-1: one accepted delivery per
+    addressee and event): two attempts published for two addressees that a
+    third identity then merges into one - only the attempt that keeps the
+    reservation may make its call."""
+
+    def test_only_the_kept_reservation_calls(self):
+        a = self.ledger("mon-a", ident([addr("orca", "t-1")]))
+        b = self.ledger("mon-b", ident([addr("codex", "th-9")]))
+        da = a.begin([ev("e1")], "c1")
+        db = b.begin([ev("e1")], "c2")
+        self.assertIsNotNone(da.attempt)
+        self.assertIsNotNone(db.attempt)
+        # A third monitor serves both: the two entries are one addressee now.
+        c = self.ledger("mon-c", ident([addr("orca", "t-1"), addr("codex", "th-9")]))
+        self.clock.t += 11   # past the rate window of 10 s
+        c.begin([ev("e2")], "c1").attempt.release()
+        called = []
+        for d in (da, db):
+            try:
+                d.attempt.note_call()
+                called.append(d.attempt.ledger.monitor)
+            except RUNNER.AttemptLost:
+                d.attempt.abandon()
+            finally:
+                d.attempt.release()
+        self.assertEqual(len(called), 1, called)
+
+
+@unittest.skipUnless(os.name == "posix", "the POSIX ledger")
 class OneDeliveryTest(Base):
     """Row #45: attempts of two monitors of one addressee publish one; the
     loser frees its attempt; every competitor at every step of the owner

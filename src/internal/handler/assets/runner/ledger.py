@@ -109,6 +109,12 @@ class LedgerUnavailable(Exception):
         self.reason = reason
 
 
+class AttemptLost(Exception):
+    """A published attempt no longer holds the reservation of an event it
+    carries (addressees merged and another attempt kept it): it hands
+    nothing over."""
+
+
 class LedgerFull(LedgerUnavailable):
     def __init__(self):
         LedgerUnavailable.__init__(self, "full")
@@ -232,17 +238,22 @@ class Attempt(object):
         self.first_call = first_call
 
     def note_call(self):
-        """Count a call of the channel in the ledger before it is made."""
+        """Count a call of the channel in the ledger before it is made.
+        Raises AttemptLost, counting nothing, when the attempt no longer
+        holds the reservation of every event it carries."""
         now = self.ledger.clock()
 
         def change(entry):
-            for eid in self.events:
-                rec = entry["events"].get(eid)
-                if rec and (rec.get("delivering") or {}).get("attempt") == self.key:
-                    rec["delivering"]["calls"] = self.calls + 1
-                    rec["delivering"]["lastCall"] = now
-                    rec["delivering"]["firstCall"] = self.first_call if self.first_call is not None else now
-        self.ledger._change(change)
+            recs = [entry["events"].get(eid) for eid in self.events]
+            if not all(rec and (rec.get("delivering") or {}).get("attempt") == self.key for rec in recs):
+                return True
+            for rec in recs:
+                rec["delivering"]["calls"] = self.calls + 1
+                rec["delivering"]["lastCall"] = now
+                rec["delivering"]["firstCall"] = self.first_call if self.first_call is not None else now
+            return False
+        if self.ledger._change(change):
+            raise AttemptLost()
         self.calls += 1
         self.last_call = now
         if self.first_call is None:
