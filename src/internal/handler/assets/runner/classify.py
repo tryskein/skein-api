@@ -40,7 +40,7 @@ def classify(rows, exit_code=None, doc=None, http_status=None, timed_out=False,
     delivery was refused before send."""
     if timed_out:
         return OUTCOME_UNKNOWN, answer_sign(timed_out=True)
-    matched = [r for r in rows or [] if sign_matches(r.get("match") or {}, exit_code=exit_code,
+    matched = [r for r in rows or [] if outcome_sign_matches(r.get("match") or {}, exit_code=exit_code,
                                                       doc=doc, http_status=http_status)]
     if len(matched) != 1:
         return OUTCOME_UNKNOWN, answer_sign(exit_code, doc, http_status)

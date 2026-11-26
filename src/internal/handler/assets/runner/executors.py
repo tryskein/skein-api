@@ -98,7 +98,7 @@ def json_path_value(doc, path):
     return json.dumps(doc)
 
 
-def sign_matches(match, exit_code=None, doc=None, http_status=None):
+def outcome_sign_matches(match, exit_code=None, doc=None, http_status=None):
     """Whether an answer carries the sign of a table row: every criterion
     the row states holds. A row without a criterion matches nothing."""
     stated = False
@@ -372,7 +372,7 @@ class SystemProbeRunner(ProbeRunner):
         if result.timed_out:
             raise ProbeError("timed out after %d s" % timeout)
         for row in probe.get("results") or []:
-            if sign_matches(row.get("match") or {}, exit_code=result.exit_code, doc=result.json):
+            if outcome_sign_matches(row.get("match") or {}, exit_code=result.exit_code, doc=result.json):
                 return row.get("result")
         return PROBE_UNAVAILABLE
 
