@@ -208,6 +208,12 @@ def receipt_text(outcome, issue, preflight=None):
         DELIVERY_LABEL, outcome.reason, issue, stop_action(outcome.reason, issue, outcome.detail, preflight))
 
 
+def receipt_short_text(outcome, issue):
+    """The receipt within a short limit of the channel: the label, the
+    reason and the issue; the action is in the stop line of the journal."""
+    return "%s. monitor stopped: reason=%s issue=%s." % (DELIVERY_LABEL, outcome.reason, issue)
+
+
 def finish_client(outcome, issue, token_file, sink=None, write=None, preflight=None):
     """Steps 2-4 of P-12 for a runner that holds the one-runner lock: the
     receipt, the stop line in the journal, the fate of the files, the stop
@@ -220,7 +226,7 @@ def finish_client(outcome, issue, token_file, sink=None, write=None, preflight=N
         line["status"] = outcome.status
     if sink is not None:
         if outcome.reason in RECEIPT_STOPS and hasattr(sink, "receipt"):
-            sink.receipt(receipt_text(outcome, issue, preflight))
+            sink.receipt(receipt_text(outcome, issue, preflight), receipt_short_text(outcome, issue))
         sink.lifecycle(line)
     apply_file_fate(token_file, outcome.delete_token)
     return finish(Stop(outcome.reason, status=outcome.status, detail=outcome.detail, preflight=preflight),

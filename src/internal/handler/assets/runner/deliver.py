@@ -676,12 +676,19 @@ class DeliverySink(object):
             self.failing.discard(channel_id)
             self.lifecycle({"event": "recovered", "issue": self.issue, "channel": channel_id})
 
-    def receipt(self, text):
+    def receipt(self, text, short=None):
         """The receipt of a stop that keeps access (US-12): one text by the
         first channel of the preflight, after the addressee check, within
-        the budget of INV-8. A failure leaves only the journal line."""
+        the budget of INV-8 and the channel's limit of a text (short, its
+        reason and issue only, when text is over it; neither fits: no
+        receipt). A failure leaves only the journal line."""
         channel_id = self.channels[0]
         channel = self.registry.channel(channel_id) or {}
+        limit, unit = _line_limit(channel)
+        if limit is not None and measure(text, unit) > limit:
+            if short is None or measure(short, unit) > limit:
+                return
+            text = short
         driver = self.drivers.get(channel_id) or ArgvDriver(channel, self.executor)
         start = self.clock.now()
         for calls in range(MAX_CALLS):
