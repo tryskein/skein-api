@@ -225,6 +225,33 @@ func wholeSecondsAtLeastOne(d time.Duration) int {
 // @Description  journal path. With a live runner of the token it answers
 // @Description  `already_running` and changes nothing.
 // @Description
+// @Description  Working start (`client` mode with SKEIN_MONITOR_MODE=run, the
+// @Description  `command` of the preflight line): the runner first checks
+// @Description  that SKEIN_MONITOR_PREFLIGHT names the last saved preflight
+// @Description  result and that SKEIN_MONITOR_CHANNEL and
+// @Description  SKEIN_MONITOR_BLIND are the values it ran with, the Python
+// @Description  version and the journal directory (else `config_invalid`,
+// @Description  before any poll). `stream` and `exit-on-event` then run in
+// @Description  the foreground; `detached` and `journal` start a detached
+// @Description  process (a new session on POSIX) that gets this body on its
+// @Description  stdin. Every start takes, in this order: the one-runner lock
+// @Description  (the stable file skein-monitor/locks/<key>.lock of the token
+// @Description  path), the token (opened, checked private, read, its
+// @Description  descriptor closed), state.lock, a second check of the result
+// @Description  and the overrides by the lock holder; a mismatch there is
+// @Description  `config_invalid` with no poll. The start of any monitor
+// @Description  removes files of locks/ older than 24 h that no one holds.
+// @Description  The command that starts a detached process prints exactly
+// @Description  one line and returns: `monitor_started` when the detached
+// @Description  process is alive and holds the lock, or the stop line of its
+// @Description  failed start. `monitor_started` of the first start by a
+// @Description  result is `{event, preflightId, method, channel, issue,
+// @Description  pollIntervalSec, reason, warnings, journal}`; a restart by
+// @Description  the same command prints only `{event, preflightId, method,
+// @Description  channel}` (the result is marked announced in preflight.json).
+// @Description  A detached or journal monitor writes its lines and events to
+// @Description  the journal.
+// @Description
 // @Description  Stop protocol (sk-579 US-3): every controlled stop prints
 // @Description  exactly one last stdout line `{event, reason, action[, status]}`
 // @Description  — the only line with `reason` and `action` together (the
@@ -245,14 +272,20 @@ func wholeSecondsAtLeastOne(d time.Duration) int {
 // @Description  traceback to stderr only); `already_running` (`duplicate`,
 // @Description  file untouched, 0); `config_invalid` (`client` mode: an
 // @Description  invalid override, client name or platform, a token or
-// @Description  journal directory that takes no write, an old Python;
-// @Description  `action` names what to
-// @Description  fix; kept, 1). One runner per token file: the runner
-// @Description  takes an exclusive non-blocking flock on the token file it
-// @Description  opened and reads the token once from that descriptor; on a
-// @Description  platform without OS file locks it runs unlocked and says so
-// @Description  once on stderr. The endpoint is gated by RequireMonitorToken
-// @Description  purely for audit.
+// @Description  journal directory that takes no write, an old Python, no
+// @Description  preflight result, a SKEIN_MONITOR_PREFLIGHT that is missing
+// @Description  or not the last result, overrides other than the
+// @Description  preflight's, a one-runner lock that cannot be taken for an
+// @Description  OS error; `action` names what to fix; kept, 1); `delivered`
+// @Description  (`client` mode, exit-on-event: the batch is out; `paused`,
+// @Description  kept, 0; `action` says to run the working command of the
+// @Description  named preflight again). One runner per token file: in
+// @Description  `legacy` mode the runner takes an exclusive non-blocking
+// @Description  flock on the token file it opened and reads the token once
+// @Description  from that descriptor; on a platform without OS file locks it
+// @Description  runs unlocked and says so once on stderr. In `client` mode
+// @Description  the lock is skein-monitor/locks/<key>.lock (above). The
+// @Description  endpoint is gated by RequireMonitorToken purely for audit.
 // @Tags         agent-monitor
 // @Produce      text/x-python
 // @Security     ApiKeyAuth

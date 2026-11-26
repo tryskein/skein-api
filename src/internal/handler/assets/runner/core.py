@@ -162,30 +162,7 @@ def open_token(path):
     the life of the process — it holds the lock, which the kernel releases on
     any death of the process, SIGKILL included.
     """
-    try:
-        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
-    except FileNotFoundError:
-        # The token is gone: its state and its empty directory go too.
-        raise Stop("token_file_missing", delete_token=True)
-    except OSError:
-        # Unreadable (a symlink, no permission): not ours to touch.
-        raise Stop("token_file_missing")
-    try:
-        st = os.fstat(fd)
-    except OSError:
-        os.close(fd)
-        raise Stop("token_file_missing")
-    if not stat.S_ISREG(st.st_mode):
-        # A directory or a device: not ours to touch.
-        os.close(fd)
-        raise Stop("token_file_missing")
-    if not token_file_private(path, st):
-        os.close(fd)
-        # The token is burnt: delete our readable copy so it does not
-        # outlive the refusal on disk. Another user's file is not ours to touch.
-        if hasattr(os, "getuid") and st.st_uid == os.getuid():
-            remove_token_file(path, opened=st)
-        raise Stop("token_file_insecure")
+    fd = open_token_checked(path)
     if fcntl is None:
         log_stderr("monitor runner: this platform has no OS file locks; running without the "
                    "one-runner lock, so a second runner on this token file is not prevented")
@@ -216,6 +193,36 @@ def open_token(path):
         os.close(fd)
         raise Stop("token_file_missing", delete_token=True)
     return fd, token
+
+
+def open_token_checked(path):
+    """Open the token file and check what was opened: a regular file no one
+    else can read. Returns the descriptor, nothing read yet; raises Stop."""
+    try:
+        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    except FileNotFoundError:
+        # The token is gone: its state and its empty directory go too.
+        raise Stop("token_file_missing", delete_token=True)
+    except OSError:
+        # Unreadable (a symlink, no permission): not ours to touch.
+        raise Stop("token_file_missing")
+    try:
+        st = os.fstat(fd)
+    except OSError:
+        os.close(fd)
+        raise Stop("token_file_missing")
+    if not stat.S_ISREG(st.st_mode):
+        # A directory or a device: not ours to touch.
+        os.close(fd)
+        raise Stop("token_file_missing")
+    if not token_file_private(path, st):
+        os.close(fd)
+        # The token is burnt: delete our readable copy so it does not
+        # outlive the refusal on disk. Another user's file is not ours to touch.
+        if hasattr(os, "getuid") and st.st_uid == os.getuid():
+            remove_token_file(path, opened=st)
+        raise Stop("token_file_insecure")
+    return fd
 
 
 def token_file_private(path, st):
@@ -303,6 +310,9 @@ def build_url(base, cursor, exclude_session=""):
 # already_running     duplicate 0     not touched
 # config_invalid      closed    1     kept (client mode: a setting, directory
 #                                     or the Python version to fix)
+# delivered           paused    0     kept (client mode, exit-on-event: the
+#                                     batch is out; run the working command
+#                                     of the preflight again)
 STOPS = {
     "token_expired": ("closed", 0),
     "visibility_lost": ("closed", 0),
@@ -314,6 +324,7 @@ STOPS = {
     "root_closed": ("closed", 0),
     "already_running": ("duplicate", 0),
     "config_invalid": ("closed", 1),
+    "delivered": ("paused", 0),
 }
 
 
@@ -322,6 +333,10 @@ def stop_action(reason, issue, detail=None):
     if reason == "config_invalid":
         return ("The monitor for issue %s did not start: %s. Fix that, then run the preflight again; "
                 "do not mint a new monitor: its token is kept." % (issue, detail or "a setting is invalid"))
+    if reason == "delivered":
+        # detail: the number of the preflight result whose working command
+        # restarts the monitor; the command itself is not repeated (INV-17).
+        return ("Handle the events above, then run the working command of preflight %s again." % detail)
     if reason == "token_expired":
         return ("The monitor for issue %s has ended: its token expired or was revoked. If you "
                 "stopped it yourself, do nothing; otherwise mint a new monitor with %s." % (issue, mint))
@@ -520,10 +535,36 @@ def failure_backoff(backoff):
     return min(max(backoff, float(POLL_INTERVAL_SEC)) * 2, float(BACKOFF_CEILING_SEC))
 
 
-def work(executor, base, token, issue, exclude_session, token_file):
-    """The polling loop. Never returns: it ends by raising Stop."""
-    emit({"event": "monitor_started", "issue": issue,
-          "pollIntervalSec": POLL_INTERVAL_SEC})
+class StdoutSink(object):
+    """Where the lines of a monitor go: stdout, one JSON line each. announce
+    prints the legacy monitor_started line when the loop begins; a client
+    start prints its own monitor_started before the loop."""
+
+    def __init__(self, issue, announce=True):
+        self.issue = issue
+        self.announce = announce
+
+    def started(self):
+        if self.announce:
+            emit({"event": "monitor_started", "issue": self.issue,
+                  "pollIntervalSec": POLL_INTERVAL_SEC})
+
+    def lifecycle(self, line):
+        emit(line)
+
+    def notification(self, n):
+        emit({"event": "notification", "notification": n})
+
+
+def work(executor, base, token, issue, exclude_session, token_file, sink=None):
+    """The polling loop. Never returns: it ends by raising Stop. sink takes
+    the lines (stdout by default); a sink that raises JournalUnavailable for
+    a notification leaves the page undone: the cursor stays and the same page
+    is polled again."""
+    if sink is None:
+        sink = StdoutSink(issue)
+    if hasattr(sink, "started"):
+        sink.started()
 
     # A restart with the same token file resumes from the saved cursor; a
     # new token (no state) starts live.
@@ -565,24 +606,32 @@ def work(executor, base, token, issue, exclude_session, token_file):
 
         if status == 200 and isinstance(payload, dict) and isinstance(payload.get("notifications") or [], list):
             if series_degraded:
-                emit({"event": "recovered", "issue": issue,
-                      "failedForSec": int(time.monotonic() - series_started)})
+                sink.lifecycle({"event": "recovered", "issue": issue,
+                                "failedForSec": int(time.monotonic() - series_started)})
             series_started = None
             series_degraded = False
             notifs = payload.get("notifications") or []
             new_count = 0
-            for n in notifs:
-                nid = n.get("id") if isinstance(n, dict) else None
-                if nid is not None:
-                    if nid in seen:
+            try:
+                for n in notifs:
+                    nid = n.get("id") if isinstance(n, dict) else None
+                    if nid is not None and nid in seen:
                         continue
-                    seen.add(nid)
-                    seen_order.append(nid)
-                    if len(seen_order) > SEEN_IDS_CAP:
-                        old = seen_order.pop(0)
-                        seen.discard(old)
-                emit({"event": "notification", "notification": n})
-                new_count += 1
+                    sink.notification(n)
+                    new_count += 1
+                    if nid is not None:
+                        seen.add(nid)
+                        seen_order.append(nid)
+                        if len(seen_order) > SEEN_IDS_CAP:
+                            old = seen_order.pop(0)
+                            seen.discard(old)
+            except JournalUnavailable as exc:
+                # The page is not done: the same cursor is polled again; the
+                # events already written are skipped by the seen set.
+                log_stderr("monitor runner: the journal cannot be written (%s); the page is "
+                           "polled again" % exc.reason)
+                time.sleep(jitter(float(POLL_INTERVAL_SEC)))
+                continue
             # The root issue is closed and everything owed is delivered (the
             # server decides, INV-12): stop only after printing this page.
             if payload.get("rootClosed") is True:
@@ -617,11 +666,11 @@ def work(executor, base, token, issue, exclude_session, token_file):
             # be lost. Not part of a failure run — the next poll is fresh.
             cursor = None
             persist(None)
-            emit({"event": "degraded", "cause": "cursor_reset", "issue": issue,
-                  "action": "The server rejected this monitor's poll cursor, so the monitor "
-                            "restarted from now: notifications since its last successful poll "
-                            "may have been missed — check issue %s with skein_show. "
-                            "Do not restart anything; the monitor keeps running." % issue})
+            sink.lifecycle({"event": "degraded", "cause": "cursor_reset", "issue": issue,
+                            "action": "The server rejected this monitor's poll cursor, so the monitor "
+                                      "restarted from now: notifications since its last successful poll "
+                                      "may have been missed — check issue %s with skein_show. "
+                                      "Do not restart anything; the monitor keeps running." % issue})
             time.sleep(jitter(float(POLL_INTERVAL_SEC)))
             continue
 
@@ -634,11 +683,11 @@ def work(executor, base, token, issue, exclude_session, token_file):
             series_started = now
         if not series_degraded and now - series_started > STALL_THRESHOLD_SEC:
             series_degraded = True
-            emit({"event": "degraded", "cause": "poll_failing", "issue": issue,
-                  "failingForSec": int(now - series_started), "lastStatus": status,
-                  "action": "Polls for issue %s have been failing for a while; the monitor "
-                            "keeps retrying on its own, so do not restart it. If this does not "
-                            "clear, check that the Skein server is reachable." % issue})
+            sink.lifecycle({"event": "degraded", "cause": "poll_failing", "issue": issue,
+                            "failingForSec": int(now - series_started), "lastStatus": status,
+                            "action": "Polls for issue %s have been failing for a while; the monitor "
+                                      "keeps retrying on its own, so do not restart it. If this does not "
+                                      "clear, check that the Skein server is reachable." % issue})
         if status == 429:
             wait = retry_after_seconds(retry_after, BACKOFF_CEILING_SEC)
             wait = min(max(float(wait), float(POLL_INTERVAL_SEC)), float(BACKOFF_CEILING_SEC))
@@ -655,8 +704,12 @@ def work(executor, base, token, issue, exclude_session, token_file):
 
 def run():
     """Run the monitor; returns the process exit code. Prints exactly one stop
-    line (the last stdout line) on every controlled stop."""
+    line (the last stdout line) on every controlled stop. In client mode this
+    is the working start (run_client of the detach part), and in the detached
+    child it starts, the child's run (run_detached_child)."""
     global _stopping
+    if LOADER_MODE == "client":
+        return run_detached_child() if DETACHED_CHILD else run_client()
     issue = os.environ.get("SKEIN_ISSUE", "")
     token_file = os.environ.get("SKEIN_TOKEN_FILE", "")
     executor = Executor()

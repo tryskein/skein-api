@@ -382,7 +382,11 @@ func TestMeasureToolResponses(t *testing.T) {
 //     prints (run for real; it creates and then loses its token directory);
 //   - working_command: the `command` of the line of a real preflight of the
 //     runner, run with the variables of the fixture record's `preflight`
-//     command in the token directory prepare made.
+//     command in the token directory prepare made;
+//   - first_start_monitor_started, restart_monitor_started: the
+//     monitor_started lines of the working start by that command (the
+//     behavioural fixture): the first start by the result, then a restart
+//     by the same command after the detached runner was stopped (C1).
 func measureMonitorStart(m *respMeasurer, noClient, fixture string) {
 	t := m.t
 	t.Helper()
@@ -429,19 +433,34 @@ func measureMonitorStart(m *respMeasurer, noClient, fixture string) {
 	cmd := exec.Command("python3", "-c", measureWorkingCommandPy)
 	cmd.Dir = "../../internal/handler/assets/runner_tests"
 	cmd.Env = append(os.Environ(), "MEASURE_PREFLIGHT="+named.Preflight, "MEASURE_STATE_HOME="+t.TempDir())
+	cmd.Stderr = os.Stderr
 	out, err = cmd.Output()
 	if err != nil {
-		t.Fatalf("build the working command: %v; stdout %q", err, out)
+		t.Fatalf("run the preflight and the working start: %v; stdout %q", err, out)
 	}
-	m.part("skein_get_monitor_script.working_command", string(out))
+	var lines struct {
+		Command string `json:"command"`
+		First   string `json:"first"`
+		Restart string `json:"restart"`
+	}
+	if err := json.Unmarshal(out, &lines); err != nil {
+		t.Fatalf("decode the lines of the start: %v; stdout %q", err, out)
+	}
+	m.part("skein_get_monitor_script.working_command", lines.Command)
+	m.part("skein_get_monitor_script.first_start_monitor_started", lines.First)
+	m.part("skein_get_monitor_script.restart_monitor_started", lines.Restart)
 }
 
 // measureWorkingCommandPy runs the runner's preflight (the body the server
 // serves, loaded by the runner tests' harness) in the token directory that
 // prepare made, with the SKEIN_* variables of the preflight command in
-// MEASURE_PREFLIGHT, and prints the command of its line. The state home is a
-// directory of the measurement.
-const measureWorkingCommandPy = `import os, shlex, sys
+// MEASURE_PREFLIGHT, then starts the monitor twice by the `command` of its
+// line, as the loader would run the body in client mode, against a local
+// poll server that answers empty pages: the first start by the result, and
+// a restart after the detached runner was stopped by a signal. It prints
+// {"command", "first", "restart"}: the command and the two monitor_started
+// lines as printed. The state home is a directory of the measurement.
+const measureWorkingCommandPy = `import io, json, os, shlex, signal, sys, time
 sys.path.insert(0, os.getcwd())
 import harness
 R = harness.load_runner()
@@ -453,8 +472,60 @@ for word in shlex.split(os.environ["MEASURE_PREFLIGHT"]):
         env[name] = value
 registry = R.load_registry()
 settings = R.read_settings(env, registry, mode="client")
-line = R.preflight(env["SKEIN_TOKEN_FILE"], env, registry, settings)
-sys.stdout.write(line["command"])
+command = R.preflight(env["SKEIN_TOKEN_FILE"], env, registry, settings)["command"]
+
+# The working start: the variables of the command, the loader's namespace.
+srv = harness.ScriptedServer(lambda h, qs: h.send_json(200, harness.EMPTY))
+run_env = dict(env)
+for word in shlex.split(command):
+    name, sep, value = word.partition("=")
+    if sep and name.startswith("SKEIN_"):
+        run_env[name] = value
+run_env["SKEIN_PUBLIC_URL"] = srv.url()
+os.environ.clear()
+os.environ.update(run_env)
+R.LOADER_MODE = "client"
+R._skein_loader_body = harness.render_runner()
+pids = []
+spawn = R.PosixPlatform.spawn_detached
+def spy(*args):
+    pid, receipt = spawn(*args)
+    pids.append(pid)
+    return pid, receipt
+R.PosixPlatform.spawn_detached = staticmethod(spy)
+
+def start():
+    out, real = io.StringIO(), sys.stdout
+    sys.stdout = out
+    try:
+        code = R.run_client()
+    finally:
+        sys.stdout = real
+    lines = [l for l in out.getvalue().splitlines() if l]
+    if code != 0 or len(lines) != 1 or json.loads(lines[0]).get("event") != "monitor_started" or not pids:
+        sys.exit("the working start did not print one monitor_started: code %r, %r" % (code, lines))
+    return lines[0]
+
+def stop():
+    pid = pids.pop()
+    os.kill(pid, signal.SIGTERM)
+    deadline = time.monotonic() + 30
+    while time.monotonic() < deadline:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return
+        time.sleep(0.05)
+    sys.exit("the detached runner did not stop")
+
+first = start()
+stop()
+restart = start()
+stop()
+srv.stop()
+if "journal" not in json.loads(first) or "journal" in json.loads(restart):
+    sys.exit("the first start is not the full line or the restart is not the short one: %s / %s" % (first, restart))
+sys.stdout.write(json.dumps({"command": command, "first": first, "restart": restart}))
 `
 
 // measureMonitorRealRegistry measures skein_get_monitor_script with `client`
