@@ -124,6 +124,16 @@ type AgentScriptHandler struct {
 // registry is the embedded registry.json, base64-encoded, so the body's
 // digest covers it.
 func NewAgentScriptHandler(pollIntervalSec int, backoffCeiling, requestLimit, stallThreshold, tokenIdle time.Duration) *AgentScriptHandler {
+	return NewAgentScriptHandlerWithRegistry(monitorregistry.Embedded(), pollIntervalSec, backoffCeiling,
+		requestLimit, stallThreshold, tokenIdle)
+}
+
+// NewAgentScriptHandlerWithRegistry is NewAgentScriptHandler with the monitor
+// registry document the body carries (registryDoc, base64 in the body); the
+// caller has validated it (cmd/api buildServingRouter). A test hands a
+// fixture registry here.
+func NewAgentScriptHandlerWithRegistry(registryDoc []byte, pollIntervalSec int, backoffCeiling, requestLimit,
+	stallThreshold, tokenIdle time.Duration) *AgentScriptHandler {
 	if pollIntervalSec < 1 {
 		pollIntervalSec = 1
 	}
@@ -133,7 +143,7 @@ func NewAgentScriptHandler(pollIntervalSec int, backoffCeiling, requestLimit, st
 	body = strings.ReplaceAll(body, requestLimitPlaceholder, strconv.Itoa(wholeSecondsAtLeastOne(requestLimit)))
 	body = strings.ReplaceAll(body, stallThresholdPlaceholder, strconv.Itoa(wholeSecondsAtLeastOne(stallThreshold)))
 	body = strings.ReplaceAll(body, tokenIdlePlaceholder, strconv.Itoa(wholeSecondsAtLeastOne(tokenIdle)))
-	body = strings.ReplaceAll(body, registryPlaceholder, base64.StdEncoding.EncodeToString(monitorregistry.Embedded()))
+	body = strings.ReplaceAll(body, registryPlaceholder, base64.StdEncoding.EncodeToString(registryDoc))
 	if i := strings.Index(body, placeholderPrefix); i >= 0 {
 		end := min(i+64, len(body))
 		panic(fmt.Sprintf("monitor runner: placeholder left unsubstituted near %q", body[i:end]))
@@ -324,7 +334,20 @@ func wholeSecondsAtLeastOne(d time.Duration) int {
 // @Description  detached: the channel's check says the agent has ended;
 // @Description  `closed`, deleted, 0). In `client` mode `stopped` and
 // @Description  `internal_error` name the working command of the preflight
-// @Description  to resume, never repeat it. While a detached monitor waits
+// @Description  to resume, never repeat it; a command that mints a new
+// @Description  monitor keeps the parameters of this one (`subtree` and
+// @Description  `eventTypes` when not the defaults, `client`, `platform`,
+// @Description  `tokenDir` on Windows). The client branch of the loader that
+// @Description  downloads this body reads the token only after the token
+// @Description  directory and `starter.py` pass the token's privacy check
+// @Description  (else `token_file_insecure`); it maps the answer of this
+// @Description  route: 401 `token_expired`, 403 `visibility_lost` (both end
+// @Description  the monitor under its one-runner lock: kept events get
+// @Description  "access lost" without the preview, then the files go; a
+// @Description  live runner holding the lock is left to end it), a network
+// @Description  failure, a timeout or another status `server_unreachable`
+// @Description  (nothing is touched), a body of another SHA-256
+// @Description  `runner_mismatch` (the files go under the lock). While a detached monitor waits
 // @Description  to deliver it polls from the cursor of its last fixed
 // @Description  outcome; it sends only when the last successful poll is at
 // @Description  most two poll intervals old; 401 and 403 win over waiting

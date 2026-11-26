@@ -2,6 +2,11 @@ import signal
 
 globals().setdefault("_SKEIN_LOADER_MODE", "legacy")
 
+if _SKEIN_LOADER_MODE == "client":
+    # The client branch (monitorassets/loader_client/main.py); it never
+    # returns. Without `client` the loader below runs as before.
+    loader_client_main()
+
 
 class _SkeinLoaderSignal(BaseException):
     pass

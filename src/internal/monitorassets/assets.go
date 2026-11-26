@@ -16,6 +16,17 @@ import "embed"
 //go:embed runner/parts.txt runner/*.py
 var Runner embed.FS
 
+// LoaderClient holds the parts of the client branch of the loader and their
+// manifest (LoaderClientDir/parts.txt); the manifest names runner parts too,
+// so the runner parts are in this FS as well.
+//
+//go:embed loader_client/parts.txt loader_client/*.py runner/parts.txt runner/*.py
+var LoaderClient embed.FS
+
+// LoaderClientDir is the directory of the client branch and its manifest in
+// LoaderClient.
+const LoaderClientDir = "loader_client"
+
 // RunnerDir is the directory of the runner parts and of their manifest in
 // Runner.
 const RunnerDir = "runner"

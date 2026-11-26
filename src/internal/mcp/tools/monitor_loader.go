@@ -9,6 +9,8 @@ import (
 	"io/fs"
 	"path"
 	"strings"
+
+	"skein-api/internal/monitorassets"
 )
 
 // monitorAssets holds the parts of the served loader, their manifest and the
@@ -64,11 +66,14 @@ func mustStarter(mode string) string {
 }
 
 // servedLoaderSource is the loader GET /agent/v1/monitor-loader serves: the
-// parts listed in assets/loader_parts.txt, joined in order. It is static code
-// of this build, the same for every caller; the starter runs it with its mode
-// in the loader's namespace, so one body serves both the call without
-// `client` and the call with it.
-var servedLoaderSource = mustAssembleAssets(monitorAssets, "assets", "loader_parts.txt")
+// parts of the client branch (internal/monitorassets, loader_client/parts.txt:
+// the runner's shared parts and the branch itself), then the parts listed in
+// assets/loader_parts.txt, joined in order. It is static code of this build,
+// the same for every caller; the starter runs it with its mode in the
+// loader's namespace, so one body serves both the call without `client` and
+// the call with it.
+var servedLoaderSource = mustAssembleAssets(monitorassets.LoaderClient, monitorassets.LoaderClientDir, "parts.txt") +
+	mustAssembleAssets(monitorAssets, "assets", "loader_parts.txt")
 
 // ServedLoader returns the loader source GET /agent/v1/monitor-loader serves.
 // The handler of that route digests it once; the digest is the

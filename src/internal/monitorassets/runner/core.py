@@ -58,19 +58,12 @@
 
 import json
 import os
-import random
 import signal
-import stat
 import subprocess
 import sys
 import time
 import traceback
 import urllib.parse
-
-try:
-    import fcntl
-except ImportError:  # not POSIX (Python on Windows): no OS file locks
-    fcntl = None
 
 # --- timings, templated by the serving handler (integer seconds) ------------
 # Each placeholder token below is replaced by plain string substitution in
@@ -133,141 +126,6 @@ for line in sys.stdin:
 """
 
 
-def emit(obj):
-    """Write one JSON object as a single flushed stdout line (the Monitor contract)."""
-    sys.stdout.write(json.dumps(obj, separators=(",", ":")) + "\n")
-    sys.stdout.flush()
-
-
-def log_stderr(msg):
-    """Diagnostics go to stderr so they never pollute the stdout line protocol."""
-    sys.stderr.write(msg + "\n")
-    sys.stderr.flush()
-
-
-def jitter(base):
-    """Full-jitter: a random point in [base/2, base] to de-sync a fleet of runners."""
-    if base <= 0:
-        return 0.0
-    return base / 2.0 + random.random() * (base / 2.0)
-
-
-def open_token(path):
-    """Open the token file, take the one-runner lock, read the token.
-
-    Order is open → check → lock → read (sk-579 INV-13): a missing file is
-    reported as missing, never as somebody else's lock, and a file others can
-    read is refused before its token is read. Raises Stop for every outcome
-    that ends the runner; returns (fd, token) otherwise. The fd stays open for
-    the life of the process — it holds the lock, which the kernel releases on
-    any death of the process, SIGKILL included.
-    """
-    fd = open_token_checked(path)
-    if fcntl is None:
-        log_stderr("monitor runner: this platform has no OS file locks; running without the "
-                   "one-runner lock, so a second runner on this token file is not prevented")
-    else:
-        try:
-            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
-            os.close(fd)
-            raise Stop("already_running")
-        except OSError as exc:
-            # The lock guards against a duplicate; it is not a condition of
-            # running (same decision as a platform without fcntl): say so
-            # once and run without it.
-            log_stderr("monitor runner: cannot lock the token file (%s); running without the "
-                       "one-runner lock, so a second runner on this token file is not prevented" % exc)
-    try:
-        chunks = []
-        while True:
-            chunk = os.read(fd, 65536)
-            if not chunk:
-                break
-            chunks.append(chunk)
-        token = b"".join(chunks).decode("utf-8").strip()
-    except (OSError, UnicodeDecodeError):
-        os.close(fd)
-        raise Stop("token_file_missing")
-    if not token:
-        os.close(fd)
-        raise Stop("token_file_missing", delete_token=True)
-    return fd, token
-
-
-def open_token_checked(path):
-    """Open the token file and check what was opened: a regular file no one
-    else can read. Returns the descriptor, nothing read yet; raises Stop."""
-    try:
-        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
-    except FileNotFoundError:
-        # The token is gone: its state and its empty directory go too.
-        raise Stop("token_file_missing", delete_token=True)
-    except OSError:
-        # Unreadable (a symlink, no permission): not ours to touch.
-        raise Stop("token_file_missing")
-    try:
-        st = os.fstat(fd)
-    except OSError:
-        os.close(fd)
-        raise Stop("token_file_missing")
-    if not stat.S_ISREG(st.st_mode):
-        # A directory or a device: not ours to touch.
-        os.close(fd)
-        raise Stop("token_file_missing")
-    if not token_file_private(path, st):
-        os.close(fd)
-        # The token is burnt: delete our readable copy so it does not
-        # outlive the refusal on disk. Another user's file is not ours to touch.
-        if hasattr(os, "getuid") and st.st_uid == os.getuid():
-            remove_token_file(path, opened=st)
-        raise Stop("token_file_insecure")
-    return fd
-
-
-def token_file_private(path, st):
-    """True when no other user can read the token file of stat st: it is
-    ours and either has no group/other bits or sits in a directory of ours
-    that has none. Platforms without POSIX owners (Windows) are not checked."""
-    if not hasattr(os, "getuid"):
-        return True
-    uid = os.getuid()
-    if st.st_uid != uid:
-        return False
-    if not st.st_mode & 0o077:
-        return True
-    try:
-        parent = os.lstat(os.path.dirname(os.path.abspath(path)))
-    except OSError:
-        return False
-    return stat.S_ISDIR(parent.st_mode) and parent.st_uid == uid and not parent.st_mode & 0o077
-
-
-def remove_token_file(path, opened=None):
-    """Delete the token file with its state file, and its directory when it
-    is the mint's own skein-mon-* directory and nothing else is left in it.
-    With opened (the fstat of the opened file), only that same file is
-    deleted: a path that now names another inode is left alone, and so is
-    the state next to it. A token file already gone still takes its state."""
-    try:
-        if opened is not None:
-            cur = os.lstat(path)
-            if (cur.st_ino, cur.st_dev) != (opened.st_ino, opened.st_dev):
-                return
-        os.remove(path)
-    except FileNotFoundError:
-        pass
-    except OSError:
-        return
-    remove_state_file(path)
-    parent = os.path.dirname(os.path.abspath(path))
-    if os.path.basename(parent).startswith("skein-mon-"):
-        try:
-            os.rmdir(parent)
-        except OSError:
-            pass
-
-
 def build_url(base, cursor, exclude_session="", limit=None):
     poll_url = base.rstrip("/") + "/agent/v1/notifications/poll"
     params = {}
@@ -291,139 +149,6 @@ def build_url(base, cursor, exclude_session="", limit=None):
     if params:
         poll_url += "?" + urllib.parse.urlencode(params)
     return poll_url
-
-
-# --- stop protocol (sk-579 US-3) ---------------------------------------------
-# Every controlled stop prints exactly ONE last stdout line
-# {"event", "reason", "action"[, "status"]}; "action" is a finished instruction
-# to the agent with the root issue id filled in. The table below is the single
-# place a reason's event, exit code and token-file fate are decided (the
-# columns of the US-3 table). Diagnostics, tracebacks included, go to stderr.
-#
-# reason              event     exit  token file
-# token_expired       closed    0     deleted
-# visibility_lost     closed    0     deleted
-# token_file_missing  closed    1     missing stays missing (its state is
-#                                     deleted); empty → deleted;
-#                                     unreadable → not touched
-# token_file_insecure closed    1     deleted when ours; another user's not touched
-# misconfigured       closed    1     deleted when its path is known
-# stopped             paused    0     kept
-# internal_error      paused    1     kept
-# root_closed         closed    0     deleted
-# already_running     duplicate 0     not touched
-# config_invalid      closed    1     kept (client mode: a setting, directory
-#                                     or the Python version to fix)
-# delivered           paused    0     kept (client mode, exit-on-event: the
-#                                     batch is out; run the working command
-#                                     of the preflight again)
-STOPS = {
-    "token_expired": ("closed", 0),
-    "visibility_lost": ("closed", 0),
-    "token_file_missing": ("closed", 1),
-    "token_file_insecure": ("closed", 1),
-    "misconfigured": ("closed", 1),
-    "stopped": ("paused", 0),
-    "internal_error": ("paused", 1),
-    "root_closed": ("closed", 0),
-    "already_running": ("duplicate", 0),
-    "config_invalid": ("closed", 1),
-    "delivered": ("paused", 0),
-    "addressee_gone": ("closed", 0),
-}
-
-
-def stop_action(reason, issue, detail=None, preflight=None):
-    """The action of a stop line. preflight is the number of the result
-    whose working command resumes a client-mode monitor: the action names
-    it, never repeats the command (INV-17)."""
-    mint = 'skein_get_monitor_script(id="%s")' % issue
-    if preflight is not None and reason in ("stopped", "internal_error"):
-        return ("The monitor for issue %s %s. Run the working command of preflight %s again to resume "
-                "it." % (issue, "was stopped by a signal" if reason == "stopped" else "hit an unexpected error",
-                         preflight))
-    if reason == "addressee_gone":
-        return ("The agent the monitor for issue %s delivered to has ended, so the monitor stopped. "
-                "If the work goes on in another agent, mint a new monitor there with %s." % (issue, mint))
-    if reason == "config_invalid":
-        return ("The monitor for issue %s did not start: %s. Running this command again does not help: "
-                "fix that, run the preflight again and start the working command its preflight line "
-                "names; do not mint a new monitor: its token is kept." % (issue, detail or "a setting is invalid"))
-    if reason == "delivered":
-        # detail: the number of the preflight result whose working command
-        # restarts the monitor; the command itself is not repeated (INV-17).
-        return ("Handle the events above, then run the working command of preflight %s again." % detail)
-    if reason == "token_expired":
-        return ("The monitor for issue %s has ended: its token expired or was revoked. If you "
-                "stopped it yourself, do nothing; otherwise mint a new monitor with %s." % (issue, mint))
-    if reason == "visibility_lost":
-        return ("The monitor for issue %s has ended because you no longer have access to its project. "
-                "Do not mint it again until you regain access to that project; then mint a new "
-                "monitor with %s." % (issue, mint))
-    if reason == "token_file_missing":
-        return ("The monitor for issue %s cannot run: its token file is missing, empty or unreadable. "
-                "Mint a new monitor with %s." % (issue, mint))
-    if reason == "token_file_insecure":
-        return ("The token file of the monitor for issue %s can be read by other users, so the monitor "
-                "did not start. Mint a new monitor with %s and run its `prepare` before writing the "
-                "token." % (issue, mint))
-    if reason == "misconfigured":
-        return ("The bootstrap of the monitor for issue %s is broken (the server address or the token "
-                "file path is not set). Mint a new monitor with %s." % (issue, mint))
-    if reason == "root_closed" and isinstance(detail, dict):
-        # A client-mode close: the summary of what was received since it.
-        return ("Issue %s is %s. Process the delivered events and do not restart the monitor; if the "
-                "issue is reopened and you still need to follow it, mint a new monitor with %s."
-                % (issue, summary_text(detail), mint))
-    if reason == "root_closed":
-        return ("Issue %s is closed, so its monitor has finished after delivering everything it owed. "
-                "Nothing to do; if the issue is reopened and you still need to follow it, mint a new "
-                "monitor with %s." % (issue, mint))
-    if reason == "already_running":
-        return ("A runner is already monitoring issue %s with this token file, so this second one "
-                "stopped. Do nothing: the monitor is already running." % issue)
-    if reason == "stopped":
-        return ("The monitor for issue %s was stopped by a signal. Run the same bootstrap again to "
-                "resume from where it stopped; its token stays valid until the renewal window runs "
-                "out." % issue)
-    return ("The monitor for issue %s hit an unexpected error. Run the same bootstrap again; if it "
-            "happens again, mint a new monitor with %s." % (issue, mint))
-
-
-class Stop(Exception):
-    """A controlled stop: reason (a STOPS key), optional HTTP status, and
-    whether the token file is to be deleted."""
-
-    def __init__(self, reason, status=None, delete_token=False, detail=None, preflight=None):
-        global _stopping
-        # Deciding a stop starts the final phase: from here on a signal no
-        # longer raises, so it cannot replace this stop or print a second line.
-        _stopping = True
-        super().__init__(reason)
-        self.reason = reason
-        self.status = status
-        self.delete_token = delete_token
-        # What config_invalid names to fix (a variable, a directory).
-        self.detail = detail
-        # The number of the preflight result a client-mode action names.
-        self.preflight = preflight
-
-
-class StopSignal(BaseException):
-    """Raised by the SIGTERM/SIGINT handler. A BaseException so no ordinary
-    handler swallows it on the way out."""
-
-
-# Set once the runner has started its final stop: a late signal must not
-# start a second stop line. The handler sets it too, so it raises at most once.
-_stopping = False
-
-
-def _on_signal(signum, frame):
-    global _stopping
-    if not _stopping:
-        _stopping = True
-        raise StopSignal()
 
 
 class Executor:
@@ -823,21 +548,6 @@ def run_preflight():
         log_stderr("monitor runner: unexpected error in preflight\n" + traceback.format_exc())
         outcome = Stop("internal_error")
     return finish(outcome, issue, token_file)
-
-
-def finish(outcome, issue, token_file, write=None):
-    """Apply the token-file fate of the stop, print its line (through write,
-    when given: a stream monitor keeps it within its limits), return its
-    code."""
-    event, code = STOPS[outcome.reason]
-    if outcome.delete_token and token_file:
-        remove_token_file(token_file)
-    line = {"event": event, "reason": outcome.reason,
-            "action": stop_action(outcome.reason, issue, outcome.detail, outcome.preflight)}
-    if outcome.status is not None:
-        line["status"] = outcome.status
-    (write or emit)(line)
-    return code
 
 
 def main():

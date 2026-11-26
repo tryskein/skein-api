@@ -201,6 +201,27 @@ def apply_file_fate(token_file, delete):
     _point("token_dir_removed")
 
 
+def finalize_stored(token_file, issue, reason, env, secrets=()):
+    """Step 1 of P-12 for a stop by lost access that has no live page (the
+    client loader got 401 or 403 for the runner): the events the state keeps
+    get their journal lines without the preview - the rest of a page an
+    exit-on-event cycle kept gets "access lost", an outcome fixed before the
+    stop but not in the journal yet keeps its own - in the journal or, when
+    it takes no write, in the deferred tail with the stop summary. The
+    caller holds the one-runner lock."""
+    cursor = load_cursor(token_file)
+    items = []
+    rest = load_remainder(token_file, cursor)
+    if rest is not None:
+        items.extend((n, OUTCOME_ACCESS_LOST) for n in rest[0])
+    outcomes, journaled = load_page_outcomes(token_file, cursor)
+    items.extend(({"id": eid}, status) for eid, status in sorted(outcomes.items()) if eid not in journaled)
+    if not items:
+        return
+    method = (load_preflight(token_file) or {}).get("method")
+    close_stored(Journal(token_file, issue, secrets=list(secrets), env=env), method, items, reason, env)
+
+
 def receipt_text(outcome, issue, preflight=None):
     """The plain text of the receipt of a stop that keeps access; in client
     mode its action names the working command of preflight `preflight`."""

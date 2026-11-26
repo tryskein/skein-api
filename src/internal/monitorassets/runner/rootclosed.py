@@ -127,21 +127,22 @@ def note_read_limited(journal, root):
             pass
 
 
-def close_stored(journal, method, events, reason, env):
-    """A stop by lost access with events of a kept page: each gets "access
-    lost" without the preview, in the journal or, when the journal takes no
-    write, in the deferred tail with a stop summary (US-12)."""
+def close_stored(journal, method, items, reason, env):
+    """A stop by lost access with events the state keeps, items of (event,
+    outcome): each line goes without the preview, in the journal or, when
+    the journal takes no write, in the deferred tail with a stop summary
+    (US-12)."""
     deferred = []
-    for n in events:
+    for n, status in items:
         if not isinstance(n, dict) or n.get("id") is None:
             continue
         if not deferred:
             try:
-                journal.delivery(n, OUTCOME_ACCESS_LOST, method=method, reason=reason, with_preview=False)
+                journal.delivery(n, status, method=method, reason=reason, with_preview=False)
                 continue
             except JournalUnavailable:
                 pass
-        record = {"event": "delivery", "status": OUTCOME_ACCESS_LOST, "method": method, "channel": None,
+        record = {"event": "delivery", "status": status, "method": method, "channel": None,
                   "addressee": None, "channelAnswer": None, "reason": reason}
         record.update(notification_fields(n, with_preview=False))
         deferred.append(record)

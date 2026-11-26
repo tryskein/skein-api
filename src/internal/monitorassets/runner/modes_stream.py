@@ -526,7 +526,7 @@ def run_stream_loop(executor, base, token, issue, exclusion, token_file, doc, ou
         if status in (401, 403) and remainder is not None:
             # Lost access wins over the kept rest of a page: its events are
             # not printed, their outcome is "access lost" (US-12).
-            close_stored(output.journal, doc.get("method"), remainder[0],
+            close_stored(output.journal, doc.get("method"), [(n, OUTCOME_ACCESS_LOST) for n in remainder[0]],
                          "token_expired" if status == 401 else "visibility_lost", env)
         if status == 401:
             raise Stop("token_expired", status=401, delete_token=True)

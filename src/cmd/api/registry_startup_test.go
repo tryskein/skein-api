@@ -30,7 +30,7 @@ func TestBuildServingRouter_BrokenRegistryStopsStartup(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			built := false
-			router, drain, err := buildServingRouter([]byte(tc.doc), func(*monitorregistry.Registry) (chi.Router, func()) {
+			router, drain, err := buildServingRouter([]byte(tc.doc), func(*monitorregistry.Registry, []byte) (chi.Router, func()) {
 				built = true
 				return chi.NewRouter(), func() {}
 			})
@@ -54,7 +54,7 @@ func TestBuildServingRouter_BrokenRegistryStopsStartup(t *testing.T) {
 // router builder is the loaded one.
 func TestBuildServingRouter_EmbeddedRegistryBuildsRouter(t *testing.T) {
 	var got *monitorregistry.Registry
-	router, drain, err := buildServingRouter(monitorregistry.Embedded(), func(reg *monitorregistry.Registry) (chi.Router, func()) {
+	router, drain, err := buildServingRouter(monitorregistry.Embedded(), func(reg *monitorregistry.Registry, _ []byte) (chi.Router, func()) {
 		got = reg
 		r := chi.NewRouter()
 		r.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })

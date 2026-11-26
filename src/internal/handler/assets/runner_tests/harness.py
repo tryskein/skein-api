@@ -44,6 +44,8 @@ STARTER_CLIENT_PLACEHOLDER = "__SKEIN_STARTER_CLIENT__"
 # The manifest of the loader GET /agent/v1/monitor-loader serves
 # (monitor_loader.go#servedLoaderSource); paths relative to its directory.
 LOADER_PARTS_MANIFEST = os.path.join(os.path.dirname(LOADER_SRC), "loader_parts.txt")
+# The manifest of the client branch of the loader, joined before those parts.
+LOADER_CLIENT_MANIFEST = os.path.join(HERE, "..", "..", "..", "monitorassets", "loader_client", "parts.txt")
 
 # The token renewal window the server templates by default (6 h).
 DEFAULT_TOKEN_IDLE_SEC = 6 * 3600
@@ -52,25 +54,31 @@ ROOT = "zz-77"
 EMPTY = {"notifications": [], "cursor": {"ts": "2026-01-01T00:00:00Z", "id": 0}}
 
 
-def served_loader():
-    """The loader the route serves: the parts of loader_parts.txt joined in
-    order, each ending with a newline, the way monitor_loader.go assembles
-    them. The starter runs these bytes; a test that runs the loader runs
-    them too."""
-    assets = os.path.dirname(LOADER_PARTS_MANIFEST)
+def _join_manifest(manifest):
+    """The parts a manifest lists (paths relative to its directory), each
+    ending with a newline, joined in order."""
+    base = os.path.dirname(manifest)
     chunks = []
-    with open(LOADER_PARTS_MANIFEST, "r") as fh:
+    with open(manifest, "r") as fh:
         for line in fh:
             name = line.strip()
             if name and not name.startswith("#"):
-                with open(os.path.join(assets, name), "r") as part:
+                with open(os.path.join(base, name), "r") as part:
                     text = part.read()
                 if text and not text.endswith("\n"):
                     text += "\n"
                 chunks.append(text)
     if not chunks:
-        raise AssertionError("the loader manifest lists no part")
+        raise AssertionError("the manifest %s lists no part" % manifest)
     return "".join(chunks)
+
+
+def served_loader():
+    """The loader the route serves: the parts of the client branch
+    (LOADER_CLIENT_MANIFEST), then those of loader_parts.txt, joined in
+    order the way monitor_loader.go assembles them. The starter runs these
+    bytes; a test that runs the loader runs them too."""
+    return _join_manifest(LOADER_CLIENT_MANIFEST) + _join_manifest(LOADER_PARTS_MANIFEST)
 
 
 def starter(client):

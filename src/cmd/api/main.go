@@ -828,8 +828,8 @@ func main() {
 	// The monitor registry is loaded and validated before the router is
 	// built: an invalid registry stops the process before any route exists
 	// or any listener opens.
-	router, drainMCPStreams, err := buildServingRouter(monitorregistry.Embedded(), func(*monitorregistry.Registry) (chi.Router, func()) {
-		return buildRouter(pool, cfg, authHandler, projectsHandler, componentsHandler, issuesHandler, depsHandler, readyHandler, searchH, notificationsHandler, bulkHandler, apiKeysHandler, usersHandler, issuesMeHandler, issuesAllHandler, activityHandler, dashboardHandler, usersStore, issuesStore, depsStore, projectsStore, notifStore, remindersStore, searchSvc, s3Client, attachmentsHandler, meHandler, themesHandler, meThemeHandler, themesStore, themesPublisher, inspectCache, remindersHandler, pushHandler)
+	router, drainMCPStreams, err := buildServingRouter(monitorregistry.Embedded(), func(_ *monitorregistry.Registry, doc []byte) (chi.Router, func()) {
+		return buildRouterWithRegistry(doc, pool, cfg, authHandler, projectsHandler, componentsHandler, issuesHandler, depsHandler, readyHandler, searchH, notificationsHandler, bulkHandler, apiKeysHandler, usersHandler, issuesMeHandler, issuesAllHandler, activityHandler, dashboardHandler, usersStore, issuesStore, depsStore, projectsStore, notifStore, remindersStore, searchSvc, s3Client, attachmentsHandler, meHandler, themesHandler, meThemeHandler, themesStore, themesPublisher, inspectCache, remindersHandler, pushHandler)
 	})
 	if err != nil {
 		slog.Error("monitor registry is invalid", "error", err.Error())
@@ -1402,12 +1402,12 @@ func buildSearchStack(pool *pgxpool.Pool, cfg *config.Config) (*search.Service, 
 // registry returns an error before a router is built and before main opens
 // any listener. main passes the embedded registry.json; a test passes its
 // own document.
-func buildServingRouter(registryDoc []byte, build func(*monitorregistry.Registry) (chi.Router, func())) (chi.Router, func(), error) {
+func buildServingRouter(registryDoc []byte, build func(*monitorregistry.Registry, []byte) (chi.Router, func())) (chi.Router, func(), error) {
 	reg, err := monitorregistry.Load(registryDoc)
 	if err != nil {
 		return nil, nil, fmt.Errorf("loading monitor registry: %w", err)
 	}
-	router, drain := build(reg)
+	router, drain := build(reg, registryDoc)
 	return router, drain, nil
 }
 
@@ -1436,7 +1436,55 @@ func buildServingRouter(registryDoc []byte, build func(*monitorregistry.Registry
 //     2. RequireSessionEpoch — a request that carries a user is refused with
 //     401 session_revoked when the session's epoch is not the user's
 //     current one or the user is deactivated or deleted (K-16).
+//
+// buildRouter is buildRouterWithRegistry with the embedded monitor registry.
 func buildRouter(
+	pool *pgxpool.Pool,
+	cfg *config.Config,
+	authH *handler.AuthHandler,
+	projectsH *handler.ProjectsHandler,
+	componentsH *handler.ComponentsHandler,
+	issuesH *handler.IssuesHandler,
+	depsH *handler.DependenciesHandler,
+	readyH *handler.ReadyHandler,
+	searchH *handler.SearchHandler,
+	notifH *handler.NotificationsHandler,
+	bulkH *handler.BulkHandler,
+	apiKeysH *handler.APIKeysHandler,
+	usersH *handler.UsersHandler,
+	issuesMeH *handler.IssuesMeHandler,
+	issuesAllH *handler.IssuesAllHandler,
+	activityH *handler.ActivityHandler,
+	dashboardH *handler.DashboardHandler,
+	usersStore *users.Store,
+	issuesStore *issues.Store,
+	depsStore *dependencies.Store,
+	projectsStore *projects.Store,
+	notifStore *notifications.Store,
+	remindersStore *reminders.Store,
+	searchSvc *search.Service,
+	s3Client *storage.S3Client,
+	attachmentsH *handler.AttachmentsHandler,
+	meH *handler.MeHandler,
+	themesH *handler.ThemesHandler,
+	meThemeH *handler.MeThemeHandler,
+	themesStore *themes.Store,
+	themesPublisher themes.Publisher,
+	inspectCache *themes.InspectCache,
+	remindersH *handler.RemindersHandler,
+	pushH *handler.PushHandler,
+) (chi.Router, func()) {
+	return buildRouterWithRegistry(nil,
+		pool, cfg, authH, projectsH, componentsH, issuesH, depsH, readyH, searchH, notifH, bulkH, apiKeysH, usersH, issuesMeH, issuesAllH, activityH, dashboardH, usersStore, issuesStore, depsStore, projectsStore, notifStore, remindersStore, searchSvc, s3Client, attachmentsH, meH, themesH, meThemeH, themesStore, themesPublisher, inspectCache, remindersH, pushH)
+}
+
+// buildRouterWithRegistry assembles the chi router; registryDoc is the
+// monitor registry document the served runner body carries (nil: the
+// embedded registry.json). It is the seam through which a test hands the
+// router a fixture registry; buildServingRouter validates the document the
+// same way for production and for that test before the router is built.
+func buildRouterWithRegistry(
+	registryDoc []byte,
 	pool *pgxpool.Pool,
 	cfg *config.Config,
 	authH *handler.AuthHandler,
@@ -1631,7 +1679,11 @@ func buildRouter(
 	// sk-579 — every runner timing comes from the single derivation that
 	// config.Load checked the stall threshold against (INV-6).
 	runnerTimings := config.RunnerTimings(cfg.MonitorRunnerPollInterval)
-	agentScriptHandler := handler.NewAgentScriptHandler(
+	if registryDoc == nil {
+		registryDoc = monitorregistry.Embedded()
+	}
+	agentScriptHandler := handler.NewAgentScriptHandlerWithRegistry(
+		registryDoc,
 		runnerTimings.PollIntervalSec,
 		runnerTimings.BackoffCeiling,
 		runnerTimings.RequestLimit,

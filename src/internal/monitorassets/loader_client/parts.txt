@@ -1,0 +1,31 @@
+# The parts of the client branch of the loader (P-4), joined in order before
+# the loader's own part (mcp/tools/assets/loader_parts.txt) into the body
+# GET /agent/v1/monitor-loader serves (monitor_loader.go#servedLoaderSource).
+# Paths are relative to this directory: every part of the runner but core.py,
+# whose values the serving handler templates, then the branch itself. Blank
+# lines and lines starting with "#" are ignored.
+../runner/platform.py
+../runner/platform_posix.py
+../runner/platform_windows.py
+../runner/stops.py
+../runner/state.py
+../runner/echo.py
+../runner/journal.py
+../runner/text.py
+../runner/registry.py
+../runner/overrides.py
+../runner/proctree.py
+../runner/identity.py
+../runner/preflight.py
+../runner/executors.py
+../runner/ledger.py
+../runner/classify.py
+../runner/detect.py
+../runner/takeover.py
+../runner/detach.py
+../runner/rootclosed.py
+../runner/modes_stream.py
+../runner/deliver.py
+../runner/finalize.py
+../runner/start.py
+main.py

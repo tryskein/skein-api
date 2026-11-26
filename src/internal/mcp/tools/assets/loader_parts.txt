@@ -1,5 +1,6 @@
 # The parts of the loader that GET /agent/v1/monitor-loader serves
-# (monitor_loader.go#servedLoaderSource), in order. Paths are relative to the
+# (monitor_loader.go#servedLoaderSource), in order, after the parts of the
+# client branch (internal/monitorassets/loader_client/parts.txt). Paths are relative to the
 # assets directory. Blank lines and lines starting with "#" are ignored. The
 # starter names its mode to the loader in the loader's namespace
 # (_SKEIN_LOADER_MODE, "client" or none); a body run without it is legacy.

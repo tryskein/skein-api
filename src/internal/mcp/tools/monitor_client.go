@@ -3,6 +3,7 @@ package tools
 import (
 	"path"
 	"regexp"
+	"slices"
 	"strings"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
@@ -187,6 +188,12 @@ type clientCommandInput struct {
 	publicURL, issueID, excludeSession, tokenFilePath string
 	runnerSHA256, loaderSHA256                        string
 	client, platform                                  string
+	// subtree and eventTypes are the mint's parameters; the preflight
+	// command carries them only when they are not the mint's default
+	// (SKEIN_SUBTREE, SKEIN_EVENT_TYPES), so a default call does not grow
+	// (INV-17) and the runner's reissue commands keep them (US-12).
+	subtree    bool
+	eventTypes []string
 }
 
 // clientCommands are the commands of a call with `client` on POSIX.
@@ -216,8 +223,24 @@ func buildClientCommands(in clientCommandInput) clientCommands {
 			" SKEIN_LOADER_SHA256=" + shellSingleQuote(in.loaderSHA256) +
 			" SKEIN_CLIENT=" + shellSingleQuote(in.client) +
 			" SKEIN_PLATFORM=" + shellSingleQuote(in.platform) +
+			mintParamVars(in.subtree, in.eventTypes) +
 			" python3 " + shellSingleQuote(path.Join(dir, clientStarterFile)),
 	}
+}
+
+// mintParamVars are the start variables of the mint's parameters that are
+// not its default, each with a leading space: SKEIN_SUBTREE=1 for
+// subtree=true, SKEIN_EVENT_TYPES with the comma-separated event types when
+// they are not defaultMonitorEventTypes. Empty for a default call.
+func mintParamVars(subtree bool, eventTypes []string) string {
+	var b strings.Builder
+	if subtree {
+		b.WriteString(" SKEIN_SUBTREE=" + shellSingleQuote("1"))
+	}
+	if len(eventTypes) > 0 && !slices.Equal(eventTypes, defaultMonitorEventTypes) {
+		b.WriteString(" SKEIN_EVENT_TYPES=" + shellSingleQuote(strings.Join(eventTypes, ",")))
+	}
+	return b.String()
 }
 
 // clientStarterFile is the name of the starter file prepare writes into the

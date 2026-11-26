@@ -8,6 +8,7 @@
 platform.py
 platform_posix.py
 platform_windows.py
+stops.py
 state.py
 echo.py
 journal.py

@@ -344,6 +344,7 @@ func handleGetMonitorScript(issues monitorIssueResolver, watcher monitorWatcher,
 					publicURL: agentPublicURL, issueID: issueID, excludeSession: sess,
 					tokenFilePath: tokenFilePath, runnerSHA256: runnerSHA256, loaderSHA256: loaderSHA256,
 					client: clientArgs.Client, platform: clientArgs.Platform,
+					subtree: subtree, eventTypes: eventTypes,
 				})
 				resp.Prepare = cmds.prepare
 				resp.Preflight = cmds.preflight
