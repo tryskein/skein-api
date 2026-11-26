@@ -375,14 +375,16 @@ def choose(ctx):
     # reaches them, so their warnings (ambiguous_terminal) are raised only
     # then.
     chosen, done = _walk(ctx, candidates, reasons, None, [])
+    hosts = []
     if not done:
-        hosts = []
         if under:
             hosts.append(under[0])
         hosts.extend(c for c in ctx.detector.hosts(ctx) if c not in hosts)
         chosen, done = _walk(ctx, [(5, "host", c) for c in hosts], reasons, chosen,
                              chosen.fallbacks if chosen else [])
-    if not done and chosen is None and not settings.blind_off:
+    # Condition (2) of US-7: a detected host, available or not, keeps the
+    # blind channels off.
+    if not done and chosen is None and not hosts and not settings.blind_off:
         chosen, done = _walk(ctx, [(7, "blind", c) for c in ctx.detector.blind(ctx)], reasons, chosen, [])
     if chosen is None:
         return Choice(METHOD_JOURNAL, None, reasons + ["journal: no other method available"])

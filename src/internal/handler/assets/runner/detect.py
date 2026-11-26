@@ -175,7 +175,9 @@ class RegistryDetector(Detector):
         muxes = sorted((b for b in confirmed if b.multiplexer),
                        key=lambda b: b.depth if b.depth is not None else 1 << 30)
         if muxes:
-            return [b.channel["id"] for b in muxes]
+            # Only the nearest: typing into an outer pane reaches the inner
+            # multiplexer's client, not the agent.
+            return [muxes[0].channel["id"]]
         # Inside a multiplexer pane the other blind channels are skipped,
         # even when the binding to that pane is not confirmed.
         if self.in_multiplexer(ctx):

@@ -217,7 +217,7 @@ class BlindOrderTest(unittest.TestCase):
     def test_nearest_multiplexer_first_and_emulators_skipped(self):
         bindings = {"mux-1": (True, True, 3), "mux-2": (True, True, 2), "emu-1": (True, False, None)}
         ctx = context({}, bindings=bindings)
-        self.assertEqual(ctx.detector.blind(ctx), ["mux-2", "mux-1"])
+        self.assertEqual(ctx.detector.blind(ctx), ["mux-2"])
         self.assertEqual(RUNNER.choose(ctx).channel, "mux-2")
 
     def test_step_6_is_skipped_inside_a_multiplexer_pane(self):

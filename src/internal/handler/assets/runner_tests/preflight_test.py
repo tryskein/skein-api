@@ -202,14 +202,21 @@ class MethodOrderTest(unittest.TestCase):
              {"own-q": "unavailable"}, ("detached", "host-1")),
             ({"ALPHA_STREAM": None, "CFG_DIR": None}, {"own-q": "error", "host-1": "unavailable"},
              ("detached", "host-2")),
+            # Detected hosts, none available: condition (2) of US-7 keeps the
+            # blind channel off.
             ({"ALPHA_STREAM": None, "OWN_Q_ID": None, "CFG_DIR": None},
-             {"host-1": "unavailable", "host-2": "error"}, ("detached", "blind-1")),
-            ({"ALPHA_STREAM": None, "OWN_Q_ID": None, "CFG_DIR": None},
-             {"host-1": "unavailable", "host-2": "unavailable", "blind-1": "unavailable"}, ("journal", None)),
+             {"host-1": "unavailable", "host-2": "error"}, ("journal", None)),
         ]
         for extra, answers, want in steps:
             with self.subTest(env=extra, answers=answers):
                 choice = choose(self.box.env(**extra), detector, FakeProbe(answers))
+                self.assertEqual((choice.method, choice.channel), want)
+        # No host detected: the blind channel, then the journal.
+        no_hosts = FakeDetector(blind=["blind-1"])
+        env = self.box.env(ALPHA_STREAM=None, OWN_Q_ID=None, CFG_DIR=None)
+        for answers, want in (({}, ("detached", "blind-1")), ({"blind-1": "unavailable"}, ("journal", None))):
+            with self.subTest(answers=answers):
+                choice = choose(env, no_hosts, FakeProbe(answers))
                 self.assertEqual((choice.method, choice.channel), want)
 
     def test_unmet_conditions_skip_a_method(self):
