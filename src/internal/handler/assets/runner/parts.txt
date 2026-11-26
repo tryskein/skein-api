@@ -13,4 +13,6 @@ journal.py
 text.py
 registry.py
 overrides.py
+proctree.py
+identity.py
 core.py
