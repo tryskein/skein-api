@@ -160,6 +160,37 @@ class NotificationLineTest(unittest.TestCase):
         self.assertNotIn("bodyPreview", obj["notification"])
         self.assertEqual(obj["notification"]["summary"], "")
 
+    def test_minimal_form_just_under_the_limit_is_delivered(self):
+        event = self.unicode_event(preview_len=800)
+        event["entity"] = {"type": "issue", "id": "i" * 200, "title": "A task"}
+        mandatory = {"id": event["id"], "type": event["type"],
+                     "entity": {"type": "issue", "id": event["entity"]["id"]},
+                     "commentId": event["commentId"], "actorSessionId": event["actorSessionId"]}
+        # The minimal form of US-10: the mandatory fields and a compact cut mark.
+        smallest = json.dumps({"event": "notification", "notification": mandatory, "deliveryCut": True},
+                              ensure_ascii=False, separators=(",", ":"))
+        limit = len(smallest) + 5
+        line = RUNNER.notification_line(event, limit)
+        self.assertIsNotNone(line)
+        self.assertLessEqual(len(line), limit)
+        obj = json.loads(line)
+        self.assertEqual(obj["notification"], mandatory)
+        self.assertTrue(obj["deliveryCut"])
+
+    def test_plain_minimal_form_just_under_the_limit_is_delivered(self):
+        event = comment(preview="p" * 800)
+        event["entity"] = {"type": "issue", "id": "i" * 200}
+        pieces = ['type="comment.created"', 'notification="41"', 'issue="%s"' % ("i" * 200),
+                  'commentId="c-1"', 'actorSessionId="sess-1"']
+        limit = len(LABEL) + sum(len(p) + 1 for p in pieces) + 30
+        text, cut = RUNNER.plain_text(event, EXCLUDE, limit=limit)
+        self.assertIsNotNone(text)
+        self.assertTrue(cut)
+        self.assertLessEqual(len(text), limit)
+        self.assertTrue(text.startswith(LABEL))
+        for piece in pieces:
+            self.assertIn(piece, text)
+
     def test_minimal_form_that_does_not_fit_is_not_cut(self):
         event = comment()
         event["entity"] = {"type": "issue", "id": "i" * 1000}

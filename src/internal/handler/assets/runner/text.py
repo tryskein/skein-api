@@ -31,6 +31,8 @@ UNIT_BYTES = "bytes"
 MANDATORY_EVENT_FIELDS = ("id", "type", "entity", "commentId", "actorSessionId")
 # Lifecycle fields that stay in a shortened lifecycle line.
 MANDATORY_LIFECYCLE_FIELDS = ("event", "reason", "cause", "preflightId")
+# The compact mark of a plain text reduced to its minimal form.
+PLAIN_CUT_MARK = "deliveryCut=true"
 # What replaces a long lifecycle field that does not fit.
 SEE_JOURNAL = "see journal"
 # Line breaks of every kind become this visible mark, never a break.
@@ -99,9 +101,10 @@ def plain_text(notification, exclude_file, limit=None, unit=UNIT_CHARS):
     comment), and what to do with an event of one's own session.
 
     Returns (text, cut): cut is True when the preview was shortened to fit
-    the limit. Returns (None, False) when even the minimal form (label and
-    the mandatory fields) does not fit: such an event is not delivered by
-    this channel."""
+    the limit. The last resort is the minimal form: the label, the mandatory
+    fields and, when something was cut, the compact mark of the cut.
+    Returns (None, False) when even that does not fit: such an event is not
+    delivered by this channel."""
     n = notification if isinstance(notification, dict) else {}
     head = ["type=" + _quoted(n.get("type")), "notification=" + _quoted(n.get("id")),
             "issue=" + _quoted(_issue_id(n))]
@@ -145,6 +148,10 @@ def plain_text(notification, exclude_file, limit=None, unit=UNIT_CHARS):
         text = build("" if preview is not None else None, preview is not None, with_summary, with_author)
         if measure(text, unit) <= limit:
             return text, preview is not None
+    minimal = " ".join([DELIVERY_LABEL + "."] + head)
+    compact = minimal + " " + PLAIN_CUT_MARK
+    if measure(compact, unit) <= limit:
+        return compact, True
     return None, False
 
 
@@ -173,7 +180,8 @@ def notification_line(notification, limit=None, unit=UNIT_CHARS):
     issue, commentId, actorSessionId) are never cut. A shortened text stays
     present (possibly empty), a dropped field is absent: the line names what
     was cut in "deliveryCut" (a flag of the delivery, not the server's
-    "truncated") and how to read the rest.
+    "truncated") and how to read the rest; where the list does not fit,
+    "deliveryCut" is true.
 
     Returns the line, or None when even the minimal form does not fit."""
     n = dict(notification) if isinstance(notification, dict) else {}
@@ -214,6 +222,10 @@ def notification_line(notification, limit=None, unit=UNIT_CHARS):
     if isinstance(minimal.get("entity"), dict):
         minimal["entity"] = dict((k, v) for k, v in minimal["entity"].items() if k in ("type", "id"))
     text = with_cut(minimal)
+    if measure(text, unit) <= limit:
+        return text
+    # The compact mark: that the delivery cut the event, not what it cut.
+    text = _dumps({"event": "notification", "notification": minimal, "deliveryCut": True})
     return text if measure(text, unit) <= limit else None
 
 
