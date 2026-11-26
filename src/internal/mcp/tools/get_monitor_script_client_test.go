@@ -2,7 +2,9 @@ package tools
 
 import (
 	"context"
+	"os"
 	"path"
+	"path/filepath"
 	"sort"
 	"strings"
 	"testing"
@@ -164,10 +166,10 @@ func TestGetMonitorScriptClient_WithoutClientUnchanged(t *testing.T) {
 	}
 	bootstrap, _ := body["bootstrap"].(string)
 	if !strings.HasPrefix(bootstrap, "SKEIN_PUBLIC_URL=") ||
-		!strings.HasSuffix(bootstrap, " python3 -c "+shellSingleQuote(monitorStarter(false))) ||
-		!strings.Contains(bootstrap, " SKEIN_LOADER_SHA256="+shellSingleQuote(gmsTestLoaderSHA256)+" ") {
-		t.Fatalf("bootstrap is not the starter with SKEIN_LOADER_SHA256:\n%s", bootstrap)
+		!strings.Contains(bootstrap, " SKEIN_LOADER_SHA256='"+gmsTestLoaderSHA256+"' ") {
+		t.Fatalf("bootstrap does not set SKEIN_LOADER_SHA256:\n%s", bootstrap)
 	}
+	gmsRunsStarter(t, bootstrap, "0")
 	if strings.Contains(bootstrap, "SKEIN_CLIENT=") || strings.Contains(bootstrap, "SKEIN_PLATFORM=") {
 		t.Fatalf("bootstrap without client carries client variables:\n%s", bootstrap)
 	}
@@ -322,9 +324,44 @@ func assertSameIDs(t *testing.T, got, want []string) {
 	}
 }
 
-// The marker of the loader's own text: it must not appear in any field of a
-// response (R-10).
-const gmsLoaderMarker = "_skein_loader_fetch"
+// gmsLoaderLines are the lines of the served loader long enough to be its
+// own text (40 bytes and more, trimmed): none may appear in a field of a
+// response (R-10). No identifier of the loader is assumed.
+func gmsLoaderLines(t *testing.T) []string {
+	t.Helper()
+	var out []string
+	for _, l := range strings.Split(ServedLoader(), "\n") {
+		if l = strings.TrimSpace(l); len(l) >= 40 {
+			out = append(out, l)
+		}
+	}
+	if len(out) == 0 {
+		t.Fatal("the served loader has no line of 40 bytes")
+	}
+	return out
+}
+
+// gmsAssetStarter is the starter asset as it lies in the source tree with
+// the mode substituted, read from the file rather than through the
+// production builder.
+func gmsAssetStarter(t *testing.T, mode string) string {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join("assets", "monitor_starter.py"))
+	if err != nil {
+		t.Fatalf("read the starter asset: %v", err)
+	}
+	return strings.TrimRight(strings.Replace(string(raw), "__SKEIN_STARTER_CLIENT__", mode, 1), "\n")
+}
+
+// gmsRunsStarter checks, by running the command with sh and a fake python3,
+// that it hands python3 exactly "-c" and the starter of that mode.
+func gmsRunsStarter(t *testing.T, command, mode string) {
+	t.Helper()
+	args, _ := runWithFakePython(t, command)
+	if len(args) != 2 || args[0] != "-c" || args[1] != gmsAssetStarter(t, mode) {
+		t.Fatalf("the command does not run the starter (mode %s): python3 got %d arguments", mode, len(args))
+	}
+}
 
 // TestGetMonitorScriptClient_StartCommands — R-10, INV-17, the table of the
 // response fields (row #147). Without client the bootstrap runs the starter
@@ -334,9 +371,7 @@ const gmsLoaderMarker = "_skein_loader_fetch"
 // starter.py of the token directory, both digests) and prepare writes
 // starter.py; usage holds no instruction of any record of the registry.
 func TestGetMonitorScriptClient_StartCommands(t *testing.T) {
-	if !strings.Contains(ServedLoader(), gmsLoaderMarker) {
-		t.Fatalf("the served loader no longer holds the marker %q", gmsLoaderMarker)
-	}
+	loaderLines := gmsLoaderLines(t)
 	loaderSHA256 := handler.NewAgentLoaderHandler(ServedLoader()).SHA256()
 	reg := gmsUnitRegistry(t)
 	unit := func() *gmsUnit {
@@ -347,8 +382,14 @@ func TestGetMonitorScriptClient_StartCommands(t *testing.T) {
 	noLoader := func(t *testing.T, body map[string]any) {
 		t.Helper()
 		for k, v := range body {
-			if sv, ok := v.(string); ok && strings.Contains(sv, gmsLoaderMarker) {
-				t.Fatalf("field %s carries the loader text", k)
+			sv, ok := v.(string)
+			if !ok {
+				continue
+			}
+			for _, l := range loaderLines {
+				if strings.Contains(sv, l) {
+					t.Fatalf("field %s carries the loader text %q", k, l)
+				}
 			}
 		}
 	}
@@ -358,16 +399,14 @@ func TestGetMonitorScriptClient_StartCommands(t *testing.T) {
 		noLoader(t, body)
 		bootstrap, _ := body["bootstrap"].(string)
 		for _, want := range []string{
-			" SKEIN_LOADER_SHA256=" + shellSingleQuote(loaderSHA256) + " ",
-			" SKEIN_RUNNER_SHA256=" + shellSingleQuote(gmsTestRunnerSHA256) + " ",
+			" SKEIN_LOADER_SHA256='" + loaderSHA256 + "' ",
+			" SKEIN_RUNNER_SHA256='" + gmsTestRunnerSHA256 + "' ",
 		} {
 			if !strings.Contains(bootstrap, want) {
 				t.Fatalf("bootstrap lacks %q:\n%s", want, bootstrap)
 			}
 		}
-		if !strings.HasSuffix(bootstrap, " python3 -c "+shellSingleQuote(monitorStarter(false))) {
-			t.Fatalf("bootstrap does not run the starter:\n%s", bootstrap)
-		}
+		gmsRunsStarter(t, bootstrap, "0")
 	})
 
 	for _, client := range []string{"unit-agent", "not-in-registry"} {
@@ -422,18 +461,19 @@ func TestGetMonitorScriptClient_DescriptionAndFullList(t *testing.T) {
 		s := server.NewMCPServer("t", "0", server.WithToolCapabilities(false))
 		RegisterGetMonitorScript(s, nil, nil, nil, reg, gmsTestPublicURL, gmsTestRunnerSHA256, gmsTestLoaderSHA256, 0)
 		desc := s.GetTool("skein_get_monitor_script").Tool.Description
-		main := map[string]bool{}
-		for _, id := range monitorMainAgentIDs {
-			main[id] = true
-			if !strings.Contains(desc, id) {
-				t.Fatalf("description does not name the main agent %q:\n%s", id, desc)
-			}
+		// The list of ids the description gives: "e.g. a, b, …;". Compared
+		// as a set of whole ids, not by substrings of the prose.
+		i := strings.Index(desc, "e.g. ")
+		if i < 0 {
+			t.Fatalf("description gives no list of client ids:\n%s", desc)
 		}
-		for _, id := range reg.AgentIDs() {
-			if !main[id] && strings.Contains(desc, id) {
-				t.Fatalf("description lists %q, which is not a main agent:\n%s", id, desc)
-			}
+		end := strings.Index(desc[i:], ";")
+		if end < 0 {
+			t.Fatalf("the list of client ids does not end:\n%s", desc)
 		}
+		listed := strings.Split(desc[i+len("e.g. "):i+end], ", ")
+		// Exactly the ten main ids: no other id of the registry is listed.
+		assertSameIDs(t, listed, monitorMainAgentIDs)
 	}
 
 	embedded := monitorregistry.MustEmbedded()
