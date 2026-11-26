@@ -357,7 +357,7 @@ class NamedPathTest(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.root, True)
         self.state_home = os.path.join(self.root, "state")
         os.mkdir(self.state_home, 0o700)
-        registry = base64.b64encode(json.dumps(fixture_registry({"batch": {"max": 2, "unit": "lines"}}))
+        registry = base64.b64encode(json.dumps(fixture_registry({"batch": {"max": 3, "unit": "lines"}}))
                                     .encode()).decode()
         self.runner = harness.render_runner(registry=registry).encode("utf-8")
         self.pages = Pages([])
@@ -424,11 +424,11 @@ class NamedPathTest(unittest.TestCase):
 
     def test_a_kept_rest_then_403_on_the_first_poll_is_visibility_lost(self):
         token, command, env = self.started_monitor()
-        self.pages.answers = [{"notifications": [note(1), note(2), note(3)], "cursor": NEXT}]
+        self.pages.answers = [{"notifications": [note(i) for i in range(1, 6)], "cursor": NEXT}]
         first, err = self.run_cmd(["sh", "-c", command], env)
         self.assertEqual(first[-1]["reason"], "delivered", err)
         printed = [l for l in first if l.get("event") == "notification"]
-        self.assertLess(len(printed), 3, "the batch limit left no rest: %r" % first)
+        self.assertLess(len(printed), 5, "the batch limit left no rest: %r" % first)
         # The restart: the runner downloads fine, its first poll is 403.
         self.pages.answers = [403]
         lines, err = self.run_cmd(["sh", "-c", command], env)
