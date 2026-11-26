@@ -604,6 +604,11 @@ def preflight(token_file, env, registry, settings, detector=None, prober=None, p
                 "method": choice.method,
                 "channel": choice.channel,
                 "fallbacks": choice.fallbacks,
+                # The first full monitor_started of this result repeats
+                # them (C1, INV-17): the working runner does not choose again.
+                "reason": choice.reason,
+                "warnings": warnings,
+                "journal": journal,
                 "overrides": {"SKEIN_MONITOR_CHANNEL": settings.channel,
                               "SKEIN_MONITOR_BLIND": BLIND_OFF if settings.blind_off else None},
                 "identity": _identity_doc(ctx.identity),

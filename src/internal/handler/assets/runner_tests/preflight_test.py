@@ -319,6 +319,9 @@ class PreflightLineTest(unittest.TestCase):
             saved = json.load(fh)
         self.assertEqual(saved["preflightId"], 2)
         self.assertEqual(saved["method"], line["method"])
+        # What the first full monitor_started repeats is saved with it.
+        for key in ("reason", "warnings", "journal"):
+            self.assertEqual(saved[key], line[key], key)
         self.assertEqual(os.stat(self.box.preflight_file()).st_mode & 0o777, 0o600)
 
     def test_live_runner_leaves_the_result_unchanged(self):
