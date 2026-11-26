@@ -141,6 +141,10 @@ default = ["scripts/progon/starter-py27.sh"]
 [kind.measure]
 adapter = "shell"
 workdir = "."
+# python3 runs `prepare` and builds the runner's working command (SC-012).
+image_setup = [
+  "apt-get update && apt-get install -y --no-install-recommends python3 && rm -rf /var/lib/apt/lists/*",
+]
 memory_mib = 3072
 timeout_seconds = 3600
 test_timeout_seconds = 1800

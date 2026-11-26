@@ -13,9 +13,18 @@
 #                                                  prints them
 #
 # The kind provides a migrated Postgres in TEST_DATABASE_URL, which the
-# response measurement needs. Any script failure, a tools/list descriptor
-# group other than exactly the one tool, or a missing named response row
-# (no_client, client_general_posix, client_fixture3_posix) fails the run.
+# response measurement needs, and python3, which runs `prepare` and the
+# runner's working command. Any script failure, a tools/list descriptor group
+# other than exactly the one tool, or a missing named row fails the run. The
+# named rows of SC-009 and SC-012 (the early slice of R-10):
+#   MEASURE_RESP no_client, client_general_posix, client_fixture3_posix,
+#                client_general_real_posix (the general record on the
+#                registry the server embeds)
+#   MEASURE_PART starter (source the bootstrap carries), prepare_ready (the
+#                ready line of `prepare`), working_command (`command` of the
+#                preflight line), client_posix_max (the largest response
+#                with `client` on POSIX over every record of the real
+#                registry and the general record)
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -34,11 +43,15 @@ listed="$(printf '%s\n' "$list" | awk -v tool="$tool" '
 
 resp="$("$root/scripts/measure-tool-responses.sh")"
 rows="$(printf '%s\n' "$resp" | grep -E '^MEASURE_(RESP|PART) ' || true)"
-# Every named point of SC-009 must be a whole-response row of its own.
-for point in no_client client_general_posix client_fixture3_posix; do
-	if ! printf '%s\n' "$rows" | awk -v l="$tool.$point" '$1 == "MEASURE_RESP" && $NF == l { found = 1 } END { exit found ? 0 : 1 }'; then
+# Every named point of SC-009 and SC-012 must be a row of its own.
+for point in RESP:no_client RESP:client_general_posix RESP:client_fixture3_posix \
+	RESP:client_general_real_posix PART:starter PART:prepare_ready PART:working_command \
+	PART:client_posix_max; do
+	kind="MEASURE_${point%%:*}"
+	label="$tool.${point#*:}"
+	if ! printf '%s\n' "$rows" | awk -v k="$kind" -v l="$label" '$1 == k && $NF == l { found = 1 } END { exit found ? 0 : 1 }'; then
 		printf '%s\n' "$resp" >&2
-		echo "measure: the response row $tool.$point was not measured" >&2
+		echo "measure: the row $kind $label was not measured" >&2
 		exit 1
 	fi
 done

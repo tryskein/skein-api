@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
+	"path"
 	"sort"
 	"strings"
 	"testing"
@@ -43,6 +45,7 @@ const measureEnv = "SKEIN_MEASURE_TOOLS"
 const (
 	measureMonitorPublicURL    = "https://skein.example.test"
 	measureMonitorRunnerSHA256 = "0000000000000000000000000000000000000000000000000000000000000000"
+	measureMonitorLoaderSHA256 = "1111111111111111111111111111111111111111111111111111111111111111"
 	measureMonitorIdleTTL      = 6 * time.Hour
 )
 
@@ -226,7 +229,7 @@ func TestMeasureToolResponses(t *testing.T) {
 	// of a deployment, so the row changes only when the tool's response does.
 	mcptools.RegisterGetMonitorScript(s, pool, notifications.NewStore(pool),
 		monitorcreds.New(pool, measureMonitorIdleTTL), measureMonitorRegistry(t), measureMonitorPublicURL,
-		measureMonitorRunnerSHA256, measureMonitorRunnerSHA256, measureMonitorIdleTTL)
+		measureMonitorRunnerSHA256, measureMonitorLoaderSHA256, measureMonitorIdleTTL)
 
 	c, err := client.NewInProcessClient(s)
 	if err != nil {
@@ -342,7 +345,7 @@ func TestMeasureToolResponses(t *testing.T) {
 	monitorKey := seedMeasureAPIKey(t, pool, fx.callerID)
 	monitorCtx := auth.WithKeyGrant(auth.WithAPIKeyID(ctx, monitorKey),
 		apikeys.Grant{Level: apikeys.LevelManage, Scope: apikeys.Scope{Mode: apikeys.ScopeAll}})
-	m.callCtx(monitorCtx, "skein_get_monitor_script.no_client",
+	noClient := m.callCtx(monitorCtx, "skein_get_monitor_script.no_client",
 		"skein_get_monitor_script", map[string]any{"id": fx.referenceID})
 	// The same call with `client` on POSIX, for a name the registry does
 	// not know (the general record): the response with `client` is compared
@@ -351,8 +354,10 @@ func TestMeasureToolResponses(t *testing.T) {
 		"skein_get_monitor_script", map[string]any{"id": fx.referenceID, "client": "measure-unknown-agent"})
 	// SC-009, STOP & VALIDATE 2: the representative record of the contract
 	// (stream, exit-on-event and a host in the registry) on POSIX.
-	m.callCtx(monitorCtx, "skein_get_monitor_script.client_fixture3_posix",
+	fixture := m.callCtx(monitorCtx, "skein_get_monitor_script.client_fixture3_posix",
 		"skein_get_monitor_script", map[string]any{"id": fx.referenceID, "client": measureMonitorFixtureClient})
+	measureMonitorStart(m, noClient, fixture)
+	measureMonitorRealRegistry(m, pool, monitorCtx, fx.referenceID)
 
 	fmt.Printf("MEASURE_RESP_TOTAL %d %d\n", m.totalBytes, m.rows)
 
@@ -363,6 +368,120 @@ func TestMeasureToolResponses(t *testing.T) {
 	if waveDefault == "" {
 		t.Fatal("wave node default read returned an empty payload")
 	}
+}
+
+// measureMonitorStart reports the parts of the start of a monitor that
+// SC-009 and SC-012 bound, on the same fixed input as the responses
+// (STOP & VALIDATE 2, the early slice of R-10):
+//   - starter: the starter source the bootstrap without `client` carries;
+//   - prepare_ready: the ready line the `prepare` of the fixture record
+//     prints (run for real; it creates and then loses its token directory);
+//   - working_command: the `command` of the preflight line the runner builds
+//     from the variables of the fixture record's `preflight` command, with
+//     the result number 1 (the runner's working_command, loaded by the
+//     runner tests' harness).
+func measureMonitorStart(m *respMeasurer, noClient, fixture string) {
+	t := m.t
+	t.Helper()
+	var plain, named struct {
+		Bootstrap     string `json:"bootstrap"`
+		Prepare       string `json:"prepare"`
+		Preflight     string `json:"preflight"`
+		TokenFilePath string `json:"tokenFilePath"`
+	}
+	if err := json.Unmarshal([]byte(noClient), &plain); err != nil {
+		t.Fatalf("decode the response without client: %v", err)
+	}
+	if err := json.Unmarshal([]byte(fixture), &named); err != nil {
+		t.Fatalf("decode the response of the fixture record: %v", err)
+	}
+
+	const run = " python3 -c "
+	i := strings.LastIndex(plain.Bootstrap, run)
+	if i < 0 {
+		t.Fatalf("the bootstrap without client runs no starter text:\n%s", plain.Bootstrap)
+	}
+	quoted := plain.Bootstrap[i+len(run):]
+	if len(quoted) < 2 || quoted[0] != '\'' || quoted[len(quoted)-1] != '\'' {
+		t.Fatalf("the starter of the bootstrap is not one single-quoted word:\n%s", quoted)
+	}
+	m.part("skein_get_monitor_script.starter", strings.ReplaceAll(quoted[1:len(quoted)-1], `'\''`, "'"))
+
+	if named.Prepare == "" || named.Preflight == "" || named.TokenFilePath == "" {
+		t.Fatalf("the response of the fixture record lacks prepare, preflight or tokenFilePath")
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(path.Dir(named.TokenFilePath)) })
+	out, err := exec.Command("sh", "-c", named.Prepare).Output()
+	if err != nil {
+		t.Fatalf("run prepare: %v; stdout %q", err, out)
+	}
+	m.part("skein_get_monitor_script.prepare_ready", strings.TrimRight(string(out), "\n"))
+
+	cmd := exec.Command("python3", "-c", measureWorkingCommandPy)
+	cmd.Dir = "../../internal/handler/assets/runner_tests"
+	cmd.Env = append(os.Environ(), "MEASURE_PREFLIGHT="+named.Preflight)
+	out, err = cmd.Output()
+	if err != nil {
+		t.Fatalf("build the working command: %v; stdout %q", err, out)
+	}
+	m.part("skein_get_monitor_script.working_command", string(out))
+}
+
+// measureWorkingCommandPy prints the working command the runner builds for
+// the variables of the preflight command in MEASURE_PREFLIGHT, result 1.
+const measureWorkingCommandPy = `import os, shlex, sys
+sys.path.insert(0, os.getcwd())
+import harness
+R = harness.load_runner()
+env = {}
+for word in shlex.split(os.environ["MEASURE_PREFLIGHT"]):
+    name, sep, value = word.partition("=")
+    if sep and name.startswith("SKEIN_"):
+        env[name] = value
+settings = R.read_settings(env, R.load_registry(), mode="client")
+sys.stdout.write(R.working_command(env, env["SKEIN_TOKEN_FILE"], 1, settings))
+`
+
+// measureMonitorRealRegistry measures skein_get_monitor_script with `client`
+// on POSIX against the registry the server embeds: a row per record, the
+// general record (an unknown id: its warning lists every id of the real
+// registry), and the largest of them as the part
+// skein_get_monitor_script.client_posix_max (SC-009).
+func measureMonitorRealRegistry(m *respMeasurer, pool *pgxpool.Pool, ctx context.Context, issueID string) {
+	t := m.t
+	t.Helper()
+	reg := monitorregistry.MustEmbedded()
+	s := server.NewMCPServer("measure-real", "0.1.0", server.WithToolCapabilities(false))
+	mcptools.RegisterGetMonitorScript(s, pool, notifications.NewStore(pool),
+		monitorcreds.New(pool, measureMonitorIdleTTL), reg, measureMonitorPublicURL,
+		measureMonitorRunnerSHA256, measureMonitorLoaderSHA256, measureMonitorIdleTTL)
+	c, err := client.NewInProcessClient(s)
+	if err != nil {
+		t.Fatalf("new in-process client: %v", err)
+	}
+	t.Cleanup(func() { _ = c.Close() })
+	if err := c.Start(ctx); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	initReq := mcpgo.InitializeRequest{}
+	initReq.Params.ProtocolVersion = mcpgo.LATEST_PROTOCOL_VERSION
+	initReq.Params.ClientInfo = mcpgo.Implementation{Name: "measure", Version: "1"}
+	if _, err := c.Initialize(ctx, initReq); err != nil {
+		t.Fatalf("initialize: %v", err)
+	}
+	onReal := &respMeasurer{t: t, ctx: ctx, c: c}
+	largest := onReal.call("skein_get_monitor_script.client_general_real_posix",
+		"skein_get_monitor_script", map[string]any{"id": issueID, "client": "measure-unknown-agent"})
+	for _, id := range reg.AgentIDs() {
+		resp := onReal.call("skein_get_monitor_script.client_"+id+"_posix",
+			"skein_get_monitor_script", map[string]any{"id": issueID, "client": id})
+		if len(resp) > len(largest) {
+			largest = resp
+		}
+	}
+	m.totalBytes += onReal.totalBytes
+	m.rows += onReal.rows
+	m.part("skein_get_monitor_script.client_posix_max", largest)
 }
 
 // respMeasurer calls a tool and reports the size of its response.
