@@ -154,6 +154,10 @@ class Journal(object):
             # secret is found too.
             raise JournalUnavailable("secret_in_line", self.path)
         data = (text + "\n").encode("utf-8")
+        if len(data) > JOURNAL_MAX_BYTES:
+            # No file may pass the limit, so a line longer than a whole file
+            # is not written; the caller records the failure.
+            raise JournalUnavailable("too_large", self.path)
         directory = os.path.dirname(self.path)
         plat = current_platform()
         try:

@@ -146,6 +146,16 @@ class JournalTest(unittest.TestCase):
         self.assertNotIn(0, kept)
         self.assertIn(written - len(filler), [line["seq"] for line in self.lines()])
 
+    def test_line_longer_than_a_file_is_refused(self):
+        self.journal.lifecycle("monitor_started")
+        with self.assertRaises(RUNNER.JournalUnavailable) as ctx:
+            self.journal.lifecycle("degraded", pad="x" * (MIB + 1))
+        self.assertEqual(ctx.exception.reason, "too_large")
+        directory = os.path.dirname(self.journal.path)
+        for name in os.listdir(directory):
+            self.assertLessEqual(os.path.getsize(os.path.join(directory, name)), MIB, name)
+        self.assertEqual([line["event"] for line in self.lines()], ["monitor_started"])
+
     def test_start_probe(self):
         with self.subTest(case="directory made when absent"):
             path = RUNNER.probe_journal_dir(self.env)
