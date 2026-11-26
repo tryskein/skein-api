@@ -624,8 +624,7 @@ class DeliverySink(object):
             return pending
         if not self.ledger_off:
             self._ledger_step(self.ledger.record, [str(n["id"]) for n in own], OUTCOME_OWN_ECHO, None)
-        for n in own:
-            self._close(cursor, outcomes, journaled, n, OUTCOME_OWN_ECHO, None, None)
+        self._close_batch(cursor, outcomes, journaled, own, OUTCOME_OWN_ECHO, None, None)
         return [n for n in pending if str(n["id"]) not in outcomes]
 
     def _deliver(self, cursor, outcomes, journaled, attempt, channel_id, channel, batch, step):
@@ -714,9 +713,8 @@ class DeliverySink(object):
             # Kept pending: the next turn calls again when due, or switches.
             self._last_refusal = sign
             return
-        for n in batch:
-            self._close(cursor, outcomes, journaled, n, outcome, channel_id, sign,
-                        with_preview=not guard.access_lost)
+        self._close_batch(cursor, outcomes, journaled, batch, outcome, channel_id, sign,
+                          with_preview=not guard.access_lost)
         if guard.cancel_reason is not None:
             # A stop answer withheld the final step: it wins over the rest of
             # the page (US-12), once this batch has its outcome.
@@ -799,11 +797,23 @@ class DeliverySink(object):
         """The batch of a call a stop interrupted: unknown, as far as the
         state and the journal take it (what they refuse, the next start
         recovers from the ledger)."""
+        try:
+            self._close_batch(cursor, outcomes, journaled, batch, OUTCOME_UNKNOWN, channel_id, {"interrupted": True})
+        except (JournalUnavailable, OSError, PlatformRefusal):
+            pass
+
+    def _close_batch(self, cursor, outcomes, journaled, batch, status, channel, sign, with_preview=True):
+        """The outcome of a batch the ledger took in one record: every event
+        into the state in one save, then the journal line of each. A journal
+        that refuses a line leaves the state saying what the ledger says, so
+        a later stop does not count those events as waiting."""
         for n in batch:
-            try:
-                self._close(cursor, outcomes, journaled, n, OUTCOME_UNKNOWN, channel_id, {"interrupted": True})
-            except (JournalUnavailable, OSError, PlatformRefusal):
-                pass
+            outcomes[str(n["id"])] = status
+            if not with_preview:
+                self._redacted.add(str(n["id"]))
+        save_page_outcomes(self.token_file, cursor, outcomes, journaled, self._redacted)
+        for n in batch:
+            self._journal(cursor, outcomes, journaled, n, status, channel, sign, with_preview)
 
     def _close(self, cursor, outcomes, journaled, n, status, channel, sign, with_preview=True):
         """The outcome of one event: into the state, then the journal."""
