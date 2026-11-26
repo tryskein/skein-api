@@ -234,10 +234,15 @@ def receipt_text(outcome, issue, preflight=None):
         DELIVERY_LABEL, outcome.reason, issue, stop_action(outcome.reason, issue, outcome.detail, preflight))
 
 
-def receipt_short_text(outcome, issue):
+def receipt_short_text(outcome, issue, preflight=None):
     """The receipt within a short limit of the channel: the label, the
-    reason and the issue; the action is in the stop line of the journal."""
-    return "%s. monitor stopped: reason=%s issue=%s." % (DELIVERY_LABEL, outcome.reason, issue)
+    reason, the issue and, for a stop the working command resumes, the
+    shortest action that names it; the full action is in the stop line of
+    the journal."""
+    text = "%s. monitor stopped: reason=%s issue=%s." % (DELIVERY_LABEL, outcome.reason, issue)
+    if preflight is not None and outcome.reason in ("stopped", "internal_error"):
+        text += " Run the working command of preflight %s again." % preflight
+    return text
 
 
 def finish_client(outcome, issue, token_file, sink=None, write=None, preflight=None):
@@ -247,7 +252,8 @@ def finish_client(outcome, issue, token_file, sink=None, write=None, preflight=N
     command of preflight `preflight`). Returns the exit code; the caller
     releases the lock after it."""
     event, code = STOPS[outcome.reason]
-    line = {"event": event, "reason": outcome.reason}
+    line = {"event": event, "reason": outcome.reason,
+            "action": stop_action(outcome.reason, issue, outcome.detail, preflight)}
     if outcome.status is not None:
         line["status"] = outcome.status
     if outcome.reason == "root_closed" and isinstance(outcome.detail, dict):
@@ -255,7 +261,7 @@ def finish_client(outcome, issue, token_file, sink=None, write=None, preflight=N
         line["summary"] = dict(outcome.detail)
     if sink is not None:
         if outcome.reason in RECEIPT_STOPS and hasattr(sink, "receipt"):
-            sink.receipt(receipt_text(outcome, issue, preflight), receipt_short_text(outcome, issue))
+            sink.receipt(receipt_text(outcome, issue, preflight), receipt_short_text(outcome, issue, preflight))
         sink.lifecycle(line)
     apply_file_fate(token_file, outcome.delete_token)
     return finish(Stop(outcome.reason, status=outcome.status, detail=outcome.detail, preflight=preflight),
