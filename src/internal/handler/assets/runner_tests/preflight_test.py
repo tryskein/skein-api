@@ -9,7 +9,9 @@ Standard library of Python 3.6 only.
 """
 
 import base64
+import contextlib
 import hashlib
+import io
 import json
 import os
 import shutil
@@ -18,6 +20,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -454,6 +457,58 @@ class PreflightLineTest(unittest.TestCase):
             with self.assertRaises(RUNNER.ConfigInvalid) as ctx:
                 RUNNER.preflight(token, self.box.env(), REG, settings(), FakeDetector(), FakeProbe(), placement())
             self.assertEqual(ctx.exception.variable, os.path.dirname(token))
+
+
+@unittest.skipUnless(os.name == "posix", "the POSIX preflight")
+class ConfigInvalidLineTest(unittest.TestCase):
+    """Matrix row #31, US-9, US-5: a refused preflight as the agent sees
+    it: run_preflight prints exactly one config_invalid stop line naming
+    what to fix, returns exit code 1 and keeps the token."""
+
+    def run_line(self, env, nested=False):
+        box = self.box
+        full = box.env(SKEIN_MONITOR_MODE="preflight", **env)
+        patches = [mock.patch.dict(os.environ, full, clear=True),
+                   mock.patch.object(RUNNER, "LOADER_MODE", "client")]
+        if nested:
+            source, pids = fake_proc.linear(RUNNER_PROC, "bash", "alpha", "bash", "alpha")
+            chain = RUNNER.ancestry(source, pids[0])
+            patches.append(mock.patch.object(
+                RUNNER, "system_placement",
+                lambda registry, record: RUNNER.place(chain, registry, record, self_pid=pids[0])))
+        out = io.StringIO()
+        with contextlib.ExitStack() as stack:
+            for p in patches:
+                stack.enter_context(p)
+            stack.enter_context(contextlib.redirect_stdout(out))
+            code = RUNNER.run_preflight()
+        lines = [json.loads(l) for l in out.getvalue().splitlines() if l.strip()]
+        return code, lines
+
+    def setUp(self):
+        self.box = Sandbox(self)
+
+    def assert_refused(self, code, lines, names):
+        self.assertEqual(code, 1, lines)
+        self.assertEqual(len(lines), 1, lines)
+        self.assertEqual((lines[0]["event"], lines[0]["reason"]), ("closed", "config_invalid"))
+        self.assertIn(names, lines[0]["action"])
+        self.assertTrue(os.path.exists(self.box.token), "the token was not kept")
+        self.assertFalse(os.path.exists(self.box.preflight_file()), "a refused preflight saved a result")
+
+    def test_an_invalid_override_is_one_stop_line(self):
+        code, lines = self.run_line({"SKEIN_MONITOR_CHANNEL": "no-such-channel"})
+        self.assert_refused(code, lines, "SKEIN_MONITOR_CHANNEL")
+
+    def test_a_forced_host_of_a_nested_agent_is_one_stop_line(self):
+        code, lines = self.run_line({"SKEIN_MONITOR_CHANNEL": "host-1"}, nested=True)
+        self.assert_refused(code, lines, "SKEIN_MONITOR_CHANNEL")
+        self.assertIn("outer agent", lines[0]["action"])
+
+    def test_the_same_override_without_nesting_is_not_refused(self):
+        code, lines = self.run_line({"SKEIN_MONITOR_CHANNEL": "host-1"})
+        self.assertEqual(code, 0, lines)
+        self.assertEqual(lines[0]["event"], "preflight")
 
 
 @unittest.skipUnless(os.name == "posix", "the POSIX preflight")
