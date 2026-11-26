@@ -588,6 +588,33 @@ class CycleOutputTest(unittest.TestCase):
         self.assertEqual(output.pacer.closed_at, closed)
 
 
+class RateAndUnitsTest(unittest.TestCase):
+    """Review finding 10 of wave 6: the rate bucket {burst, intervalSec}
+    and a batch limit in characters with non-ASCII text."""
+
+    def test_a_burst_then_one_batch_per_interval(self):
+        box = Box(self)
+        clock = FakeClock()
+        start = clock.now
+        out = Out(clock)
+        output = box.output({"rate": {"burst": 2, "intervalSec": 5}}, "stream", clock=clock, out=out)
+        for i in range(4):
+            output.batch(["{\"n\":%d}" % i])
+        self.assertEqual([round(t - start, 6) for t, _ in out.writes], [0, 0, 5, 10])
+
+    def test_a_batch_limit_in_characters_counts_characters_not_bytes(self):
+        box = Box(self)
+        out = Out()
+        output = box.output({"batch": {"max": 600, "unit": "chars"}}, "stream", out=out)
+        events = [event(i, preview="ж" * 80) for i in (1, 2, 3, 4)]
+        self.assertEqual(RUNNER.print_events(output, events, False, None), events)
+        first = out.writes[0][1]
+        self.assertEqual(len(first.splitlines()), 2)
+        self.assertLessEqual(len(first), 600)
+        self.assertGreater(len(first.encode("utf-8")), 600)
+        self.assertTrue(all(len(t) <= 600 for _, t in out.writes))
+
+
 class WindowModelTest(unittest.TestCase):
     """Matrix row #42 (the window model of a harness, US-10 pace), fake
     clock, a synthetic record."""

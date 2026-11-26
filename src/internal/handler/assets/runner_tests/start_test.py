@@ -499,6 +499,64 @@ class ForegroundStopLineTest(unittest.TestCase):
 
 
 @unittest.skipUnless(sys.platform.startswith("linux"), "the POSIX flock")
+class ForegroundStartTest(unittest.TestCase):
+    """Review finding 10 of wave 6: the foreground start of a stream result
+    (run_foreground): the lock order with the holder's second check, the
+    full then the short monitor_started, the limits of preflight.json and
+    the stop line through the stream output."""
+
+    def stop_on_poll(self, n):
+        """Polls as usual up to the n-th, which is a SIGTERM (stopped)."""
+        real = RUNNER.poll_once
+        calls = []
+
+        def poll(*args, **kwargs):
+            calls.append(1)
+            if len(calls) >= n:
+                raise RUNNER.StopSignal()
+            return real(*args, **kwargs)
+        return mock.patch.object(RUNNER, "poll_once", poll)
+
+    def test_a_stream_result_runs_in_the_foreground_within_its_limits(self):
+        box = Box(self, event_per_poll())
+        pre = box.preflight(SKEIN_CLIENT="streamer")
+        self.assertEqual(pre["method"], "stream")
+        with self.stop_on_poll(2):
+            code, lines = box.start(pre["preflightId"], SKEIN_CLIENT="streamer")
+        self.assertEqual((code, [l["event"] for l in lines]), (0, ["monitor_started", "notification", "paused"]))
+        self.assertEqual(set(lines[0]), FULL_KEYS)
+        self.assertEqual(lines[1]["notification"]["id"], 1)
+        self.assertEqual(lines[2]["reason"], "stopped")
+        # The line limit of the record, carried by preflight.json.
+        self.assertTrue(all(len(t) <= 300 for t in box.text_lines), box.text_lines)
+        self.assertFalse(box.lock_busy(), "the foreground runner kept the lock")
+        self.assertTrue(os.path.exists(box.token))
+        # A restart by the same command: the short line, from the saved cursor.
+        with self.stop_on_poll(2):
+            code, lines = box.start(pre["preflightId"], SKEIN_CLIENT="streamer")
+        self.assertEqual(lines[0], {"event": "monitor_started", "preflightId": pre["preflightId"],
+                                    "method": "stream", "channel": "stdout"})
+        self.assertEqual(box.server.requests[-1].get("since_id"), ["1"])
+
+    def test_the_holder_checks_the_result_again(self):
+        box = Box(self)
+        pre = box.preflight(SKEIN_CLIENT="streamer")
+        real = RUNNER.take_runner_lock
+
+        def take(*args):
+            # After the synchronous check, before the lock: a new preflight.
+            box.preflight(SKEIN_CLIENT="streamer")
+            return real(*args)
+
+        with mock.patch.object(RUNNER, "take_runner_lock", take):
+            code, lines = box.start(pre["preflightId"], SKEIN_CLIENT="streamer")
+        one_stop(self, code, lines, "config_invalid", 1)
+        self.assertIn("SKEIN_MONITOR_PREFLIGHT", lines[0]["action"])
+        self.assertEqual(box.server.requests, [])
+        self.assertFalse(box.lock_busy())
+
+
+@unittest.skipUnless(sys.platform.startswith("linux"), "the POSIX flock")
 class StaleLockSweepTest(unittest.TestCase):
     """P-5: the start of a monitor removes the files of locks/ older than
     24 h that no one holds; a held one and a fresh one stay."""
