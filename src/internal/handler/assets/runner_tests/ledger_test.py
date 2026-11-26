@@ -317,7 +317,10 @@ class MergedAttemptsTest(Base):
         # A third monitor serves both: the two entries are one addressee now.
         c = self.ledger("mon-c", ident([addr("orca", "t-1"), addr("codex", "th-9")]))
         self.clock.t += 11   # past the rate window of 10 s
-        c.begin([ev("e2")], "c1").attempt.release()
+        # Its begin merges the two entries; while their attempts are in
+        # flight it publishes none of its own (the window they hold).
+        dc = c.begin([ev("e2")], "c1")
+        self.assertIsNone(dc.attempt)
         called = []
         for d in (da, db):
             try:
