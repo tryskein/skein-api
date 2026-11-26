@@ -44,6 +44,7 @@ import (
 	"skein-api/internal/mail"
 	mcppkg "skein-api/internal/mcp"
 	"skein-api/internal/monitorcreds"
+	"skein-api/internal/monitorregistry"
 	"skein-api/internal/notifications"
 	"skein-api/internal/nudges"
 	"skein-api/internal/oauthmeta"
@@ -823,7 +824,16 @@ func main() {
 	// workers start, so no committed write runs ahead of it.
 	signals.Configure(nc)
 
-	router, drainMCPStreams := buildRouter(pool, cfg, authHandler, projectsHandler, componentsHandler, issuesHandler, depsHandler, readyHandler, searchH, notificationsHandler, bulkHandler, apiKeysHandler, usersHandler, issuesMeHandler, issuesAllHandler, activityHandler, dashboardHandler, usersStore, issuesStore, depsStore, projectsStore, notifStore, remindersStore, searchSvc, s3Client, attachmentsHandler, meHandler, themesHandler, meThemeHandler, themesStore, themesPublisher, inspectCache, remindersHandler, pushHandler)
+	// The monitor registry is loaded and validated before the router is
+	// built: an invalid registry stops the process before any route exists
+	// or any listener opens.
+	router, drainMCPStreams, err := buildServingRouter(monitorregistry.Embedded(), func(*monitorregistry.Registry) (chi.Router, func()) {
+		return buildRouter(pool, cfg, authHandler, projectsHandler, componentsHandler, issuesHandler, depsHandler, readyHandler, searchH, notificationsHandler, bulkHandler, apiKeysHandler, usersHandler, issuesMeHandler, issuesAllHandler, activityHandler, dashboardHandler, usersStore, issuesStore, depsStore, projectsStore, notifStore, remindersStore, searchSvc, s3Client, attachmentsHandler, meHandler, themesHandler, meThemeHandler, themesStore, themesPublisher, inspectCache, remindersHandler, pushHandler)
+	})
+	if err != nil {
+		slog.Error("monitor registry is invalid", "error", err.Error())
+		os.Exit(1)
+	}
 
 	// Embedding backfill worker — single goroutine, lifetime tied to ctx
 	// (ServerCtx below).  We keep this simple: one worker per replica,
@@ -1383,6 +1393,21 @@ func buildSearchStack(pool *pgxpool.Pool, cfg *config.Config) (*search.Service, 
 		return nil, nil, fmt.Errorf("building search service: %w", err)
 	}
 	return svc, handler.NewSearchHandler(svc), nil
+}
+
+// buildServingRouter is the step of the startup path that turns the monitor
+// registry document into a router. It loads and validates the document
+// first and calls build only when the registry is valid, so a broken
+// registry returns an error before a router is built and before main opens
+// any listener. main passes the embedded registry.json; a test passes its
+// own document.
+func buildServingRouter(registryDoc []byte, build func(*monitorregistry.Registry) (chi.Router, func())) (chi.Router, func(), error) {
+	reg, err := monitorregistry.Load(registryDoc)
+	if err != nil {
+		return nil, nil, fmt.Errorf("loading monitor registry: %w", err)
+	}
+	router, drain := build(reg)
+	return router, drain, nil
 }
 
 // buildRouter assembles the chi router. Public probes (/healthz, /ready,

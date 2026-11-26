@@ -1,0 +1,32 @@
+{
+  "schemaVersion": 1,
+  "general": {
+    "about": "Any agent whose client name has no record of its own: no own way to receive an event is assumed, so a host, a blind channel under its conditions, or the journal delivers.",
+    "source": "Skein monitor contract: the method order and the addressee rule of the general record (agent process = nearest ancestor of the runner that is neither the loader, the runner nor a listed shell).",
+    "warnings": [
+      "The client name was not found in the registry; the general record is used."
+    ]
+  },
+  "agents": [],
+  "channels": [],
+  "shells": {
+    "source": "POSIX: shells(5), the /etc/shells list of valid login shells (sh, bash, dash, zsh, ksh, mksh, fish, tcsh, csh, nu, pwsh are the names such lists carry); Windows: Microsoft Learn 'cmd' (cmd.exe), 'about_PowerShell_exe' (powershell.exe) and 'about_Pwsh' (pwsh.exe).",
+    "names": [
+      "sh",
+      "bash",
+      "dash",
+      "zsh",
+      "ksh",
+      "mksh",
+      "fish",
+      "tcsh",
+      "csh",
+      "nu",
+      "pwsh",
+      "cmd.exe",
+      "powershell.exe",
+      "pwsh.exe"
+    ]
+  },
+  "zavodEngines": {}
+}

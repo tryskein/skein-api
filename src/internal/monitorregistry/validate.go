@@ -1,0 +1,619 @@
+package monitorregistry
+
+import (
+	"fmt"
+	"regexp"
+	"slices"
+	"strings"
+)
+
+// Rule names one rule of Validate. A violation carries its rule so callers
+// and tests tell violations apart without reading the text.
+type Rule string
+
+// Rules of Validate.
+const (
+	// RuleMalformed: the document is not one JSON object of the schema
+	// (syntax, unknown field, wrong type, trailing data).
+	RuleMalformed Rule = "malformed"
+	// RuleSchemaVersion: the document declares an unknown schema version.
+	RuleSchemaVersion Rule = "schema_version"
+	// RuleMissingSource: a record, probe or the shell list has no source.
+	RuleMissingSource Rule = "missing_source"
+	// RuleMissingAbout: a record has no about.
+	RuleMissingAbout Rule = "missing_about"
+	// RuleBadID: an id is empty or not of the form [a-z0-9-]{1,64}.
+	RuleBadID Rule = "bad_id"
+	// RuleDuplicateID: two agent records or two channel records share an id.
+	RuleDuplicateID Rule = "duplicate_id"
+	// RuleUnknownMethod: a method kind outside the closed set.
+	RuleUnknownMethod Rule = "unknown_method"
+	// RuleUnknownExecutor: an executor type outside the closed set.
+	RuleUnknownExecutor Rule = "unknown_executor"
+	// RuleUnknownProbe: a probe type outside the closed set.
+	RuleUnknownProbe Rule = "unknown_probe"
+	// RuleUnknownOutcome: a sign maps to a value outside the closed set of
+	// outcomes (or of probe or addressee results).
+	RuleUnknownOutcome Rule = "unknown_outcome"
+	// RuleAmbiguousSign: the same sign appears twice in one table, or a row
+	// has no criterion.
+	RuleAmbiguousSign Rule = "ambiguous_sign"
+	// RuleProbeFeedsText: a probe carries the text of an event.
+	RuleProbeFeedsText Rule = "probe_feeds_text"
+	// RuleProbeSends: a socket-connect or other connection probe carries
+	// something to send.
+	RuleProbeSends Rule = "probe_sends"
+	// RuleProbeChoice: a channel has both probes and "probe undefined", or
+	// neither.
+	RuleProbeChoice Rule = "probe_choice"
+	// RuleBlindStep: a blind channel outside step 7, or a channel at step 7
+	// that is not blind.
+	RuleBlindStep Rule = "blind_step"
+	// RuleUnknownEngineTarget: the Zavod engine map points to an agent
+	// record that does not exist.
+	RuleUnknownEngineTarget Rule = "unknown_engine_target"
+	// RuleInvalid: any other field of the schema has a value outside its
+	// allowed set or is missing.
+	RuleInvalid Rule = "invalid"
+)
+
+// ValidationError is one violation of the registry schema.
+type ValidationError struct {
+	Rule Rule
+	// Path locates the violation, e.g. "channels[2].outcomes[1].outcome".
+	Path   string
+	Detail string
+}
+
+// ValidationErrors are all violations found in one document.
+type ValidationErrors []*ValidationError
+
+func (es ValidationErrors) Error() string {
+	parts := make([]string, len(es))
+	for i, e := range es {
+		parts[i] = e.Error()
+	}
+	return strings.Join(parts, "; ")
+}
+
+// Has reports whether a violation of the rule is among es.
+func (es ValidationErrors) Has(rule Rule) bool {
+	for _, e := range es {
+		if e.Rule == rule {
+			return true
+		}
+	}
+	return false
+}
+
+var (
+	idPattern      = regexp.MustCompile(`^[a-z0-9-]{1,64}$`)
+	envNamePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+)
+
+var (
+	methodKinds   = set(MethodStream, MethodDelivery, MethodExitOnEvent)
+	executorTypes = set(ExecutorArgv, ExecutorHTTP)
+	feeds         = set(FeedStdin, FeedFile, FeedArg)
+	probeTypes    = set(ProbeArgv, ProbeDirWritable, ProbeSocketConnect, ProbeTCPReach)
+	outcomes      = set(OutcomeRefused, OutcomeQueued, OutcomeInputWritten, OutcomeInputNoReceipt,
+		OutcomeTurnStarted, OutcomeUnknown, OutcomeAddresseeChanged, OutcomeAddresseeGone)
+	probeResults     = set(ProbeAvailable, ProbeUnavailable)
+	addresseeResults = set(AddresseeSame, AddresseeChanged, AddresseeGone)
+	processChecks    = set(ProcessAlive, ProcessForeground, ProcessNone)
+	idleTypes        = set(IdleNone, IdleBuiltin, IdleArgv)
+	kinds            = set(KindTerminal, KindAddressed)
+	steps            = map[int]bool{StepOwnDelivery: true, StepHost: true, StepTerminal: true, StepBlind: true}
+	platforms        = set(PlatformLinux, PlatformMacOS, PlatformWindows)
+	units            = set(UnitChars, UnitBytes, UnitLines, UnitEvents)
+	settingFormats   = set(SettingJSON, SettingTOML, SettingYAML)
+	httpMethods      = set("POST", "PUT")
+)
+
+func set(values ...string) map[string]bool {
+	m := make(map[string]bool, len(values))
+	for _, v := range values {
+		m[v] = true
+	}
+	return m
+}
+
+type validator struct{ errs ValidationErrors }
+
+func (v *validator) add(rule Rule, path, format string, args ...any) {
+	v.errs = append(v.errs, &ValidationError{Rule: rule, Path: path, Detail: fmt.Sprintf(format, args...)})
+}
+
+// Validate checks every rule of the schema and returns all violations as
+// ValidationErrors, or nil when the registry is valid.
+func (r *Registry) Validate() error {
+	v := &validator{}
+	if r.SchemaVersion != 1 {
+		v.add(RuleSchemaVersion, "schemaVersion", "unknown schema version %d", r.SchemaVersion)
+	}
+	v.text(RuleMissingAbout, "general.about", r.General.About)
+	v.text(RuleMissingSource, "general.source", r.General.Source)
+	v.warnings("general.warnings", r.General.Warnings)
+
+	v.text(RuleMissingSource, "shells.source", r.Shells.Source)
+	if len(r.Shells.Names) == 0 {
+		v.add(RuleInvalid, "shells.names", "the shell list is empty")
+	}
+	v.names("shells.names", r.Shells.Names)
+
+	channelSteps := make(map[string]int, len(r.Channels))
+	seenChannels := make(map[string]bool, len(r.Channels))
+	seenOrder := make(map[[2]int]string)
+	for i := range r.Channels {
+		c := &r.Channels[i]
+		path := fmt.Sprintf("channels[%d]", i)
+		v.channel(path, c)
+		if c.ID != "" {
+			if seenChannels[c.ID] {
+				v.add(RuleDuplicateID, path+".id", "channel id %q appears twice", c.ID)
+			}
+			seenChannels[c.ID] = true
+			channelSteps[c.ID] = c.Step
+		}
+		key := [2]int{c.Step, c.Order}
+		if other, dup := seenOrder[key]; dup {
+			v.add(RuleInvalid, path+".order", "order %d of step %d is taken by channel %q", c.Order, c.Step, other)
+		}
+		seenOrder[key] = c.ID
+	}
+
+	seenAgents := make(map[string]bool, len(r.Agents))
+	for i := range r.Agents {
+		a := &r.Agents[i]
+		path := fmt.Sprintf("agents[%d]", i)
+		v.agent(path, a, channelSteps)
+		if a.ID != "" {
+			if seenAgents[a.ID] {
+				v.add(RuleDuplicateID, path+".id", "agent id %q appears twice", a.ID)
+			}
+			seenAgents[a.ID] = true
+		}
+	}
+
+	for engine, target := range r.ZavodEngines {
+		path := "zavodEngines." + engine
+		if !idPattern.MatchString(engine) {
+			v.add(RuleInvalid, path, "engine id %q is not of the form [a-z0-9-]{1,64}", engine)
+		}
+		if !seenAgents[target] {
+			v.add(RuleUnknownEngineTarget, path, "engine %q maps to %q, which is not an agent record", engine, target)
+		}
+	}
+
+	if len(v.errs) == 0 {
+		return nil
+	}
+	return v.errs
+}
+
+func (v *validator) text(rule Rule, path, value string) {
+	if strings.TrimSpace(value) == "" {
+		v.add(rule, path, "is empty")
+	}
+}
+
+func (v *validator) warnings(path string, ws []string) {
+	for i, w := range ws {
+		if strings.TrimSpace(w) == "" {
+			v.add(RuleInvalid, fmt.Sprintf("%s[%d]", path, i), "warning is empty")
+		}
+	}
+}
+
+func (v *validator) names(path string, names []string) {
+	for i, n := range names {
+		if strings.TrimSpace(n) == "" || strings.ContainsAny(n, "/\\") {
+			v.add(RuleInvalid, fmt.Sprintf("%s[%d]", path, i), "%q is not a bare executable name", n)
+		}
+	}
+}
+
+func (v *validator) id(path, id string) {
+	if !idPattern.MatchString(id) {
+		v.add(RuleBadID, path, "id %q is not of the form [a-z0-9-]{1,64}", id)
+	}
+}
+
+func (v *validator) agent(path string, a *Agent, channelSteps map[string]int) {
+	v.id(path+".id", a.ID)
+	v.text(RuleMissingAbout, path+".about", a.About)
+	v.text(RuleMissingSource, path+".source", a.Source)
+	if len(a.Process.Executables) == 0 && len(a.Process.Argv) == 0 {
+		v.add(RuleInvalid, path+".process", "the agent record has no process sign")
+	}
+	v.names(path+".process.executables", a.Process.Executables)
+	for i, arg := range a.Process.Argv {
+		if strings.TrimSpace(arg) == "" {
+			v.add(RuleInvalid, fmt.Sprintf("%s.process.argv[%d]", path, i), "argument sign is empty")
+		}
+	}
+	v.warnings(path+".warnings", a.Warnings)
+	for i := range a.Methods {
+		m := &a.Methods[i]
+		mpath := fmt.Sprintf("%s.methods[%d]", path, i)
+		if !methodKinds[m.Kind] {
+			v.add(RuleUnknownMethod, mpath+".kind", "method %q is not one of stream, delivery, exit-on-event", m.Kind)
+		}
+		switch {
+		case m.Kind == MethodDelivery:
+			step, ok := channelSteps[m.Channel]
+			if !ok {
+				v.add(RuleInvalid, mpath+".channel", "delivery method names channel %q, which does not exist", m.Channel)
+			} else if step != StepOwnDelivery {
+				v.add(RuleInvalid, mpath+".channel", "delivery method names channel %q of step %d, not step 3", m.Channel, step)
+			}
+		case m.Channel != "":
+			v.add(RuleInvalid, mpath+".channel", "only a delivery method names a channel")
+		}
+		v.text(RuleInvalid, mpath+".instruction", m.Instruction)
+		v.conditions(mpath+".conditions", m.Conditions)
+		v.limits(mpath+".limits", m.Limits)
+	}
+}
+
+func (v *validator) conditions(path string, c Conditions) {
+	for i, e := range c.Env {
+		epath := fmt.Sprintf("%s.env[%d]", path, i)
+		if !envNamePattern.MatchString(e.Name) {
+			v.add(RuleInvalid, epath+".name", "%q is not an environment variable name", e.Name)
+		}
+		if e.Pattern != "" {
+			if _, err := regexp.Compile(e.Pattern); err != nil {
+				v.add(RuleInvalid, epath+".pattern", "pattern does not compile: %v", err)
+			}
+		}
+	}
+	for i, s := range c.Settings {
+		spath := fmt.Sprintf("%s.settings[%d]", path, i)
+		v.text(RuleInvalid, spath+".path", s.Path)
+		v.text(RuleInvalid, spath+".key", s.Key)
+		if !settingFormats[s.Format] {
+			v.add(RuleInvalid, spath+".format", "format %q is not one of json, toml, yaml", s.Format)
+		}
+		if len(s.Equals) == 0 {
+			v.add(RuleInvalid, spath+".equals", "the expected value is missing")
+		}
+	}
+	v.names(path+".programs", c.Programs)
+}
+
+func (v *validator) limits(path string, l *Limits) {
+	if l == nil {
+		return
+	}
+	for name, lim := range map[string]*Limit{"line": l.Line, "batch": l.Batch} {
+		if lim == nil {
+			continue
+		}
+		if lim.Max <= 0 {
+			v.add(RuleInvalid, path+"."+name+".max", "limit %d is not positive", lim.Max)
+		}
+		if !units[lim.Unit] {
+			v.add(RuleInvalid, path+"."+name+".unit", "unit %q is not one of chars, bytes, lines, events", lim.Unit)
+		}
+	}
+	if l.Rate != nil && (l.Rate.Burst <= 0 || l.Rate.IntervalSec <= 0) {
+		v.add(RuleInvalid, path+".rate", "burst and interval must be positive")
+	}
+}
+
+func (v *validator) channel(path string, c *Channel) {
+	v.id(path+".id", c.ID)
+	v.text(RuleMissingAbout, path+".about", c.About)
+	v.text(RuleMissingSource, path+".source", c.Source)
+	if !steps[c.Step] {
+		v.add(RuleInvalid, path+".step", "step %d is not one of 3, 5, 6, 7", c.Step)
+	}
+	if c.Blind != (c.Step == StepBlind) {
+		v.add(RuleBlindStep, path+".step", "blind=%t at step %d: blind channels are exactly the channels of step 7", c.Blind, c.Step)
+	}
+	if !kinds[c.Kind] {
+		v.add(RuleInvalid, path+".kind", "kind %q is not one of terminal, addressed", c.Kind)
+	}
+	if c.Blind && c.Kind != KindTerminal {
+		v.add(RuleInvalid, path+".kind", "a blind channel is a terminal channel")
+	}
+	if len(c.Detect.Env) == 0 && len(c.Detect.Programs) == 0 {
+		v.add(RuleInvalid, path+".detect", "the channel has no detection sign")
+	}
+	v.conditions(path+".detect", c.Detect)
+	v.executor(path+".executor", c.Executor)
+	v.idle(path+".idle", c.Idle)
+
+	if len(c.Outcomes) == 0 {
+		v.add(RuleInvalid, path+".outcomes", "the outcome table is empty")
+	}
+	rows := make([]Match, len(c.Outcomes))
+	for i, row := range c.Outcomes {
+		rows[i] = row.Match
+		if !outcomes[row.Outcome] {
+			v.add(RuleUnknownOutcome, fmt.Sprintf("%s.outcomes[%d].outcome", path, i), "%q is not an outcome", row.Outcome)
+		}
+	}
+	v.signs(path+".outcomes", rows)
+
+	switch {
+	case len(c.Probes) > 0 && c.ProbeUndefined:
+		v.add(RuleProbeChoice, path+".probes", "probes are given and also declared undefined")
+	case len(c.Probes) == 0 && !c.ProbeUndefined:
+		v.add(RuleProbeChoice, path+".probes", "give probes or declare probeUndefined")
+	}
+	for i := range c.Probes {
+		v.probe(fmt.Sprintf("%s.probes[%d]", path, i), &c.Probes[i])
+	}
+
+	v.addressee(path+".addressee", c)
+
+	if c.Blind && c.PanePID == nil {
+		v.add(RuleInvalid, path+".panePid", "a blind channel needs the source of its pane PID")
+	}
+	if !c.Blind && c.PanePID != nil {
+		v.add(RuleInvalid, path+".panePid", "only a blind channel has a pane PID source")
+	}
+	if c.PanePID != nil {
+		v.argv(path+".panePid.argv", c.PanePID.Argv, false)
+	}
+
+	if len(c.Binaries) == 0 {
+		v.add(RuleInvalid, path+".binaries", "the channel names no platform")
+	}
+	for p, bins := range c.Binaries {
+		if !platforms[p] {
+			v.add(RuleInvalid, path+".binaries."+p, "platform %q is not one of linux, macos, windows", p)
+		}
+		if len(bins) == 0 {
+			v.add(RuleInvalid, path+".binaries."+p, "no program for the platform")
+		}
+		for i, b := range bins {
+			if strings.TrimSpace(b) == "" {
+				v.add(RuleInvalid, fmt.Sprintf("%s.binaries.%s[%d]", path, p, i), "program is empty")
+			}
+		}
+	}
+	v.limits(path+".limits", c.Limits)
+	v.warnings(path+".warnings", c.Warnings)
+}
+
+func (v *validator) executor(path string, e Executor) {
+	if !executorTypes[e.Type] {
+		v.add(RuleUnknownExecutor, path+".type", "executor %q is not one of argv, http", e.Type)
+		return
+	}
+	if e.TimeoutSec <= 0 {
+		v.add(RuleInvalid, path+".timeoutSec", "timeout %d is not positive", e.TimeoutSec)
+	}
+	switch e.Type {
+	case ExecutorArgv:
+		if e.HTTP != nil {
+			v.add(RuleInvalid, path+".http", "an argv executor has no http request")
+		}
+		if !feeds[e.Feed] {
+			v.add(RuleInvalid, path+".feed", "feed %q is not one of stdin, file, arg", e.Feed)
+			return
+		}
+		v.argv(path+".argv", e.Argv, true)
+		text, file := count(e.Argv, PlaceholderText), count(e.Argv, PlaceholderTextFile)
+		want := map[string][2]int{FeedStdin: {0, 0}, FeedFile: {0, 1}, FeedArg: {1, 0}}[e.Feed]
+		if text != want[0] || file != want[1] {
+			v.add(RuleInvalid, path+".argv", "feed %q needs %d {text} and %d {textFile} elements, found %d and %d",
+				e.Feed, want[0], want[1], text, file)
+		}
+	case ExecutorHTTP:
+		if len(e.Argv) > 0 || e.Feed != "" {
+			v.add(RuleInvalid, path, "an http executor has no argv and no feed")
+		}
+		if e.HTTP == nil {
+			v.add(RuleInvalid, path+".http", "the http request is missing")
+			return
+		}
+		if !httpMethods[e.HTTP.Method] {
+			v.add(RuleInvalid, path+".http.method", "method %q is not one of POST, PUT", e.HTTP.Method)
+		}
+		v.value(path+".http.url", e.HTTP.URL, false)
+		if e.HTTP.KeyFileEnv != "" && !envNamePattern.MatchString(e.HTTP.KeyFileEnv) {
+			v.add(RuleInvalid, path+".http.keyFileEnv", "%q is not an environment variable name", e.HTTP.KeyFileEnv)
+		}
+		v.text(RuleInvalid, path+".http.bodyField", e.HTTP.BodyField)
+	}
+}
+
+func count(argv []string, element string) int {
+	n := 0
+	for _, a := range argv {
+		if a == element {
+			n++
+		}
+	}
+	return n
+}
+
+// argv checks an argument list: non-empty, the program a literal, every
+// element a literal without braces or exactly one known placeholder; the
+// text placeholders only where allowText.
+func (v *validator) argv(path string, argv []string, allowText bool) {
+	if len(argv) == 0 {
+		v.add(RuleInvalid, path, "the argument list is empty")
+		return
+	}
+	if strings.ContainsAny(argv[0], "{}") || strings.TrimSpace(argv[0]) == "" {
+		v.add(RuleInvalid, path+"[0]", "the program must be a literal name")
+	}
+	for i, a := range argv[1:] {
+		v.value(fmt.Sprintf("%s[%d]", path, i+1), a, allowText)
+	}
+}
+
+// value checks one templated value: a literal without braces, "{env:NAME}",
+// or, where allowText, "{text}" / "{textFile}".
+func (v *validator) value(path, s string, allowText bool) {
+	switch {
+	case s == PlaceholderText || s == PlaceholderTextFile:
+		if !allowText {
+			v.add(RuleProbeFeedsText, path, "%s carries the text of an event", s)
+		}
+	case strings.HasPrefix(s, PlaceholderEnvPrefix) && strings.HasSuffix(s, "}"):
+		name := strings.TrimSuffix(strings.TrimPrefix(s, PlaceholderEnvPrefix), "}")
+		if !envNamePattern.MatchString(name) {
+			v.add(RuleInvalid, path, "%q is not an environment variable name", name)
+		}
+	case strings.ContainsAny(s, "{}"):
+		v.add(RuleInvalid, path, "%q is neither a literal nor a placeholder", s)
+	case s == "":
+		v.add(RuleInvalid, path, "value is empty")
+	}
+}
+
+// pathValue checks a probe path: a literal, or "{env:NAME}" optionally
+// followed by "/" and literal elements.
+func (v *validator) pathValue(path, s string) {
+	head, rest, hasRest := strings.Cut(s, "/")
+	if strings.HasPrefix(head, PlaceholderEnvPrefix) {
+		v.value(path, head, false)
+		if hasRest && strings.ContainsAny(rest, "{}") {
+			v.add(RuleInvalid, path, "only the first element of %q may be a placeholder", s)
+		}
+		return
+	}
+	v.value(path, s, false)
+}
+
+func (v *validator) idle(path string, i Idle) {
+	if !idleTypes[i.Type] {
+		v.add(RuleInvalid, path+".type", "idle wait %q is not one of none, builtin, argv", i.Type)
+		return
+	}
+	if i.Type == IdleArgv {
+		v.argv(path+".argv", i.Argv, false)
+		if i.TimeoutSec <= 0 {
+			v.add(RuleInvalid, path+".timeoutSec", "an argv idle wait needs a positive timeout")
+		}
+	} else if len(i.Argv) > 0 {
+		v.add(RuleInvalid, path+".argv", "only an argv idle wait has a command")
+	}
+}
+
+// signs checks that every row of a table has a criterion and that no sign
+// appears twice: a sign maps to exactly one value.
+func (v *validator) signs(path string, rows []Match) {
+	seen := make(map[string]int, len(rows))
+	for i, m := range rows {
+		rpath := fmt.Sprintf("%s[%d].match", path, i)
+		if m.ExitCode == nil && m.HTTPStatus == nil && len(m.JSON) == 0 {
+			v.add(RuleAmbiguousSign, rpath, "the row has no criterion")
+			continue
+		}
+		key := m.key()
+		if j, dup := seen[key]; dup {
+			v.add(RuleAmbiguousSign, rpath, "the same sign as row %d", j)
+		}
+		seen[key] = i
+	}
+}
+
+// key is a canonical form of a sign for duplicate detection.
+func (m Match) key() string {
+	var b strings.Builder
+	if m.ExitCode != nil {
+		fmt.Fprintf(&b, "exit=%d;", *m.ExitCode)
+	}
+	if m.HTTPStatus != nil {
+		fmt.Fprintf(&b, "http=%d;", *m.HTTPStatus)
+	}
+	keys := make([]string, 0, len(m.JSON))
+	for k := range m.JSON {
+		keys = append(keys, k)
+	}
+	slices.Sort(keys)
+	for _, k := range keys {
+		fmt.Fprintf(&b, "json:%q=%q;", k, m.JSON[k])
+	}
+	return b.String()
+}
+
+func (v *validator) probe(path string, p *Probe) {
+	if !probeTypes[p.Type] {
+		v.add(RuleUnknownProbe, path+".type", "probe %q is not one of argv, dir-writable, socket-connect, tcp-reach", p.Type)
+		return
+	}
+	v.text(RuleMissingSource, path+".source", p.Source)
+	switch p.Type {
+	case ProbeArgv:
+		v.argv(path+".argv", p.Argv, false)
+		if p.Path != "" || p.Address != "" {
+			v.add(RuleInvalid, path, "an argv probe has no path and no address")
+		}
+		if len(p.Results) == 0 {
+			v.add(RuleInvalid, path+".results", "an argv probe needs its result table")
+		}
+		rows := make([]Match, len(p.Results))
+		for i, r := range p.Results {
+			rows[i] = r.Match
+			if !probeResults[r.Result] {
+				v.add(RuleUnknownOutcome, fmt.Sprintf("%s.results[%d].result", path, i), "%q is not available or unavailable", r.Result)
+			}
+		}
+		v.signs(path+".results", rows)
+	default:
+		if len(p.Argv) > 0 {
+			if p.Type == ProbeSocketConnect || p.Type == ProbeTCPReach {
+				v.add(RuleProbeSends, path+".argv", "a %s probe connects and closes without sending anything", p.Type)
+			} else {
+				v.add(RuleInvalid, path+".argv", "a %s probe runs no command", p.Type)
+			}
+			for i, a := range p.Argv {
+				if a == PlaceholderText || a == PlaceholderTextFile {
+					v.add(RuleProbeFeedsText, fmt.Sprintf("%s.argv[%d]", path, i), "%s carries the text of an event", a)
+				}
+			}
+		}
+		if len(p.Results) > 0 {
+			v.add(RuleInvalid, path+".results", "a %s probe has a fixed meaning and no result table", p.Type)
+		}
+		if p.Type == ProbeTCPReach {
+			if p.Path != "" {
+				v.add(RuleInvalid, path+".path", "a tcp-reach probe has an address, not a path")
+			}
+			v.value(path+".address", p.Address, false)
+		} else {
+			if p.Address != "" {
+				v.add(RuleInvalid, path+".address", "a %s probe has a path, not an address", p.Type)
+			}
+			v.pathValue(path+".path", p.Path)
+		}
+	}
+}
+
+func (v *validator) addressee(path string, c *Channel) {
+	a := c.Addressee
+	if !processChecks[a.Process] {
+		v.add(RuleInvalid, path+".process", "process check %q is not one of alive, foreground, none", a.Process)
+	} else {
+		switch {
+		case c.Blind && a.Process != ProcessForeground:
+			v.add(RuleInvalid, path+".process", "a blind channel checks that the agent is in the foreground")
+		case c.Kind == KindTerminal && a.Process == ProcessNone:
+			v.add(RuleInvalid, path+".process", "a terminal channel checks the agent process")
+		case c.Kind == KindAddressed && a.Process != ProcessNone:
+			v.add(RuleInvalid, path+".process", "an addressed channel does not need the agent process")
+		}
+	}
+	if a.Command != nil {
+		v.argv(path+".command.argv", a.Command.Argv, false)
+		if len(a.Command.Results) == 0 {
+			v.add(RuleInvalid, path+".command.results", "the addressee command needs its result table")
+		}
+		rows := make([]Match, len(a.Command.Results))
+		for i, r := range a.Command.Results {
+			rows[i] = r.Match
+			if !addresseeResults[r.Result] {
+				v.add(RuleUnknownOutcome, fmt.Sprintf("%s.command.results[%d].result", path, i), "%q is not same, changed or gone", r.Result)
+			}
+		}
+		v.signs(path+".command.results", rows)
+	}
+}
