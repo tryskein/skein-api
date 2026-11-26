@@ -124,6 +124,12 @@ class Detector(object):
         channel, or None. This one confirms none."""
         return None
 
+    def addressee_holds(self, ctx, channel):
+        """Whether the addressee of a host or terminal environment of steps
+        5-6 is this agent ("Addressee and check"): a forced one is checked
+        the same way as a detected one. This one confirms none."""
+        return False
+
     def blind(self, ctx):
         """Channel ids of the blind channels whose three conditions hold, in
         order."""
@@ -312,6 +318,11 @@ def choose(ctx):
                                 "the channel %s belongs to an outer agent (nested agent)" % forced)
         # A forced blind channel lifts conditions (1) and (2) of US-7, not
         # the binding to the pane (decision 8).
+        # A forced host is still this agent's only (US-5, "Addressee and
+        # check" pp. 2, 6): the checks of the detection hold for it too.
+        if channel and channel.get("step") in (5, 6) and not ctx.detector.addressee_holds(ctx, channel):
+            return Choice(METHOD_JOURNAL, None,
+                          ["forced %s unavailable: its addressee is not this agent" % forced])
         if ctx.registry.is_blind(forced) and ctx.detector.binding(ctx, forced) is None:
             return Choice(METHOD_JOURNAL, None,
                           ["forced %s unavailable: the binding to its pane is not confirmed" % forced])

@@ -185,6 +185,21 @@ class HostDetectionTest(unittest.TestCase):
                 ctx = context(env)
                 self.assertEqual("zavod" in ctx.detector.hosts(ctx), detected)
 
+    def test_a_forced_zavod_passes_the_detection_checks(self):
+        # Forced Zavod whose engine does not match the client, or whose
+        # address is not the agent's own: the journal, not Zavod.
+        for name, env, want in (
+                ("engine of another record", dict(ZAVOD_SELF, ZAVOD_AGENT_ENGINE_ID="nkimi"), ("journal", None)),
+                ("address of another agent", {"ZAVOD_ME": ZAVOD_UUID, "ZAVOD_AGENT_ENGINE_ID": "kimi"},
+                 ("journal", None)),
+                ("this agent", dict(ZAVOD_SELF, ZAVOD_AGENT_ENGINE_ID="kimi"), ("detached", "zavod"))):
+            with self.subTest(case=name):
+                ctx = context(env)
+                ctx.settings = RUNNER.Settings(record=ctx.settings.record, platform="posix",
+                                               channel="zavod", forced="zavod")
+                choice = RUNNER.choose(ctx)
+                self.assertEqual((choice.method, choice.channel), want)
+
     def test_order_of_hosts(self):
         ctx = context(dict(ZAVOD_SELF, HOST_A_ID="a-1", ZAVOD_AGENT_ENGINE_ID="kimi", TERM_X_HANDLE="t-1"))
         self.assertEqual(ctx.detector.hosts(ctx), ["zavod", "host-a", "term-x"])

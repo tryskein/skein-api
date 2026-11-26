@@ -109,6 +109,9 @@ class FakeDetector(RUNNER.Detector):
     def blind(self, ctx):
         return list(self._blind)
 
+    def addressee_holds(self, ctx, channel):
+        return channel["id"] in self._hosts
+
     def binding(self, ctx, channel_id):
         if channel_id not in self._bound:
             return None
@@ -259,6 +262,12 @@ class MethodOrderTest(unittest.TestCase):
         channel["binaries"] = saved
         choice = choose(env, FakeDetector(hosts=["host-1"]))
         self.assertEqual((choice.method, choice.channel), ("detached", "host-1"))
+
+    def test_a_forced_host_must_be_this_agents(self):
+        # The addressee checks of the detection hold for a forced host too.
+        choice = choose(self.box.env(), FakeDetector(hosts=["host-1"]), channel="host-2", forced="host-2")
+        self.assertEqual((choice.method, choice.channel), ("journal", None))
+        self.assertIn("addressee is not this agent", choice.reason)
 
     def test_forced_blind_channel_needs_its_pane_binding(self):
         # US-7, decision 8: forcing lifts conditions (1) and (2), not the

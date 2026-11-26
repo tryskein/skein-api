@@ -139,6 +139,10 @@ class RegistryDetector(Detector):
             return False
         return True
 
+    def addressee_holds(self, ctx, channel):
+        """A forced host passes the same checks as a detected one."""
+        return self.detected(ctx, channel)
+
     def _detected_hosts(self, ctx):
         step5 = [c for c in self._channels(ctx, 5) if self.detected(ctx, c)]
         step6 = []
