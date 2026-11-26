@@ -144,6 +144,9 @@ class Guard(object):
         self.gone = False
         # Set once the text may be handed to the channel (every check held).
         self.handed = False
+        # The stop answer before_commit saw: the monitor stops on it once
+        # the outcome of the batch is written.
+        self.cancel_reason = None
 
     def remaining(self):
         """The time left of the attempt's deadline; RefusedBeforeSend when
@@ -180,10 +183,7 @@ class Guard(object):
         self.attempt.note_call()
 
     def before_commit(self):
-        if self.pipeline.cancel.check() is not None:
-            self.access_lost = True
-            return False
-        if not self.pipeline.cancel.may_send():
+        if not self._commit_boundary():
             return False
         try:
             self.pipeline.check_addressee(self.channel, self.remaining())
@@ -195,7 +195,17 @@ class Guard(object):
             return False
         except RefusedBeforeSend:
             return False
-        return True
+        # Last, right before the final step: a stop or a stale poll that
+        # came during the addressee check withholds it.
+        return self._commit_boundary()
+
+    def _commit_boundary(self):
+        reason = self.pipeline.cancel.check()
+        if reason is not None:
+            self.access_lost = True
+            self.cancel_reason = reason
+            return False
+        return bool(self.pipeline.cancel.may_send())
 
 
 class _ReceiptGuard(Guard):
@@ -702,6 +712,10 @@ class DeliverySink(object):
         for n in batch:
             self._close(cursor, outcomes, journaled, n, outcome, channel_id, sign,
                         with_preview=not guard.access_lost)
+        if guard.cancel_reason is not None:
+            # A stop answer withheld the final step: it wins over the rest of
+            # the page (US-12), once this batch has its outcome.
+            raise DeliveryCancelled(guard.cancel_reason)
         if outcome == OUTCOME_ADDRESSEE_GONE or guard.gone:
             # The stop follows when the page loop returns (page()).
             self.gone = True
