@@ -26,7 +26,8 @@ PROBE = [{"type": "argv", "source": "test", "argv": ["probe"]}]
 
 def channel(cid, step, order, env=None, blind=False):
     return {"id": cid, "step": step, "order": order, "kind": "terminal", "blind": blind,
-            "detect": {"env": [{"name": n} for n in (env or [])]}, "probes": PROBE}
+            "detect": {"env": [{"name": n} for n in (env or [])]}, "probes": PROBE,
+            "binaries": {"linux": ["sh"], "macos": ["sh"]}}
 
 
 REGISTRY = {

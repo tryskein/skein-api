@@ -273,8 +273,12 @@ def channel_available(ctx, channel_id):
     ok, cause = conditions_hold(channel.get("detect"), ctx.env)
     if not ok:
         return False, cause
+    # Every channel names its programs per platform; a platform it names
+    # none for has no program, so the channel is unavailable there.
     binaries = (channel.get("binaries") or {}).get(_platform_key())
-    if binaries is not None and not any(program_found(b, ctx.env) for b in binaries):
+    if not binaries:
+        return False, "channel %s has no program for this platform" % channel_id
+    if not any(program_found(b, ctx.env) for b in binaries):
         return False, "no program of channel %s found" % channel_id
     if channel.get("probeUndefined"):
         return True, None

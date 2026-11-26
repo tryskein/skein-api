@@ -29,7 +29,8 @@ PROBE = [{"type": "argv", "source": "test", "argv": ["probe"]}]
 
 
 def channel(cid, step, order, blind=False, probe_undefined=False):
-    chan = {"id": cid, "step": step, "order": order, "kind": "terminal", "blind": blind, "detect": {}}
+    chan = {"id": cid, "step": step, "order": order, "kind": "terminal", "blind": blind, "detect": {},
+            "binaries": {"linux": ["own-cli"], "macos": ["own-cli"]}}
     if probe_undefined:
         chan["probeUndefined"] = True
     else:
@@ -245,6 +246,19 @@ class MethodOrderTest(unittest.TestCase):
         self.assertEqual((choice.method, choice.channel), ("journal", None))
         choice = choose(self.box.env(), detector, channel="journal", forced="journal")
         self.assertEqual((choice.method, choice.channel), ("journal", None))
+
+    def test_a_channel_without_a_program_for_the_platform_is_unavailable(self):
+        env = self.box.env(ALPHA_STREAM=None, OWN_Q_ID=None, CFG_DIR=None)
+        channel = REG.channel("host-1")
+        saved = channel["binaries"]
+        self.addCleanup(channel.__setitem__, "binaries", saved)
+        channel["binaries"] = {"windows": ["own-cli.exe"]}
+        choice = choose(env, FakeDetector(hosts=["host-1"]))
+        self.assertEqual((choice.method, choice.channel), ("journal", None))
+        self.assertIn("host-1 has no program for this platform", choice.reason)
+        channel["binaries"] = saved
+        choice = choose(env, FakeDetector(hosts=["host-1"]))
+        self.assertEqual((choice.method, choice.channel), ("detached", "host-1"))
 
     def test_forced_blind_channel_needs_its_pane_binding(self):
         # US-7, decision 8: forcing lifts conditions (1) and (2), not the
