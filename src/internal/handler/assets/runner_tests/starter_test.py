@@ -89,9 +89,10 @@ def starter_argv(form, box):
     return [sys.executable, box.starter_file]
 
 
-def run_starter(form, box, url, loader_sha, extra_env=None, drop=(), on_start=None):
+def run_starter(form, box, url, loader_sha, extra_env=None, drop=(), on_start=None, mode="preflight"):
     """Run the starter once; returns (exit code, stdout lines, raw stdout,
-    stderr)."""
+    stderr). The file form runs as the preflight command (mode preflight)
+    or as the working command (mode run)."""
     env = dict(os.environ)
     for name in list(env):
         if name.startswith("SKEIN_"):
@@ -102,7 +103,9 @@ def run_starter(form, box, url, loader_sha, extra_env=None, drop=(), on_start=No
         "SKEIN_LOADER_SHA256": loader_sha, "XDG_STATE_HOME": box.state_home,
     })
     if form == "file":
-        env.update({"SKEIN_CLIENT": "alpha", "SKEIN_PLATFORM": "posix", "SKEIN_MONITOR_MODE": "preflight"})
+        env.update({"SKEIN_CLIENT": "alpha", "SKEIN_PLATFORM": "posix", "SKEIN_MONITOR_MODE": mode})
+        if mode == "run":
+            env.update({"SKEIN_MONITOR_PREFLIGHT": "1", "SKEIN_MONITOR_CHANNEL": "", "SKEIN_MONITOR_BLIND": ""})
     for name in drop:
         env.pop(name, None)
     env.update(extra_env or {})
@@ -364,6 +367,12 @@ class LiveRunner(object):
         self.pending = []
         self.lock = threading.Lock()
         self.polled = threading.Event()
+        # With hold set, a poll that carries notifications is kept unanswered
+        # (held set) until release: the owner then has a delivery in flight.
+        self.hold = threading.Event()
+        self.held = threading.Event()
+        self.release = threading.Event()
+        test.addCleanup(self.release.set)
         self.runner = harness.render_runner(poll_sec=1).encode("utf-8")
         self.srv = loader_server(test, loader=lambda h: h.send_body(200, harness.served_loader().encode("utf-8")),
                                  script=lambda h: h.send_body(200, self.runner), poll=self.poll)
@@ -388,6 +397,9 @@ class LiveRunner(object):
         with self.lock:
             notes, self.pending = self.pending, []
         self.polled.set()
+        if notes and self.hold.is_set():
+            self.held.set()
+            self.release.wait(30)
         handler.send_body(200, json.dumps({"notifications": notes,
                                            "cursor": {"ts": "2026-01-01T00:00:00Z", "id": 40}}).encode())
 
@@ -431,20 +443,28 @@ class StarterRestartTest(unittest.TestCase):
         owner.wait_for(lambda l: l.get("event") == "monitor_started")
         if not owner.polled.wait(30):
             raise AssertionError("the owner never polled")
+        # A first delivery leaves the owner's saved cursor in state.json.
         owner.push(41)
-        owner.wait_for(lambda l: l.get("event") == "notification")
+        owner.wait_for(lambda l: l.get("event") == "notification" and l["notification"]["id"] == 41)
+        # Notification 42 is on its way to the owner, not delivered yet,
+        # while second starts fail at the starter.
+        owner.hold.set()
+        owner.push(42)
+        if not owner.held.wait(30):
+            raise AssertionError("the owner never asked for the pending notification")
         before = box.snapshot()
         refused = loader_server(self, body=b"a loader of another build\n")
-        for form in FORMS:
-            for name, url, digest, reason in (
-                    ("digest", refused.url(), owner.loader_sha, "runner_mismatch"),
-                    ("network", closed_url(), owner.loader_sha, "server_unreachable")):
-                with self.subTest(form=form, case=name):
-                    rc, lines, out, _ = run_starter(form, box, url, digest)
+        for form, mode in (("text", None), ("file", "preflight"), ("file", "run")):
+            for name, url, reason in (("digest", refused.url(), "runner_mismatch"),
+                                      ("network", closed_url(), "server_unreachable")):
+                with self.subTest(form=form, mode=mode, case=name):
+                    rc, lines, out, _ = run_starter(form, box, url, owner.loader_sha, mode=mode or "preflight")
                     self.assertEqual((rc, len(lines), lines[0]["reason"]), (1, 1, reason), out)
-                    self.assertEqual(box.snapshot(), before, (form, name))
+                    self.assertEqual(box.snapshot(), before, (form, mode, name))
         self.assertIsNone(owner.proc.poll(), "the owner stopped")
-        owner.push(42)
+        self.assertFalse([l for l in owner.lines if l.get("notification", {}).get("id") == 42],
+                         "the pending notification was delivered before the release")
+        owner.release.set()
         line = owner.wait_for(lambda l: l.get("event") == "notification" and l["notification"]["id"] == 42)
         self.assertEqual(line["notification"]["id"], 42)
 
