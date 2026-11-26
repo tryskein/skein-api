@@ -18,10 +18,14 @@
 # inherited from the agent's shell) without any variable whose value holds a
 # secret of the monitor (the token, INV-6). A call is bounded by its timeout,
 # which the caller keeps within the idle window of the token; on timeout the
-# program and the processes of its session are killed. stdout and stderr are
-# read by threads, so a program that writes much or reads nothing never
-# blocks the runner; at most OUTPUT_CAP_BYTES of each are kept. A stdout that
-# is one JSON object is parsed for the outcome table (Match.json).
+# program and the processes of its session are killed. On POSIX one loop
+# waits on the program's pipes without blocking reads, so neither a program
+# that writes much or reads nothing nor a descendant that keeps a pipe open
+# holds the runner past the timeout and a short grace after the program
+# ends; the processes left in the program's group then are killed, and so
+# are all of them when the call ends by an exception (a stop signal). At
+# most OUTPUT_CAP_BYTES of stdout and of stderr are kept. A stdout that is
+# one JSON object is parsed for the outcome table (Match.json).
 #
 # Probes check the boundary of a channel without delivering (P-7): argv (the
 # command without the text of an event: no stdin, no message file),
@@ -32,10 +36,12 @@
 
 import json
 import os
+import select
 import signal
 import socket
 import subprocess
 import threading
+import time
 
 # The prefix of a message file in the token directory.
 MESSAGE_FILE_PREFIX = "msg-"
@@ -44,9 +50,11 @@ OUTPUT_CAP_BYTES = 64 * 1024
 # The longest a probe of the preflight may take: the preflight is
 # synchronous, an agent waits for its line.
 PROBE_TIMEOUT_SEC = 10
-# How long the reader threads are awaited after the program ended or was
-# killed: a grandchild that keeps a pipe open does not hold the runner.
+# How long the pipes are read after the program ended or was killed: a
+# descendant that keeps a pipe open does not hold the runner longer.
 _READER_GRACE_SEC = 1.0
+# The step of the POSIX wait loop (the program's end is seen within it).
+_WAIT_STEP_SEC = 0.05
 
 
 class ExecutorRefusal(Exception):
@@ -282,7 +290,108 @@ def _kill(proc):
 def run_program(argv, env, stdin_data, timeout_sec):
     """Run argv (no shell) with env, stdin_data (bytes, or None for no
     stdin) and a timeout. Returns a CallResult; raises ExecutorRefusal when
-    the program cannot be started."""
+    the program cannot be started. Returns within timeout_sec plus
+    _READER_GRACE_SEC on POSIX whatever the program's descendants do."""
+    if os.name == "posix":
+        return _run_posix(argv, env, stdin_data, timeout_sec)
+    return _run_threads(argv, env, stdin_data, timeout_sec)
+
+
+def _kill_group(pgid):
+    try:
+        os.killpg(pgid, signal.SIGKILL)
+    except OSError:
+        pass
+
+
+def _run_posix(argv, env, stdin_data, timeout_sec):
+    try:
+        proc = subprocess.Popen(argv, stdin=subprocess.PIPE if stdin_data is not None else subprocess.DEVNULL,
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env, close_fds=True,
+                                start_new_session=True)
+    except OSError as exc:
+        raise ExecutorRefusal("the program cannot be started (%s)" % (exc.strerror or exc))
+    # The program leads its own session and group: the group is named by
+    # its pid while any member is left.
+    group = proc.pid
+    out_fd, err_fd = proc.stdout.fileno(), proc.stderr.fileno()
+    chunks = {out_fd: [], err_fd: []}
+    sizes = {out_fd: 0, err_fd: 0}
+    reading = set([out_fd, err_fd])
+    in_fd = proc.stdin.fileno() if stdin_data is not None else None
+    pending = memoryview(stdin_data) if stdin_data is not None else None
+    for fd in list(reading) + ([in_fd] if in_fd is not None else []):
+        os.set_blocking(fd, False)
+    deadline = time.monotonic() + max(timeout_sec, 0)
+    ended_at = None
+    timed_out = False
+    try:
+        while True:
+            now = time.monotonic()
+            if ended_at is None and proc.poll() is not None:
+                ended_at = now
+            if ended_at is None and now >= deadline:
+                timed_out = True
+                _kill_group(group)
+                proc.wait()
+                ended_at = time.monotonic()
+            if ended_at is not None and (not reading or time.monotonic() >= ended_at + _READER_GRACE_SEC):
+                break
+            writing = [in_fd] if in_fd is not None and ended_at is None else []
+            try:
+                ready_r, ready_w, _ = select.select(list(reading), writing, [], _WAIT_STEP_SEC)
+            except InterruptedError:
+                continue
+            for fd in ready_r:
+                try:
+                    chunk = os.read(fd, 65536)
+                except BlockingIOError:
+                    continue
+                except OSError:
+                    chunk = b""
+                if not chunk:
+                    reading.discard(fd)
+                    continue
+                room = OUTPUT_CAP_BYTES - sizes[fd]
+                if room > 0:
+                    chunks[fd].append(chunk[:room])
+                    sizes[fd] += min(len(chunk), room)
+            if ready_w:
+                try:
+                    pending = pending[os.write(in_fd, pending):]
+                except BlockingIOError:
+                    pass
+                except OSError:
+                    pending = memoryview(b"")
+                if not pending:
+                    proc.stdin.close()
+                    in_fd = None
+            if in_fd is not None and ended_at is not None:
+                proc.stdin.close()
+                in_fd = None
+    except BaseException:
+        # A stop signal (or any error) during the call: the program and its
+        # group do not outlive it.
+        _kill_group(group)
+        raise
+    finally:
+        if reading:
+            # A descendant still holds a pipe after the grace: its group goes.
+            _kill_group(group)
+        for f in (proc.stdin, proc.stdout, proc.stderr):
+            if f is not None:
+                try:
+                    f.close()
+                except OSError:
+                    pass
+        if proc.returncode is None:
+            proc.wait()
+    return CallResult(None if timed_out else proc.returncode, b"".join(chunks[out_fd]), b"".join(chunks[err_fd]),
+                      timed_out)
+
+
+def _run_threads(argv, env, stdin_data, timeout_sec):
+    """The wait of a platform without select on pipes: reader threads."""
     try:
         proc = subprocess.Popen(argv, stdin=subprocess.PIPE if stdin_data is not None else subprocess.DEVNULL,
                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env, close_fds=True,
@@ -301,6 +410,9 @@ def run_program(argv, env, stdin_data, timeout_sec):
         timed_out = True
         _kill(proc)
         proc.wait()
+    except BaseException:
+        _kill(proc)
+        raise
     for r in readers:
         r.join(_READER_GRACE_SEC)
     for pipe in (proc.stdout, proc.stderr):

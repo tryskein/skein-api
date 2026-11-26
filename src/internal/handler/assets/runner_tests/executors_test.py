@@ -64,6 +64,102 @@ class Box(object):
         return sorted(n for n in os.listdir(self.token_dir) if n.startswith("msg-"))
 
 
+
+def _gone(pid):
+    """Ended: no such process, or a zombie no one has reaped yet (an orphan
+    in a container whose first process reaps nothing)."""
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return True
+    try:
+        with open("/proc/%d/stat" % pid) as fh:
+            return fh.read().rsplit(")", 1)[1].split()[0] == "Z"
+    except (OSError, IndexError):
+        return False
+
+
+def _wait_gone(pid, sec=10):
+    deadline = time.monotonic() + sec
+    while not _gone(pid) and time.monotonic() < deadline:
+        time.sleep(0.05)
+    return _gone(pid)
+
+
+@unittest.skipUnless(os.name == "posix", "the POSIX program group")
+class ProgramWaitTest(unittest.TestCase):
+    """Review findings C4 and V3 of wave 7 (P-7: a call is bounded by its
+    timeout; on timeout the program and the processes of its session are
+    killed): a descendant that keeps the program's pipes open holds no call
+    past its timeout, and neither it nor the program outlives the call -
+    nor a stop signal during it."""
+
+    def setUp(self):
+        self.root = tempfile.mkdtemp(prefix="skein-wait-")
+        self.addCleanup(shutil.rmtree, self.root, True)
+        self.pidfile = os.path.join(self.root, "descendant.pid")
+        self.addCleanup(self.kill_left)
+
+    def kill_left(self):
+        pid = self.descendant(wait=False)
+        if pid:
+            try:
+                os.kill(pid, 9)
+            except OSError:
+                pass
+
+    def descendant(self, wait=True):
+        deadline = time.monotonic() + (10 if wait else 0)
+        while True:
+            try:
+                with open(self.pidfile) as fh:
+                    text = fh.read().strip()
+                if text:
+                    return int(text)
+            except OSError:
+                pass
+            if time.monotonic() >= deadline:
+                return None
+            time.sleep(0.02)
+
+    def test_a_descendant_holding_the_pipes_after_the_program_ended(self):
+        argv = ["sh", "-c", "sleep 60 & echo $! > %s; echo done" % self.pidfile]
+        started = time.monotonic()
+        result = RUNNER.run_program(argv, dict(os.environ), None, 10)
+        took = time.monotonic() - started
+        self.assertEqual((result.exit_code, result.stdout.strip()), (0, b"done"))
+        # The program ended at once; the wait does not last the descendant's
+        # minute, nor the call's timeout of 10 s.
+        self.assertLess(took, 10)
+        self.assertTrue(_wait_gone(self.descendant()), "a descendant on the pipes outlived the call")
+
+    def test_a_timeout_kills_every_process_of_the_program(self):
+        argv = ["sh", "-c", "sleep 60 & echo $! > %s; sleep 60" % self.pidfile]
+        started = time.monotonic()
+        result = RUNNER.run_program(argv, dict(os.environ), b"text", 1)
+        self.assertTrue(result.timed_out)
+        self.assertIsNone(result.exit_code)
+        self.assertLess(time.monotonic() - started, 1 + 5)
+        self.assertTrue(_wait_gone(self.descendant()), "a descendant outlived the timeout")
+
+    def test_a_stop_signal_during_the_call_kills_the_program_and_its_descendants(self):
+        argv = ["sh", "-c", "echo $$ > %s.prog; sleep 60 & echo $! > %s; sleep 60" % (self.pidfile, self.pidfile)]
+        real = RUNNER.select.select
+
+        def select(*args):
+            if self.descendant(wait=False):
+                raise RUNNER.StopSignal()
+            return real(*args)
+
+        with mock.patch.object(RUNNER.select, "select", select):
+            with self.assertRaises(RUNNER.StopSignal):
+                RUNNER.run_program(argv, dict(os.environ), None, 30)
+        with open(self.pidfile + ".prog") as fh:
+            program = int(fh.read().strip())
+        self.assertTrue(_wait_gone(program), "the program outlived the stop")
+        self.assertTrue(_wait_gone(self.descendant()), "a descendant outlived the stop")
+
+
 @unittest.skipUnless(os.name == "posix", "the POSIX executor")
 class ArgvExecutorTest(unittest.TestCase):
     """Row #43: the text of an event never steers the call (INV-5), the
