@@ -752,6 +752,30 @@ class TailTest(Base):
         self.assertEqual(self.journal_ids(), ["line-0", "line-1", "line-summary"])
         self.assertEqual(self.tails(), [])
 
+    def test_a_repeat_after_two_rotations_writes_no_line_twice(self):
+        # Review finding 18 of wave 7: the journal keeps 5 files (P-12, the
+        # journal); an earlier append may have rotated it more than once.
+        lines = self.lines()
+        RUNNER.defer_lines(self.journal.path, lines, self.env)
+        os.makedirs(os.path.dirname(self.journal.path), 0o700, exist_ok=True)
+        for suffix, text in ((".2", lines[0]), (".1", lines[1]), ("", "")):
+            with open(self.journal.path + suffix, "w") as fh:
+                fh.write(text + "\n" if text else "")
+        RUNNER.append_tails(self.env)
+        self.assertEqual(self.journal_ids(), ["line-summary"])
+
+    def test_attempt_files_are_swept_without_any_tail(self):
+        # Review finding 37 of wave 7: the sweep of attempt files no
+        # process holds does not depend on a tail existing.
+        led = RUNNER.Ledger(SERVER, "mon-a", ident([addr("orca", "t-1")]), env=self.env, clock=self.clock)
+        led.begin([ev("warm")], "c1").attempt.release()
+        stale = os.path.join(RUNNER.ledger_dir(self.env), RUNNER.ATTEMPTS_DIR_NAME, "0" * 32)
+        with open(stale, "w"):
+            pass
+        self.assertEqual(self.tails(), [])
+        RUNNER.append_tails(self.env)
+        self.assertFalse(os.path.exists(stale), "an unheld attempt file was kept")
+
     def test_a_ledger_directory_that_takes_nothing_keeps_neither_lines_nor_summary(self):
         state = self.env["XDG_STATE_HOME"]
         os.makedirs(os.path.join(state, RUNNER.USER_DIR_NAME), 0o700)

@@ -757,7 +757,8 @@ def append_tails(env=None):
     try:
         names = sorted(os.listdir(tails))
     except FileNotFoundError:
-        return 0
+        # No tails: the sweep of attempt files below still runs.
+        names = []
     except OSError as exc:
         raise LedgerUnavailable(exc.strerror or "read_failed")
     done = 0
@@ -820,13 +821,16 @@ def _append_to_journal(path, lines, env):
 
 
 def _read_rotated(path):
-    """The last rotated file of a journal: a line appended just before a
-    rotation lives there."""
-    try:
-        with open(path + ".1", "rb") as fh:
-            return fh.read()
-    except OSError:
-        return b""
+    """Every rotated file of a journal kept: an earlier append of the same
+    tail may have rotated the journal more than once."""
+    out = []
+    for i in range(1, JOURNAL_KEEP_FILES):
+        try:
+            with open("%s.%d" % (path, i), "rb") as fh:
+                out.append(fh.read())
+        except OSError:
+            continue
+    return b"\n".join(out)
 
 
 def _sweep_attempts(attempts):
