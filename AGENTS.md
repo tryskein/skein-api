@@ -132,7 +132,7 @@ session — the response stays in the transcript.
 | integration | on | store, handler and MCP tests against the real migrated schema; NATS in-process, S3 stubbed | from the top of `skein/`: `./scripts/integration-test.sh` | `./scripts/integration-test.sh -p 1 ./internal/<pkg>/...` (add `-run '<regexp>'`) | same suite, gated by `TEST_DATABASE_URL` |
 | e2e | via skein-frontend | none of its own; the product e2e suite of skein-frontend runs against a live stack built with this image | from the top of `skein/`: `./scripts/e2e-test.sh` | `./scripts/e2e-test.sh -- -g '<title>'` | `skein-frontend/browser/e2e/` |
 | smoke (image contract) | not used | — | — | — | — |
-| mutation | not used | — | — | — | — |
+| mutation | on (progon) | gomutants for Go, mutmut for the Python runner and loader; one run on the diff of a whole piece of work, not per change | `progon api mutation --since <base>`; `progon api pymutation <mutant pattern>` | the targets (below) | `.progon/api.toml`; mutmut configuration in `src/setup.cfg` |
 | source-reading checks | two permitted | (1) routes of the **assembled** router under `/agent/v1` are GET/HEAD only; needed until it is decided that `/agent/v1` gets a write route. (2) routes of the **assembled** public router (`chi.Walk`) ↔ paths and methods of the embedded public OpenAPI document, both ways, with the operationId, the key right and the `force` query parameter (exactly on the guarded operations) of each operation as `routes.go` declares them; permitted by the owner because the public spec is declared apart from the routes, needed while that stays so | part of unit | (1) `cd src && go test -count=1 -run TestAgentRoutes_ReadOnly ./cmd/api/`; (2) `cd src && go test -count=1 -run TestPublicRoutesMatchOpenAPI ./cmd/api/` | (1) `src/cmd/api/agent_routes_readonly_test.go`; (2) `src/cmd/api/public_routes_spec_test.go` |
 | artifact contract | not used | — | — | — | — |
 
@@ -151,6 +151,8 @@ The profile is `.progon/api.toml`; run from the repository root:
 | unit | `progon api unit` | `progon api unit ./internal/<pkg>/ -run '<regexp>'` |
 | integ | `progon api integ` | `progon api integ ./internal/<pkg>/ -run '<regexp>'` |
 | mutation | `progon api mutation ./internal/<pkg>/` | the package patterns are the targets; `--since <ref>` limits it to changed lines |
+| pyunit | `progon api pyunit` | `progon api pyunit <file>` — a path relative to `src`, e.g. `internal/handler/assets/monitor_runner_test.py` |
+| pymutation | `progon api pymutation <mutant pattern>` | the targets are mutmut mutant name patterns, e.g. `'internal.handler.assets.monitor_runner.x_build_url*'`; no `--since` (mutmut has no diff mode) |
 
 `integ` starts a `pgvector/pgvector:pg18` fixture with `pg_trgm` and `vector`,
 applies `src/migrations` with golang-migrate and runs the packages serially
@@ -158,7 +160,11 @@ applies `src/migrations` with golang-migrate and runs the packages serially
 `GOFLAGS=-p=1` against the same Postgres fixture and migrations as `integ`, so
 DB-backed tests take part; a full run takes hours, so name packages or use
 `--since`.
-Python runner tests are not part of the profile; run them as described above.
+`pyunit` runs every `*_test.py` under `src` on its own (`python3 <file> -v`) in a
+Python image. `pymutation` runs mutmut over the paths named in the `[mutmut]`
+section of `src/setup.cfg`; the tests it drives are the same `*_test.py` files,
+collected by pytest. The Go kinds `unit` and `integ` install `python3` on top of
+the Go image.
 
 ### Project specifics
 
@@ -186,7 +192,9 @@ Python runner tests are not part of the profile; run them as described above.
 - docker — needed for integration and e2e (the harnesses start the stack), not
   for unit.
 - `python3` (stdlib only) — for the Python runner tests and for Go tests that
-  execute the served runner; without it those parts skip.
+  execute the served runner; without it those parts skip. The progon kinds
+  `unit` and `integ` have `python3`, so a skip of those Go tests there is a
+  defect of the run, not the norm.
 - No secrets. The dev password `qwerty12` exists only in the local/test compose
   files.
 

@@ -15,7 +15,12 @@ CGO_ENABLED = "0"
 GOFLAGS = "-buildvcs=false"
 
 # Go tests without a database: DB-backed tests skip without TEST_DATABASE_URL.
+# python3 is installed on top of the Go image: the Go tests that execute the
+# served monitor runner skip without it.
 [kind.unit]
+image_setup = [
+  "apt-get update && apt-get install -y --no-install-recommends python3 && rm -rf /var/lib/apt/lists/*",
+]
 [kind.unit.options]
 flags = ["-count=1"]
 
@@ -23,6 +28,9 @@ flags = ["-count=1"]
 # One shared database: packages must run serially (-p 1).
 [kind.integ]
 memory_mib = 3072
+image_setup = [
+  "apt-get update && apt-get install -y --no-install-recommends python3 && rm -rf /var/lib/apt/lists/*",
+]
 timeout_seconds = 3600
 test_timeout_seconds = 900
 prepare = [
@@ -90,3 +98,25 @@ POSTGRES_PASSWORD = "test"
 POSTGRES_DB = "skein"
 PGDATA = "/var/lib/postgresql/data/pgdata"
 POSTGRES_INITDB_ARGS = "--locale-provider=builtin --builtin-locale=C.UTF-8 --lc-collate=C.UTF-8 --lc-ctype=C.UTF-8"
+
+# Python tests of the monitor runner and loader (stdlib unittest): every
+# *_test.py under src runs on its own with `python3 <file> -v`. Narrowed run:
+# a path relative to src.
+[kind.pyunit]
+adapter = "python"
+image = "python:3.13.18-slim-bookworm"
+[kind.pyunit.options]
+mode = "unittest-files"
+start = "."
+pattern = "*_test.py"
+
+# Mutation testing of the Python runner and loader with mutmut; its
+# configuration (what is mutated, which tests run) is the [mutmut] section of
+# src/setup.cfg. Targets are mutant name patterns, e.g.
+# "internal.handler.assets.monitor_runner.x_build_url*"; mutmut has no diff mode.
+[kind.pymutation]
+adapter = "mutmut"
+image = "python:3.13.18-slim-bookworm"
+timeout_seconds = 7200
+[kind.pymutation.options]
+install = "python3 -m pip install --user mutmut==3.8.1"
