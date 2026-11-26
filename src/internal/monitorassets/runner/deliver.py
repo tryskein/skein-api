@@ -172,7 +172,12 @@ class Guard(object):
         self.count_call()
         self.pipeline.check_addressee(self.channel, self.remaining())
         self.pipeline.wait_idle(self.channel, self.remaining())
-        # Right before the hand-over: a stop or a stale poll that came
+        # After the wait: the addressee it waited for, and the reservation
+        # of every event (a merge of the addressee's records may have taken
+        # one meanwhile), are checked again.
+        self.pipeline.check_addressee(self.channel, self.remaining())
+        self.attempt.confirm()
+        # Last, right before the hand-over: a stop or a stale poll that came
         # during the checks and the wait still wins.
         self.boundary()
         self.remaining()

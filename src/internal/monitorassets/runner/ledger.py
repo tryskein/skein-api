@@ -269,6 +269,15 @@ class Attempt(object):
         if self.first_call is None:
             self.first_call = now
 
+    def confirm(self):
+        """The attempt still holds the reservation of every event it carries;
+        AttemptLost when not (nothing is handed over)."""
+        def change(entry):
+            recs = [entry["events"].get(eid) for eid in self.events]
+            return all(rec and (rec.get("delivering") or {}).get("attempt") == self.key for rec in recs)
+        if not self.ledger._change(change):
+            raise AttemptLost()
+
     def finish(self, outcome):
         """Write the authoritative outcome of the attempt (step 5). Returns
         True when it starts a series of one session (degraded
