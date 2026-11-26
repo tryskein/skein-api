@@ -521,8 +521,12 @@ def save_preflight(token_file, doc):
 
 
 def runner_alive(token_file, env):
-    """Whether a runner of this token holds its one-runner lock. A lock that
-    cannot be taken for an OS error is config_invalid."""
+    """Whether a runner of this token holds its one-runner lock (P-5:
+    locks/<key>.lock in client mode). The preflight asks only while it holds
+    state.lock, and holds the runner lock for that instant only: a working
+    start takes the lock with take_runner_lock, which waits out that instant
+    instead of reading it as a live runner. A lock that cannot be taken for
+    an OS error is config_invalid."""
     try:
         lock = current_platform().acquire_runner_lock(token_file, 0, env)
     except LockBusy:
@@ -531,6 +535,21 @@ def runner_alive(token_file, env):
         raise ConfigInvalid(runner_lock_path(token_file, env), "the runner lock cannot be taken (%s)" % exc.reason)
     lock.release()
     return False
+
+
+def take_runner_lock(token_file, env):
+    """Take the one-runner lock for a working start (P-5, P-6). A busy lock
+    may be the instant a preflight holds it to see whether a runner is alive
+    (runner_alive, under state.lock): then wait for state.lock, which that
+    preflight releases after its check, and try once more. Returns the
+    RunnerLock; raises LockBusy when a live runner holds it, PlatformRefusal
+    for a lock that cannot be taken."""
+    try:
+        return current_platform().acquire_runner_lock(token_file, 0, env)
+    except LockBusy:
+        pass
+    with StateLock(token_file):
+        return current_platform().acquire_runner_lock(token_file, 0, env)
 
 
 def shell_quote(s):

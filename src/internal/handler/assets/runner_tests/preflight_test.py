@@ -19,6 +19,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 from unittest import mock
 
@@ -430,6 +431,37 @@ class PreflightLineTest(unittest.TestCase):
         self.run_preflight()
         with open(self.box.preflight_file()) as fh:
             self.assertIsNone(json.load(fh)["binding"])
+
+    def test_a_working_start_waits_out_the_preflight_check(self):
+        # The preflight holds state.lock and, for an instant inside it, the
+        # runner lock (runner_alive). A working start that meets the busy
+        # lock then waits for state.lock and takes the runner lock: no false
+        # already_running.
+        env = self.box.env()
+        held = threading.Event()
+        release = threading.Event()
+
+        def preflight_check():
+            with RUNNER.StateLock(self.box.token):
+                lock = RUNNER.PosixPlatform.acquire_runner_lock(self.box.token, 0, env)
+                held.set()
+                release.wait(10)
+                lock.release()
+
+        t = threading.Thread(target=preflight_check)
+        t.start()
+        self.addCleanup(t.join, 10)
+        self.assertTrue(held.wait(10))
+        threading.Timer(0.2, release.set).start()
+        lock = RUNNER.take_runner_lock(self.box.token, env)
+        lock.release()
+
+    def test_a_live_runner_keeps_the_working_start_out(self):
+        env = self.box.env()
+        live = RUNNER.PosixPlatform.acquire_runner_lock(self.box.token, 0, env)
+        self.addCleanup(live.release)
+        with self.assertRaises(RUNNER.LockBusy):
+            RUNNER.take_runner_lock(self.box.token, env)
 
     def test_directory_without_write_is_named(self):
         with self.subTest(directory="journal"):
