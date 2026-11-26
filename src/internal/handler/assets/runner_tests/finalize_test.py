@@ -328,6 +328,26 @@ class EndUnderLockTest(unittest.TestCase):
                 self.assertIn("Run the working command of preflight 3 again", call["stdin"])
                 self.assertNotIn("bootstrap", call["stdin"])
 
+    def test_a_receipt_call_keeps_within_the_idle_window(self):
+        # Review finding 23 of wave 7 (INV-8: the receipt goes within the
+        # budget, all calls within the idle window of the token).
+        world = World(self, [chan("A", "chan-a")])
+        world.prog("chan-a").respond([REFUSE])
+        mon = world.monitor(idle=1.5)
+        timeouts = []
+        inner = mon.sink.executor
+
+        class Recording(object):
+            secrets = inner.secrets
+
+            def call(self, spec, text, timeout):
+                timeouts.append(timeout)
+                return inner.call(spec, text, timeout)
+        mon.sink.executor = Recording()
+        mon.sink.receipt("receipt text")
+        self.assertEqual(len(timeouts), 1)
+        self.assertLessEqual(timeouts[0], 1.5)
+
     def test_a_failed_receipt_leaves_only_the_journal_line(self):
         self.world.prog("chan-a").respond([{"exit": 9}])
         self.end(self.r.Stop("stopped"), sink=self.mon.sink)

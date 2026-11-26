@@ -691,8 +691,12 @@ class DeliverySink(object):
                     return
                 while self.clock.now() < due:
                     self.clock.sleep(min(WAIT_STEP_SEC, due - self.clock.now()))
-            guard = _ReceiptGuard(self, channel, (channel.get("executor") or {}).get("timeoutSec")
-                                  or PROBE_TIMEOUT_SEC)
+            # Every call within what is left of the idle window (INV-8).
+            left = start + self.idle_window - self.clock.now()
+            if left <= 0:
+                return
+            guard = _ReceiptGuard(self, channel, min((channel.get("executor") or {}).get("timeoutSec")
+                                                     or PROBE_TIMEOUT_SEC, left))
             try:
                 outcome, _ = driver.send(text, guard)
             except (RefusedBeforeSend, PollStale):
