@@ -79,6 +79,9 @@ type mcpDeps struct {
 	// sk-579 — the token renewal window (cfg.MonitorTokenIdleTTL) quoted in
 	// the skein_get_monitor_script description.
 	monitorTokenIdleTTL time.Duration
+	// monitorRegistry is the registry the router was built with: the same
+	// document the served runner body carries (R-1, one copy).
+	monitorRegistry *monitorregistry.Registry
 	// runnerSHA256 is the digest of the runner body /agent/v1/monitor-script
 	// serves; the bootstrap carries it so the loader verifies the download.
 	runnerSHA256 string
@@ -270,9 +273,10 @@ func mcpRegisterToolsFn(d mcpDeps) func(*server.MCPServer) {
 		// sk-142.7 — agent task-monitor setup. One call auto-watches the
 		// issue (subtree-aware), mints a scoped short-lived skm_ token, and
 		// returns a bootstrap command (token in a private file, never in argv).
-		// The registry is the embedded one, the same document the startup
-		// path validated (buildServingRouter).
-		mcptools.RegisterGetMonitorScript(s, d.pool, d.notifStore, d.monitorCredsStore, monitorregistry.MustEmbedded(), d.agentPublicURL, d.runnerSHA256, d.loaderSHA256, d.monitorTokenIdleTTL)
+		// The registry is the one the router was built with, the document
+		// the startup path validated (buildServingRouter) and the served
+		// runner body carries.
+		mcptools.RegisterGetMonitorScript(s, d.pool, d.notifStore, d.monitorCredsStore, d.monitorRegistry, d.agentPublicURL, d.runnerSHA256, d.loaderSHA256, d.monitorTokenIdleTTL)
 
 		// sk-669 — the monitorStalled response layer (sk-579 US-5,
 		// mcptools.MonitorStalledMiddleware) is deliberately NOT registered:

@@ -1682,6 +1682,13 @@ func buildRouterWithRegistry(
 	if registryDoc == nil {
 		registryDoc = monitorregistry.Embedded()
 	}
+	// The MCP tool and the served runner body read this one document. A
+	// caller hands either the embedded document or one buildServingRouter
+	// validated, so a refusal here is a defect of the build.
+	monitorRegistry, err := monitorregistry.Load(registryDoc)
+	if err != nil {
+		panic(fmt.Sprintf("monitor registry: the document the router is built with is invalid: %v", err))
+	}
 	agentScriptHandler := handler.NewAgentScriptHandlerWithRegistry(
 		registryDoc,
 		runnerTimings.PollIntervalSec,
@@ -1726,6 +1733,7 @@ func buildRouterWithRegistry(
 		monitorCredsStore:   monitorStore,
 		agentPublicURL:      cfg.AgentPublicURL,
 		monitorTokenIdleTTL: cfg.MonitorTokenIdleTTL,
+		monitorRegistry:     monitorRegistry,
 		runnerSHA256:        agentScriptHandler.SHA256(),
 		loaderSHA256:        agentLoaderHandler.SHA256(),
 		// sk-674.18 T024 — the space of a new project and the admin agent
