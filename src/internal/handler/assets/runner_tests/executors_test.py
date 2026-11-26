@@ -218,6 +218,32 @@ class ArgvExecutorTest(unittest.TestCase):
             for f in call["files"].values():
                 self.assertNotIn(TOKEN, f["content"])
 
+    def test_a_text_that_holds_the_token_reaches_no_feed_with_it(self):
+        # Review finding C2 of wave 7: the class "the token nowhere" (#43)
+        # covers the text of the event too - a preview that quotes the
+        # token - replaced as the journal replaces it.
+        text = "see " + TOKEN + " here"
+        for argv, feed in ((["chan", "--", "{text}"], "arg"), (["chan"], "stdin"),
+                           (["chan", "{textFile}"], "file")):
+            with self.subTest(feed=feed):
+                self.call(argv, feed, text=text)
+        calls = self.prog.calls()
+        self.assertEqual(len(calls), 3)
+        self.assertEqual(calls[0]["argv"][-1], "see [redacted] here")
+        self.assertEqual(calls[1]["stdin"], "see [redacted] here")
+        (content,) = [f["content"] for f in calls[2]["files"].values()]
+        self.assertEqual(content, "see [redacted] here")
+
+    def test_an_argument_from_a_variable_that_holds_the_token_is_refused_before_the_call(self):
+        with self.assertRaises(RUNNER.ExecutorRefusal):
+            self.call(["chan", "--key", "{env:%s}" % SECRET_VAR], "stdin")
+        self.assertEqual(self.prog.calls(), [])
+
+    def test_a_literal_argument_with_the_token_is_refused_before_the_call(self):
+        with self.assertRaises(RUNNER.ExecutorRefusal):
+            self.call(["chan", "--key", TOKEN], "stdin")
+        self.assertEqual(self.prog.calls(), [])
+
     def test_a_call_past_its_timeout_is_killed(self):
         self.prog.respond([{"hang": True}])
         started = time.monotonic()

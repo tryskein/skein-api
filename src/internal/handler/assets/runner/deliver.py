@@ -329,9 +329,11 @@ class DeliverySink(object):
         command = check.get("command")
         if command:
             try:
-                argv = expand_argv(command.get("argv") or [], self.env)
-                result = run_program(argv, child_env(self.env, self.executor.secrets), None,
-                                     (channel.get("executor") or {}).get("timeoutSec") or PROBE_TIMEOUT_SEC)
+                env = child_env(self.env, self.executor.secrets)
+                argv = expand_argv(command.get("argv") or [], env)
+                result = run_program(argv, env, None,
+                                     (channel.get("executor") or {}).get("timeoutSec") or PROBE_TIMEOUT_SEC,
+                                     self.executor.secrets)
             except ExecutorRefusal as exc:
                 raise RefusedBeforeSend(exc.reason)
             verdict = None
@@ -368,9 +370,10 @@ class DeliverySink(object):
         if idle.get("type") != "argv":
             return
         try:
-            argv = expand_argv(idle.get("argv") or [], self.env)
-            result = run_program(argv, child_env(self.env, self.executor.secrets), None,
-                                 min(idle.get("timeoutSec") or timeout, timeout))
+            env = child_env(self.env, self.executor.secrets)
+            argv = expand_argv(idle.get("argv") or [], env)
+            result = run_program(argv, env, None, min(idle.get("timeoutSec") or timeout, timeout),
+                                 self.executor.secrets)
         except ExecutorRefusal as exc:
             raise RefusedBeforeSend(exc.reason)
         if result.timed_out or result.exit_code != 0:

@@ -14,9 +14,14 @@
 # read as an option (it starts with "-") is passed only behind a "--"
 # element, otherwise the call is refused before it runs.
 #
-# The program gets the environment of the agent process (the runner's own,
-# inherited from the agent's shell) without any variable whose value holds a
-# secret of the monitor (the token, INV-6). A call is bounded by its timeout,
+# No secret of the monitor (the token, INV-6) goes to a channel by any way:
+# the program gets the environment of the agent process (the runner's own,
+# inherited from the agent's shell) without any variable whose name or
+# value holds one; {env:NAME} is taken from that environment, so a variable
+# holding a secret is not there; the text of an event (stdin, the message
+# file, {text}) has every secret replaced as the journal replaces it; and an
+# argument or stdin that still carries one is refused before the program
+# runs. A call is bounded by its timeout,
 # which the caller keeps within the idle window of the token; on timeout the
 # program and the processes of its session are killed. On POSIX one loop
 # waits on the program's pipes without blocking reads, so neither a program
@@ -287,11 +292,20 @@ def _kill(proc):
         pass
 
 
-def run_program(argv, env, stdin_data, timeout_sec):
+def redact_text(text, secrets):
+    """text with every secret replaced, as the journal does."""
+    return _redact(text, [s for s in secrets if s])
+
+
+def run_program(argv, env, stdin_data, timeout_sec, secrets=()):
     """Run argv (no shell) with env, stdin_data (bytes, or None for no
     stdin) and a timeout. Returns a CallResult; raises ExecutorRefusal when
-    the program cannot be started. Returns within timeout_sec plus
-    _READER_GRACE_SEC on POSIX whatever the program's descendants do."""
+    the program cannot be started, or when an argument or stdin carries one
+    of secrets (env is the caller's child_env). Returns within timeout_sec
+    plus _READER_GRACE_SEC on POSIX whatever the program's descendants do."""
+    for s in secrets:
+        if s and (any(s in a for a in argv) or (stdin_data is not None and s.encode("utf-8") in stdin_data)):
+            raise ExecutorRefusal("the call would carry a secret of the monitor")
     if os.name == "posix":
         return _run_posix(argv, env, stdin_data, timeout_sec)
     return _run_threads(argv, env, stdin_data, timeout_sec)
@@ -436,20 +450,22 @@ class ArgvExecutor(object):
         CallResult; raises ExecutorRefusal when nothing was handed over."""
         feed = executor.get("feed")
         text_file = None
+        env = child_env(self.env, self.secrets)
+        text = redact_text(text, self.secrets)
         try:
             if feed == "file":
                 text_file = write_message_file(self.token_file, text)
-                argv = expand_argv(executor["argv"], self.env, text_file=text_file)
+                argv = expand_argv(executor["argv"], env, text_file=text_file)
                 stdin_data = None
             elif feed == "arg":
-                argv = expand_argv(executor["argv"], self.env, text=text)
+                argv = expand_argv(executor["argv"], env, text=text)
                 stdin_data = None
             elif feed == "stdin":
-                argv = expand_argv(executor["argv"], self.env)
+                argv = expand_argv(executor["argv"], env)
                 stdin_data = text.encode("utf-8")
             else:
                 raise ExecutorRefusal("feed %r is not one of stdin, file, arg" % feed)
-            return run_program(argv, child_env(self.env, self.secrets), stdin_data, timeout_sec)
+            return run_program(argv, env, stdin_data, timeout_sec, self.secrets)
         finally:
             if text_file is not None:
                 remove_quietly(text_file)
@@ -479,8 +495,9 @@ class SystemProbeRunner(ProbeRunner):
 
     def _argv(self, channel, probe, env):
         timeout = min((channel.get("executor") or {}).get("timeoutSec") or PROBE_TIMEOUT_SEC, PROBE_TIMEOUT_SEC)
-        argv = expand_argv(probe.get("argv") or [], env)
-        result = run_program(argv, child_env(env, self.secrets), None, timeout)
+        clean = child_env(env, self.secrets)
+        argv = expand_argv(probe.get("argv") or [], clean)
+        result = run_program(argv, clean, None, timeout, self.secrets)
         if result.timed_out:
             raise ProbeError("timed out after %d s" % timeout)
         for row in probe.get("results") or []:
