@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"net/http"
@@ -12,6 +13,7 @@ import (
 	"os"
 	osexec "os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -566,5 +568,42 @@ func TestAgentScriptHandler_SHA256CoversEverySubstitution(t *testing.T) {
 			t.Fatalf("handlers %+v and %+v serve bodies with the same digest", other, v)
 		}
 		seen[served] = v
+	}
+}
+
+// TestAgentScript_ServedBodyCarriesWindowAndRegistry — П-2, Р-1: the served
+// body carries the token renewal window as whole seconds and the registry
+// as base64 of registry.json. The references are independent of the
+// handler: the window in seconds computed here, the registry read from the
+// file on disk. Two handlers that differ only in the window serve bodies
+// with different digests.
+func TestAgentScript_ServedBodyCarriesWindowAndRegistry(t *testing.T) {
+	serve := func(window time.Duration) (string, string) {
+		h := NewAgentScriptHandler(2, 10*time.Second, 15*time.Second, 3*time.Minute, window)
+		rec := httptest.NewRecorder()
+		h.Script(rec, httptest.NewRequest(http.MethodGet, "/agent/v1/monitor-script", nil))
+		return rec.Body.String(), h.SHA256()
+	}
+	body, sum4h := serve(4 * time.Hour)
+	if !strings.Contains(body, `TOKEN_IDLE_SEC = int("14400")`) {
+		t.Fatalf("served body does not carry the 4h window as 14400 seconds")
+	}
+	m := regexp.MustCompile(`REGISTRY_B64 = "([A-Za-z0-9+/=]*)"`).FindStringSubmatch(body)
+	if m == nil {
+		t.Fatal("served body carries no REGISTRY_B64 literal")
+	}
+	got, err := base64.StdEncoding.DecodeString(m[1])
+	if err != nil {
+		t.Fatalf("REGISTRY_B64 is not base64: %v", err)
+	}
+	want, err := os.ReadFile(filepath.Join("..", "monitorregistry", "registry.json"))
+	if err != nil {
+		t.Fatalf("read registry.json: %v", err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("REGISTRY_B64 decodes to %d bytes that differ from registry.json (%d bytes)", len(got), len(want))
+	}
+	if _, sum5h := serve(5 * time.Hour); sum5h == sum4h {
+		t.Fatal("handlers that differ only in the window serve the same digest")
 	}
 }
