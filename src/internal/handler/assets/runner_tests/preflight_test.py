@@ -294,7 +294,7 @@ class PreflightLineTest(unittest.TestCase):
         self.assertEqual(self.run_preflight()["preflightId"], 1)
         line = self.run_preflight()
         self.assertEqual(line["preflightId"], 2)
-        self.assertTrue(line["command"].startswith("SKEIN_MONITOR_PREFLIGHT=2 "))
+        self.assertTrue(line["command"].startswith("SKEIN_MONITOR_MODE=run SKEIN_MONITOR_PREFLIGHT=2 "))
         with open(self.box.preflight_file()) as fh:
             saved = json.load(fh)
         self.assertEqual(saved["preflightId"], 2)
