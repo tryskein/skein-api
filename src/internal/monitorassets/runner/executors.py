@@ -398,9 +398,9 @@ def _run_posix(argv, env, stdin_data, timeout_sec):
         _kill_group(group)
         raise
     finally:
-        if reading:
-            # A descendant still holds a pipe after the grace: its group goes.
-            _kill_group(group)
+        # Nothing of the call outlives it: the descendants of the program go
+        # with its group, whether or not they still hold its pipes.
+        _kill_group(group)
         for f in (proc.stdin, proc.stdout, proc.stderr):
             if f is not None:
                 try:
