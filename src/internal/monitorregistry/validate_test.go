@@ -320,3 +320,46 @@ func TestValidate_AcceptsEveryWindowsShell(t *testing.T) {
 		}
 	}
 }
+
+// TestValidate_Window — US-10 (the window model of a harness, row #42): a
+// whole window passes, a method without one passes, and a window given in
+// part (a field left out of the document) or with a field that is not
+// positive is refused with RuleInvalid naming that field.
+func TestValidate_Window(t *testing.T) {
+	whole := `{"lengthMs":200,"lines":50,"budget":30,"refillSec":20}`
+	withWindow := func(doc string) *Registry {
+		var w Window
+		if err := json.Unmarshal([]byte(doc), &w); err != nil {
+			t.Fatalf("decode the window %s: %v", doc, err)
+		}
+		r := validRegistry()
+		r.Agents[0].Methods[0].Limits = &Limits{Window: &w}
+		return r
+	}
+	if err := withWindow(whole).Validate(); err != nil {
+		t.Fatalf("a whole window was refused: %v", err)
+	}
+	r := validRegistry()
+	r.Agents[0].Methods[0].Limits = &Limits{Line: &Limit{Max: 400, Unit: UnitChars}}
+	if err := r.Validate(); err != nil {
+		t.Fatalf("limits without a window were refused: %v", err)
+	}
+	for _, tc := range []struct{ doc, field string }{
+		{`{"lengthMs":200,"lines":50,"budget":30}`, "refillSec"},
+		{`{"lines":50,"budget":30,"refillSec":20}`, "lengthMs"},
+		{`{"lengthMs":200,"lines":0,"budget":30,"refillSec":20}`, "lines"},
+		{`{"lengthMs":200,"lines":50,"budget":-1,"refillSec":20}`, "budget"},
+	} {
+		t.Run(tc.field, func(t *testing.T) {
+			err := withWindow(tc.doc).Validate()
+			if err == nil {
+				t.Fatalf("the window %s was accepted", tc.doc)
+			}
+			var verrs ValidationErrors
+			if !errors.As(err, &verrs) || len(verrs) != 1 || verrs[0].Rule != RuleInvalid ||
+				!strings.HasSuffix(verrs[0].Path, ".limits.window."+tc.field) {
+				t.Fatalf("the window %s: got %v, want one RuleInvalid at .limits.window.%s", tc.doc, err, tc.field)
+			}
+		})
+	}
+}

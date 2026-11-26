@@ -670,6 +670,9 @@ def preflight(token_file, env, registry, settings, detector=None, prober=None, p
                 "method": choice.method,
                 "channel": choice.channel,
                 "fallbacks": choice.fallbacks,
+                # The limits of the record's method the walk took: the
+                # working runner keeps to them and does not choose again.
+                "limits": (choice.record_method or {}).get("limits"),
                 # The first full monitor_started of this result repeats
                 # them (C1, INV-17): the working runner does not choose again.
                 "reason": choice.reason,

@@ -386,7 +386,9 @@ func TestMeasureToolResponses(t *testing.T) {
 //   - first_start_monitor_started, restart_monitor_started: the
 //     monitor_started lines of the working start by that command (the
 //     behavioural fixture): the first start by the result, then a restart
-//     by the same command after the detached runner was stopped (C1).
+//     by the same command after the detached runner was stopped (C1);
+//   - delivered: the stop line of an exit-on-event cycle that printed one
+//     event (a preflight of the same token with an exit-on-event record).
 func measureMonitorStart(m *respMeasurer, noClient, fixture string) {
 	t := m.t
 	t.Helper()
@@ -439,9 +441,10 @@ func measureMonitorStart(m *respMeasurer, noClient, fixture string) {
 		t.Fatalf("run the preflight and the working start: %v; stdout %q", err, out)
 	}
 	var lines struct {
-		Command string `json:"command"`
-		First   string `json:"first"`
-		Restart string `json:"restart"`
+		Command   string `json:"command"`
+		First     string `json:"first"`
+		Restart   string `json:"restart"`
+		Delivered string `json:"delivered"`
 	}
 	if err := json.Unmarshal(out, &lines); err != nil {
 		t.Fatalf("decode the lines of the start: %v; stdout %q", err, out)
@@ -449,6 +452,7 @@ func measureMonitorStart(m *respMeasurer, noClient, fixture string) {
 	m.part("skein_get_monitor_script.working_command", lines.Command)
 	m.part("skein_get_monitor_script.first_start_monitor_started", lines.First)
 	m.part("skein_get_monitor_script.restart_monitor_started", lines.Restart)
+	m.part("skein_get_monitor_script.delivered", lines.Delivered)
 }
 
 // measureWorkingCommandPy runs the runner's preflight (the body the server
@@ -457,10 +461,14 @@ func measureMonitorStart(m *respMeasurer, noClient, fixture string) {
 // MEASURE_PREFLIGHT, then starts the monitor twice by the `command` of its
 // line, as the loader would run the body in client mode, against a local
 // poll server that answers empty pages: the first start by the result, and
-// a restart after the detached runner was stopped by a signal. It prints
-// {"command", "first", "restart"}: the command and the two monitor_started
-// lines as printed. The state home is a directory of the measurement.
-const measureWorkingCommandPy = `import io, json, os, shlex, signal, sys, time
+// a restart after the detached runner was stopped by a signal. Then it runs a
+// preflight of the same token against a registry whose record of the
+// fixture client has only an exit-on-event method, and one working cycle
+// of its command against a page with one event. It prints {"command",
+// "first", "restart", "delivered"}: the command, the two monitor_started
+// lines and the last line of the cycle as printed. The state home is a
+// directory of the measurement.
+const measureWorkingCommandPy = `import base64, io, json, os, shlex, signal, sys, time
 sys.path.insert(0, os.getcwd())
 import harness
 R = harness.load_runner()
@@ -525,7 +533,37 @@ stop()
 srv.stop()
 if "journal" not in json.loads(first) or "journal" in json.loads(restart):
     sys.exit("the first start is not the full line or the restart is not the short one: %s / %s" % (first, restart))
-sys.stdout.write(json.dumps({"command": command, "first": first, "restart": restart}))
+
+# One exit-on-event cycle: the same token, a record with exit-on-event only.
+with open(harness.REGISTRY_JSON) as fh:
+    doc = json.load(fh)
+doc["agents"] = [{"id": env["SKEIN_CLIENT"], "about": "measurement", "source": "measurement",
+                  "process": {"executables": ["measure-agent"]},
+                  "methods": [{"kind": "exit-on-event", "conditions": {},
+                               "instruction": "Run command as a background task; run it again when it ends."}]}]
+exit_registry = R.load_registry(base64.b64encode(json.dumps(doc).encode()).decode())
+exit_settings = R.read_settings(env, exit_registry, mode="client")
+exit_command = R.preflight(env["SKEIN_TOKEN_FILE"], env, exit_registry, exit_settings)["command"]
+page = {"notifications": [{"id": 7, "type": "comment_added", "entity": {"type": "issue", "id": env["SKEIN_ISSUE"]},
+                           "actor": {"username": "measure"}, "commentId": "c-7", "bodyPreview": "measured event"}],
+        "cursor": {"ts": "2026-01-01T00:00:01Z", "id": 7}}
+srv = harness.ScriptedServer(lambda h, qs: h.send_json(200, page))
+for word in shlex.split(exit_command):
+    name, sep, value = word.partition("=")
+    if sep and name.startswith("SKEIN_"):
+        os.environ[name] = value
+os.environ["SKEIN_PUBLIC_URL"] = srv.url()
+out, real = io.StringIO(), sys.stdout
+sys.stdout = out
+try:
+    code = R.run_client()
+finally:
+    sys.stdout = real
+srv.stop()
+cycle = [l for l in out.getvalue().splitlines() if l]
+if code != 0 or not cycle or json.loads(cycle[-1]).get("reason") != "delivered":
+    sys.exit("the exit-on-event cycle did not end with delivered: code %r, %r" % (code, cycle))
+sys.stdout.write(json.dumps({"command": command, "first": first, "restart": restart, "delivered": cycle[-1]}))
 `
 
 // measureMonitorRealRegistry measures skein_get_monitor_script with `client`

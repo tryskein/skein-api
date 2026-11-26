@@ -31,6 +31,35 @@ def load_cursor(token_file):
     """The saved poll cursor of this token file, or None: no state, a state
     file that is not ours or others can read, a link, or one that does not
     parse as a state document. None means a live-start poll."""
+    doc = _load_state_doc(token_file)
+    if doc is None:
+        return None
+    cursor = doc.get("cursor")
+    if (isinstance(cursor, dict) and isinstance(cursor.get("ts"), str)
+            and isinstance(cursor.get("id"), int) and not isinstance(cursor.get("id"), bool)):
+        return {"ts": cursor["ts"], "id": cursor["id"]}
+    return None
+
+
+def load_printed(token_file, cursor):
+    """The notification ids already printed from the page polled at cursor
+    (an exit-on-event cycle that printed part of a page), or an empty list:
+    the next cycle polls the same page and skips them. Ids saved with
+    another cursor do not count."""
+    doc = _load_state_doc(token_file)
+    if doc is None or doc.get("cursor") != cursor:
+        return []
+    ids = doc.get("printed")
+    return list(ids) if isinstance(ids, list) else []
+
+
+def save_printed(token_file, cursor, ids):
+    """Keep the cursor and record the ids printed from its page. Raises
+    OSError or PlatformRefusal when it cannot."""
+    _save_state_doc(token_file, {"version": STATE_VERSION, "cursor": cursor, "printed": list(ids)})
+
+
+def _load_state_doc(token_file):
     path = state_file_path(token_file)
     try:
         if os.name == "posix":
@@ -46,18 +75,17 @@ def load_cursor(token_file):
         return None
     if not isinstance(doc, dict) or doc.get("version") != STATE_VERSION:
         return None
-    cursor = doc.get("cursor")
-    if (isinstance(cursor, dict) and isinstance(cursor.get("ts"), str)
-            and isinstance(cursor.get("id"), int) and not isinstance(cursor.get("id"), bool)):
-        return {"ts": cursor["ts"], "id": cursor["id"]}
-    return None
+    return doc
 
 
 def save_cursor(token_file, cursor):
     """Write the cursor (None: live-start next time) to the state file
     atomically. Raises OSError or PlatformRefusal when it cannot."""
-    data = json.dumps({"version": STATE_VERSION, "cursor": cursor},
-                      separators=(",", ":"), sort_keys=True).encode("utf-8")
+    _save_state_doc(token_file, {"version": STATE_VERSION, "cursor": cursor})
+
+
+def _save_state_doc(token_file, doc):
+    data = json.dumps(doc, separators=(",", ":"), sort_keys=True).encode("utf-8")
     path = state_file_path(token_file)
     if os.name == "posix":
         PosixPlatform.atomic_write(path, data, dir_check=_state_dir_ok)

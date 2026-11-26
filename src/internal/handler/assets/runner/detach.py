@@ -433,17 +433,22 @@ def run_client():
 
 def run_foreground(token_file, issue, env, settings):
     """stream and exit-on-event: the same lock order in this process, then
-    the poll loop on stdout. Returns the exit code."""
+    the poll loop on stdout within the limits of the record's method (the
+    modes_stream part). Returns the exit code."""
     global _stopping
     held = WorkingStart()
     executor = Executor()
     outcome = None
+    output = None
     try:
         try:
             held.begin(token_file, env, settings, issue)
-            emit(held.line)
-            work(executor, os.environ.get("SKEIN_PUBLIC_URL", ""), held.token, issue,
-                 os.environ.get("SKEIN_EXCLUDE_SESSION", ""), token_file, sink=StdoutSink(issue, announce=False))
+            limits = StreamLimits(held.doc.get("limits"))
+            journal = Journal(token_file, issue, secrets=[held.token], env=env)
+            output = StreamOutput(limits, journal, held.doc.get("method"), held.doc.get("journal"))
+            output.lifecycle(held.line)
+            run_stream_loop(executor, os.environ.get("SKEIN_PUBLIC_URL", ""), held.token, issue,
+                            os.environ.get("SKEIN_EXCLUDE_SESSION", ""), token_file, held.doc, output)
         except ConfigInvalid as exc:
             raise Stop("config_invalid", detail="%s (%s)" % (exc.variable, exc.detail))
     except Stop as stop:
@@ -457,6 +462,6 @@ def run_foreground(token_file, issue, env, settings):
     finally:
         executor.stop()
     try:
-        return finish(outcome, issue, token_file)
+        return finish(outcome, issue, token_file, write=output.stop_line if output is not None else None)
     finally:
         held.release()

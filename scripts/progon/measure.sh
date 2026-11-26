@@ -27,7 +27,9 @@
 #                registry and the general record), first_start_monitor_started
 #                and restart_monitor_started (the monitor_started lines of
 #                the first start by a preflight result and of a restart by
-#                the same working command, on the behavioural fixture)
+#                the same working command, on the behavioural fixture),
+#                delivered (the stop line of an exit-on-event cycle on that
+#                fixture)
 # Rows of SC-009 and SC-012 their owner tasks have not filled yet are listed
 # as skipped TAP points "awaiting <task>" (see `pending` below): the run
 # names them, and a green run does not read as covering them. A task that
@@ -53,7 +55,8 @@ rows="$(printf '%s\n' "$resp" | grep -E '^MEASURE_(RESP|PART) ' || true)"
 # Every named point of SC-009 and SC-012 must be a row of its own.
 for point in RESP:no_client RESP:client_general_posix RESP:client_fixture3_posix \
 	RESP:client_general_real_posix PART:starter PART:prepare_ready PART:working_command \
-	PART:client_posix_max PART:first_start_monitor_started PART:restart_monitor_started; do
+	PART:client_posix_max PART:first_start_monitor_started PART:restart_monitor_started \
+	PART:delivered; do
 	kind="MEASURE_${point%%:*}"
 	label="$tool.${point#*:}"
 	if ! printf '%s\n' "$rows" | awk -v k="$kind" -v l="$label" '$1 == k && $NF == l { found = 1 } END { exit found ? 0 : 1 }'; then
@@ -66,10 +69,9 @@ done
 # Named rows not measured yet, with the task that fills each:
 #   windows_<shell>_delta_max: the largest windows - posix growth of one
 #     record's response with client, over every record the shell applies
-#     to and the general record (SC-009);
-#   delivered: the line of the behavioural fixture (SC-012).
+#     to and the general record (SC-009).
 pending="PART:windows_gitbash_delta_max:T031 PART:windows_pwsh_delta_max:T031
-PART:windows_powershell_delta_max:T031 PART:delivered:T016"
+PART:windows_powershell_delta_max:T031"
 skipped=""
 for point in $pending; do
 	kind="MEASURE_${point%%:*}"

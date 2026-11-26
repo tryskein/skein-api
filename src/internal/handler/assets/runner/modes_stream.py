@@ -1,0 +1,360 @@
+# --- stream and exit-on-event with client (US-2, US-3, US-10) -----------------
+# The working runner of a stream or exit-on-event result prints on its own
+# stdout, which the agent's tool reads. The limits are those of the record's
+# method the preflight took (preflight.json "limits"): a line limit, a batch
+# limit, a rate (a burst of batches, then one per interval) and a window
+# model of the tool.
+#
+#   - Every line keeps to the line limit, service lines included (monitor_
+#     started, degraded, recovered, a stop): too long, it is shortened by
+#     text.lifecycle_line ("see journal", then event and reason only). An
+#     event whose minimal form does not fit is replaced by a stand-in line
+#     with its notification id that says to read the journal; when even that
+#     does not fit, the event is only in the journal. Both are the outcome
+#     "unfit", and the cursor passes the event.
+#   - A batch is one write of whole lines within the batch limit and the
+#     window's line limit; service lines count in both. Events that did not
+#     go into a batch go into the next one: the cursor of a page is saved
+#     only after every event of the page has an outcome.
+#   - The rate is a bucket of `burst` batches refilled by one every
+#     `intervalSec`; the window budget is a bucket of `budget` windows
+#     refilled by one every `refillSec`. A batch waits for both, and for the
+#     window of the previous batch to close (its length plus a margin), so
+#     two batches never share a window.
+#   - stream with client writes every printed event to the journal too.
+#   - exit-on-event: a batch, flushed; then the cursor (or, for a page only
+#     partly printed, the ids printed from it); then exactly one stop line,
+#     delivered (paused, exit 0, token kept), whose action names the working
+#     command of the preflight result by its number without repeating it.
+#     A runner killed between the output and the cursor repeats those events
+#     in the next cycle: a repeat, not a loss (US-3). root_closed comes
+#     instead of delivered only when the whole last page is out (INV-11).
+
+import json
+import sys
+import time
+
+# The margin after a window closes before the next batch may start.
+WINDOW_MARGIN_SEC = 0.1
+# Statuses of an event in the journal of a stream or exit-on-event monitor.
+STATUS_PRINTED = "printed"
+STATUS_UNFIT = "unfit"
+# Line limit units of the registry and their measure in text.py.
+_LINE_UNITS = {"chars": UNIT_CHARS, "bytes": UNIT_BYTES}
+# Batch limit units counted in lines.
+_COUNT_UNITS = ("lines", "events")
+
+
+class StreamLimits(object):
+    """The limits of the method the preflight took (registry form, checked
+    by the server's validator); every limit is optional."""
+
+    def __init__(self, limits=None):
+        limits = limits if isinstance(limits, dict) else {}
+        line = limits.get("line") if isinstance(limits.get("line"), dict) else {}
+        self.line_max = line.get("max") if line.get("unit") in _LINE_UNITS else None
+        self.line_unit = _LINE_UNITS.get(line.get("unit"), UNIT_CHARS)
+        batch = limits.get("batch") if isinstance(limits.get("batch"), dict) else {}
+        self.batch_max = batch.get("max")
+        self.batch_unit = batch.get("unit")
+        rate = limits.get("rate") if isinstance(limits.get("rate"), dict) else {}
+        self.burst = rate.get("burst")
+        self.interval_sec = rate.get("intervalSec")
+        window = limits.get("window") if isinstance(limits.get("window"), dict) else {}
+        self.window_sec = window["lengthMs"] / 1000.0 if window else None
+        self.window_lines = window.get("lines") if window else None
+        self.window_budget = window.get("budget") if window else None
+        self.window_refill_sec = window.get("refillSec") if window else None
+
+    def lines_cap(self):
+        """The most lines one batch may hold, or None."""
+        caps = [c for c in (self.window_lines,
+                            self.batch_max if self.batch_unit in _COUNT_UNITS else None) if c]
+        return min(caps) if caps else None
+
+    def batch_size(self, texts):
+        """The size of the lines as one batch in the unit of the batch limit
+        (a line and its newline in chars or bytes)."""
+        if self.batch_unit in _COUNT_UNITS or self.batch_unit is None:
+            return len(texts)
+        unit = _LINE_UNITS.get(self.batch_unit, UNIT_CHARS)
+        return sum(measure(t, unit) + 1 for t in texts)
+
+    def fits(self, texts):
+        cap = self.lines_cap()
+        if cap is not None and len(texts) > cap:
+            return False
+        if self.batch_max and self.batch_unit not in _COUNT_UNITS and self.batch_size(texts) > self.batch_max:
+            return False
+        return True
+
+
+class _Bucket(object):
+    """capacity tokens, one more every refill_sec, at most capacity."""
+
+    def __init__(self, capacity, refill_sec, now):
+        self.capacity = float(capacity)
+        self.refill_sec = float(refill_sec)
+        self.tokens = float(capacity)
+        self.stamp = now
+
+    def wait(self, now):
+        """Seconds until a token is there."""
+        self.tokens = min(self.capacity, self.tokens + (now - self.stamp) / self.refill_sec)
+        self.stamp = now
+        return 0.0 if self.tokens >= 1.0 else (1.0 - self.tokens) * self.refill_sec
+
+    def take(self):
+        self.tokens -= 1.0
+
+
+class Pacer(object):
+    """When the next batch may be written: a rate token, a window of the
+    budget, and the previous window closed. clock and sleep are the
+    boundary a test drives with fake time."""
+
+    def __init__(self, limits, clock=None, sleep=None):
+        self.clock = clock or time.monotonic
+        self.sleep = sleep or time.sleep
+        now = self.clock()
+        self.buckets = []
+        if limits.burst and limits.interval_sec:
+            self.buckets.append(_Bucket(limits.burst, limits.interval_sec, now))
+        if limits.window_sec:
+            self.buckets.append(_Bucket(limits.window_budget, limits.window_refill_sec, now))
+        self.window_sec = limits.window_sec
+        self.closed_at = None
+
+    def wait_turn(self):
+        """Wait until a batch may be written and take its turn."""
+        while True:
+            now = self.clock()
+            waits = [b.wait(now) for b in self.buckets]
+            if self.closed_at is not None:
+                waits.append(self.closed_at - now)
+            longest = max(waits) if waits else 0.0
+            if longest <= 0:
+                break
+            self.sleep(longest)
+        for b in self.buckets:
+            b.take()
+        if self.window_sec:
+            # The batch is written now, in one write: its window closes after
+            # the window length; the next batch waits a margin more.
+            self.closed_at = self.clock() + self.window_sec + WINDOW_MARGIN_SEC
+
+
+class StreamOutput(object):
+    """The stdout of a stream or exit-on-event monitor within its limits."""
+
+    def __init__(self, limits, journal, method, journal_path, out=None, pacer=None):
+        self.limits = limits
+        self.journal = journal
+        self.method = method
+        self.journal_path = journal_path
+        self.out = out
+        self.pacer = pacer or Pacer(limits)
+        # A line reserved in the batch just written (the stop line of an
+        # exit-on-event cycle): it is written without a turn of its own.
+        self.reserved = False
+        self._journal_failed = False
+
+    def _write(self, texts):
+        out = self.out or sys.stdout
+        out.write("".join(t + "\n" for t in texts))
+        out.flush()
+
+    def batch(self, texts, reserve=False):
+        """Write texts as one batch; reserve keeps a line of it for the stop
+        line that follows."""
+        self.pacer.wait_turn()
+        self._write(texts)
+        self.reserved = reserve
+
+    def line(self, obj):
+        """A service line within the line limit, or None when not even its
+        event and reason fit."""
+        return lifecycle_line(obj, self.limits.line_max, self.limits.line_unit)
+
+    def lifecycle(self, obj):
+        """A service line: to the journal, and to stdout as a batch of its
+        own (or in the reserved place)."""
+        self._journal_lifecycle(obj)
+        text = self.line(obj)
+        if text is None:
+            return
+        if self.reserved:
+            self.reserved = False
+            self._write([text])
+        else:
+            self.batch([text])
+
+    def event_text(self, n):
+        """(text, status) of an event: its line, or the stand-in of an event
+        that does not fit (status unfit), or (None, unfit): journal only."""
+        text = notification_line(n, self.limits.line_max, self.limits.line_unit)
+        if text is not None and self.limits.fits([text]):
+            return text, STATUS_PRINTED
+        nid = n.get("id") if isinstance(n, dict) else None
+        stub = unfit_stub_line(nid, self.journal_path, self.limits.line_max, self.limits.line_unit)
+        if stub is not None and self.limits.fits([stub]):
+            return stub, STATUS_UNFIT
+        return None, STATUS_UNFIT
+
+    def take(self, texts, reserve_text=None):
+        """How many of texts, from the start, form one batch (with
+        reserve_text after them, when given); at least one when the first
+        fits alone."""
+        tail = [reserve_text] if reserve_text is not None else []
+        k = 0
+        while k < len(texts) and self.limits.fits(texts[:k + 1] + tail):
+            k += 1
+        return k
+
+    def record(self, n, status):
+        """The outcome of an event in the journal. A journal that cannot be
+        written does not stop the stdout delivery: said once on stderr."""
+        try:
+            self.journal.delivery(n, status, method=self.method, channel=CHANNEL_STDOUT)
+        except JournalUnavailable as exc:
+            self._journal_down(exc)
+
+    def _journal_lifecycle(self, obj):
+        fields = dict(obj)
+        event = fields.pop("event", "")
+        try:
+            self.journal.lifecycle(event, **fields)
+        except JournalUnavailable as exc:
+            self._journal_down(exc)
+
+    def _journal_down(self, exc):
+        if not self._journal_failed:
+            log_stderr("monitor runner: the journal cannot be written (%s)" % exc.reason)
+        self._journal_failed = True
+
+    def stop_line(self, line):
+        """finish() writes the stop line through here."""
+        self.lifecycle(line)
+
+
+def print_events(output, events, exit_on_event, delivered):
+    """Print the events (each with its text from output.event_text) in
+    batches. exit_on_event prints one batch, with room for the delivered
+    stop line, and leaves the rest. Returns the events that got an outcome
+    (printed or unfit), in order."""
+    done = []
+    pending = []
+    for n in events:
+        text, status = output.event_text(n)
+        if text is None:
+            # Only the journal: the outcome is unfit, the cursor passes it.
+            output.record(n, STATUS_UNFIT)
+            done.append(n)
+            continue
+        pending.append((n, text, status))
+    reserve = output.line(delivered) if exit_on_event else None
+    while pending:
+        texts = [t for _, t, _ in pending]
+        k = output.take(texts, reserve)
+        with_reserve = exit_on_event and k > 0
+        if k == 0:
+            # Not even one event beside the stop line: the first events go
+            # in a batch of their own (each fits alone), the stop line in
+            # the next one.
+            k = max(output.take(texts), 1)
+        chunk, pending = pending[:k], pending[k:]
+        output.batch([t for _, t, _ in chunk], reserve=with_reserve)
+        for n, _, status in chunk:
+            output.record(n, status)
+            done.append(n)
+        if exit_on_event:
+            break
+    return done
+
+
+def run_stream_loop(executor, base, token, issue, exclude_session, token_file, doc, output):
+    """The poll loop of a stream or exit-on-event monitor. Never returns: it
+    ends by raising Stop (delivered ends each exit-on-event cycle)."""
+    exit_on_event = doc.get("method") == METHOD_EXIT_ON_EVENT
+    delivered = {"event": STOPS["delivered"][0], "reason": "delivered",
+                 "action": stop_action("delivered", issue, doc["preflightId"])}
+    cursor = load_cursor(token_file)
+    seen = set()
+    backoff = float(POLL_INTERVAL_SEC)
+    series_started = None
+    series_degraded = False
+    while True:
+        status, payload, retry_after = poll_once(executor, base, token, cursor, exclude_session)
+        if status == 200 and isinstance(payload, dict) and isinstance(payload.get("notifications") or [], list):
+            if series_degraded:
+                output.lifecycle({"event": "recovered", "issue": issue,
+                                  "failedForSec": int(time.monotonic() - series_started)})
+            series_started = None
+            series_degraded = False
+            printed_before = set(load_printed(token_file, cursor)) if exit_on_event else set()
+            events = [n for n in payload.get("notifications") or []
+                      if not isinstance(n, dict) or (n.get("id") not in seen and n.get("id") not in printed_before)]
+            done = print_events(output, events, exit_on_event, delivered)
+            for n in done:
+                if isinstance(n, dict) and n.get("id") is not None:
+                    seen.add(n.get("id"))
+            complete = len(done) == len(events)
+            nxt = payload.get("cursor") if isinstance(payload.get("cursor"), dict) else cursor
+            if complete:
+                if payload.get("rootClosed") is True:
+                    raise Stop("root_closed", delete_token=True)
+                _save_state(save_cursor, token_file, nxt)
+                if exit_on_event and events:
+                    raise Stop("delivered", detail=doc["preflightId"])
+                cursor = nxt
+                backoff = float(POLL_INTERVAL_SEC) if events else min(backoff + POLL_INTERVAL_SEC,
+                                                                      float(BACKOFF_CEILING_SEC))
+                time.sleep(max(jitter(backoff), float(POLL_INTERVAL_SEC)))
+                continue
+            if exit_on_event:
+                # The rest of the page waits for the next cycle, which polls
+                # the same page and skips what was printed.
+                ids = sorted(printed_before | set(n.get("id") for n in done
+                                                  if isinstance(n, dict) and n.get("id") is not None))
+                _save_state(save_printed, token_file, cursor, ids)
+                raise Stop("delivered", detail=doc["preflightId"])
+            continue
+        if status == 401:
+            raise Stop("token_expired", status=401, delete_token=True)
+        if status == 403:
+            raise Stop("visibility_lost", status=403, delete_token=True)
+        if status == 400 and cursor is not None:
+            cursor = None
+            _save_state(save_cursor, token_file, None)
+            output.lifecycle({"event": "degraded", "cause": "cursor_reset", "issue": issue,
+                              "action": "The server rejected this monitor's poll cursor, so the monitor "
+                                        "restarted from now: notifications since its last successful poll "
+                                        "may have been missed — check issue %s with skein_show. "
+                                        "Do not restart anything; the monitor keeps running." % issue})
+            time.sleep(jitter(float(POLL_INTERVAL_SEC)))
+            continue
+        now = time.monotonic()
+        if series_started is None:
+            series_started = now
+        if not series_degraded and now - series_started > STALL_THRESHOLD_SEC:
+            series_degraded = True
+            output.lifecycle({"event": "degraded", "cause": "poll_failing", "issue": issue,
+                              "failingForSec": int(now - series_started), "lastStatus": status,
+                              "action": "Polls for issue %s have been failing for a while; the monitor "
+                                        "keeps retrying on its own, so do not restart it. If this does not "
+                                        "clear, check that the Skein server is reachable." % issue})
+        if status == 429:
+            wait = retry_after_seconds(retry_after, BACKOFF_CEILING_SEC)
+            time.sleep(jitter(min(max(float(wait), float(POLL_INTERVAL_SEC)), float(BACKOFF_CEILING_SEC))))
+            continue
+        backoff = failure_backoff(backoff)
+        time.sleep(jitter(backoff))
+
+
+def _save_state(save, token_file, *args):
+    """A state that cannot be written costs the resume, not the run (as in
+    the legacy loop): said on stderr."""
+    try:
+        save(token_file, *args)
+    except (OSError, PlatformRefusal) as exc:
+        log_stderr("monitor runner: cannot save the monitor state (%s)" % exc)

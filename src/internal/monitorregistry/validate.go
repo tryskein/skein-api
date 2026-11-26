@@ -305,6 +305,16 @@ func (v *validator) limits(path string, l *Limits) {
 	if l.Rate != nil && (l.Rate.Burst <= 0 || l.Rate.IntervalSec <= 0) {
 		v.add(RuleInvalid, path+".rate", "burst and interval must be positive")
 	}
+	// A window is whole or absent: a field left out decodes as 0 and is
+	// refused like a non-positive one.
+	if w := l.Window; w != nil {
+		for name, value := range map[string]int{"lengthMs": w.LengthMs, "lines": w.Lines,
+			"budget": w.Budget, "refillSec": w.RefillSec} {
+			if value <= 0 {
+				v.add(RuleInvalid, path+".window."+name, "window %s %d is not positive", name, value)
+			}
+		}
+	}
 }
 
 func (v *validator) channel(path string, c *Channel) {

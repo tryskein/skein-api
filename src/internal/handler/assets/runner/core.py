@@ -536,18 +536,15 @@ def failure_backoff(backoff):
 
 
 class StdoutSink(object):
-    """Where the lines of a monitor go: stdout, one JSON line each. announce
-    prints the legacy monitor_started line when the loop begins; a client
-    start prints its own monitor_started before the loop."""
+    """Where the lines of a legacy monitor go: stdout, one JSON line each,
+    beginning with its monitor_started line."""
 
-    def __init__(self, issue, announce=True):
+    def __init__(self, issue):
         self.issue = issue
-        self.announce = announce
 
     def started(self):
-        if self.announce:
-            emit({"event": "monitor_started", "issue": self.issue,
-                  "pollIntervalSec": POLL_INTERVAL_SEC})
+        emit({"event": "monitor_started", "issue": self.issue,
+              "pollIntervalSec": POLL_INTERVAL_SEC})
 
     def lifecycle(self, line):
         emit(line)
@@ -770,8 +767,10 @@ def run_preflight():
     return finish(outcome, issue, token_file)
 
 
-def finish(outcome, issue, token_file):
-    """Apply the token-file fate of the stop, print its line, return its code."""
+def finish(outcome, issue, token_file, write=None):
+    """Apply the token-file fate of the stop, print its line (through write,
+    when given: a stream monitor keeps it within its limits), return its
+    code."""
     event, code = STOPS[outcome.reason]
     if outcome.delete_token and token_file:
         remove_token_file(token_file)
@@ -779,7 +778,7 @@ def finish(outcome, issue, token_file):
             "action": stop_action(outcome.reason, issue, outcome.detail)}
     if outcome.status is not None:
         line["status"] = outcome.status
-    emit(line)
+    (write or emit)(line)
     return code
 
 

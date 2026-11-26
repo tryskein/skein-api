@@ -206,6 +206,10 @@ type Limits struct {
 	Batch *Limit `json:"batch,omitempty"`
 	// Rate limits how often batches may be emitted.
 	Rate *Rate `json:"rate,omitempty"`
+	// Window is the output window of the agent's tool, when it reads the
+	// runner's stdout in windows (a notifier that matches lines per time
+	// window); absent when the tool has none.
+	Window *Window `json:"window,omitempty"`
 }
 
 // Limit is an upper bound in a unit.
@@ -218,6 +222,21 @@ type Limit struct {
 type Rate struct {
 	Burst       int `json:"burst"`
 	IntervalSec int `json:"intervalSec"`
+}
+
+// Window is the window model of a tool that reads stdout in time windows:
+// lines that arrive within one window of LengthMs are matched together, at
+// most Lines of them (the rest are dropped by the tool), and one background
+// task of the tool has a budget of Budget windows that grows by one every
+// RefillSec seconds. The runner puts a whole batch, its service lines
+// included, into one window and starts the next batch only after that
+// window has closed. Every field is positive; a window is given whole or
+// not at all.
+type Window struct {
+	LengthMs  int `json:"lengthMs"`
+	Lines     int `json:"lines"`
+	Budget    int `json:"budget"`
+	RefillSec int `json:"refillSec"`
 }
 
 // Steps of the method order a channel belongs to.
