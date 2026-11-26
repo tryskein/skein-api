@@ -774,6 +774,33 @@ class TailTest(Base):
         RUNNER.append_tails(self.env)
         self.assertEqual(self.journal_ids(), ["line-0", "line-1", "line-summary"])
 
+    def test_a_journal_only_and_a_foreground_monitor_append_tails(self):
+        # Review finding 39 of wave 7 (P-12: any monitor of the user tries
+        # at the start and periodically).
+        token = os.path.join(self.root, "skein-mon-live", "token")
+        os.mkdir(os.path.dirname(token), 0o700)
+        own = RUNNER.Journal(token, "sk-51", env=self.env)
+        server = harness.ScriptedServer(lambda h, qs: h.send_json(401, {}))
+        self.addCleanup(server.stop)
+        executor = RUNNER.Executor()
+        self.addCleanup(executor.stop)
+        runs = {
+            "journal": lambda: RUNNER.work(executor, server.url(), "skm_x", "sk-51", "", token,
+                                           sink=RUNNER.JournalSink(own, "journal", None, self.env)),
+            "stream": lambda: RUNNER.run_stream_loop(
+                executor, server.url(), "skm_x", "sk-51", "", token, {"method": "stream", "preflightId": 1},
+                RUNNER.StreamOutput(RUNNER.StreamLimits(None), own, "stream", issue="sk-51"), env=self.env),
+        }
+        for method, run in sorted(runs.items()):
+            with self.subTest(method=method):
+                if os.path.exists(self.journal.path):
+                    os.remove(self.journal.path)
+                RUNNER.defer_lines(self.journal.path, self.lines(), self.env)
+                with self.assertRaises(RUNNER.Stop):
+                    run()
+                self.assertEqual(self.journal_ids(), ["line-0", "line-1", "line-summary"])
+                self.assertEqual(self.tails(), [])
+
     def test_attempt_files_are_swept_without_any_tail(self):
         # Review finding 37 of wave 7: the sweep of attempt files no
         # process holds does not depend on a tail existing.

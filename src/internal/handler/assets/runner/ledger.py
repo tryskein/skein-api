@@ -778,6 +778,30 @@ def append_tails(env=None):
     return done
 
 
+class TailTimer(object):
+    """The periodic append of the user's deferred tails by a working
+    monitor of any method (P-12: at the start and periodically): at most
+    once per `every` seconds (TAILS_EVERY_SEC); a ledger that cannot be
+    used leaves them for a later try."""
+
+    def __init__(self, env, every=None, clock=time.monotonic):
+        self.env = env
+        self.every = every
+        self.clock = clock
+        self.at = None
+
+    def maybe(self):
+        now = self.clock()
+        every = TAILS_EVERY_SEC if self.every is None else self.every
+        if self.at is not None and now - self.at < every:
+            return
+        self.at = now
+        try:
+            append_tails(self.env)
+        except LedgerUnavailable:
+            pass
+
+
 def _append_to_journal(path, lines, env):
     """Append the lines whose lineId the journal at path does not hold yet,
     after cutting a partial last line. Raises JournalUnavailable when the

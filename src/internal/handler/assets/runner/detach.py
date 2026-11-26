@@ -372,10 +372,16 @@ def _send_receipt(line):
 class JournalSink(object):
     """Where a detached or journal monitor puts its lines: the journal."""
 
-    def __init__(self, journal, method, channel):
+    def __init__(self, journal, method, channel, env=None):
         self.journal = journal
         self.method = method
         self.channel = channel
+        self.tails = TailTimer(env) if env is not None else None
+
+    def maybe_tails(self):
+        """The periodic append of the user's deferred tails."""
+        if self.tails is not None:
+            self.tails.maybe()
 
     def lifecycle(self, line):
         fields = dict(line)
@@ -433,7 +439,7 @@ def run_detached_child():
             if held.doc.get("method") == METHOD_DETACHED:
                 sink = delivery_sink(journal, token_file, held.doc, env, base, issue, held.token, executor)
             else:
-                sink = JournalSink(journal, held.doc.get("method"), held.doc.get("channel"))
+                sink = JournalSink(journal, held.doc.get("method"), held.doc.get("channel"), env)
             _send_receipt(held.line)
             work(executor, base, held.token, issue, os.environ.get("SKEIN_EXCLUDE_SESSION", ""),
                  token_file, sink=sink)
@@ -511,7 +517,7 @@ def run_foreground(token_file, issue, env, settings, doc=None):
             if output.lifecycle(held.line) and held.full:
                 mark_announced(token_file, held.doc["preflightId"])
             run_stream_loop(executor, os.environ.get("SKEIN_PUBLIC_URL", ""), held.token, issue,
-                            os.environ.get("SKEIN_EXCLUDE_SESSION", ""), token_file, held.doc, output)
+                            os.environ.get("SKEIN_EXCLUDE_SESSION", ""), token_file, held.doc, output, env=env)
         except ConfigInvalid as exc:
             raise Stop("config_invalid", detail="%s (%s)" % (exc.variable, exc.detail))
     except Stop as stop:

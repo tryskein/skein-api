@@ -613,6 +613,10 @@ def work(executor, base, token, issue, exclude_session, token_file, sink=None):
     series_degraded = False
 
     while True:
+        if hasattr(sink, "maybe_tails"):
+            # A journal-only monitor appends the user's deferred tails
+            # periodically too (a detached one does it with its pages).
+            sink.maybe_tails()
         status, payload, retry_after = poll_once(executor, base, token, cursor, exclude_session)
 
         if status == 200 and isinstance(payload, dict) and isinstance(payload.get("notifications") or [], list):

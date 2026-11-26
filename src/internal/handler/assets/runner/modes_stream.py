@@ -421,9 +421,11 @@ def print_events(output, events, exit_on_event, stop_lines):
     return done
 
 
-def run_stream_loop(executor, base, token, issue, exclude_session, token_file, doc, output):
+def run_stream_loop(executor, base, token, issue, exclude_session, token_file, doc, output, env=None):
     """The poll loop of a stream or exit-on-event monitor. Never returns: it
-    ends by raising Stop (delivered ends each exit-on-event cycle)."""
+    ends by raising Stop (delivered ends each exit-on-event cycle). With
+    env it also appends the user's deferred tails periodically (P-12)."""
+    tails = TailTimer(env) if env is not None else None
     exit_on_event = doc.get("method") == METHOD_EXIT_ON_EVENT
     # The stop lines that may follow the batch of an exit-on-event cycle at
     # once: the batch keeps room for the longest.
@@ -446,6 +448,8 @@ def run_stream_loop(executor, base, token, issue, exclude_session, token_file, d
     series_started = None
     series_degraded = False
     while True:
+        if tails is not None:
+            tails.maybe()
         status, payload, retry_after = poll_once(executor, base, token, cursor, exclude_session)
         if status == 200 and isinstance(payload, dict) and isinstance(payload.get("notifications") or [], list):
             if series_degraded:
