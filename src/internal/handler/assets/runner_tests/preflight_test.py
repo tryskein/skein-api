@@ -226,6 +226,21 @@ class MethodOrderTest(unittest.TestCase):
             json.dump({"a": {"mode": "off"}}, fh)
         self.assertEqual(choose(self.box.env(ALPHA_STREAM=None, OWN_Q_ID=None)).method, "journal")
 
+    def test_a_setting_equals_only_a_value_of_its_type(self):
+        # JSON 1 is not true, 0 is not false: exit-on-event's setting
+        # condition does not hold on a number.
+        cond = {"path": "{env:CFG_DIR}/cfg.json", "format": "json", "key": "a.on", "equals": True}
+        cases = [(True, True), (1, False), (1.0, False), ("true", False), (False, False)]
+        for value, holds in cases:
+            with self.subTest(value=value):
+                with open(os.path.join(self.box.cfg, "cfg.json"), "w") as fh:
+                    json.dump({"a": {"on": value}}, fh)
+                self.assertEqual(RUNNER.setting_holds(cond, self.box.env()), holds)
+        zero = dict(cond, equals=0)
+        with open(os.path.join(self.box.cfg, "cfg.json"), "w") as fh:
+            json.dump({"a": {"on": False}}, fh)
+        self.assertFalse(RUNNER.setting_holds(zero, self.box.env()))
+
     def test_probe_takes_part_in_the_choice(self):
         prober = FakeProbe({"own-q": "unavailable"})
         choice = choose(self.box.env(ALPHA_STREAM=None), FakeDetector(hosts=["host-1"]), prober)

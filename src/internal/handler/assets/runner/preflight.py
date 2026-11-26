@@ -235,9 +235,23 @@ def read_setting(cond, env):
     return doc
 
 
+def _same_json_value(a, b):
+    """Equality of two JSON values that keeps their types apart: a boolean
+    equals only a boolean (in Python True == 1 and False == 0)."""
+    if isinstance(a, bool) or isinstance(b, bool):
+        return isinstance(a, bool) and isinstance(b, bool) and a == b
+    if isinstance(a, list) and isinstance(b, list):
+        return len(a) == len(b) and all(_same_json_value(x, y) for x, y in zip(a, b))
+    if isinstance(a, dict) and isinstance(b, dict):
+        return a.keys() == b.keys() and all(_same_json_value(a[k], b[k]) for k in a)
+    if isinstance(a, (list, dict)) or isinstance(b, (list, dict)):
+        return False
+    return a == b
+
+
 def setting_holds(cond, env):
     value = read_setting(cond, env)
-    return value is not _MISSING and value == cond.get("equals")
+    return value is not _MISSING and _same_json_value(value, cond.get("equals"))
 
 
 def program_found(name, env):
