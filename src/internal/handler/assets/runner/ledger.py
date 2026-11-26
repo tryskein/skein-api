@@ -676,22 +676,19 @@ def append_tails(env=None):
 
 def _append_to_journal(path, lines, env):
     """Append the lines whose lineId the journal at path does not hold yet,
-    after cutting a partial last line."""
+    after cutting a partial last line. Raises JournalUnavailable when the
+    journal takes no write."""
     journal = Journal(None, None, env=env, path=path)
-    present = set()
+    directory = os.path.dirname(path)
+    try:
+        current_platform().ensure_private_dir(os.path.dirname(directory))
+        current_platform().ensure_private_dir(directory)
+    except PlatformRefusal as exc:
+        raise JournalUnavailable(exc.reason, exc.path)
     fd = journal._open()
     try:
-        size = os.fstat(fd).st_size
-        data = b""
-        if size:
-            os.lseek(fd, 0, os.SEEK_SET)
-            chunks = []
-            while True:
-                chunk = os.read(fd, 1 << 16)
-                if not chunk:
-                    break
-                chunks.append(chunk)
-            data = b"".join(chunks)
+        with open(path, "rb") as fh:
+            data = fh.read()
         if data and not data.endswith(b"\n"):
             # A line cut by a crash: drop it, its full form follows.
             keep = data.rfind(b"\n") + 1
@@ -699,7 +696,8 @@ def _append_to_journal(path, lines, env):
             data = data[:keep]
     finally:
         os.close(fd)
-    for raw in [data] + [_read_rotated(path)]:
+    present = set()
+    for raw in (data, _read_rotated(path)):
         for line in raw.splitlines():
             try:
                 lid = json.loads(line.decode("utf-8")).get("lineId")
