@@ -19,7 +19,8 @@ except ImportError:  # not POSIX (Python on Windows): no OS file locks
 
 def emit(obj):
     """Write one JSON object as a single flushed stdout line (the Monitor contract)."""
-    sys.stdout.write(json.dumps(obj, separators=(",", ":")) + "\n")
+    text = json.dumps(obj, separators=(",", ":"))
+    sys.stdout.write(text + "\n")
     sys.stdout.flush()
 
 
