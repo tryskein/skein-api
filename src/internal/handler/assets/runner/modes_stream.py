@@ -36,6 +36,10 @@ import time
 
 # The margin after a window closes before the next batch may start.
 WINDOW_MARGIN_SEC = 0.1
+# A wait shorter than this is none: the refill of a bucket is computed in
+# floating point and may stop a hair short of a whole token, a remainder no
+# sleep can usefully wait out.
+_WAIT_EPSILON_SEC = 1e-6
 # Statuses of an event in the journal of a stream or exit-on-event monitor.
 STATUS_PRINTED = "printed"
 STATUS_UNFIT = "unfit"
@@ -105,7 +109,7 @@ class _Bucket(object):
         return 0.0 if self.tokens >= 1.0 else (1.0 - self.tokens) * self.refill_sec
 
     def take(self):
-        self.tokens -= 1.0
+        self.tokens = max(self.tokens - 1.0, 0.0)
 
 
 class Pacer(object):
@@ -133,7 +137,7 @@ class Pacer(object):
             if self.closed_at is not None:
                 waits.append(self.closed_at - now)
             longest = max(waits) if waits else 0.0
-            if longest <= 0:
+            if longest <= _WAIT_EPSILON_SEC:
                 break
             self.sleep(longest)
         for b in self.buckets:
