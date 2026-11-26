@@ -136,6 +136,25 @@ class RecordLimitTest(Base):
 
 
 @unittest.skipUnless(os.name == "posix", "the POSIX ledger")
+class WholeLedgerBoundTest(Base):
+    """Review finding 36 of wave 7 (P-11: a record lives at least 24 h):
+    records of other addressees older than that and the empty addressees
+    go too, so the ledger file does not grow without end."""
+
+    def test_old_records_of_other_addressees_go(self):
+        old = self.ledger("mon-old", ident([addr("orca", "t-old")]))
+        self.deliver(old, ["x1", "x2"])
+        self.clock.t += 24 * 3600 + 1
+        now = self.ledger("mon-new", ident([addr("orca", "t-new")]))
+        self.deliver(now, ["y1"])
+        with open(os.path.join(RUNNER.ledger_dir(self.env), RUNNER._server_key(SERVER) + ".json")) as fh:
+            doc = json.load(fh)
+        ids = [eid for entry in doc["addressees"] for eid in entry["events"]]
+        self.assertEqual(ids, ["y1"])
+        self.assertEqual(len(doc["addressees"]), 1)
+
+
+@unittest.skipUnless(os.name == "posix", "the POSIX ledger")
 class ChannelBudgetTest(Base):
     """Review finding 14 of wave 7 (INV-8: at most 4 calls of a channel
     that refuses before send, kept in the ledger so a restart continues

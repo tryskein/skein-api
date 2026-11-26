@@ -463,6 +463,7 @@ class Ledger(object):
             doc = self._load()
             entry = self._resolve(doc)
             out = change(entry)
+            _prune_doc(doc, self.clock(), keep=entry)
             self._save(doc)
             return out
 
@@ -532,6 +533,7 @@ class Ledger(object):
                     entry["window"] = {"until": now + _window_len(entry, now), "attempt": key,
                                        "prev": window.get("until") or 0}
                     published = [str(ev["id"]) for ev in carry]
+                _prune_doc(doc, now, keep=entry)
                 self._save(doc)
                 if carry:
                     decision.published = published
@@ -667,6 +669,21 @@ def _prune(entry, now):
            if rec.get("at", 0) <= now - RETAIN_SEC and not rec.get("delivering")]
     for eid in old:
         del entry["events"][eid]
+
+
+def _prune_doc(doc, now, keep=None):
+    """The whole ledger within its bounds: old records of every addressee
+    go, and an addressee left with no record, no live window and no series
+    still running is dropped (keep, the one just changed, stays)."""
+    entries = []
+    for entry in doc["addressees"]:
+        _prune(entry, now)
+        series_times = (entry.get("series") or {}).get("times") or []
+        alive = (entry["events"] or (entry.get("window") or {}).get("until", 0) > now
+                 or (series_times and now - series_times[-1] <= SERIES_SPAN_SEC))
+        if alive or entry is keep:
+            entries.append(entry)
+    doc["addressees"] = entries
 
 
 def _ledger_dir_ok(dir_st):
