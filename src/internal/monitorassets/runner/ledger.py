@@ -420,6 +420,19 @@ def _window_len(entry, now):
     return WINDOW_SEC
 
 
+def _attempt_live(attempts, key):
+    """An attempt lock of key is held by its owner (the attempt is in
+    flight)."""
+    try:
+        other = _FileLock(os.path.join(attempts, key), blocking=False, create=False)
+    except LockBusy:
+        return True
+    except (FileNotFoundError, LedgerUnavailable):
+        return False
+    other.release()
+    return False
+
+
 def _remove_quietly(path):
     try:
         os.remove(path)
@@ -564,6 +577,13 @@ class Ledger(object):
                 window = entry.get("window") or {}
                 if carry and now < (window.get("until") or 0):
                     decision.wait_until = window["until"]
+                    carry = []
+                elif carry and window.get("attempt") and _attempt_live(attempts, window["attempt"]):
+                    # The window is held by an attempt still in flight (in
+                    # its checks, its idle wait or its call): its end sets
+                    # the window anew, so no other attempt of the addressee
+                    # starts before it.
+                    decision.pending.extend(str(ev["id"]) for ev in carry)
                     carry = []
                 if carry:
                     live = [r for r in entry["events"].values() if r.get("at", 0) > now - RETAIN_SEC]
