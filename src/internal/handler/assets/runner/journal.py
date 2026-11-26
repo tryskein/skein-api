@@ -110,9 +110,11 @@ def notification_fields(notification, with_preview=True):
 class Journal(object):
     """The journal of one monitor."""
 
-    def __init__(self, token_file, issue, secrets=(), env=None):
-        self.path = journal_path(token_file, env)
-        self.monitor = os.path.basename(os.path.dirname(os.path.abspath(token_file)))
+    def __init__(self, token_file, issue, secrets=(), env=None, path=None):
+        # path names the journal of another monitor (the append of its
+        # deferred tail); token_file is then None.
+        self.path = path or journal_path(token_file, env)
+        self.monitor = os.path.basename(os.path.dirname(os.path.abspath(token_file))) if token_file else None
         self.issue = issue
         self._secrets = [s for s in secrets if s]
         self._env = env
@@ -147,8 +149,13 @@ class Journal(object):
         events have no line of their own."""
         self._write({"event": "summary", "summary": "read_limited", "pages": pages})
 
-    def _write(self, record):
+    def render(self, record, line_id=None):
+        """The text of a journal line for record, redacted, with its time,
+        monitor and issue; line_id marks a line of a deferred tail. Raises
+        JournalUnavailable (secret_in_line) when a secret survives."""
         record = dict(record, ts=_utc_now(), monitor=self.monitor, issue=self.issue)
+        if line_id is not None:
+            record["lineId"] = line_id
         record = _redact(record, self._secrets)
         text = json.dumps(record, separators=(",", ":"), sort_keys=True)
         if _holds_secret(json.loads(text), self._secrets):
@@ -156,7 +163,10 @@ class Journal(object):
             # written. Checked on the decoded line, so an escaped form of a
             # secret is found too.
             raise JournalUnavailable("secret_in_line", self.path)
-        data = (text + "\n").encode("utf-8")
+        return text
+
+    def _write(self, record):
+        data = (self.render(record) + "\n").encode("utf-8")
         if len(data) > JOURNAL_MAX_BYTES:
             # No file may pass the limit, so a line longer than a whole file
             # is not written; the caller records the failure.

@@ -170,9 +170,12 @@ class WorkingStart(object):
 
 def ledger_tails_at_start(env):
     """The start of every monitor appends the deferred journal tails of the
-    user's monitors (P-12); the ledger part (T018) plugs in here. Nothing to
-    append until then."""
-    return None
+    user's monitors (P-12). The start does not depend on them: a ledger or a
+    journal that refuses leaves the tails for a later try."""
+    try:
+        append_tails(env)
+    except LedgerUnavailable:
+        pass
 
 
 def sweep_stale_locks(env, keep):
