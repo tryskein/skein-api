@@ -286,17 +286,6 @@ class _Writer(threading.Thread):
             return
 
 
-def _kill(proc):
-    """Kill the program and the processes of its session."""
-    try:
-        if os.name == "posix":
-            os.killpg(proc.pid, signal.SIGKILL)
-        else:
-            proc.kill()
-    except OSError:
-        pass
-
-
 def redact_text(text, secrets):
     """text with every secret replaced, as the journal does."""
     return _redact(text, [s for s in secrets if s])
@@ -414,37 +403,91 @@ def _run_posix(argv, env, stdin_data, timeout_sec):
 
 
 def _run_threads(argv, env, stdin_data, timeout_sec):
-    """The wait of a platform without select on pipes: reader threads."""
+    """The wait of a platform without select on pipes: reader threads. The
+    processes of the call are one tree (_ProcessTree): it is killed at the
+    end of the call, on its timeout and on any error or stop signal, so no
+    descendant outlives it. A pipe a reader still blocks on is never closed
+    (closing waits for the reader): the call returns within timeout_sec plus
+    the grace of the readers whatever the descendants do."""
     try:
         proc = subprocess.Popen(argv, stdin=subprocess.PIPE if stdin_data is not None else subprocess.DEVNULL,
                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env, close_fds=True,
                                 start_new_session=(os.name == "posix"))
     except OSError as exc:
         raise ExecutorRefusal("the program cannot be started (%s)" % (exc.strerror or exc))
-    readers = [_Reader(proc.stdout), _Reader(proc.stderr)]
-    for r in readers:
-        r.start()
-    if stdin_data is not None:
-        _Writer(proc.stdin, stdin_data).start()
+    tree = _ProcessTree(proc)
     timed_out = False
+    readers = []
     try:
-        proc.wait(timeout=max(timeout_sec, 0))
-    except subprocess.TimeoutExpired:
-        timed_out = True
-        _kill(proc)
-        proc.wait()
-    except BaseException:
-        _kill(proc)
-        raise
-    for r in readers:
-        r.join(_READER_GRACE_SEC)
-    for pipe in (proc.stdout, proc.stderr):
+        readers = [_Reader(proc.stdout), _Reader(proc.stderr)]
+        for r in readers:
+            r.start()
+        if stdin_data is not None:
+            _Writer(proc.stdin, stdin_data).start()
         try:
-            pipe.close()
-        except OSError:
-            pass
+            proc.wait(timeout=max(timeout_sec, 0))
+        except subprocess.TimeoutExpired:
+            timed_out = True
+        for r in readers:
+            r.join(_READER_GRACE_SEC)
+    finally:
+        tree.kill()
+        if proc.returncode is None:
+            proc.wait()
+    for r in readers:
+        # The tree is gone: its pipes are at their end.
+        r.join(_READER_GRACE_SEC)
+    for r, pipe in zip(readers, (proc.stdout, proc.stderr)):
+        if not r.is_alive():
+            try:
+                pipe.close()
+            except OSError:
+                pass
     return CallResult(None if timed_out else proc.returncode, readers[0].data(), readers[1].data(), timed_out,
                       readers[0].cut)
+
+
+class _ProcessTree(object):
+    """The processes of one call: on POSIX the session the program leads,
+    on Windows a job object the program is assigned to as it starts (its
+    descendants join it); kill() ends them all."""
+
+    def __init__(self, proc):
+        self.proc = proc
+        self.job = None
+        if os.name != "posix":
+            self.job = _windows_job(proc)
+
+    def kill(self):
+        if os.name == "posix":
+            _kill_group(self.proc.pid)
+            return
+        if self.job is not None:
+            import ctypes
+            ctypes.windll.kernel32.TerminateJobObject(self.job, 1)
+            ctypes.windll.kernel32.CloseHandle(self.job)
+            self.job = None
+        try:
+            self.proc.kill()
+        except OSError:
+            pass
+
+
+def _windows_job(proc):
+    """A job object holding proc (and, from now on, its descendants), or
+    None when it cannot be made (then only the program is killed)."""
+    try:
+        import ctypes
+        kernel32 = ctypes.windll.kernel32
+        job = kernel32.CreateJobObjectW(None, None)
+        if not job:
+            return None
+        if not kernel32.AssignProcessToJobObject(job, int(proc._handle)):
+            kernel32.CloseHandle(job)
+            return None
+        return job
+    except (AttributeError, OSError, ValueError):
+        return None
 
 
 class ArgvExecutor(object):
