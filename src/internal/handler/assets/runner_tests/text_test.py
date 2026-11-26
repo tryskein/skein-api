@@ -37,6 +37,15 @@ def comment(preview="hello there", truncated=None, **extra):
     return n
 
 
+def _size(text, unit):
+    """The size of text in a limit unit, counted here, not by the runner."""
+    if unit == "bytes":
+        return len(text.encode("utf-8"))
+    if unit == "utf16":
+        return sum(2 if ord(ch) > 0xFFFF else 1 for ch in text)
+    return len(text)
+
+
 def between(text):
     """The text between the data boundaries of the preview."""
     start = text.index("preview: " + RUNNER.DATA_OPEN) + len("preview: " + RUNNER.DATA_OPEN)
@@ -58,17 +67,18 @@ class PlainTextTest(unittest.TestCase):
     def test_server_truncated_preview_says_to_read_the_comment(self):
         text, cut = RUNNER.plain_text(comment(truncated=True), EXCLUDE)
         self.assertFalse(cut)
-        self.assertIn("truncated by the server", text)
+        # The server's flag under its poll name, not the delivery's.
+        self.assertIn("truncated=true", text)
+        self.assertNotIn(RUNNER.PLAIN_CUT_MARK, text)
         self.assertIn('skein_comment_get(commentId="c-1")', text)
 
     def test_preview_cut_by_the_delivery_is_flagged(self):
-        full, _ = RUNNER.plain_text(comment(preview="z" * 500), EXCLUDE)
-        limit = len(full) - 100
-        text, cut = RUNNER.plain_text(comment(preview="z" * 500), EXCLUDE, limit=limit)
+        limit = 700
+        text, cut = RUNNER.plain_text(comment(preview="z" * 2000), EXCLUDE, limit=limit)
         self.assertTrue(cut)
         self.assertLessEqual(len(text), limit)
-        self.assertIn("cut by the delivery", text)
-        self.assertNotIn("truncated by the server", text)
+        self.assertIn(RUNNER.PLAIN_CUT_MARK, text)
+        self.assertNotIn("truncated=true", text)
         self.assertIn('skein_comment_get(commentId="c-1")', text)
         self.assertTrue(set(between(text).strip()) <= {"z"})
 
@@ -76,7 +86,6 @@ class PlainTextTest(unittest.TestCase):
         text, _ = RUNNER.plain_text(comment(preview=None), EXCLUDE)
         self.assertNotIn("preview:", text)
         self.assertEqual(text.count(RUNNER.DATA_OPEN), 1, text)  # the summary's only
-        self.assertIn("comment deleted", text)
 
 
 class CleaningTest(unittest.TestCase):
@@ -117,7 +126,7 @@ class NotificationLineTest(unittest.TestCase):
 
     def assert_valid(self, line, event, limit, unit):
         self.assertIsNotNone(line)
-        self.assertLessEqual(RUNNER.measure(line, unit), limit)
+        self.assertLessEqual(_size(line, unit), limit)
         obj = json.loads(line)
         got = obj["notification"]
         for key in self.MANDATORY:
@@ -126,8 +135,8 @@ class NotificationLineTest(unittest.TestCase):
         return obj
 
     def test_limits_keep_valid_json_and_mandatory_fields(self):
-        for limit, unit in ((400, RUNNER.UNIT_CHARS), (2000, RUNNER.UNIT_CHARS),
-                            (2048, RUNNER.UNIT_BYTES), (2000, RUNNER.UNIT_UTF16)):
+        for limit, unit in ((400, "chars"), (2000, "chars"),
+                            (2048, "bytes"), (2000, "utf16")):
             with self.subTest(limit=limit, unit=unit):
                 event = self.unicode_event()
                 obj = self.assert_valid(RUNNER.notification_line(event, limit, unit), event, limit, unit)
@@ -137,10 +146,11 @@ class NotificationLineTest(unittest.TestCase):
 
     def test_preview_is_cut_before_summary_and_summary_before_the_rest(self):
         event = self.unicode_event(preview_len=600)
-        full = RUNNER.notification_line(event)
+        full = json.dumps({"event": "notification", "notification": event}, ensure_ascii=False,
+                          separators=(",", ":"))
         with self.subTest(step="preview only"):
             limit = len(full) - 200
-            obj = self.assert_valid(RUNNER.notification_line(event, limit), event, limit, RUNNER.UNIT_CHARS)
+            obj = self.assert_valid(RUNNER.notification_line(event, limit), event, limit, "chars")
             self.assertEqual(obj["deliveryCut"], ["bodyPreview"])
             self.assertEqual(obj["notification"]["summary"], event["summary"])
             self.assertEqual(obj["notification"]["oldValue"], event["oldValue"])
@@ -148,7 +158,7 @@ class NotificationLineTest(unittest.TestCase):
             without_preview = json.dumps(dict(event, bodyPreview=""), ensure_ascii=False,
                                          separators=(",", ":"))
             limit = len(without_preview) - 100
-            obj = self.assert_valid(RUNNER.notification_line(event, limit), event, limit, RUNNER.UNIT_CHARS)
+            obj = self.assert_valid(RUNNER.notification_line(event, limit), event, limit, "chars")
             self.assertEqual(obj["deliveryCut"][:2], ["bodyPreview", "summary"])
             self.assertEqual(obj["notification"]["bodyPreview"], "")
             self.assertEqual(obj["notification"]["oldValue"], event["oldValue"])

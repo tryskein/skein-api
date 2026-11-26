@@ -32,8 +32,13 @@ UNIT_BYTES = "bytes"
 MANDATORY_EVENT_FIELDS = ("id", "type", "entity", "commentId", "actorSessionId")
 # Lifecycle fields that stay in a shortened lifecycle line.
 MANDATORY_LIFECYCLE_FIELDS = ("event", "reason", "cause", "preflightId")
-# The compact mark of a plain text reduced to its minimal form.
+# Marks of a plain text, named like the fields of the JSON line: the
+# preview was cut by the delivery (also the compact mark of the minimal
+# form), the server truncated it (the poll's own "truncated"), the comment
+# is deleted and has no text.
 PLAIN_CUT_MARK = "deliveryCut=true"
+PLAIN_TRUNCATED_MARK = "truncated=true"
+PLAIN_DELETED_MARK = "commentDeleted=true"
 # What replaces a long lifecycle field that does not fit.
 SEE_JOURNAL = "see journal"
 # Characters a JSON line keeps only as \u escapes: DEL, the C1 controls
@@ -132,13 +137,13 @@ def plain_text(notification, exclude_file, limit=None, unit=UNIT_CHARS):
         if with_summary and summary:
             parts.append("summary: %s %s %s" % (DATA_OPEN, summary, DATA_CLOSE))
         if "commentId" in n and not has_preview:
-            parts.append("comment deleted, no text.")
+            parts.append(PLAIN_DELETED_MARK)
         elif preview_text is not None:
             parts.append("preview: %s %s %s" % (DATA_OPEN, preview_text, DATA_CLOSE))
             if cut:
-                parts.append("preview cut by the delivery: " + read + ".")
+                parts.append(PLAIN_CUT_MARK + " " + read + ".")
             elif n.get("truncated") is True:
-                parts.append("preview truncated by the server: " + read + ".")
+                parts.append(PLAIN_TRUNCATED_MARK + " " + read + ".")
         parts.append(tail)
         return " ".join(parts)
 
