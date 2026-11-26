@@ -110,7 +110,8 @@ mode = "unittest-files"
 start = "."
 pattern = "*_test.py"
 
-# Mutation testing of the Python runner and loader with mutmut; its
+# Mutation testing of the Python runner with mutmut (only the runner is
+# mutated; the loader is copied for its tests); its
 # configuration (what is mutated, which tests run) is the [mutmut] section of
 # src/setup.cfg. Targets are mutant name patterns, e.g.
 # "internal.handler.assets.monitor_runner.x_build_url*"; mutmut has no diff mode.
