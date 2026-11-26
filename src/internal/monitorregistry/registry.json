@@ -55,6 +55,25 @@
           }
         }
       ]
+    },
+    {
+      "id": "kimi",
+      "about": "Kimi Code in its terminal UI: the runner exits after a batch of events, and the end of the background command wakes the agent; Zavod engine nkimi runs this harness.",
+      "source": "github.com/MoonshotAI/kimi-code 48cdb62 (2.7.3): loop-actor.ts#drainDetachedCompletions (a finished background Bash command starts a turn; the output of a running one does not), Bash tool parameters run_in_background and disable_timeout (without it a background command ends timed_out); Git Bash on Windows (KIMI_SHELL_PATH); npm @moonshot-ai/kimi-code 2.8.0 dist/main.mjs#PROCESS_NAME (process title 'kimi-code', command 'kimi').",
+      "process": {
+        "executables": [
+          "kimi-code",
+          "kimi"
+        ]
+      },
+      "methods": [
+        {
+          "kind": "exit-on-event",
+          "conditions": {},
+          "instruction": "Run `command` with the Bash tool, run_in_background=true, disable_timeout=true, and a description of your choice. It ends after a batch of events with a stop line; handle the events, then follow the action of that line."
+        }
+      ],
+      "windowsShell": "git-bash"
     }
   ],
   "channels": [],
