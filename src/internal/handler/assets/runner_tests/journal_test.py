@@ -106,6 +106,22 @@ class JournalTest(unittest.TestCase):
         self.assertNotIn("bodyPreview", lost)
         self.assertEqual(lost.get("reason"), "access_lost")
 
+    def test_summary_records(self):
+        # A rejected cursor and a capped read-ahead after rootClosed leave
+        # events without a line of their own; each is one summary line.
+        self.journal.summary_cursor_reset({"ts": "2026-01-01T00:00:05Z", "id": 5})
+        self.journal.summary_read_limited(20)
+        reset, limited = self.lines()
+        for line in (reset, limited):
+            self.assertEqual(line["event"], "summary")
+            self.assertEqual(line["monitor"], "skein-mon-zz-77-0123456789abcdef")
+            self.assertEqual(line["issue"], "zz-77")
+            self.assertIn("ts", line)
+        self.assertEqual(reset["summary"], "cursor_reset")
+        self.assertEqual(reset["cursor"], {"ts": "2026-01-01T00:00:05Z", "id": 5})
+        self.assertEqual(limited["summary"], "read_limited")
+        self.assertEqual(limited["pages"], 20)
+
     def test_files_are_private(self):
         self.journal.lifecycle("monitor_started")
         self.assertEqual(os.stat(self.journal.path).st_mode & 0o777, 0o600)
