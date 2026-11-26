@@ -366,6 +366,63 @@ class EndUnderLockTest(unittest.TestCase):
 
 
 @unittest.skipUnless(os.name == "posix", "the POSIX runner")
+class JournalOutageThenStopTest(unittest.TestCase):
+    """Review finding V5 of wave 7 (US-12, the access boundary and "a stop
+    while the journal refuses": the lines go to the deferred tail; after a
+    loss of access without the preview): a page the journal left undone
+    still gets its outcomes when access is lost before it is polled again,
+    and a line written later keeps the decision to drop the preview."""
+
+    def test_a_stop_by_lost_access_closes_the_page_the_journal_left(self):
+        world = World(self, [chan("A", "chan-a")])
+        limit = single_fit(world)
+        world = World(self, [chan("A", "chan-a", limit=limit), chan("B", "chan-b")])
+        mon = world.monitor()
+        page = {"notifications": [note(1), note(2)], "cursor": {"ts": "2026-01-01T00:00:09Z", "id": 9}}
+        server = server_answering(self, [200, 401], page=page)
+        executor = world.runner.Executor()
+        self.addCleanup(executor.stop)
+        outage = world.runner.JournalUnavailable("write_failed", mon.journal.path)
+        with mock.patch.object(mon.journal, "delivery", side_effect=outage), \
+                mock.patch.object(world.runner.time, "sleep", lambda s: None):
+            with self.assertRaises(world.runner.Stop) as ctx:
+                world.runner.work(executor, server.url(), TOKEN, ISSUE, "", mon.token, sink=mon.sink)
+        self.assertEqual(ctx.exception.reason, "token_expired")
+        # Event 1 went to the channel; event 2 waited.
+        self.assertEqual(len(world.prog("chan-a").calls()), 1)
+        world.runner.ledger_tails_at_start(world.env)
+        tail = [l for l in mon.lines() if l.get("lineId")]
+        self.assertEqual([(l["event"], l.get("notificationId"), l.get("status")) for l in tail],
+                         [("delivery", 2, "access-lost"), ("delivery", 1, "queued"), ("summary", None, None)])
+        self.assertFalse([l for l in tail if "bodyPreview" in l], "a line after the loss of access has the preview")
+
+    def test_a_line_written_after_the_journal_is_back_keeps_the_dropped_preview(self):
+        world = World(self, [chan("A", "chan-a")])
+        insert, enter = fake_channel.two_step(world.bin)
+        server = server_answering(self, [401])
+        mon = world.monitor(cancel=poll_cancel(self, world, server))
+        step = {"executor": {"type": "argv", "argv": ["insert"], "feed": "stdin", "timeoutSec": 2},
+                "outcomes": [{"match": {"exitCode": 0}, "outcome": "input-written"}]}
+        commit = {"executor": {"type": "argv", "argv": ["enter"], "feed": "stdin", "timeoutSec": 2},
+                  "outcomes": [{"match": {"exitCode": 0}, "outcome": "turn-started"}]}
+        mon.sink.drivers["A"] = world.runner.TwoStepDriver(world.reg.channel("A"), mon.spy, step, commit)
+
+        def after(program):
+            if program == "insert":
+                world.clock.t += 2   # the poll before Enter answers 401
+        mon.spy.after = after
+        outage = world.runner.JournalUnavailable("write_failed", mon.journal.path)
+        with mock.patch.object(mon.journal, "delivery", side_effect=outage):
+            with self.assertRaises(world.runner.JournalUnavailable):
+                mon.page([note(1)])
+        self.assertEqual(enter.calls(), [])
+        # The runner starts again with the same token; the journal is back.
+        again = world.monitor()
+        again.page([note(1)])
+        self.assertEqual(again.deliveries(), [(1, "unknown", None, False)])
+
+
+@unittest.skipUnless(os.name == "posix", "the POSIX runner")
 class VisibilityLostTest(unittest.TestCase):
     """Row #62: the first poll answers 403 with a valid token:
     visibility_lost, the end of P-12, nothing sent."""

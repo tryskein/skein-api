@@ -307,6 +307,12 @@ class DeliverySink(object):
         self._last_refusal = None
         # The cursor of the last page (the one a cursor_reset rejects).
         self._cursor = None
+        # Ids of the current page whose journal line goes without the
+        # preview (kept in the state with the outcomes).
+        self._redacted = set()
+        # A page left undone by the journal, (cursor, notifications): a stop
+        # by lost access closes it (end_open_page).
+        self._open = None
 
     # --- lines ----------------------------------------------------------------
 
@@ -466,13 +472,19 @@ class DeliverySink(object):
             # A poll during a wait asks from the last fixed outcome.
             self.cancel.cursor = cursor
         state = {"pending": []}
+        self._open = (cursor, notifications)
         try:
             self._page(cursor, notifications, state)
+        except JournalUnavailable:
+            # Undone: the same page comes again, or a stop closes it.
+            raise
         except DeliveryCancelled as exc:
+            self._open = None
             outcomes, journaled = state["outcomes"], state["journaled"]
             waiting = [n for n in state["pending"] if str(n["id"]) not in outcomes]
             close_waiting(self, cursor, outcomes, journaled, waiting, OUTCOME_ACCESS_LOST, exc.reason)
             raise access_stop(exc.reason)
+        self._open = None
         if self.gone:
             outcomes, journaled = state["outcomes"], state["journaled"]
             waiting = [n for n in state["pending"] if str(n["id"]) not in outcomes]
@@ -483,13 +495,16 @@ class DeliverySink(object):
         self._maybe_append_tails()
         events = [n for n in notifications if isinstance(n, dict) and n.get("id") is not None]
         outcomes, journaled = load_page_outcomes(self.token_file, cursor)
+        self._redacted = load_page_redacted(self.token_file, cursor)
         state["outcomes"], state["journaled"] = outcomes, journaled
         byid = dict((str(n["id"]), n) for n in events)
         # Outcomes the ledger and the state hold but the journal does not
-        # yet: they come first after the journal is back.
+        # yet: they come first after the journal is back, with the preview
+        # decision they were given.
         for eid, status in list(outcomes.items()):
             if eid not in journaled and eid in byid:
-                self._journal(cursor, outcomes, journaled, byid[eid], status, None, None)
+                self._journal(cursor, outcomes, journaled, byid[eid], status, None, None,
+                              with_preview=eid not in self._redacted)
         pending = [n for n in events if str(n["id"]) not in outcomes]
         state["pending"] = list(pending)
         step = dict((str(n["id"]), 0) for n in pending)
@@ -706,14 +721,34 @@ class DeliverySink(object):
         """The outcome of one event: into the state, then the journal."""
         eid = str(n["id"])
         outcomes[eid] = status
-        save_page_outcomes(self.token_file, cursor, outcomes, journaled)
+        if not with_preview:
+            self._redacted.add(eid)
+        save_page_outcomes(self.token_file, cursor, outcomes, journaled, self._redacted)
         self._journal(cursor, outcomes, journaled, n, status, channel, sign, with_preview)
 
     def _journal(self, cursor, outcomes, journaled, n, status, channel, sign, with_preview=True):
         self.journal.delivery(n, status, method=self.doc.get("method"), channel=channel, answer=sign,
                               with_preview=with_preview)
         journaled.add(str(n["id"]))
-        save_page_outcomes(self.token_file, cursor, outcomes, journaled)
+        save_page_outcomes(self.token_file, cursor, outcomes, journaled, self._redacted)
+
+    def end_open_page(self, reason):
+        """A stop by lost access (401, 403) while a page is undone because
+        the journal refused: its waiting events get "access lost", and the
+        outcomes the journal does not hold yet get their lines - all without
+        the preview - in the journal or, when it takes no write, in the
+        deferred tail with the stop summary."""
+        if self._open is None:
+            return
+        cursor, notifications = self._open
+        self._open = None
+        events = [n for n in notifications if isinstance(n, dict) and n.get("id") is not None]
+        outcomes, journaled = load_page_outcomes(self.token_file, cursor)
+        self._redacted = load_page_redacted(self.token_file, cursor)
+        known = [(n, outcomes[str(n["id"])]) for n in events
+                 if str(n["id"]) in outcomes and str(n["id"]) not in journaled]
+        waiting = [n for n in events if str(n["id"]) not in outcomes]
+        close_waiting(self, cursor, outcomes, journaled, waiting, OUTCOME_ACCESS_LOST, reason, known=known)
 
 
 def _line_limit(channel):

@@ -80,12 +80,22 @@ def load_page_outcomes(token_file, cursor):
             set(journaled) if isinstance(journaled, list) else set())
 
 
-def save_page_outcomes(token_file, cursor, outcomes, journaled):
+def save_page_outcomes(token_file, cursor, outcomes, journaled, redacted=()):
     """Keep the cursor and the outcomes of its page (R-6: after the ledger,
-    before the journal and the cursor). Raises OSError or PlatformRefusal
-    when it cannot."""
+    before the journal and the cursor), and the ids whose journal line goes
+    without the preview (access was lost), so a line written later keeps
+    that decision. Raises OSError or PlatformRefusal when it cannot."""
     _save_state_doc(token_file, {"version": STATE_VERSION, "cursor": cursor, "outcomes": dict(outcomes),
-                                 "journaled": sorted(journaled)})
+                                 "journaled": sorted(journaled), "redacted": sorted(redacted)})
+
+
+def load_page_redacted(token_file, cursor):
+    """The ids of the page polled at cursor whose journal line goes without
+    the preview."""
+    doc = _load_state_doc(token_file)
+    if doc is None or doc.get("cursor") != cursor or not isinstance(doc.get("redacted"), list):
+        return set()
+    return set(doc["redacted"])
 
 
 def _load_state_doc(token_file):

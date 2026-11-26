@@ -672,6 +672,10 @@ def work(executor, base, token, issue, exclude_session, token_file, sink=None):
             time.sleep(max(jitter(backoff), float(POLL_INTERVAL_SEC)))
             continue
 
+        if status in (401, 403) and hasattr(sink, "end_open_page"):
+            # A page the journal left undone gets its outcomes by the lost
+            # access before the stop.
+            sink.end_open_page("token_expired" if status == 401 else "visibility_lost")
         if status == 401:
             # Token died (renewal window passed, 12h cap, revoked).
             raise Stop("token_expired", status=401, delete_token=True)

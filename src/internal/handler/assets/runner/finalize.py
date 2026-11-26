@@ -112,30 +112,36 @@ def access_stop(reason):
     return Stop(reason, status=status, delete_token=True)
 
 
-def close_waiting(sink, cursor, outcomes, journaled, waiting, outcome, reason):
+def close_waiting(sink, cursor, outcomes, journaled, waiting, outcome, reason, known=()):
     """Give every waiting event (not handed to a channel) its outcome by the
     stop: into the ledger and the state, then the journal without the
-    preview; when the journal takes no write, the lines and a stop summary
-    go to the deferred tail (P-12, OST-2-6) before any file of the token is
+    preview; known are (event, outcome) whose outcome is fixed but not in
+    the journal yet: their lines go the same way, without the preview. When
+    the journal takes no write, the lines and a stop summary go to the
+    deferred tail (P-12, OST-2-6) before any file of the token is
     touched."""
+    redacted = getattr(sink, "_redacted", set())
+    items = [(n, outcome, True) for n in waiting] + [(n, status, False) for n, status in known]
     deferred = []
-    for n in waiting:
+    for n, status, new in items:
         eid = str(n["id"])
+        redacted.add(eid)
+        if new:
+            try:
+                sink.ledger.record([eid], status)
+            except LedgerUnavailable:
+                pass
+            outcomes[eid] = status
         try:
-            sink.ledger.record([eid], outcome)
-        except LedgerUnavailable:
-            pass
-        outcomes[eid] = outcome
-        try:
-            save_page_outcomes(sink.token_file, cursor, outcomes, journaled)
+            save_page_outcomes(sink.token_file, cursor, outcomes, journaled, redacted)
         except (OSError, PlatformRefusal):
             pass
-        record = {"event": "delivery", "status": outcome, "method": sink.doc.get("method"), "channel": None,
+        record = {"event": "delivery", "status": status, "method": sink.doc.get("method"), "channel": None,
                   "addressee": None, "channelAnswer": None, "reason": reason}
         record.update(notification_fields(n, with_preview=False))
         if not deferred:
             try:
-                sink.journal.delivery(n, outcome, method=sink.doc.get("method"), reason=reason,
+                sink.journal.delivery(n, status, method=sink.doc.get("method"), reason=reason,
                                       with_preview=False)
                 journaled.add(eid)
                 continue
@@ -143,15 +149,16 @@ def close_waiting(sink, cursor, outcomes, journaled, waiting, outcome, reason):
                 pass
         deferred.append(record)
     if deferred:
-        lines = [sink.journal.render(r, line_id=uuid.uuid4().hex) for r in deferred]
-        lines.append(sink.journal.render({"event": "summary", "summary": "stopped_journal_unavailable",
-                                          "reason": reason, "events": len(deferred)},
-                                         line_id=uuid.uuid4().hex))
         try:
+            lines = [sink.journal.render(r, line_id=uuid.uuid4().hex) for r in deferred]
+            lines.append(sink.journal.render({"event": "summary", "summary": "stopped_journal_unavailable",
+                                              "reason": reason, "events": len(deferred)},
+                                             line_id=uuid.uuid4().hex))
             defer_lines(sink.journal.path, lines, sink.env)
-        except LedgerUnavailable:
-            # The ledger directory took nothing: neither the lines nor the
-            # summary exist (a documented boundary).
+        except (LedgerUnavailable, JournalUnavailable):
+            # The ledger directory took nothing (or a line could not be
+            # rendered): neither the lines nor the summary exist (a
+            # documented boundary).
             pass
 
 
