@@ -50,7 +50,7 @@ var monitorAssets embed.FS
 // order. Its first part sets _SKEIN_LOADER_MODE = "client" before the body is
 // exec()'d, so the mode follows the loader the agent runs, never an
 // environment variable.
-var clientLoaderSource = mustAssembleAssets(monitorAssets, "assets", "loader_client/parts.txt")
+var clientLoaderSource = stripPythonCommentLines(mustAssembleAssets(monitorAssets, "assets", "loader_client/parts.txt"))
 
 // monitorPrepareScript is the prepare script of a call with `client` on
 // POSIX, with the client loader in it as a Python string literal.
@@ -109,6 +109,36 @@ func mustPrepareScript() string {
 	if bytes.Count(script, []byte(clientLoaderPlaceholder)) != 1 {
 		panic("monitor loader: the prepare script must carry the loader placeholder exactly once")
 	}
-	out := strings.Replace(string(script), clientLoaderPlaceholder, strings.TrimRight(lit.String(), "\n"), 1)
+	out := strings.Replace(stripPythonCommentLines(string(script)), clientLoaderPlaceholder, strings.TrimRight(lit.String(), "\n"), 1)
 	return strings.TrimRight(out, "\n")
+}
+
+// stripPythonCommentLines drops every full-line comment (a line whose first
+// non-blank character is "#") from Python source: the client loader and the
+// prepare script travel inside the response with `client`, and their comments
+// would cost every such response bytes (SC-009). The sources keep their
+// comments; only the served bytes lose them.
+//
+// A line starting with "#" is a comment unless it continues a string
+// literal, and a string literal spans lines only in triple quotes or after a
+// backslash at the end of a line. The sources that go through here use
+// neither; a source that starts to is refused at start-up instead of being
+// stripped wrongly.
+func stripPythonCommentLines(src string) string {
+	if strings.Contains(src, `"""`) || strings.Contains(src, "'''") {
+		panic("monitor loader: a stripped source must not use triple-quoted strings")
+	}
+	lines := strings.SplitAfter(src, "\n")
+	var b strings.Builder
+	for _, line := range lines {
+		body := strings.TrimRight(line, "\r\n")
+		if strings.HasSuffix(body, "\\") {
+			panic("monitor loader: a stripped source must not continue a line with a backslash")
+		}
+		if strings.HasPrefix(strings.TrimLeft(body, " \t"), "#") {
+			continue
+		}
+		b.WriteString(line)
+	}
+	return b.String()
 }
