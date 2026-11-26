@@ -334,6 +334,10 @@ def run_stream_loop(executor, base, token, issue, exclude_session, token_file, d
     delivered = {"event": STOPS["delivered"][0], "reason": "delivered",
                  "action": stop_action("delivered", issue, doc["preflightId"])}
     cursor = load_cursor(token_file)
+
+    def hold(save, *args):
+        _save_or_hold(save, token_file, args, output, executor, base, token, cursor, exclude_session, issue)
+
     seen = set()
     backoff = float(POLL_INTERVAL_SEC)
     series_started = None
@@ -364,7 +368,7 @@ def run_stream_loop(executor, base, token, issue, exclude_session, token_file, d
             if complete:
                 if payload.get("rootClosed") is True:
                     raise Stop("root_closed", delete_token=True)
-                _save_state(save_cursor, token_file, nxt)
+                hold(save_cursor, nxt)
                 if exit_on_event and events:
                     raise Stop("delivered", detail=doc["preflightId"])
                 cursor = nxt
@@ -377,7 +381,7 @@ def run_stream_loop(executor, base, token, issue, exclude_session, token_file, d
                 # the same page and skips what was printed.
                 ids = sorted(printed_before | set(n.get("id") for n in done
                                                   if isinstance(n, dict) and n.get("id") is not None))
-                _save_state(save_printed, token_file, cursor, ids)
+                hold(save_printed, cursor, ids)
                 raise Stop("delivered", detail=doc["preflightId"])
         if status == 401:
             raise Stop("token_expired", status=401, delete_token=True)
@@ -385,7 +389,7 @@ def run_stream_loop(executor, base, token, issue, exclude_session, token_file, d
             raise Stop("visibility_lost", status=403, delete_token=True)
         if status == 400 and cursor is not None:
             cursor = None
-            _save_state(save_cursor, token_file, None)
+            hold(save_cursor, None)
             output.lifecycle({"event": "degraded", "cause": "cursor_reset", "issue": issue,
                               "action": "The server rejected this monitor's poll cursor, so the monitor "
                                         "restarted from now: notifications since its last successful poll "
@@ -411,10 +415,38 @@ def run_stream_loop(executor, base, token, issue, exclude_session, token_file, d
         time.sleep(jitter(backoff))
 
 
-def _save_state(save, token_file, *args):
-    """A state that cannot be written costs the resume, not the run (as in
-    the legacy loop): said on stderr."""
-    try:
-        save(token_file, *args)
-    except (OSError, PlatformRefusal) as exc:
-        log_stderr("monitor runner: cannot save the monitor state (%s)" % exc)
+def _save_or_hold(save, token_file, args, output, executor, base, token, cursor, exclude_session, issue):
+    """Write the monitor state (the cursor, or the ids printed from a
+    partial page). The run goes on only once it is written: the cursor in
+    memory moves after its state, and exit-on-event prints delivered only
+    for a saved cycle (an unsaved one would print the same events again on
+    every run). While the state cannot be written the monitor holds: it says
+    degraded state_unavailable once, keeps the access boundary by polling at
+    the last saved cursor (401 and 403 still stop it; what such a poll
+    returns is not delivered) and tries again every poll interval; recovered
+    once it is written."""
+    failed_at = None
+    while True:
+        try:
+            save(token_file, *args)
+        except (OSError, PlatformRefusal) as exc:
+            if failed_at is None:
+                failed_at = time.monotonic()
+                log_stderr("monitor runner: cannot save the monitor state (%s)" % exc)
+                output.lifecycle({
+                    "event": "degraded", "cause": "state_unavailable", "issue": issue,
+                    "action": "The monitor for issue %s cannot save its state next to its token file, so it "
+                              "holds new notifications (they are not lost) until it can; it keeps running "
+                              "and retries on its own, so do not restart it. If this does not clear, check "
+                              "that the directory of the token file can be written." % issue})
+            time.sleep(jitter(float(POLL_INTERVAL_SEC)))
+            status, _, _ = poll_once(executor, base, token, cursor, exclude_session)
+            if status == 401:
+                raise Stop("token_expired", status=401, delete_token=True)
+            if status == 403:
+                raise Stop("visibility_lost", status=403, delete_token=True)
+            continue
+        if failed_at is not None:
+            output.lifecycle({"event": "recovered", "cause": "state_unavailable", "issue": issue,
+                              "failedForSec": int(time.monotonic() - failed_at)})
+        return

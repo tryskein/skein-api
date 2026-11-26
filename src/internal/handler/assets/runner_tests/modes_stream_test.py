@@ -302,6 +302,59 @@ class JournalUnavailableTest(unittest.TestCase):
         self.assertEqual(events, ["notification", "degraded"])
 
 
+class StateUnavailableTest(unittest.TestCase):
+    """Review finding C2 of wave 6: a state that cannot be written holds the
+    run; the cursor in memory does not move past it and exit-on-event does
+    not print delivered for an unsaved cycle."""
+
+    def failing_save(self, failures):
+        real = RUNNER.save_cursor
+        left = [failures]
+
+        def save(token_file, cursor):
+            if left[0] > 0:
+                left[0] -= 1
+                raise OSError(28, "No space left on device")
+            real(token_file, cursor)
+        return mock.patch.object(RUNNER, "save_cursor", save)
+
+    def test_stream_holds_until_the_cursor_is_saved(self):
+        box = Box(self)
+        out = Out()
+        # The second answer is the liveness poll of the hold: not delivered.
+        executor = FakeExecutor([page([1], 1), page([1, 2], 2)])
+        with self.failing_save(1):
+            stop, _ = box.cycle(executor, box.output(None, "stream", out=out), "stream")
+        self.assertEqual(stop.reason, "token_expired")
+        self.assertEqual([(l["event"], l.get("cause")) for l in out.lines()],
+                         [("notification", None), ("degraded", "state_unavailable"),
+                          ("recovered", "state_unavailable"), ("closed", None)])
+        # The hold polled at the saved place (none: a new token), the run went
+        # on from the saved cursor.
+        self.assertNotIn("since_id", executor.urls[1])
+        self.assertIn("since_id=1", executor.urls[2])
+        self.assertEqual(RUNNER.load_cursor(box.token)["id"], 1)
+
+    def test_exit_on_event_prints_delivered_only_for_a_saved_cycle(self):
+        box = Box(self)
+        out = Out()
+        executor = FakeExecutor([page([1], 1), page([1], 1), page([1], 1)])
+        with self.failing_save(2):
+            stop, code = box.cycle(executor, box.output(None, "exit-on-event", out=out), "exit-on-event")
+        self.assertEqual((stop.reason, code), ("delivered", 0))
+        self.assertEqual([l["event"] for l in out.lines()], ["notification", "degraded", "recovered", "paused"])
+        self.assertEqual(RUNNER.load_cursor(box.token)["id"], 1)
+
+    def test_a_lost_access_ends_the_hold(self):
+        box = Box(self)
+        out = Out()
+        executor = FakeExecutor([page([1], 1), 403])
+        with self.failing_save(5):
+            stop, _ = box.cycle(executor, box.output(None, "exit-on-event", out=out), "exit-on-event")
+        self.assertEqual(stop.reason, "visibility_lost")
+        self.assertNotIn("delivered", [l.get("reason") for l in out.lines()])
+
+
 class ExitOnEventTest(unittest.TestCase):
     """Matrix row #41 (US-3 "the stdout guarantee", INV-11)."""
 

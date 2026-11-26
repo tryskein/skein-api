@@ -238,8 +238,12 @@ func wholeSecondsAtLeastOne(d time.Duration) int {
 // @Description  carrier is the journal (`unfit`: its line, or its stand-in
 // @Description  that points at the journal) waits while the journal refuses
 // @Description  its record (`degraded` `journal_unavailable` once, then
-// @Description  `recovered`); the cursor does not pass it. Every start takes,
-// @Description  in this order: the one-runner lock
+// @Description  `recovered`); the cursor does not pass it. A state that
+// @Description  cannot be written holds the run (`degraded`
+// @Description  `state_unavailable`, then `recovered`; 401 and 403 still stop
+// @Description  it): the cursor moves, and exit-on-event prints `delivered`,
+// @Description  only after the state is saved. Every start takes, in this
+// @Description  order: the one-runner lock
 // @Description  (the stable file skein-monitor/locks/<key>.lock of the token
 // @Description  path), the token (opened, checked private, read, its
 // @Description  descriptor closed), state.lock, a second check of the result
