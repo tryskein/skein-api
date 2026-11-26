@@ -163,11 +163,17 @@ def alive(pid):
     return True
 
 
+# The event of each stop line these tests meet, as the stop protocol states
+# it (the spec's table of new reasons; the existing ones as they were).
+STOP_EVENTS = {"token_file_missing": "closed", "already_running": "duplicate", "config_invalid": "closed",
+               "misconfigured": "closed"}
+
+
 def one_stop(test, code, lines, reason, want_code):
     """Exactly one line, the stop line of reason, and no monitor_started."""
     test.assertEqual(len(lines), 1, lines)
     test.assertEqual(lines[0]["reason"], reason, lines)
-    test.assertEqual(lines[0]["event"], RUNNER.STOPS[reason][0])
+    test.assertEqual(lines[0]["event"], STOP_EVENTS[reason])
     test.assertEqual(code, want_code)
 
 
@@ -343,7 +349,13 @@ class JournalMethodTest(unittest.TestCase):
         pre = box.preflight()
         code, lines = box.start(pre["preflightId"], SKEIN_PUBLIC_URL="")
         one_stop(self, code, lines, "misconfigured", 1)
-        self.assertEqual(lines[0]["action"], RUNNER.stop_action("misconfigured", ISSUE))
+        # The text and the token-file fate it always had: a known path is
+        # deleted.
+        self.assertEqual(lines[0]["action"],
+                         "The bootstrap of the monitor for issue %s is broken (the server address or the "
+                         "token file path is not set). Mint a new monitor with "
+                         'skein_get_monitor_script(id="%s").' % (ISSUE, ISSUE))
+        self.assertFalse(os.path.exists(box.token), "the token of a broken bootstrap was kept")
         self.assertEqual(box.pids, [])
 
 

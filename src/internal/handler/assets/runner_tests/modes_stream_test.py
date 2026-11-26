@@ -136,8 +136,15 @@ class Box(object):
         raise AssertionError("the loop returned")
 
 
-def size(text, unit=RUNNER.UNIT_CHARS):
-    return RUNNER.measure(text, unit)
+def size(text, unit="chars"):
+    """The length of a line in the unit of a limit, counted here: characters
+    (code points) or UTF-8 bytes."""
+    return len(text.encode("utf-8")) if unit == "bytes" else len(text)
+
+
+# The reference of a shortened service line (US-10 "Service lines within
+# the limit": long fields become a "see journal" reference).
+SEE_JOURNAL = "see journal"
 
 
 class LimitsTest(unittest.TestCase):
@@ -153,7 +160,7 @@ class LimitsTest(unittest.TestCase):
         box.output({"line": {"max": 120, "unit": "chars"}}, "stream", out=out).lifecycle(line)
         (_, text), = out.writes
         self.assertLessEqual(size(text.rstrip("\n")), 120)
-        self.assertEqual(json.loads(text)["action"], RUNNER.SEE_JOURNAL)
+        self.assertEqual(json.loads(text)["action"], SEE_JOURNAL)
         self.assertEqual(json.loads(text)["cause"], "poll_failing")
         # Still too long: event and cause only.
         out = Out()
