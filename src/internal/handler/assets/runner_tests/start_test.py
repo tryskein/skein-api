@@ -463,11 +463,12 @@ class JournalMethodTest(unittest.TestCase):
         code, lines = box.start(pre["preflightId"], SKEIN_PUBLIC_URL="")
         one_stop(self, code, lines, "misconfigured", 1)
         # The text and the token-file fate it always had: a known path is
-        # deleted.
+        # deleted. The command of the new mint keeps the parameters of this
+        # monitor (US-12 "reissue commands"): client and platform.
         self.assertEqual(lines[0]["action"],
                          "The bootstrap of the monitor for issue %s is broken (the server address or the "
                          "token file path is not set). Mint a new monitor with "
-                         'skein_get_monitor_script(id="%s").' % (ISSUE, ISSUE))
+                         'skein_get_monitor_script(id="%s", client="alpha", platform="posix").' % (ISSUE, ISSUE))
         self.assertFalse(os.path.exists(box.token), "the token of a broken bootstrap was kept")
         self.assertEqual(box.pids, [])
 
