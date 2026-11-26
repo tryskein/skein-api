@@ -532,3 +532,39 @@ func TestAgentScriptHandler_SHA256IsOfTheServedBytes(t *testing.T) {
 		t.Fatalf("SHA256() = %s, want the digest of the served body %s", got, want)
 	}
 }
+
+// TestAgentScriptHandler_SHA256CoversEverySubstitution — П-2 (row #10): for
+// handlers built with independent timings and token windows (a zero and a
+// sub-second window among them), SHA256() is the digest of the bytes Script
+// serves, the served body carries no placeholder, and handlers with
+// different values serve bodies with different digests.
+func TestAgentScriptHandler_SHA256CoversEverySubstitution(t *testing.T) {
+	type values struct {
+		poll                                   int
+		ceiling, limit, stall, tokenIdleWindow time.Duration
+	}
+	cases := []values{
+		{3, 11 * time.Second, 17 * time.Second, 5 * time.Minute, 0},
+		{4, 13 * time.Second, 19 * time.Second, 7 * time.Minute, 999 * time.Millisecond},
+		{5, 29 * time.Second, 31 * time.Second, 9 * time.Minute, 4 * time.Hour},
+	}
+	seen := map[string]values{}
+	for _, v := range cases {
+		h := NewAgentScriptHandler(v.poll, v.ceiling, v.limit, v.stall, v.tokenIdleWindow)
+		rec := httptest.NewRecorder()
+		h.Script(rec, httptest.NewRequest(http.MethodGet, "/agent/v1/monitor-script", nil))
+		body := rec.Body.Bytes()
+		sum := sha256.Sum256(body)
+		served := hex.EncodeToString(sum[:])
+		if h.SHA256() != served {
+			t.Fatalf("%+v: SHA256() = %s, served body digest = %s", v, h.SHA256(), served)
+		}
+		if bytes.Contains(body, []byte("__SKEIN_")) {
+			t.Fatalf("%+v: served body still carries a __SKEIN_ placeholder", v)
+		}
+		if other, dup := seen[served]; dup {
+			t.Fatalf("handlers %+v and %+v serve bodies with the same digest", other, v)
+		}
+		seen[served] = v
+	}
+}
