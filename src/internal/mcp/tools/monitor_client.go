@@ -119,7 +119,9 @@ func monitorRefusal(code, field, message string) *mcpgo.CallToolResult {
 
 // validWindowsTokenDir reports whether dir is an absolute Windows path with a
 // drive letter that names a directory the server may build the token path
-// in: no ".." component, no control character, none of the characters
+// in: no component ending in a dot or a space (Windows strips those, so
+// ".. " and "..." resolve to the parent, and "." and ".." are such
+// components too), no control character, none of the characters
 // Windows forbids in a path (<>"|?* and a colon past the drive). A UNC path
 // and a relative path have no drive letter. Spaces, Unicode and apostrophes
 // are allowed: prepare and bootstrap quote them for the record's shell.
@@ -136,7 +138,7 @@ func validWindowsTokenDir(dir string) bool {
 		return false
 	}
 	for _, part := range strings.FieldsFunc(dir[3:], func(r rune) bool { return r == '\\' || r == '/' }) {
-		if part == ".." {
+		if strings.HasSuffix(part, ".") || strings.HasSuffix(part, " ") {
 			return false
 		}
 	}
