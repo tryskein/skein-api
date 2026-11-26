@@ -113,10 +113,15 @@ def json_path_value(doc, path):
     return json.dumps(doc)
 
 
-def outcome_sign_matches(match, exit_code=None, doc=None, http_status=None):
+def outcome_sign_matches(match, exit_code=None, doc=None, http_status=None, stderr=None):
     """Whether an answer carries the sign of a table row: every criterion
-    the row states holds. A row without a criterion matches nothing."""
+    the row states holds. A row without a criterion matches nothing. stderr
+    is what an argv program wrote there (bytes; None: no program ran)."""
     stated = False
+    if match.get("stderrEmpty") is not None:
+        stated = True
+        if stderr is None or (len(stderr.strip()) == 0) != match["stderrEmpty"]:
+            return False
     if match.get("exitCode") is not None:
         stated = True
         if exit_code is None or exit_code != match["exitCode"]:
@@ -145,13 +150,35 @@ def env_value(element, env):
 
 
 def expand_path_value(value, env):
-    """A probe path: a literal, or "{env:NAME}" optionally followed by "/"
-    and literal elements."""
+    """A probe path: a literal, "~/" and literal elements (the home
+    directory of the agent process), or "{env:NAME}" optionally followed by
+    "/" and literal elements. ExecutorRefusal when the variable it needs is
+    not set."""
+    if value.startswith("~/"):
+        home = env.get("HOME", "")
+        if not home:
+            raise ExecutorRefusal("variable HOME is not set")
+        return os.path.join(home, value[2:])
     head, sep, rest = value.partition("/")
     if head.startswith("{env:"):
         base = env_value(head, env)
         return os.path.join(base, rest) if sep and rest else base
     return value
+
+
+def probe_path(probe, env):
+    """The path a dir-writable or socket-connect probe checks: its path, or
+    the first of its order of paths whose variable is set. ExecutorRefusal
+    when none resolves."""
+    paths = probe.get("paths")
+    if not paths:
+        return expand_path_value(probe.get("path", ""), env)
+    for value in paths:
+        try:
+            return expand_path_value(value, env)
+        except ExecutorRefusal:
+            continue
+    raise ExecutorRefusal("no path of the probe resolves: %s" % ", ".join(paths))
 
 
 def expand_argv(argv, env, text=None, text_file=None):
@@ -536,10 +563,10 @@ class SystemProbeRunner(ProbeRunner):
             if kind == "argv":
                 return self._argv(channel, probe, env)
             if kind == "dir-writable":
-                path = expand_path_value(probe.get("path", ""), env)
+                path = probe_path(probe, env)
                 return PROBE_AVAILABLE if os.path.isdir(path) and dir_writable(path) else PROBE_UNAVAILABLE
             if kind == "socket-connect":
-                return self._socket(expand_path_value(probe.get("path", ""), env))
+                return self._socket(probe_path(probe, env))
             if kind == "tcp-reach":
                 return self._tcp(env_value(probe.get("address", ""), env))
         except ExecutorRefusal as exc:
@@ -554,7 +581,8 @@ class SystemProbeRunner(ProbeRunner):
         if result.timed_out:
             raise ProbeError("timed out after %d s" % timeout)
         for row in probe.get("results") or []:
-            if outcome_sign_matches(row.get("match") or {}, exit_code=result.exit_code, doc=result.json):
+            if outcome_sign_matches(row.get("match") or {}, exit_code=result.exit_code, doc=result.json,
+                                    stderr=result.stderr):
                 return row.get("result")
         return PROBE_UNAVAILABLE
 

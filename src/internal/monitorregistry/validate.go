@@ -88,6 +88,8 @@ func (es ValidationErrors) Has(rule Rule) bool {
 var (
 	idPattern      = regexp.MustCompile(`^[a-z0-9-]{1,64}$`)
 	envNamePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+	// A long option of an agent's command line, without a value.
+	longOptionPattern = regexp.MustCompile(`^--[a-z0-9][a-z0-9-]*$`)
 )
 
 var (
@@ -254,12 +256,15 @@ func (v *validator) agent(path string, a *Agent, channelSteps map[string]int) {
 			v.add(RuleInvalid, mpath+".channel", "only a delivery method names a channel")
 		}
 		v.text(RuleInvalid, mpath+".instruction", m.Instruction)
-		v.conditions(mpath+".conditions", m.Conditions)
+		v.conditions(mpath+".conditions", m.Conditions, true)
 		v.limits(mpath+".limits", m.Limits)
 	}
 }
 
-func (v *validator) conditions(path string, c Conditions) {
+// conditions checks a set of conditions; agentOptions says whether it may
+// read the agent process's argument list (a method's conditions may, a
+// channel's detection may not).
+func (v *validator) conditions(path string, c Conditions, agentOptions bool) {
 	for i, e := range c.Env {
 		epath := fmt.Sprintf("%s.env[%d]", path, i)
 		if !envNamePattern.MatchString(e.Name) {
@@ -285,6 +290,14 @@ func (v *validator) conditions(path string, c Conditions) {
 		}
 	}
 	v.names(path+".programs", c.Programs)
+	if len(c.AgentOptionsAbsent) > 0 && !agentOptions {
+		v.add(RuleInvalid, path+".agentOptionsAbsent", "only a method of an agent record reads the agent process's arguments")
+	}
+	for i, o := range c.AgentOptionsAbsent {
+		if !longOptionPattern.MatchString(o) {
+			v.add(RuleInvalid, fmt.Sprintf("%s.agentOptionsAbsent[%d]", path, i), "%q is not a long option of the form --name", o)
+		}
+	}
 }
 
 func (v *validator) limits(path string, l *Limits) {
@@ -336,7 +349,7 @@ func (v *validator) channel(path string, c *Channel) {
 	if len(c.Detect.Env) == 0 && len(c.Detect.Programs) == 0 {
 		v.add(RuleInvalid, path+".detect", "the channel has no detection sign")
 	}
-	v.conditions(path+".detect", c.Detect)
+	v.conditions(path+".detect", c.Detect, false)
 	v.executor(path+".executor", c.Executor)
 	v.idle(path+".idle", c.Idle)
 
@@ -393,6 +406,19 @@ func (v *validator) channel(path string, c *Channel) {
 	}
 	v.limits(path+".limits", c.Limits)
 	v.warnings(path+".warnings", c.Warnings)
+	if a := c.Address; a != nil {
+		if !envNamePattern.MatchString(a.Env) {
+			v.add(RuleInvalid, path+".address.env", "%q is not an environment variable name", a.Env)
+		}
+		for i, q := range a.Qualifiers {
+			if !envNamePattern.MatchString(q) {
+				v.add(RuleInvalid, fmt.Sprintf("%s.address.qualifiers[%d]", path, i), "%q is not an environment variable name", q)
+			}
+		}
+		if a.RootPIDEnv != "" && !envNamePattern.MatchString(a.RootPIDEnv) {
+			v.add(RuleInvalid, path+".address.rootPidEnv", "%q is not an environment variable name", a.RootPIDEnv)
+		}
+	}
 }
 
 func (v *validator) executor(path string, e Executor) {
@@ -487,6 +513,12 @@ func (v *validator) value(path, s string, allowText bool) {
 // pathValue checks a probe path: a literal, or "{env:NAME}" optionally
 // followed by "/" and literal elements.
 func (v *validator) pathValue(path, s string) {
+	if rest, home := strings.CutPrefix(s, "~/"); home {
+		if rest == "" || strings.ContainsAny(rest, "{}") {
+			v.add(RuleInvalid, path, "%q: a home path is \"~/\" followed by literal elements", s)
+		}
+		return
+	}
 	head, rest, hasRest := strings.Cut(s, "/")
 	if strings.HasPrefix(head, PlaceholderEnvPrefix) {
 		v.value(path, head, false)
@@ -520,7 +552,7 @@ func (v *validator) idle(path string, i Idle) {
 func (v *validator) signs(path string, rows []Match) {
 	for i, m := range rows {
 		rpath := fmt.Sprintf("%s[%d].match", path, i)
-		if m.ExitCode == nil && m.HTTPStatus == nil && len(m.JSON) == 0 {
+		if m.empty() {
 			v.add(RuleAmbiguousSign, rpath, "the row has no criterion")
 			continue
 		}
@@ -545,18 +577,25 @@ func (v *validator) criteriaOf(path string, rows []Match, executor string) {
 			v.add(RuleInvalid, rpath+".httpStatus", "an argv answer has no HTTP status")
 		case executor == ExecutorHTTP && m.ExitCode != nil:
 			v.add(RuleInvalid, rpath+".exitCode", "an http answer has no exit code")
+		case executor == ExecutorHTTP && m.StderrEmpty != nil:
+			v.add(RuleInvalid, rpath+".stderrEmpty", "an http answer has no stderr")
 		}
 	}
+}
+
+// empty reports whether the sign states no criterion.
+func (m Match) empty() bool {
+	return m.ExitCode == nil && m.HTTPStatus == nil && len(m.JSON) == 0 && m.StderrEmpty == nil
 }
 
 // overlaps reports whether one answer can satisfy both signs: every
 // criterion stated by both has the same value. A sign without criteria
 // overlaps nothing (it is refused on its own).
 func (m Match) overlaps(o Match) bool {
-	if m.ExitCode == nil && m.HTTPStatus == nil && len(m.JSON) == 0 {
+	if m.empty() || o.empty() {
 		return false
 	}
-	if o.ExitCode == nil && o.HTTPStatus == nil && len(o.JSON) == 0 {
+	if m.StderrEmpty != nil && o.StderrEmpty != nil && *m.StderrEmpty != *o.StderrEmpty {
 		return false
 	}
 	if m.ExitCode != nil && o.ExitCode != nil && *m.ExitCode != *o.ExitCode {
@@ -582,7 +621,7 @@ func (v *validator) probe(path string, p *Probe) {
 	switch p.Type {
 	case ProbeArgv:
 		v.argv(path+".argv", p.Argv, false)
-		if p.Path != "" || p.Address != "" {
+		if p.Path != "" || len(p.Paths) > 0 || p.Address != "" {
 			v.add(RuleInvalid, path, "an argv probe has no path and no address")
 		}
 		if len(p.Results) == 0 {
@@ -614,7 +653,7 @@ func (v *validator) probe(path string, p *Probe) {
 			v.add(RuleInvalid, path+".results", "a %s probe has a fixed meaning and no result table", p.Type)
 		}
 		if p.Type == ProbeTCPReach {
-			if p.Path != "" {
+			if p.Path != "" || len(p.Paths) > 0 {
 				v.add(RuleInvalid, path+".path", "a tcp-reach probe has an address, not a path")
 			}
 			v.value(path+".address", p.Address, false)
@@ -622,7 +661,16 @@ func (v *validator) probe(path string, p *Probe) {
 			if p.Address != "" {
 				v.add(RuleInvalid, path+".address", "a %s probe has a path, not an address", p.Type)
 			}
-			v.pathValue(path+".path", p.Path)
+			switch {
+			case p.Path != "" && len(p.Paths) > 0:
+				v.add(RuleInvalid, path+".paths", "a %s probe gives a path or an order of paths, not both", p.Type)
+			case len(p.Paths) > 0:
+				for i, s := range p.Paths {
+					v.pathValue(fmt.Sprintf("%s.paths[%d]", path, i), s)
+				}
+			default:
+				v.pathValue(path+".path", p.Path)
+			}
 		}
 	}
 }

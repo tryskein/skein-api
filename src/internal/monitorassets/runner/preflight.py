@@ -273,9 +273,30 @@ def program_found(name, env):
     return shutil.which(name, path=env.get("PATH", os.defpath)) is not None
 
 
-def conditions_hold(conds, env):
-    """(True, None) when every condition holds, else (False, cause)."""
+def agent_options_absent(options, agent):
+    """(True, None) when the argument list of the agent process carries none
+    of the long options, neither alone nor as "--name=value"; an agent
+    process that is not determined, or whose arguments cannot be read, does
+    not hold."""
+    argv = agent.argv if agent is not None else None
+    if argv is None:
+        return False, "the arguments of the agent process cannot be read"
+    for option in options:
+        for arg in argv[1:]:
+            if arg == option or arg.startswith(option + "="):
+                return False, "the agent process runs with %s" % option
+    return True, None
+
+
+def conditions_hold(conds, env, agent=None):
+    """(True, None) when every condition holds, else (False, cause). agent is
+    the agent process (identity.Placement.agent) a method's condition on its
+    options reads."""
     conds = conds or {}
+    if conds.get("agentOptionsAbsent"):
+        ok, cause = agent_options_absent(conds["agentOptionsAbsent"], agent)
+        if not ok:
+            return False, cause
     for cond in conds.get("env") or []:
         if not env_holds(cond, env):
             return False, "variable %s not set as required" % cond.get("name")
@@ -374,7 +395,8 @@ def choose(ctx):
         if kept is not None and kind not in kept:
             reasons.append("%s: not used under host %s" % (kind, under[0]))
             continue
-        ok, cause = conditions_hold(m.get("conditions"), ctx.env)
+        agent_proc = ctx.placement.agent if (m.get("conditions") or {}).get("agentOptionsAbsent") else None
+        ok, cause = conditions_hold(m.get("conditions"), ctx.env, agent_proc)
         if not ok:
             reasons.append("%s: %s" % (m.get("channel") or kind, cause))
             continue

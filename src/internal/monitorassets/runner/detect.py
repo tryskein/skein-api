@@ -142,6 +142,22 @@ class RegistryDetector(Detector):
             return False
         return True
 
+    def address_specs(self, ctx):
+        """The AddressSpecs of the channels whose record names an address,
+        in the order of the method (step, then order): the identity of the
+        addressee holds every address the agent process owns. A host or
+        terminal environment of steps 5-6 is never a nested agent's."""
+        specs = []
+        for step in (3, 5, 6, 7):
+            for c in self._channels(ctx, step):
+                a = c.get("address")
+                if not a:
+                    continue
+                specs.append(AddressSpec(c["id"], a["env"], qualifiers=a.get("qualifiers") or (),
+                                         per_process=bool(a.get("perProcess")), host=step in (5, 6),
+                                         root_pid_env=a.get("rootPidEnv") or None))
+        return specs
+
     def addressee_holds(self, ctx, channel):
         """A forced host passes the same checks as a detected one."""
         return self.detected(ctx, channel)

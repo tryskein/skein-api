@@ -9,6 +9,8 @@ import (
 
 func intp(v int) *int { return &v }
 
+func boolp(v bool) *bool { return &v }
+
 // validRegistry is a registry that passes Validate: an agent with a stream
 // and a delivery method, its own delivery channel (step 3), a host (step 5)
 // and a blind channel (step 7), and an engine map to the agent. Each call
@@ -148,6 +150,34 @@ func TestValidate_RejectsEachRule(t *testing.T) {
 			r.Channels[0].Outcomes = append(r.Channels[0].Outcomes,
 				OutcomeRow{Match: Match{ExitCode: intp(0), JSON: map[string]string{"warning": "stale"}}, Outcome: OutcomeUnknown})
 		}, RuleAmbiguousSign},
+		{"agent options in a channel's detection", func(r *Registry) {
+			r.Channels[1].Detect.AgentOptionsAbsent = []string{"--remote"}
+		}, RuleInvalid},
+		{"agent option that is not a bare long option", func(r *Registry) {
+			r.Agents[0].Methods[1].Conditions.AgentOptionsAbsent = []string{"--remote=ws://x"}
+		}, RuleInvalid},
+		{"stderr criterion in the table of an http channel", func(r *Registry) {
+			r.Channels[1].Executor = Executor{Type: ExecutorHTTP, TimeoutSec: 30,
+				HTTP: &HTTPRequest{Method: "POST", URL: "{env:HOST_URL}", BodyField: "text"}}
+			r.Channels[1].Outcomes = []OutcomeRow{{Match: Match{HTTPStatus: intp(200), StderrEmpty: boolp(true)}, Outcome: OutcomeQueued}}
+		}, RuleInvalid},
+		{"exit code alone and exit code with an empty stderr", func(r *Registry) {
+			// exit 0 with an empty stderr also matches the row of exit 0 alone.
+			r.Channels[0].Outcomes = append(r.Channels[0].Outcomes,
+				OutcomeRow{Match: Match{ExitCode: intp(0), StderrEmpty: boolp(true)}, Outcome: OutcomeUnknown})
+		}, RuleAmbiguousSign},
+		{"probe with a path and an order of paths", func(r *Registry) {
+			r.Channels[0].Probes[0].Paths = []string{"~/.alpha"}
+		}, RuleInvalid},
+		{"home path with a placeholder", func(r *Registry) {
+			r.Channels[0].Probes[0] = Probe{Type: ProbeDirWritable, Source: "fixture", Paths: []string{"{env:ALPHA_HOME}", "~/{env:ALPHA_DIR}"}}
+		}, RuleInvalid},
+		{"order of paths on a tcp-reach probe", func(r *Registry) {
+			r.Channels[0].Probes[0] = Probe{Type: ProbeTCPReach, Source: "fixture", Address: "{env:ALPHA_ADDR}", Paths: []string{"~/.alpha"}}
+		}, RuleInvalid},
+		{"address read from a variable of a bad name", func(r *Registry) {
+			r.Channels[0].Address = &AddressSpec{Env: "ALPHA_THREAD", Qualifiers: []string{"ALPHA HOME"}}
+		}, RuleInvalid},
 		{"rows on different criteria that one answer can match", func(r *Registry) {
 			r.Channels[1].Outcomes = []OutcomeRow{
 				{Match: Match{JSON: map[string]string{"status": "queued"}}, Outcome: OutcomeQueued},
@@ -361,5 +391,25 @@ func TestValidate_Window(t *testing.T) {
 				t.Fatalf("the window %s: got %v, want one RuleInvalid at .limits.window.%s", tc.doc, err, tc.field)
 			}
 		})
+	}
+}
+
+// TestValidate_AcceptsTheCodexReadings — the schema readings the Codex record
+// needs pass in a correct record: a stderr criterion telling an empty stderr
+// from a warning under one exit code, an order of probe paths ending in a
+// home path, a method condition on the agent's options, and an address with
+// a qualifier.
+func TestValidate_AcceptsTheCodexReadings(t *testing.T) {
+	r := validRegistry()
+	r.Channels[0].Outcomes = []OutcomeRow{
+		{Match: Match{ExitCode: intp(0), StderrEmpty: boolp(true)}, Outcome: OutcomeQueued},
+		{Match: Match{ExitCode: intp(0), StderrEmpty: boolp(false)}, Outcome: OutcomeUnknown},
+	}
+	r.Channels[0].Probes = []Probe{{Type: ProbeDirWritable, Source: "fixture",
+		Paths: []string{"{env:ALPHA_SQLITE_HOME}", "{env:ALPHA_HOME}", "~/.alpha"}}}
+	r.Channels[0].Address = &AddressSpec{Env: "ALPHA_THREAD", Qualifiers: []string{"ALPHA_HOME"}, PerProcess: true}
+	r.Agents[0].Methods[1].Conditions.AgentOptionsAbsent = []string{"--remote"}
+	if err := r.Validate(); err != nil {
+		t.Fatalf("a correct record with the Codex readings was refused: %v", err)
 	}
 }

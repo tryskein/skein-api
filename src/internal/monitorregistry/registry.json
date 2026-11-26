@@ -74,9 +74,121 @@
         }
       ],
       "windowsShell": "git-bash"
+    },
+    {
+      "id": "codex",
+      "about": "Codex CLI in a terminal: the runner detaches and queues each event into the agent's own thread with codex queue.",
+      "source": "github.com/openai/codex ae21235afbd5ba6556c2ab4b64f6afc96a139ef8 (codex-rs): core/src/exec_env.rs (every command of a thread gets CODEX_THREAD_ID and CODEX_SESSION_ID); cli/src/queue_cmd.rs#QueueCommand (--thread, --message; --remote selects a remote app server, whose address no variable of the agent's commands carries, so a thread on a remote server has no source of its address); native executable 'codex' started by the npm wrapper bin/codex.js.",
+      "process": {
+        "executables": [
+          "codex"
+        ]
+      },
+      "methods": [
+        {
+          "kind": "delivery",
+          "channel": "codex-queue",
+          "conditions": {
+            "env": [
+              {
+                "name": "CODEX_THREAD_ID"
+              }
+            ],
+            "agentOptionsAbsent": [
+              "--remote"
+            ]
+          },
+          "instruction": "Run `command` once in a shell: it returns after the line {\"event\":\"monitor_started\",...} and the monitor queues every event into this thread with codex queue on its own; a queued message starts a turn when the thread is idle."
+        }
+      ]
     }
   ],
-  "channels": [],
+  "channels": [
+    {
+      "id": "codex-queue",
+      "about": "codex queue: the own delivery command of Codex, which puts a user message into the queue of a thread by its id; the thread takes it when idle.",
+      "source": "github.com/openai/codex ae21235afbd5ba6556c2ab4b64f6afc96a139ef8 (codex-rs): cli/src/queue_cmd.rs#QueueCommand and tui/src/session_queue_commands.rs#run_session_queue_command (prints 'Queued message <id> for thread <id>.' and exits 0; the only warning, on stderr, belongs to --resume, which is not passed; an error exits non-zero after the request may have been sent); tui/src/lib.rs#maybe_probe_default_daemon_socket and #app_server_target_for_launch (the local app-server daemon socket is used when it answers, otherwise an embedded app server writes the queue, so the socket is no boundary of the delivery); uds/src/daemon_directory.rs#shared_daemon_socket_directory (the socket lives under /tmp/codex-daemon-<uid>, hidden by sandboxes); state/src/lib.rs#SQLITE_HOME_ENV and utils/home-dir find_codex_home (the queue is in the SQLite state database under CODEX_SQLITE_HOME, else CODEX_HOME, else ~/.codex); protocol/src/user_input.rs#MAX_USER_INPUT_TEXT_CHARS (1048576 characters); Linux execve(2) MAX_ARG_STRLEN (131072 bytes per argument, the terminating NUL included).",
+      "step": 3,
+      "order": 1,
+      "kind": "addressed",
+      "blind": false,
+      "detect": {
+        "env": [
+          {
+            "name": "CODEX_THREAD_ID"
+          }
+        ]
+      },
+      "executor": {
+        "type": "argv",
+        "argv": [
+          "codex",
+          "queue",
+          "--thread",
+          "{env:CODEX_THREAD_ID}",
+          "--message",
+          "{text}"
+        ],
+        "feed": "arg",
+        "timeoutSec": 60
+      },
+      "idle": {
+        "type": "none"
+      },
+      "outcomes": [
+        {
+          "match": {
+            "exitCode": 0,
+            "stderrEmpty": true
+          },
+          "outcome": "queued"
+        },
+        {
+          "match": {
+            "exitCode": 0,
+            "stderrEmpty": false
+          },
+          "outcome": "unknown"
+        }
+      ],
+      "probes": [
+        {
+          "type": "dir-writable",
+          "source": "github.com/openai/codex ae21235afbd5ba6556c2ab4b64f6afc96a139ef8 (codex-rs): state/src/lib.rs#SQLITE_HOME_ENV, utils/home-dir find_codex_home (the directory of the state database that holds the queue).",
+          "paths": [
+            "{env:CODEX_SQLITE_HOME}",
+            "{env:CODEX_HOME}",
+            "~/.codex"
+          ]
+        }
+      ],
+      "addressee": {
+        "process": "none",
+        "limitation": "A thread id is a UUID and a new thread gets a new one, so the id is not reused; a closed or interrupted thread still takes the message into its queue (queued, no turn)."
+      },
+      "binaries": {
+        "linux": [
+          "codex"
+        ],
+        "macos": [
+          "codex"
+        ]
+      },
+      "limits": {
+        "line": {
+          "max": 131071,
+          "unit": "bytes"
+        }
+      },
+      "address": {
+        "env": "CODEX_THREAD_ID",
+        "qualifiers": [
+          "CODEX_HOME"
+        ],
+        "perProcess": true
+      }
+    }
+  ],
   "shells": {
     "source": "POSIX: shells(5), the /etc/shells list of valid login shells (sh, bash, dash, zsh, ksh, mksh, fish, tcsh, csh, nu, pwsh are the names such lists carry); Windows: Microsoft Learn 'cmd' (cmd.exe), 'about_PowerShell_exe' (powershell.exe) and 'about_Pwsh' (pwsh.exe).",
     "names": [

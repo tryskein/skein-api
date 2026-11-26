@@ -33,7 +33,7 @@ def answer_sign(exit_code=None, doc=None, http_status=None, timed_out=False):
 
 
 def classify(rows, exit_code=None, doc=None, http_status=None, timed_out=False,
-             written=False, earlier_refused=True):
+             written=False, earlier_refused=True, stderr=None):
     """(outcome, sign) of one answer by the closed table rows. written: the
     text was handed to the channel in this attempt (a step that may have
     written it ran); earlier_refused: every earlier attempt of this
@@ -41,7 +41,7 @@ def classify(rows, exit_code=None, doc=None, http_status=None, timed_out=False,
     if timed_out:
         return OUTCOME_UNKNOWN, answer_sign(timed_out=True)
     matched = [r for r in rows or [] if outcome_sign_matches(r.get("match") or {}, exit_code=exit_code,
-                                                      doc=doc, http_status=http_status)]
+                                                      doc=doc, http_status=http_status, stderr=stderr)]
     if len(matched) != 1:
         return OUTCOME_UNKNOWN, answer_sign(exit_code, doc, http_status)
     outcome = matched[0].get("outcome")
@@ -55,4 +55,5 @@ def classify(rows, exit_code=None, doc=None, http_status=None, timed_out=False,
 def classify_result(rows, result, written=False, earlier_refused=True):
     """classify for a CallResult of the argv executor."""
     return classify(rows, exit_code=result.exit_code, doc=result.json, timed_out=result.timed_out,
+                    stderr=result.stderr,
                     written=written, earlier_refused=earlier_refused)

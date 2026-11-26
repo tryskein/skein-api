@@ -159,6 +159,12 @@ type Conditions struct {
 	Settings []SettingCondition `json:"settings,omitempty"`
 	// Programs are executables that must be found.
 	Programs []string `json:"programs,omitempty"`
+	// AgentOptionsAbsent are long options the argument list of the agent
+	// process must not carry, neither as an element of its own ("--remote")
+	// nor with a value ("--remote=URL"). An argument list that cannot be read
+	// does not hold. Only a method of an agent record states it: a channel's
+	// detection does not read the agent process.
+	AgentOptionsAbsent []string `json:"agentOptionsAbsent,omitempty"`
 }
 
 // EnvCondition holds when the variable is set and non-empty and, when
@@ -300,6 +306,28 @@ type Channel struct {
 	Limits *Limits `json:"limits,omitempty"`
 	// Warnings are shown with the instructions when the channel is chosen.
 	Warnings []string `json:"warnings,omitempty"`
+	// Address is the address of the addressee in this channel, as the
+	// preflight reads it from the environment of the agent process; it joins
+	// the identity of the addressee (the ledger key and the check before a
+	// transfer). Absent when the channel has no address of its own.
+	Address *AddressSpec `json:"address,omitempty"`
+}
+
+// AddressSpec says where the address of the addressee in a channel comes
+// from ("Addressee and check", items 2 and 5).
+type AddressSpec struct {
+	// Env is the variable that holds the address.
+	Env string `json:"env"`
+	// Qualifiers are variables whose values qualify the address: one value
+	// under two qualifiers is two addressees.
+	Qualifiers []string `json:"qualifiers,omitempty"`
+	// PerProcess states that the harness sets Env on every agent process
+	// itself, so a nested agent still owns it.
+	PerProcess bool `json:"perProcess,omitempty"`
+	// RootPIDEnv names the variable with the root process of the host's
+	// agent: the address is the agent's only when its agent process is that
+	// root or the first agent process under it.
+	RootPIDEnv string `json:"rootPidEnv,omitempty"`
 }
 
 // Platforms of Channel.Binaries.
@@ -412,6 +440,10 @@ type Match struct {
 	JSON map[string]string `json:"json,omitempty"`
 	// HTTPStatus is the status of an http response.
 	HTTPStatus *int `json:"httpStatus,omitempty"`
+	// StderrEmpty, when set, is whether the argv program wrote nothing to
+	// its stderr: true holds for an empty stderr, false for any output there
+	// (a warning).
+	StderrEmpty *bool `json:"stderrEmpty,omitempty"`
 }
 
 // Probe types (non-delivering availability checks).
@@ -443,9 +475,14 @@ type Probe struct {
 	// an event.
 	Argv []string `json:"argv,omitempty"`
 	// Path is the directory of a dir-writable probe or the socket of a
-	// socket-connect probe: a literal, or "{env:NAME}" optionally followed
-	// by "/" and literal path elements.
+	// socket-connect probe: a literal, "~/" followed by literal path
+	// elements (the home directory of the agent process), or "{env:NAME}"
+	// optionally followed by "/" and literal path elements.
 	Path string `json:"path,omitempty"`
+	// Paths replaces Path when the source names an order of places: the
+	// first path whose variable is set (a "~/" path always resolves) is
+	// probed. A probe of a path type gives exactly one of Path and Paths.
+	Paths []string `json:"paths,omitempty"`
 	// Address is the host:port of a tcp-reach probe, a literal or a
 	// "{env:NAME}" placeholder.
 	Address string `json:"address,omitempty"`

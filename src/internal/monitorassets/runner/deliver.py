@@ -415,7 +415,8 @@ class DeliverySink(object):
             verdict = None
             if not result.timed_out:
                 for row in command.get("results") or []:
-                    if outcome_sign_matches(row.get("match") or {}, exit_code=result.exit_code, doc=result.json):
+                    if outcome_sign_matches(row.get("match") or {}, exit_code=result.exit_code, doc=result.json,
+                                            stderr=result.stderr):
                         verdict = row.get("result")
                         break
             if verdict == "gone":
