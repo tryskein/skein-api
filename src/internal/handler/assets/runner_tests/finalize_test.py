@@ -314,6 +314,20 @@ class EndUnderLockTest(unittest.TestCase):
         last = self.mon.lines()[-1]
         self.assertEqual((last["event"], last["reason"]), ("closed", "root_closed"))
 
+    def test_the_receipt_of_a_client_mode_stop_names_the_working_command(self):
+        # Review finding 22 of wave 7 (the stop table: in client mode
+        # stopped and internal_error name the working command of the
+        # preflight, never the bootstrap).
+        for reason in ("stopped", "internal_error"):
+            with self.subTest(reason=reason):
+                world = World(self, [chan("A", "chan-a")])
+                mon = world.monitor()
+                world.runner.finish_client(world.runner.Stop(reason), ISSUE, mon.token, sink=mon.sink,
+                                           write=lambda line: None, preflight=3)
+                (call,) = world.prog("chan-a").calls()
+                self.assertIn("Run the working command of preflight 3 again", call["stdin"])
+                self.assertNotIn("bootstrap", call["stdin"])
+
     def test_a_failed_receipt_leaves_only_the_journal_line(self):
         self.world.prog("chan-a").respond([{"exit": 9}])
         self.end(self.r.Stop("stopped"), sink=self.mon.sink)

@@ -201,10 +201,11 @@ def apply_file_fate(token_file, delete):
     _point("token_dir_removed")
 
 
-def receipt_text(outcome, issue):
-    """The plain text of the receipt of a stop that keeps access."""
+def receipt_text(outcome, issue, preflight=None):
+    """The plain text of the receipt of a stop that keeps access; in client
+    mode its action names the working command of preflight `preflight`."""
     return "%s. monitor stopped: reason=%s issue=%s. %s" % (
-        DELIVERY_LABEL, outcome.reason, issue, stop_action(outcome.reason, issue, outcome.detail))
+        DELIVERY_LABEL, outcome.reason, issue, stop_action(outcome.reason, issue, outcome.detail, preflight))
 
 
 def finish_client(outcome, issue, token_file, sink=None, write=None, preflight=None):
@@ -219,7 +220,7 @@ def finish_client(outcome, issue, token_file, sink=None, write=None, preflight=N
         line["status"] = outcome.status
     if sink is not None:
         if outcome.reason in RECEIPT_STOPS and hasattr(sink, "receipt"):
-            sink.receipt(receipt_text(outcome, issue))
+            sink.receipt(receipt_text(outcome, issue, preflight))
         sink.lifecycle(line)
     apply_file_fate(token_file, outcome.delete_token)
     return finish(Stop(outcome.reason, status=outcome.status, detail=outcome.detail, preflight=preflight),
