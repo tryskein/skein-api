@@ -1,7 +1,11 @@
 package tools
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -54,20 +58,39 @@ func prepareEvents(lines []map[string]any) []string {
 	return out
 }
 
-// loaderModeOf asks python3 what the loader file assigns to
-// _SKEIN_LOADER_MODE (by its syntax tree, without running it).
+// loaderModeOf runs the loader file at path the way the working command
+// does (python3 <file>) against a local server whose runner body prints the
+// _SKEIN_LOADER_MODE the loader handed it, and returns that mode.
 func loaderModeOf(t *testing.T, path string) string {
 	t.Helper()
-	out, err := exec.Command("python3", "-c", `import ast, sys
-tree = ast.parse(open(sys.argv[1]).read())
-for node in tree.body:
-    if isinstance(node, ast.Assign) and any(getattr(x, "id", "") == "_SKEIN_LOADER_MODE" for x in node.targets):
-        print(ast.literal_eval(node.value))
-`, path).Output()
-	if err != nil {
-		t.Fatalf("read the loader mode: %v", err)
+	body := []byte("import json, sys\nprint(json.dumps({\"mode\": _SKEIN_LOADER_MODE}))\nsys.exit(0)\n")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/agent/v1/monitor-script" {
+			http.NotFound(w, r)
+			return
+		}
+		_, _ = w.Write(body)
+	}))
+	defer srv.Close()
+	token := filepath.Join(filepath.Dir(path), "token")
+	if err := os.WriteFile(token, []byte("skm_"+strings.Repeat("m", 43)), 0o600); err != nil {
+		t.Fatal(err)
 	}
-	return strings.TrimSpace(string(out))
+	sum := sha256.Sum256(body)
+	cmd := exec.Command("python3", path)
+	cmd.Env = append(os.Environ(), "SKEIN_PUBLIC_URL="+srv.URL, "SKEIN_TOKEN_FILE="+token,
+		"SKEIN_RUNNER_SHA256="+hex.EncodeToString(sum[:]), "SKEIN_ISSUE=sk-1")
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("run the loader: %v; stdout %q", err, out)
+	}
+	var got struct {
+		Mode string `json:"mode"`
+	}
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatalf("the served body did not print its mode: %q", out)
+	}
+	return got.Mode
 }
 
 func requirePython(t *testing.T) {
