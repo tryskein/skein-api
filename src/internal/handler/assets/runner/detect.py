@@ -85,6 +85,13 @@ class RegistryDetector(Detector):
                     self._bindings.append(binding)
         return self._bindings
 
+    def binding(self, ctx, channel_id):
+        """The confirmed binding to a pane of the blind channel, or None."""
+        for b in self.bindings(ctx):
+            if b.channel["id"] == channel_id and b.confirmed:
+                return b
+        return None
+
     def in_multiplexer(self, ctx):
         return any(b.confirmed and b.multiplexer for b in self.bindings(ctx))
 

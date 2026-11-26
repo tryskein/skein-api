@@ -86,12 +86,15 @@ class FakeDetector(RUNNER.Detector):
     """Hands the preflight the hosts, blind channels and launching host it is
     given; on_hosts runs while the preflight asks for hosts."""
 
-    def __init__(self, hosts=(), blind=(), under=None, on_hosts=None):
+    def __init__(self, hosts=(), blind=(), under=None, on_hosts=None, bound=None):
         RUNNER.Detector.__init__(self)
         self._hosts = list(hosts)
         self._blind = list(blind)
         self._under = under
         self.on_hosts = on_hosts
+        # Blind channels whose pane binding is confirmed: those it finds,
+        # unless told otherwise.
+        self._bound = list(blind if bound is None else bound)
 
     def under_host(self, ctx):
         return self._under
@@ -103,6 +106,11 @@ class FakeDetector(RUNNER.Detector):
 
     def blind(self, ctx):
         return list(self._blind)
+
+    def binding(self, ctx, channel_id):
+        if channel_id not in self._bound:
+            return None
+        return RUNNER.Binding(ctx.registry.channel(channel_id), True)
 
 
 def placement(client="alpha"):
@@ -236,6 +244,17 @@ class MethodOrderTest(unittest.TestCase):
         self.assertEqual((choice.method, choice.channel), ("journal", None))
         choice = choose(self.box.env(), detector, channel="journal", forced="journal")
         self.assertEqual((choice.method, choice.channel), ("journal", None))
+
+    def test_forced_blind_channel_needs_its_pane_binding(self):
+        # US-7, decision 8: forcing lifts conditions (1) and (2), not the
+        # binding to the pane; without it the strict override gives the
+        # journal, with it the channel.
+        env = self.box.env()
+        choice = choose(env, FakeDetector(bound=[]), channel="blind-1", forced="blind-1")
+        self.assertEqual((choice.method, choice.channel), ("journal", None))
+        self.assertIn("binding", choice.reason)
+        choice = choose(env, FakeDetector(bound=["blind-1"]), channel="blind-1", forced="blind-1")
+        self.assertEqual((choice.method, choice.channel), ("detached", "blind-1"))
 
     def test_blind_ban(self):
         choice = choose(self.box.env(ALPHA_STREAM=None, OWN_Q_ID=None, CFG_DIR=None),

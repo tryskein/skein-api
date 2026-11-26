@@ -124,6 +124,16 @@ class BlindConditionsTest(unittest.TestCase):
                 self.assertEqual((choice.method, choice.channel), ("journal", None))
                 self.assertEqual(ctx.detector.blind(ctx), [])
 
+    def test_a_forced_blind_channel_needs_a_confirmed_binding(self):
+        for bindings, want in (({}, ("journal", None)), ({"emu-1": (False, False, None)}, ("journal", None)),
+                               (BOUND, ("detached", "emu-1"))):
+            with self.subTest(bindings=bindings):
+                ctx = context({}, bindings=bindings)
+                ctx.settings = RUNNER.Settings(record=ctx.settings.record, platform="posix",
+                                               channel="emu-1", forced="emu-1")
+                choice = RUNNER.choose(ctx)
+                self.assertEqual((choice.method, choice.channel), want)
+
     def test_ban_disables_blind(self):
         choice = RUNNER.choose(context({}, bindings=BOUND, blind_off=True))
         self.assertEqual((choice.method, choice.channel), ("journal", None))
