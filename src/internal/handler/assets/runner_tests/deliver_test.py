@@ -559,6 +559,39 @@ class AccessBoundaryAtHandOverTest(unittest.TestCase):
 
 
 @unittest.skipUnless(os.name == "posix", "the POSIX pipeline")
+class AddressAgainTest(unittest.TestCase):
+    """Review finding V4 of wave 7 ("Addressee and check": the address of
+    the addressee is checked before a transfer): a run whose environment
+    names another address of the channel than the preflight saw - a value
+    or a qualifier - does not deliver to it; "addressee changed"."""
+
+    IDENTITY = {"process": None, "addresses": [{"channel": "A", "value": "addr-1", "env": "A_ADDR",
+                                                "qualifiers": [["A_HOME", "/h"]]}],
+                "inherited": [], "terminal": None}
+
+    def test_another_address_in_the_environment_is_another_addressee(self):
+        for name, value in (("A_ADDR", "addr-2"), ("A_HOME", "/other")):
+            with self.subTest(variable=name):
+                world = World(self, two_channels())
+                world.env.update({"A_ADDR": "addr-1", "A_HOME": "/h"})
+                world.env[name] = value
+                mon = world.monitor(identity=self.IDENTITY)
+                mon.page([note(1)])
+                mon.page([note(2)], cursor={"ts": "2026-01-01T00:00:01Z", "id": 8})
+                self.assertEqual(world.prog("chan-a").calls(), [])
+                self.assertEqual(world.prog("chan-b").calls(), [])
+                self.assertEqual([d[:2] for d in mon.deliveries()], [(1, "unknown"), (2, "journal")])
+                self.assertEqual(len(mon.degraded("addressee_changed")), 1)
+
+    def test_the_same_address_is_delivered(self):
+        world = World(self, two_channels())
+        world.env.update({"A_ADDR": "addr-1", "A_HOME": "/h"})
+        mon = world.monitor(identity=self.IDENTITY)
+        mon.page([note(1)])
+        self.assertEqual([d[:2] for d in mon.deliveries()], [(1, "queued")])
+
+
+@unittest.skipUnless(os.name == "posix", "the POSIX pipeline")
 class StopDuringCallTest(unittest.TestCase):
     """Review finding V1 of wave 7 (INV-9: "unknown" is never sent again;
     US-12: the receipt of a stop comes after the events' outcomes): a stop

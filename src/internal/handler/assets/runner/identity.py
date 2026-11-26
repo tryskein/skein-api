@@ -185,13 +185,16 @@ class AddressSpec(object):
 
 
 class Address(object):
-    __slots__ = ("channel", "value", "qualifiers")
+    __slots__ = ("channel", "value", "qualifiers", "env")
 
-    def __init__(self, channel, value, qualifiers):
+    def __init__(self, channel, value, qualifiers, env=None):
         self.channel = channel
         self.value = value
         # ((variable, value), ...) in the order of the spec.
         self.qualifiers = qualifiers
+        # The variable the value was read from: the working runner compares
+        # it again before a transfer.
+        self.env = env
 
     def key(self):
         return (self.channel, self.value, self.qualifiers)
@@ -211,7 +214,7 @@ class Identity(object):
 
 
 def _address(spec, env):
-    return Address(spec.channel, env[spec.env], tuple((q, env.get(q, "")) for q in spec.qualifiers))
+    return Address(spec.channel, env[spec.env], tuple((q, env.get(q, "")) for q in spec.qualifiers), spec.env)
 
 
 def _root_pid(spec, env):

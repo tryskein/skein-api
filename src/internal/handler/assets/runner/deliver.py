@@ -116,7 +116,7 @@ def identity_from_doc(doc):
     if not isinstance(doc, dict):
         return None
     process = doc.get("process")
-    addresses = [Address(a["channel"], a["value"], tuple(tuple(q) for q in a.get("qualifiers") or []))
+    addresses = [Address(a["channel"], a["value"], tuple(tuple(q) for q in a.get("qualifiers") or []), a.get("env"))
                  for a in doc.get("addresses") or []]
     return Identity(tuple(process) if process else None, addresses, list(doc.get("inherited") or []),
                     doc.get("terminal"))
@@ -349,8 +349,18 @@ class DeliverySink(object):
     def check_addressee(self, channel, timeout=None):
         """INV-4 before a transfer: the agent process of the preflight for a
         terminal channel (alive, same start; in the foreground where the
-        record asks), the record's own check where it has one, run within
-        timeout."""
+        record asks), the address of the preflight - the call takes its
+        address from the environment of this run, which must still name the
+        addressee the preflight saw (value and qualifiers) - and the
+        record's own check where it has one, run within timeout."""
+        for a in self.identity.get("addresses") or []:
+            if a.get("channel") != channel.get("id"):
+                continue
+            if a.get("env") and self.env.get(a["env"], "") != a.get("value"):
+                raise AddresseeChanged()
+            for q in a.get("qualifiers") or []:
+                if len(q) == 2 and self.env.get(q[0], "") != q[1]:
+                    raise AddresseeChanged()
         check = channel.get("addressee") or {}
         mode = check.get("process")
         if mode in ("alive", "foreground"):

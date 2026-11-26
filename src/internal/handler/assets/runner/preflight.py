@@ -617,8 +617,8 @@ def _identity_doc(identity):
         return None
     return {
         "process": list(identity.process) if identity.process else None,
-        "addresses": [{"channel": a.channel, "value": a.value, "qualifiers": [list(q) for q in a.qualifiers]}
-                      for a in identity.addresses],
+        "addresses": [{"channel": a.channel, "value": a.value, "qualifiers": [list(q) for q in a.qualifiers],
+                       "env": a.env} for a in identity.addresses],
         "inherited": list(identity.inherited),
         "terminal": identity.terminal,
     }
