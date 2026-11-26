@@ -123,37 +123,74 @@ def identity_from_doc(doc):
 
 
 class Guard(object):
-    """The checks of one attempt. before_send counts the call in the ledger,
-    then checks the cancel signal, the addressee and the idle wait; it raises
-    when nothing may be handed over. before_commit is asked before the
-    final step of a two-step driver; False withholds it."""
+    """The checks of one attempt, within one deadline for all its steps (the
+    address check, the idle wait and the call share the attempt's timeout).
+    before_send checks the access boundary - no stop answer, the last
+    successful poll at most two intervals old (US-12) - then the addressee
+    and the idle wait, then the boundary again right before the text is
+    handed over, and counts the call in the ledger last; it raises when
+    nothing may be handed over. before_commit is asked before the final step
+    of a two-step driver: the boundary, then the addressee; False withholds
+    the step, and what failed is kept (access lost, addressee changed or
+    gone)."""
 
     def __init__(self, pipeline, channel, attempt, timeout):
         self.pipeline = pipeline
         self.channel = channel
         self.attempt = attempt
-        self.timeout = timeout
+        self.deadline = pipeline.clock.now() + timeout
         # Set when before_commit failed because access was lost: the
         # journal line goes without the preview.
         self.access_lost = False
+        # Set when before_commit found another or an ended addressee.
+        self.changed = False
+        self.gone = False
 
-    def before_send(self):
+    def remaining(self):
+        """The time left of the attempt's deadline; RefusedBeforeSend when
+        none is left (nothing is handed over)."""
+        left = self.deadline - self.pipeline.clock.now()
+        if left <= 0:
+            raise RefusedBeforeSend("the time of the call ran out")
+        return left
+
+    def boundary(self):
+        """The access boundary: DeliveryCancelled for a stop answer,
+        PollStale while the last successful poll is too old."""
         reason = self.pipeline.cancel.check()
         if reason is not None:
             raise DeliveryCancelled(reason)
         if not self.pipeline.cancel.may_send():
             raise PollStale()
+
+    def before_send(self):
+        self.boundary()
+        self.pipeline.check_addressee(self.channel, self.remaining())
+        self.pipeline.wait_idle(self.channel, self.remaining())
+        # Right before the hand-over: a stop or a stale poll that came
+        # during the checks and the wait still wins.
+        self.boundary()
+        self.remaining()
+        self.count_call()
+
+    def count_call(self):
         self.attempt.note_call()
-        self.pipeline.check_addressee(self.channel)
-        self.pipeline.wait_idle(self.channel, self.timeout)
 
     def before_commit(self):
         if self.pipeline.cancel.check() is not None:
             self.access_lost = True
             return False
+        if not self.pipeline.cancel.may_send():
+            return False
         try:
-            self.pipeline.check_addressee(self.channel)
-        except (AddresseeChanged, AddresseeGone, RefusedBeforeSend):
+            self.pipeline.check_addressee(self.channel, self.remaining())
+        except AddresseeChanged:
+            self.changed = True
+            return False
+        except AddresseeGone:
+            self.gone = True
+            return False
+        except RefusedBeforeSend:
             return False
         return True
 
@@ -161,18 +198,19 @@ class Guard(object):
 class _ReceiptGuard(Guard):
     """The guard of a stop receipt: no event, no ledger attempt, no cancel
     (the stop is already decided); the addressee is checked as for any
-    send."""
+    send, within the receipt's deadline."""
 
     def __init__(self, pipeline, channel, timeout):
         Guard.__init__(self, pipeline, channel, None, timeout)
 
     def before_send(self):
-        self.pipeline.check_addressee(self.channel)
-        self.pipeline.wait_idle(self.channel, self.timeout)
+        self.pipeline.check_addressee(self.channel, self.remaining())
+        self.pipeline.wait_idle(self.channel, self.remaining())
+        self.remaining()
 
     def before_commit(self):
         try:
-            self.pipeline.check_addressee(self.channel)
+            self.pipeline.check_addressee(self.channel, self.remaining())
         except (AddresseeChanged, AddresseeGone, RefusedBeforeSend):
             return False
         return True
@@ -191,7 +229,7 @@ class ArgvDriver(object):
         if spec.get("type") != "argv":
             raise RefusedBeforeSend("executor %s is not available" % spec.get("type"))
         try:
-            result = self.executor.call(spec, text, guard.timeout)
+            result = self.executor.call(spec, text, guard.remaining())
         except ExecutorRefusal as exc:
             raise RefusedBeforeSend(exc.reason)
         return classify_result(self.channel.get("outcomes"), result)
@@ -213,7 +251,7 @@ class TwoStepDriver(object):
     def send(self, text, guard):
         guard.before_send()
         try:
-            first = self.executor.call(self.insert["executor"], text, guard.timeout)
+            first = self.executor.call(self.insert["executor"], text, guard.remaining())
         except ExecutorRefusal as exc:
             raise RefusedBeforeSend(exc.reason)
         outcome, sign = classify_result(self.insert.get("outcomes"), first)
@@ -222,8 +260,8 @@ class TwoStepDriver(object):
         if not guard.before_commit():
             return OUTCOME_UNKNOWN, {"commit": "withheld"}
         try:
-            second = self.executor.call(self.commit["executor"], "", guard.timeout)
-        except ExecutorRefusal:
+            second = self.executor.call(self.commit["executor"], "", guard.remaining())
+        except (ExecutorRefusal, RefusedBeforeSend):
             return OUTCOME_UNKNOWN, {"commit": "notStarted"}
         return classify_result(self.commit.get("outcomes"), second, written=True)
 
@@ -308,10 +346,11 @@ class DeliverySink(object):
 
     # --- checks -----------------------------------------------------------------
 
-    def check_addressee(self, channel):
+    def check_addressee(self, channel, timeout=None):
         """INV-4 before a transfer: the agent process of the preflight for a
         terminal channel (alive, same start; in the foreground where the
-        record asks), the record's own check where it has one."""
+        record asks), the record's own check where it has one, run within
+        timeout."""
         check = channel.get("addressee") or {}
         mode = check.get("process")
         if mode in ("alive", "foreground"):
@@ -331,8 +370,8 @@ class DeliverySink(object):
             try:
                 env = child_env(self.env, self.executor.secrets)
                 argv = expand_argv(command.get("argv") or [], env)
-                result = run_program(argv, env, None,
-                                     (channel.get("executor") or {}).get("timeoutSec") or PROBE_TIMEOUT_SEC,
+                limit = (channel.get("executor") or {}).get("timeoutSec") or PROBE_TIMEOUT_SEC
+                result = run_program(argv, env, None, limit if timeout is None else min(limit, timeout),
                                      self.executor.secrets)
             except ExecutorRefusal as exc:
                 raise RefusedBeforeSend(exc.reason)
@@ -558,6 +597,10 @@ class DeliverySink(object):
                 # text may have reached another process ("unknown", never
                 # sent again), later events go to the journal.
                 changed = True
+            if guard.changed:
+                # Another addressee before the final step: the text was
+                # written, not submitted.
+                changed = True
             if changed:
                 # Not sent; the event's outcome is "unknown" (the table of
                 # outcomes), later events go to the journal.
@@ -577,7 +620,7 @@ class DeliverySink(object):
         for n in batch:
             self._close(cursor, outcomes, journaled, n, outcome, channel_id, sign,
                         with_preview=not guard.access_lost)
-        if outcome == OUTCOME_ADDRESSEE_GONE:
+        if outcome == OUTCOME_ADDRESSEE_GONE or guard.gone:
             # The stop follows when the page loop returns (page()).
             self.gone = True
         elif changed:

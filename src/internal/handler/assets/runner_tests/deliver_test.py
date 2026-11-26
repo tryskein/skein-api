@@ -76,6 +76,26 @@ class FakeCancel(object):
         return True
 
 
+class FlagCancel(object):
+    """The cancel signal as the test sets it: a stop answer, or a poll that
+    has gone stale."""
+
+    def __init__(self):
+        self.stop = None
+        self.stale = False
+        # One stale answer, then a fresh poll.
+        self.stale_once = False
+
+    def check(self):
+        return self.stop
+
+    def may_send(self):
+        if self.stale_once:
+            self.stale_once = False
+            return False
+        return self.stop is None and not self.stale
+
+
 class Spy(object):
     """The argv executor with a record of every call (program, virtual
     time, text) and hooks before and after the real call."""
@@ -449,8 +469,14 @@ class TwoStepCancelTest(unittest.TestCase):
                 "outcomes": [{"match": {"exitCode": 0}, "outcome": "input-written"}]}
         commit = {"executor": {"type": "argv", "argv": ["enter"], "feed": "stdin", "timeoutSec": 2},
                   "outcomes": [{"match": {"exitCode": 0}, "outcome": "turn-started"}]}
-        first = world.monitor(cancel=FakeCancel([None, None, "token_expired"]))
+        cancel = FlagCancel()
+        first = world.monitor(cancel=cancel)
         first.sink.drivers["A"] = r.TwoStepDriver(world.reg.channel("A"), first.spy, step, commit)
+
+        def after(program):
+            if program == "insert":
+                cancel.stop = "token_expired"
+        first.spy.after = after
         first.page([note(1)])
         self.assertEqual(len(insert.calls()), 1)
         self.assertEqual(enter.calls(), [])
@@ -462,6 +488,74 @@ class TwoStepCancelTest(unittest.TestCase):
         self.assertEqual(len(insert.calls()), 1)
         self.assertEqual(world.prog("chan-a").calls(), [])
         self.assertEqual([d[:2] for d in second.deliveries()], [(1, "unknown")])
+
+
+@unittest.skipUnless(os.name == "posix", "the POSIX pipeline")
+class AccessBoundaryAtHandOverTest(unittest.TestCase):
+    """Review finding C1 of wave 7 (US-12, the access boundary: a send is
+    allowed only when the last successful poll is at most two poll
+    intervals old and no answer since said stop; 401/403 win over waiting
+    events): the boundary holds right before the text is handed over and
+    before Enter, not only before the checks and the wait that precede
+    them."""
+
+    def step_and_commit(self):
+        step = {"executor": {"type": "argv", "argv": ["insert"], "feed": "stdin", "timeoutSec": 2},
+                "outcomes": [{"match": {"exitCode": 0}, "outcome": "input-written"}]}
+        commit = {"executor": {"type": "argv", "argv": ["enter"], "feed": "stdin", "timeoutSec": 2},
+                  "outcomes": [{"match": {"exitCode": 0}, "outcome": "turn-started"}]}
+        return step, commit
+
+    def test_a_stop_answer_during_the_idle_wait_sends_nothing(self):
+        world = World(self, two_channels())
+        cancel = FlagCancel()
+        mon = world.monitor(cancel=cancel)
+
+        def idle(sink, channel, timeout):
+            cancel.stop = "token_expired"
+        with mock.patch.object(world.runner.DeliverySink, "wait_idle", idle):
+            with self.assertRaises(world.runner.Stop) as stop:
+                mon.page([note(1)])
+        self.assertEqual(stop.exception.reason, "token_expired")
+        self.assertEqual(world.prog("chan-a").calls(), [])
+        self.assertEqual(world.prog("chan-b").calls(), [])
+        self.assertEqual(mon.deliveries(), [(1, "access-lost", None, False)])
+
+    def test_a_poll_gone_stale_during_the_idle_wait_holds_the_send(self):
+        world = World(self, two_channels())
+        cancel = FlagCancel()
+        mon = world.monitor(cancel=cancel)
+        waits = []
+
+        def idle(sink, channel, timeout):
+            waits.append(1)
+            if len(waits) == 1:
+                # The poll goes stale during the first wait; a fresh one
+                # comes after.
+                cancel.stale_once = True
+        with mock.patch.object(world.runner.DeliverySink, "wait_idle", idle):
+            mon.page([note(1)])
+        # The first attempt sent nothing; the send came after the fresh poll.
+        self.assertEqual(len(world.prog("chan-a").calls()), 1)
+        self.assertEqual(len(waits), 2)
+        self.assertEqual([d[:2] for d in mon.deliveries()], [(1, "queued")])
+
+    def test_a_poll_gone_stale_after_the_insert_withholds_enter(self):
+        world = World(self, two_channels())
+        insert, enter = fake_channel.two_step(world.bin)
+        cancel = FlagCancel()
+        mon = world.monitor(cancel=cancel)
+        step, commit = self.step_and_commit()
+        mon.sink.drivers["A"] = world.runner.TwoStepDriver(world.reg.channel("A"), mon.spy, step, commit)
+
+        def after(program):
+            if program == "insert":
+                cancel.stale = True
+        mon.spy.after = after
+        mon.page([note(1)])
+        self.assertEqual(len(insert.calls()), 1)
+        self.assertEqual(enter.calls(), [], "Enter after the last successful poll went stale")
+        self.assertEqual([d[:2] for d in mon.deliveries()], [(1, "unknown")])
 
 
 @unittest.skipUnless(os.name == "posix", "the POSIX pipeline")
