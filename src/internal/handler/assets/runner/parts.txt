@@ -10,4 +10,5 @@ platform_posix.py
 platform_windows.py
 state.py
 journal.py
+text.py
 core.py
