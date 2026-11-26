@@ -67,6 +67,8 @@ METHOD_STREAM = "stream"
 METHOD_EXIT_ON_EVENT = "exit-on-event"
 METHOD_DETACHED = "detached"
 METHOD_JOURNAL = "journal"
+# The channel of the methods that deliver on the runner's stdout.
+CHANNEL_STDOUT = "stdout"
 
 # Steps 2-4 of the method order by the kind of a record's method.
 _KIND_STEP = {"stream": 2, "delivery": 3, "exit-on-event": 4}
@@ -350,7 +352,9 @@ def choose(ctx):
     for step, kind, channel in candidates:
         if channel is None:
             if chosen is None:
-                chosen = Choice(kind, None, reasons + ["%s: available" % kind])
+                # The record's own stream and exit-on-event deliver on the
+                # runner's stdout (US-2, US-3).
+                chosen = Choice(kind, CHANNEL_STDOUT, reasons + ["%s: available" % kind])
                 break
             continue
         if chosen is not None and (kind == "blind" or ctx.registry.is_blind(channel)):

@@ -105,7 +105,7 @@ class BlindConditionsTest(unittest.TestCase):
 
     def test_an_available_own_method_keeps_blind_off(self):
         choice = RUNNER.choose(context({"ALPHA_STREAM": "1"}, bindings=BOUND))
-        self.assertEqual((choice.method, choice.channel), ("stream", None))
+        self.assertEqual((choice.method, choice.channel), ("stream", "stdout"))
 
     def test_a_detected_host_with_an_unavailable_channel_keeps_blind_off(self):
         ctx = context({"HOST_A_ID": "a-1"}, bindings=BOUND, answers={"host-a": RUNNER.PROBE_UNAVAILABLE})

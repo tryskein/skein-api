@@ -188,9 +188,9 @@ class MethodOrderTest(unittest.TestCase):
         detector = FakeDetector(hosts=["host-1", "host-2"], blind=["blind-1"])
         # Each row takes one more method away; the next one is chosen.
         steps = [
-            ({}, {}, ("stream", None)),
+            ({}, {}, ("stream", "stdout")),
             ({"ALPHA_STREAM": None}, {}, ("detached", "own-q")),
-            ({"ALPHA_STREAM": None}, {"own-q": "unavailable"}, ("exit-on-event", None)),
+            ({"ALPHA_STREAM": None}, {"own-q": "unavailable"}, ("exit-on-event", "stdout")),
             ({"ALPHA_STREAM": None, "CFG_DIR": os.path.join(self.box.root, "none")},
              {"own-q": "unavailable"}, ("detached", "host-1")),
             ({"ALPHA_STREAM": None, "CFG_DIR": None}, {"own-q": "error", "host-1": "unavailable"},
