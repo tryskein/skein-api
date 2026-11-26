@@ -17,4 +17,5 @@ proctree.py
 identity.py
 preflight.py
 detect.py
+start.py
 core.py

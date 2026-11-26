@@ -192,6 +192,11 @@ func wholeSecondsAtLeastOne(d time.Duration) int {
 // @Description  environment variable of the agent's machine changes the
 // @Description  runner.
 // @Description
+// @Description  In `client` mode every command names its mode in
+// @Description  SKEIN_MONITOR_MODE: `preflight` (the preflight command) or
+// @Description  `run` (the working command); any other value or none is
+// @Description  `config_invalid`. In `legacy` mode it is not read.
+// @Description
 // @Description  Preflight (`client` mode with SKEIN_MONITOR_MODE=preflight):
 // @Description  the runner does not poll and does not move the cursor; it
 // @Description  chooses how the monitor runs by the method order (override
@@ -202,10 +207,16 @@ func wholeSecondsAtLeastOne(d time.Duration) int {
 // @Description  ledger directories take a write, saves the result with its
 // @Description  number and the addressee identity in preflight.json next to
 // @Description  the token under state.lock, and prints one line `{event:
-// @Description  "preflight", preflightId, method, channel, reason, warnings,
-// @Description  journal, command}` (`command` is the working command:
-// @Description  the bootstrap with SKEIN_MONITOR_PREFLIGHT and the
-// @Description  overrides). With a live runner of the token it answers
+// @Description  "preflight", preflightId, client, method, channel, reason,
+// @Description  warnings, journal, command, instruction}`. `client` is the
+// @Description  record used (its id, or `general` for an unknown name).
+// @Description  `command` is the working command: the variables of the
+// @Description  preflight command, the starter path and both digests with
+// @Description  SKEIN_MONITOR_MODE=run, SKEIN_MONITOR_PREFLIGHT and every
+// @Description  override set explicitly. `instruction` is what the agent
+// @Description  does in the chosen method (tool and parameters, restart,
+// @Description  warnings of the record and the channel), without the
+// @Description  journal path. With a live runner of the token it answers
 // @Description  `already_running` and changes nothing.
 // @Description
 // @Description  Stop protocol (sk-579 US-3): every controlled stop prints

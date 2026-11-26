@@ -691,11 +691,6 @@ def run():
     return finish(outcome, issue, token_file)
 
 
-def preflight_requested():
-    """Whether this start is a preflight: client mode only (P-4)."""
-    return LOADER_MODE == "client" and os.environ.get("SKEIN_MONITOR_MODE") == "preflight"
-
-
 def run_preflight():
     """Run the preflight; returns the process exit code. Prints the preflight
     line, or exactly one stop line."""
@@ -756,7 +751,7 @@ def main():
                 reconfigure(line_buffering=True)
             except ValueError:
                 pass
-        code = run_preflight() if preflight_requested() else run()
+        code = start()
     except StopSignal:
         code = finish(Stop("stopped"), os.environ.get("SKEIN_ISSUE", ""),
                       os.environ.get("SKEIN_TOKEN_FILE", ""))

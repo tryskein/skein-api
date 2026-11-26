@@ -1,14 +1,21 @@
 # --- preflight: the choice of the method (SKEIN_MONITOR_MODE=preflight) ------
 # Client mode only. The preflight runs synchronously, chooses how the monitor
 # runs by the method order of the spec and prints one line
-#   {"event": "preflight", "preflightId", "method", "channel", "reason",
-#    "warnings", "journal", "command"}
-# where command is the working command: the bootstrap with the number of
-# this result (SKEIN_MONITOR_PREFLIGHT) and the overrides it ran with. The
-# result, with the identity of the addressee, is saved in preflight.json next
-# to the token under state.lock; the next preflight gets the next number. A
-# preflight never polls and never moves the cursor. With a live runner of the
-# token it answers already_running and changes nothing.
+#   {"event": "preflight", "preflightId", "client", "method", "channel",
+#    "reason", "warnings", "journal", "command", "instruction"}
+# client is the record used (its id, or "general" for an unknown client name:
+# the warning of the general record is that value, not a text in warnings).
+# command is the working command: the variables of the preflight command, the
+# starter path and both digests, but SKEIN_MONITOR_MODE=run, with the number
+# of this result (SKEIN_MONITOR_PREFLIGHT) and the overrides it ran with; it
+# sets every SKEIN_* variable it reads, so values left in the shell by an
+# earlier command do not change it. instruction is what the agent does in the
+# chosen method: the tool and parameters of the record's method, the restart,
+# the warnings of the record and of the chosen channel; never the journal
+# path. The result, with the identity of the addressee, is saved in
+# preflight.json next to the token under state.lock; the next preflight gets
+# the next number. A preflight never polls and never moves the cursor. With a
+# live runner of the token it answers already_running and changes nothing.
 #
 # Method order (first available, and only it):
 #   1. the override SKEIN_MONITOR_CHANNEL (strict: unavailable -> journal);
@@ -49,8 +56,8 @@ PREFLIGHT_VERSION = 1
 # The short lock next to the token: the write of a result and its check by
 # the runner that starts.
 STATE_LOCK_NAME = "state.lock"
-# The loader file `prepare` writes into the token directory.
-CLIENT_LOADER_FILE = "loader.py"
+# The starter file `prepare` writes into the token directory.
+CLIENT_STARTER_FILE = "starter.py"
 # The ledger directory under the user directory.
 LEDGER_DIR_NAME = "ledger"
 # The lowest Python the runner supports.
@@ -65,8 +72,16 @@ METHOD_JOURNAL = "journal"
 _KIND_STEP = {"stream": 2, "delivery": 3, "exit-on-event": 4}
 
 # The variables of the bootstrap the working command repeats, in its order.
+# The variables of the preflight command the working command repeats.
 BOOTSTRAP_VARS = ("SKEIN_PUBLIC_URL", "SKEIN_ISSUE", "SKEIN_TOKEN_FILE", "SKEIN_EXCLUDE_SESSION",
-                  "SKEIN_RUNNER_SHA256", "SKEIN_CLIENT", "SKEIN_PLATFORM")
+                  "SKEIN_RUNNER_SHA256", "SKEIN_LOADER_SHA256", "SKEIN_CLIENT", "SKEIN_PLATFORM")
+
+# The parts of the instruction that are not the record's.
+INSTRUCTION_DETACHED = ("Run `command` once in a shell: it returns after the line "
+                        "{\"event\":\"monitor_started\",...} and the monitor keeps running on its own.")
+INSTRUCTION_JOURNAL = (INSTRUCTION_DETACHED + " No channel wakes you: events go only to the journal "
+                       "(the `journal` field), read it yourself.")
+INSTRUCTION_RESTART = "Every restart runs the same `command`: no new preflight, no new mint."
 
 PROBE_AVAILABLE = "available"
 PROBE_UNAVAILABLE = "unavailable"
@@ -464,16 +479,50 @@ def shell_quote(s):
 
 
 def working_command(env, token_file, preflight_id, settings):
-    """The bootstrap with the number of the result and the overrides."""
-    parts = ["SKEIN_MONITOR_PREFLIGHT=%d" % preflight_id]
-    if settings.channel is not None:
-        parts.append("SKEIN_MONITOR_CHANNEL=" + shell_quote(settings.channel))
-    if settings.blind_off:
-        parts.append("SKEIN_MONITOR_BLIND=off")
+    """The working command: the variables of the preflight command, the
+    starter path and both digests with SKEIN_MONITOR_MODE=run, the number of
+    the result and the overrides. Every SKEIN_* variable the runner reads is
+    set, an override that was not given to an empty value."""
+    parts = ["SKEIN_MONITOR_MODE=run", "SKEIN_MONITOR_PREFLIGHT=%d" % preflight_id,
+             "SKEIN_MONITOR_CHANNEL=" + shell_quote(settings.channel or ""),
+             "SKEIN_MONITOR_BLIND=" + shell_quote(BLIND_OFF if settings.blind_off else "")]
     parts.extend(name + "=" + shell_quote(env.get(name, "")) for name in BOOTSTRAP_VARS)
-    loader = os.path.join(os.path.dirname(os.path.abspath(token_file)), CLIENT_LOADER_FILE)
-    parts.append("python3 " + shell_quote(loader))
+    starter = os.path.join(os.path.dirname(os.path.abspath(token_file)), CLIENT_STARTER_FILE)
+    parts.append("python3 " + shell_quote(starter))
     return " ".join(parts)
+
+
+def record_method(record, choice):
+    """The method of the record the choice took, or None (a host, a blind
+    channel, the journal)."""
+    agent = record.agent if record is not None else None
+    for m in (agent or {}).get("methods") or []:
+        if choice.method == METHOD_DETACHED:
+            if m.get("kind") == "delivery" and m.get("channel") == choice.channel:
+                return m
+        elif m.get("kind") == choice.method:
+            return m
+    return None
+
+
+def instruction(registry, record, choice):
+    """The instruction of the chosen method: the tool and parameters of the
+    record's method (or how a detached or journal monitor starts), the
+    restart, the warnings of the record and of the chosen channel."""
+    method = record_method(record, choice)
+    if method is not None:
+        parts = [method.get("instruction") or ""]
+    elif choice.method == METHOD_JOURNAL:
+        parts = [INSTRUCTION_JOURNAL]
+    else:
+        parts = [INSTRUCTION_DETACHED]
+    parts.append(INSTRUCTION_RESTART)
+    if record is not None and record.agent is not None:
+        parts.extend(record.warnings)
+    channel = registry.channel(choice.channel) if choice.channel is not None else None
+    if channel is not None:
+        parts.extend(channel.get("warnings") or [])
+    return " ".join(p for p in parts if p)
 
 
 def _identity_doc(identity):
@@ -509,7 +558,10 @@ def preflight(token_file, env, registry, settings, detector=None, prober=None, p
     ctx = Context(registry, settings, env, placement, detector, prober, external)
     ctx.identity = identity(placement, registry, env, detector.address_specs(ctx))
     choice = choose(ctx)
-    warnings = list(settings.warnings) + list(detector.warnings)
+    # The record's warnings go into the instruction (a named record) or are
+    # the `client` value "general" (the general record), not into warnings.
+    record_warnings = settings.record.warnings if settings.record is not None else []
+    warnings = [w for w in settings.warnings if w not in record_warnings] + list(detector.warnings)
     if not external:
         warnings.append("The ledger directory is not writable: no external channel is used.")
     if choice.channel is not None and registry.is_blind(choice.channel):
@@ -539,10 +591,12 @@ def preflight(token_file, env, registry, settings, detector=None, prober=None, p
     return {
         "event": "preflight",
         "preflightId": number,
+        "client": settings.record.id,
         "method": choice.method,
         "channel": choice.channel,
         "reason": choice.reason,
         "warnings": warnings,
         "journal": journal,
         "command": working_command(env, token_file, number, settings),
+        "instruction": instruction(registry, settings.record, choice),
     }
