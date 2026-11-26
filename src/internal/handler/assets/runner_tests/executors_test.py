@@ -309,6 +309,8 @@ class _Listener(object):
         self.sock.listen(8)
         self.address = self.sock.getsockname()
         self.accepted = 0
+        # Connections whose end the listener has seen (the peer closed).
+        self.ended = 0
         self.received = b""
         self._stop = False
         self.thread = threading.Thread(target=self._serve)
@@ -336,6 +338,17 @@ class _Listener(object):
                 pass
             finally:
                 conn.close()
+                self.ended += 1
+
+    def settled(self, sec=10):
+        """Wait until at least one connection was accepted and the end of
+        every accepted one was seen: then no byte can still be on its way."""
+        deadline = time.monotonic() + sec
+        while time.monotonic() < deadline:
+            if self.accepted >= 1 and self.ended >= self.accepted:
+                return True
+            time.sleep(0.02)
+        return False
 
     def close(self):
         self._stop = True
@@ -469,9 +482,8 @@ class PreflightProbeTest(unittest.TestCase):
                 self.assertEqual(line["channel"], "one")
         self.assert_no_delivery()
         self.assertEqual(os.listdir(queue), [])
-        self.assertGreaterEqual(unix.accepted, 1)
-        self.assertGreaterEqual(tcp.accepted, 1)
-        time.sleep(0.3)
+        self.assertTrue(unix.settled(), "the unix listener saw no whole connection")
+        self.assertTrue(tcp.settled(), "the tcp listener saw no whole connection")
         self.assertEqual(unix.received, b"")
         self.assertEqual(tcp.received, b"")
 

@@ -448,7 +448,7 @@ class OneDeliveryTest(Base):
         t.join(10)
         dec = out["decision"]
         self.assertIsNone(dec.attempt)
-        self.assertEqual(dec.wait_until, self.clock.t + RUNNER.WINDOW_SEC)
+        self.assertEqual(dec.wait_until, self.clock.t + 10)  # the rate window of 10 s (P-11)
         self.assertEqual(self.attempt_files(), [])
 
 
@@ -664,10 +664,10 @@ class LimitsAndRateTest(Base):
         for led, eid in ((self.b, "e4"), (self.a, "e5")):
             d = led.begin([ev(eid)], "c1")
             self.assertIsNone(d.attempt)
-            self.assertEqual(d.wait_until, start + RUNNER.WINDOW_SEC)
+            self.assertEqual(d.wait_until, start + 10)  # the rate window of 10 s (P-11)
         other = self.ledger("mon-c", ident([addr("orca", "t-2")]))
         self.assertEqual(other.begin([ev("e4")], "c1").published, ["e4"])
-        self.clock.t = start + RUNNER.WINDOW_SEC
+        self.clock.t = start + 10
         d = self.b.begin([ev("e4")], "c1")
         self.assertEqual(d.published, ["e4"], "an event of the other monitor was lost")
 
