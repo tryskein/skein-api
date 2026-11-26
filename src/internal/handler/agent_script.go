@@ -3,7 +3,6 @@ package handler
 import (
 	"bufio"
 	"crypto/sha256"
-	"embed"
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
@@ -15,20 +14,17 @@ import (
 	"strings"
 	"time"
 
+	"skein-api/internal/monitorassets"
 	"skein-api/internal/monitorregistry"
 )
 
 // runnerParts holds the parts of the Python poll runner served by
-// GET /agent/v1/monitor-script and the manifest that orders them. They are
-// embedded at compile time so the running binary has zero filesystem
-// dependency on the source tree (the production image is a scratch/distroless
-// layer).
-//
-//go:embed assets/runner/parts.txt assets/runner/*.py
-var runnerParts embed.FS
+// GET /agent/v1/monitor-script and the manifest that orders them
+// (internal/monitorassets, shared with the client branch of the loader).
+var runnerParts fs.FS = monitorassets.Runner
 
 // runnerPartsDir is the directory of the parts and of their manifest.
-const runnerPartsDir = "assets/runner"
+const runnerPartsDir = monitorassets.RunnerDir
 
 // runnerTemplate is the runner body joined from its parts in manifest order,
 // with every __SKEIN_*__ placeholder still in place. The Python tests join the

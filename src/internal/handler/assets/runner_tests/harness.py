@@ -1,7 +1,7 @@
 """Shared helpers of the monitor runner tests.
 
 Builds the runner body the way the server does (agent_script.go): the parts
-listed in ../runner/parts.txt joined in order, every __SKEIN_*__ placeholder
+listed in internal/monitorassets/runner/parts.txt joined in order, every __SKEIN_*__ placeholder
 substituted, the registry being the server's registry.json in base64. Also
 holds the fake poll and loader servers the test files share.
 
@@ -22,7 +22,7 @@ from urllib.parse import parse_qs, urlparse
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 # The directory of the runner parts and of their manifest.
-RUNNER_DIR = os.path.join(HERE, "..", "runner")
+RUNNER_DIR = os.path.join(HERE, "..", "..", "..", "monitorassets", "runner")
 PARTS_MANIFEST = os.path.join(RUNNER_DIR, "parts.txt")
 # The core part; tracebacks of an in-process runner name this file.
 RUNNER_SRC = os.path.join(RUNNER_DIR, "core.py")
@@ -30,7 +30,7 @@ RUNNER_SRC = os.path.join(RUNNER_DIR, "core.py")
 # (src/internal/handler/assets/runner/core.py). The in-process runner is
 # loaded under this name so the tool attributes the runner's functions to
 # the file it mutated.
-RUNNER_MODULE = "internal.handler.assets.runner.core"
+RUNNER_MODULE = "internal.monitorassets.runner.core"
 # The registry the server embeds into the body.
 REGISTRY_JSON = os.path.join(HERE, "..", "..", "..", "monitorregistry", "registry.json")
 # Shared interpreter hooks for runner subprocesses (virtual clock, pinned
