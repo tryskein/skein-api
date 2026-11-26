@@ -30,6 +30,13 @@ UNIT_UTF16 = "utf16"
 UNIT_BYTES = "bytes"
 # The fields of an event that are never cut; everything else is optional.
 MANDATORY_EVENT_FIELDS = ("id", "type", "entity", "commentId", "actorSessionId")
+# The fields of an event of the poll (notifications/types.go#NotificationDTO,
+# the JSON of a monitor poll item): a stream line carries these and no other
+# field of the answer, so nothing beyond the preview of a comment (INV-12)
+# reaches the agent's tool.
+EVENT_FIELDS = ("id", "type", "createdAt", "readAt", "archivedAt", "actorSessionId", "commentId", "bodyPreview",
+                "truncated", "spaceId", "actor", "entity", "summary", "field", "oldValue", "newValue",
+                "closeOutcome", "mentionContext")
 # Lifecycle fields that stay in a shortened lifecycle line.
 MANDATORY_LIFECYCLE_FIELDS = ("event", "reason", "cause", "preflightId")
 # Marks of a plain text, named like the fields of the JSON line: the
@@ -258,7 +265,7 @@ def notification_line(notification, limit=None, unit=UNIT_CHARS):
     "deliveryCut" is true.
 
     Returns the line, or None when even the minimal form does not fit."""
-    n = dict(notification) if isinstance(notification, dict) else {}
+    n = dict((k, v) for k, v in notification.items() if k in EVENT_FIELDS) if isinstance(notification, dict) else {}
     line = {"event": "notification", "notification": n}
     text = _dumps(line)
     if limit is None or measure(text, unit) <= limit:
