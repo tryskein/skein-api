@@ -569,9 +569,18 @@ def _merge(entries):
             out["events"][eid] = _merge_record(out["events"].get(eid), rec)
         if (e.get("window") or {}).get("until", 0) > out["window"].get("until", 0):
             out["window"] = dict(e["window"])
-        if (e.get("series") or {}).get("long"):
-            out["series"] = e["series"]
+        series = e.get("series") or {}
+        if series and _series_rank(series) > _series_rank(out["series"]):
+            out["series"] = dict(series)
     return out
+
+
+def _series_rank(series):
+    """Which series a merged addressee keeps: a long one first, then the one
+    with the latest delivery, so the count of a series still in its run-up
+    survives the merge."""
+    times = series.get("times") or []
+    return (bool(series.get("long")), times[-1] if times else float("-inf"))
 
 
 def _merge_record(a, b):
