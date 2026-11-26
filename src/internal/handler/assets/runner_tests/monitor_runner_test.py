@@ -38,14 +38,8 @@ import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-RUNNER_SRC = os.path.join(HERE, "monitor_runner.py")
-# Shared interpreter hooks for runner subprocesses (virtual clock, pinned
-# random, blocked resolver) — see its header.
-SITE_DIR = os.path.join(HERE, "..", "testdata", "runner_site")
-# The bootstrap loader asset (run as `python3 -c`, exactly like the bootstrap).
-LOADER_SRC = os.path.join(HERE, "..", "..", "mcp", "tools", "assets", "monitor_loader.py")
-
+from harness import (EMPTY, LOADER_SRC, ROOT, SITE_DIR, LoaderServer, PushServer,
+                     ScriptedServer, load_runner, render_runner)
 
 _TMPDIRS = []
 
@@ -61,19 +55,6 @@ def make_tmpdir(prefix):
 def _remove_tmpdirs():
     for path in _TMPDIRS:
         shutil.rmtree(path, ignore_errors=True)
-
-
-def render_runner(poll_sec=1, ceiling_sec=10, limit_sec=15, stall_sec=180):
-    """Substitute the timing placeholders the same way agent_script.go does."""
-    with open(RUNNER_SRC, "r") as fh:
-        body = fh.read()
-    body = body.replace("__SKEIN_POLL_INTERVAL_SEC__", str(poll_sec))
-    body = body.replace("__SKEIN_BACKOFF_CEILING_SEC__", str(ceiling_sec))
-    body = body.replace("__SKEIN_REQUEST_LIMIT_SEC__", str(limit_sec))
-    body = body.replace("__SKEIN_STALL_THRESHOLD_SEC__", str(stall_sec))
-    if "__SKEIN_" in body:
-        raise AssertionError("placeholder left unsubstituted in rendered runner")
-    return body
 
 
 class _FakeHandler(BaseHTTPRequestHandler):
@@ -420,69 +401,6 @@ class FakeRandom:
     def random(self):
         return self.value
 
-
-def load_runner(**timings):
-    mod = types.ModuleType("monitor_runner_under_test")
-    exec(compile(render_runner(**timings), RUNNER_SRC, "exec"), mod.__dict__)
-    return mod
-
-
-class _ScriptedHandler(BaseHTTPRequestHandler):
-    """Answers each poll with whatever server.respond(handler, qs) decides."""
-
-    def do_GET(self):
-        parsed = urlparse(self.path)
-        qs = parse_qs(parsed.query)
-        self.server.requests.append(qs)
-        self.server.respond(self, qs)
-
-    def send_json(self, status, obj, headers=None):
-        self.send_raw(status, json.dumps(obj).encode("utf-8"), headers)
-
-    def send_raw(self, status, body, headers=None):
-        self.send_response(status)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(body)))
-        for k, v in (headers or {}).items():
-            self.send_header(k, v)
-        self.end_headers()
-        try:
-            self.wfile.write(body)
-        except (BrokenPipeError, ConnectionResetError):
-            pass
-
-    def reset_connection(self):
-        """Abort the TCP connection (RST) without any HTTP response."""
-        self.request.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
-        self.close_connection = True
-        self.request.close()
-
-    def log_message(self, *args):
-        pass
-
-
-class ScriptedServer(ThreadingHTTPServer):
-    daemon_threads = True
-
-    def __init__(self, respond):
-        super().__init__(("127.0.0.1", 0), _ScriptedHandler)
-        self.respond = respond
-        self.requests = []
-        self.thread = threading.Thread(target=self.serve_forever, daemon=True)
-        self.thread.start()
-
-    def url(self):
-        return "http://127.0.0.1:%d" % self.server_address[1]
-
-    def handle_error(self, request, client_address):
-        pass  # aborted connections are the point of some scenarios
-
-    def stop(self):
-        self.shutdown()
-        self.server_close()
-
-
-EMPTY = {"notifications": [], "cursor": {"ts": "2026-01-01T00:00:00Z", "id": 0}}
 
 # The transient failure classes of US-1, as server behaviours.
 FAILURE_CLASSES = {
@@ -919,7 +837,6 @@ class RejectedCursorTest(unittest.TestCase):
 # phase, one runner subprocess per case.
 # ---------------------------------------------------------------------------
 
-ROOT = "zz-77"
 
 
 def place_token(tmpdir, token, token_as_dir=False, token_mode=0o600, subdir=None,
@@ -1131,52 +1048,6 @@ class StopLineTest(StopLineAssertions, unittest.TestCase):
 # asset run as `python3 -c`, alone (load phase) and with the real runner
 # after exec (handover of the stop protocol and of the token file).
 # ---------------------------------------------------------------------------
-
-
-class _LoaderHandler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        parsed = urlparse(self.path)
-        srv = self.server
-        if parsed.path == "/agent/v1/monitor-script":
-            srv.script_hits += 1
-            srv.script(self)
-        else:
-            srv.poll(self)
-
-    def send_body(self, status, body, declared_len=None):
-        self.send_response(status)
-        self.send_header("Content-Type", "text/x-python")
-        self.send_header("Content-Length", str(declared_len if declared_len is not None else len(body)))
-        self.end_headers()
-        try:
-            self.wfile.write(body)
-            self.wfile.flush()
-        except (BrokenPipeError, ConnectionResetError):
-            pass
-
-    def log_message(self, *args):
-        pass
-
-
-class LoaderServer(ThreadingHTTPServer):
-    daemon_threads = True
-
-    def __init__(self, script, poll=None):
-        super().__init__(("127.0.0.1", 0), _LoaderHandler)
-        self.script = script
-        self.poll = poll or (lambda h: h.send_body(200, json.dumps(EMPTY).encode()))
-        self.script_hits = 0
-        threading.Thread(target=self.serve_forever, daemon=True).start()
-
-    def url(self):
-        return "http://127.0.0.1:%d" % self.server_address[1]
-
-    def handle_error(self, request, client_address):
-        pass
-
-    def stop(self):
-        self.shutdown()
-        self.server_close()
 
 
 def closed_port_url():
@@ -1507,44 +1378,6 @@ class LoaderRunnerHandoverTest(StopLineAssertions, unittest.TestCase):
 # Rows 43–47 (US-4, INV-12 runner side, INV-13, INV-4): one runner per token
 # file, the root-closed exit, restart of the same environment.
 # ---------------------------------------------------------------------------
-
-
-class PushServer(ThreadingHTTPServer):
-    """A poll server that answers empty pages until the test pushes
-    notifications; each pushed notification is answered once per poll queue."""
-
-    daemon_threads = True
-
-    def __init__(self):
-        super().__init__(("127.0.0.1", 0), _ScriptedHandler)
-        self.requests = []
-        self.lock = threading.Lock()
-        self.pending = []
-        self.next_id = 100
-        self.respond = self._respond
-        threading.Thread(target=self.serve_forever, daemon=True).start()
-
-    def _respond(self, h, qs):
-        with self.lock:
-            notes, self.pending = self.pending, []
-        h.send_json(200, {"notifications": notes,
-                          "cursor": {"ts": "2026-01-01T00:00:00Z", "id": self.next_id}})
-
-    def push(self):
-        with self.lock:
-            self.next_id += 1
-            self.pending.append({"id": self.next_id, "type": "comment.created", "issueId": ROOT})
-            return self.next_id
-
-    def url(self):
-        return "http://127.0.0.1:%d" % self.server_address[1]
-
-    def handle_error(self, request, client_address):
-        pass
-
-    def stop(self):
-        self.shutdown()
-        self.server_close()
 
 
 class LiveRunner:

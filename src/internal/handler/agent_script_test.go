@@ -41,7 +41,7 @@ func scriptTestDBURL(t *testing.T) string {
 // cadence placeholders substituted by the configured seconds. This is the
 // load-bearing contract — the Monitor executes this body verbatim.
 func TestAgentScript_Body(t *testing.T) {
-	h := NewAgentScriptHandler(2, 10*time.Second, 15*time.Second, 3*time.Minute)
+	h := NewAgentScriptHandler(2, 10*time.Second, 15*time.Second, 3*time.Minute, 6*time.Hour)
 
 	req := httptest.NewRequest(http.MethodGet, "/agent/v1/monitor-script", nil)
 	rec := httptest.NewRecorder()
@@ -89,7 +89,7 @@ func TestAgentScript_Body(t *testing.T) {
 // TestAgentScript_CadenceFloor proves a sub-second configured cadence never
 // templates a `0` (busy-loop) into the runner — it is floored at 1.
 func TestAgentScript_CadenceFloor(t *testing.T) {
-	h := NewAgentScriptHandler(0, 10*time.Second, 15*time.Second, 3*time.Minute)
+	h := NewAgentScriptHandler(0, 10*time.Second, 15*time.Second, 3*time.Minute, 6*time.Hour)
 	rec := httptest.NewRecorder()
 	h.Script(rec, httptest.NewRequest(http.MethodGet, "/agent/v1/monitor-script", nil))
 	body := rec.Body.String()
@@ -208,7 +208,7 @@ func TestAgentScript_Unauthorized(t *testing.T) {
 	store := monitorcreds.New(pool, 6*time.Hour)
 
 	h := auth.RequireMonitorToken(store, "notifications:poll")(
-		http.HandlerFunc(NewAgentScriptHandler(2, 10*time.Second, 15*time.Second, 3*time.Minute).Script))
+		http.HandlerFunc(NewAgentScriptHandler(2, 10*time.Second, 15*time.Second, 3*time.Minute, 6*time.Hour).Script))
 
 	cases := []struct {
 		name  string
@@ -268,7 +268,7 @@ func TestAgentScript_ValidToken(t *testing.T) {
 	}
 
 	h := auth.RequireMonitorToken(store, "notifications:poll")(
-		http.HandlerFunc(NewAgentScriptHandler(2, 10*time.Second, 15*time.Second, 3*time.Minute).Script))
+		http.HandlerFunc(NewAgentScriptHandler(2, 10*time.Second, 15*time.Second, 3*time.Minute, 6*time.Hour).Script))
 
 	req := httptest.NewRequest(http.MethodGet, "/agent/v1/monitor-script", nil)
 	req.Header.Set(auth.HeaderAPIKey, plaintext)
@@ -366,7 +366,7 @@ func runServedRunnerWith(t *testing.T, tm scriptTimings, serverURL string, budge
 		t.Fatalf("site dir: %v", err)
 	}
 
-	h := NewAgentScriptHandler(tm.pollIntervalSec, tm.backoffCeiling, tm.requestLimit, tm.stallAge)
+	h := NewAgentScriptHandler(tm.pollIntervalSec, tm.backoffCeiling, tm.requestLimit, tm.stallAge, 6*time.Hour)
 	rec := httptest.NewRecorder()
 	h.Script(rec, httptest.NewRequest(http.MethodGet, "/agent/v1/monitor-script", nil))
 	if rec.Code != http.StatusOK {
@@ -524,7 +524,7 @@ func TestAgentScript_ServedBodyAppliesTimings(t *testing.T) {
 // mint bakes into every bootstrap is the SHA-256 of exactly the bytes the
 // script door serves, so the loader's check passes for the real runner.
 func TestAgentScriptHandler_SHA256IsOfTheServedBytes(t *testing.T) {
-	h := NewAgentScriptHandler(7, 20*time.Second, 25*time.Second, 4*time.Minute)
+	h := NewAgentScriptHandler(7, 20*time.Second, 25*time.Second, 4*time.Minute, 6*time.Hour)
 	rec := httptest.NewRecorder()
 	h.Script(rec, httptest.NewRequest(http.MethodGet, "/agent/v1/monitor-script", nil))
 	sum := sha256.Sum256(rec.Body.Bytes())

@@ -1,0 +1,5 @@
+# The parts of the served monitor runner body, in order. The server
+# (agent_script.go) and the Python tests (runner_tests/harness.py) join the
+# listed files of this directory in this order into one body. Blank lines
+# and lines starting with "#" are ignored.
+core.py

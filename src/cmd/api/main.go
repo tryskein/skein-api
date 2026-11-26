@@ -1635,6 +1635,7 @@ func buildRouter(
 		runnerTimings.BackoffCeiling,
 		runnerTimings.RequestLimit,
 		cfg.MonitorStallThreshold,
+		cfg.MonitorTokenIdleTTL,
 	)
 	// Reuse the same store instances main() already built for REST —
 	// stores are stateless over the pool; no observable behaviour change,

@@ -817,7 +817,7 @@ func TestBootstrapCommand_EndToEnd(t *testing.T) {
 		t.Fatalf("site dir: %v", err)
 	}
 	rec := httptest.NewRecorder()
-	scriptHandler := handler.NewAgentScriptHandler(1, 10*time.Second, 15*time.Second, 3*time.Minute)
+	scriptHandler := handler.NewAgentScriptHandler(1, 10*time.Second, 15*time.Second, 3*time.Minute, 6*time.Hour)
 	scriptHandler.Script(rec, httptest.NewRequest(http.MethodGet, "/agent/v1/monitor-script", nil))
 	runnerBody := rec.Body.Bytes()
 	runnerSHA256 := scriptHandler.SHA256()

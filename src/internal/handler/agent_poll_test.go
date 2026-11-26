@@ -1217,7 +1217,7 @@ func TestAgentPoll_SuccessfulPollRecord(t *testing.T) {
 			t.Fatalf("Mint: %v", err)
 		}
 		h := auth.RequireMonitorToken(store, "notifications:poll")(http.HandlerFunc(
-			NewAgentScriptHandler(2, 10*time.Second, 15*time.Second, 3*time.Minute).Script))
+			NewAgentScriptHandler(2, 10*time.Second, 15*time.Second, 3*time.Minute, 6*time.Hour).Script))
 		req := httptest.NewRequest(http.MethodGet, "/agent/v1/monitor-script", nil)
 		req.Header.Set(auth.HeaderAPIKey, token)
 		rec := httptest.NewRecorder()

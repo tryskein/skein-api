@@ -1,35 +1,101 @@
 package handler
 
 import (
+	"bufio"
 	"crypto/sha256"
-	_ "embed"
+	"embed"
+	"encoding/base64"
 	"encoding/hex"
+	"fmt"
+	"io/fs"
 	"log/slog"
 	"net/http"
+	"path"
 	"strconv"
 	"strings"
 	"time"
+
+	"skein-api/internal/monitorregistry"
 )
 
-// monitorRunnerSource is the Python poll-runner served verbatim (after timing
-// substitution) by GET /agent/v1/monitor-script. It is embedded at compile
-// time so the running binary has zero filesystem dependency on the source tree
-// (the production image is a scratch/distroless layer). The four __SKEIN_*__
-// placeholders are substituted once, at construction — see
-// NewAgentScriptHandler.
+// runnerParts holds the parts of the Python poll runner served by
+// GET /agent/v1/monitor-script and the manifest that orders them. They are
+// embedded at compile time so the running binary has zero filesystem
+// dependency on the source tree (the production image is a scratch/distroless
+// layer).
 //
-//go:embed assets/monitor_runner.py
-var monitorRunnerSource string
+//go:embed assets/runner/parts.txt assets/runner/*.py
+var runnerParts embed.FS
+
+// runnerPartsDir is the directory of the parts and of their manifest.
+const runnerPartsDir = "assets/runner"
+
+// runnerTemplate is the runner body joined from its parts in manifest order,
+// with every __SKEIN_*__ placeholder still in place. The Python tests join the
+// same parts by the same manifest (runner_tests/harness.py).
+var runnerTemplate = mustAssembleRunner()
+
+// mustAssembleRunner joins the parts listed in parts.txt. The parts are
+// compiled into the binary, so a missing or unreadable part is a defect of
+// the build, never of the environment: it panics at start-up.
+func mustAssembleRunner() string {
+	body, err := assembleRunner(runnerParts, runnerPartsDir)
+	if err != nil {
+		panic(fmt.Sprintf("monitor runner: %v", err))
+	}
+	return body
+}
+
+// assembleRunner reads dir/parts.txt and joins the named files of dir in its
+// order. Blank lines and lines starting with "#" are ignored; every part ends
+// with a newline in the joined body.
+func assembleRunner(fsys fs.FS, dir string) (string, error) {
+	manifest, err := fs.ReadFile(fsys, path.Join(dir, "parts.txt"))
+	if err != nil {
+		return "", fmt.Errorf("reading the parts manifest: %w", err)
+	}
+	var b strings.Builder
+	parts := 0
+	sc := bufio.NewScanner(strings.NewReader(string(manifest)))
+	for sc.Scan() {
+		name := strings.TrimSpace(sc.Text())
+		if name == "" || strings.HasPrefix(name, "#") {
+			continue
+		}
+		part, err := fs.ReadFile(fsys, path.Join(dir, name))
+		if err != nil {
+			return "", fmt.Errorf("reading part %q: %w", name, err)
+		}
+		b.Write(part)
+		if len(part) > 0 && part[len(part)-1] != '\n' {
+			b.WriteByte('\n')
+		}
+		parts++
+	}
+	if err := sc.Err(); err != nil {
+		return "", fmt.Errorf("reading the parts manifest: %w", err)
+	}
+	if parts == 0 {
+		return "", fmt.Errorf("the parts manifest lists no part")
+	}
+	return b.String(), nil
+}
 
 // Placeholder tokens the served body carries until the handler substitutes
-// the operator-configured timings. Each sits inside int("…") in the .py so the
-// substituted result stays valid Python (plain string replacement, NOT
-// text/template, to avoid {{…}} clashing with Python).
+// them. The timing and window tokens sit inside int("…") and the registry
+// token inside a string literal, so the substituted result stays valid
+// Python (plain string replacement, NOT text/template, to avoid {{…}}
+// clashing with Python).
 const (
 	pollIntervalPlaceholder   = "__SKEIN_POLL_INTERVAL_SEC__"
 	backoffCeilingPlaceholder = "__SKEIN_BACKOFF_CEILING_SEC__"
 	requestLimitPlaceholder   = "__SKEIN_REQUEST_LIMIT_SEC__"
 	stallThresholdPlaceholder = "__SKEIN_STALL_THRESHOLD_SEC__"
+	tokenIdlePlaceholder      = "__SKEIN_TOKEN_IDLE_SEC__"
+	registryPlaceholder       = "__SKEIN_REGISTRY_B64__"
+	// placeholderPrefix starts every placeholder; none is left in a served
+	// body.
+	placeholderPrefix = "__SKEIN_"
 )
 
 // AgentScriptHandler serves the agent task-monitor poll runner (sk-142.6) on
@@ -39,7 +105,7 @@ const (
 // generic: it carries no secret, the token is read by the runner from a private
 // file at runtime).
 type AgentScriptHandler struct {
-	// body is the runner source with the timing placeholders already
+	// body is the assembled runner with every placeholder already
 	// substituted once at construction time — the served bytes are identical
 	// for every request, so there is no need to re-template per call.
 	body string
@@ -50,23 +116,32 @@ type AgentScriptHandler struct {
 	sha256 string
 }
 
-// NewAgentScriptHandler builds the handler, substituting the runner timings
-// into the embedded body (sk-579, INV-6). The caller passes all four values
-// explicitly — in production config.RunnerTimings(cfg.MonitorRunnerPollInterval)
-// for the cadence, backoff ceiling and per-request limit, and
-// cfg.MonitorStallThreshold — so the body runs exactly the timings the server
-// checked the stall threshold against at startup; the handler derives nothing
-// itself. Every value is templated as whole seconds floored at 1, so a
-// sub-second value never templates a 0 (busy loop, zero cap or zero limit).
-func NewAgentScriptHandler(pollIntervalSec int, backoffCeiling, requestLimit, stallThreshold time.Duration) *AgentScriptHandler {
+// NewAgentScriptHandler builds the handler: it substitutes the runner
+// timings (sk-579, INV-6), the token renewal window and the monitor registry
+// into the assembled body. The caller passes every value explicitly — in
+// production config.RunnerTimings(cfg.MonitorRunnerPollInterval) for the
+// cadence, backoff ceiling and per-request limit, cfg.MonitorStallThreshold
+// and cfg.MonitorTokenIdleTTL — so the body runs exactly the timings the
+// server checked at startup; the handler derives nothing itself. Every
+// duration is templated as whole seconds floored at 1, so a sub-second value
+// never templates a 0 (busy loop, zero cap, zero limit or zero window). The
+// registry is the embedded registry.json, base64-encoded, so the body's
+// digest covers it.
+func NewAgentScriptHandler(pollIntervalSec int, backoffCeiling, requestLimit, stallThreshold, tokenIdle time.Duration) *AgentScriptHandler {
 	if pollIntervalSec < 1 {
 		pollIntervalSec = 1
 	}
-	body := monitorRunnerSource
+	body := runnerTemplate
 	body = strings.ReplaceAll(body, pollIntervalPlaceholder, strconv.Itoa(pollIntervalSec))
 	body = strings.ReplaceAll(body, backoffCeilingPlaceholder, strconv.Itoa(wholeSecondsAtLeastOne(backoffCeiling)))
 	body = strings.ReplaceAll(body, requestLimitPlaceholder, strconv.Itoa(wholeSecondsAtLeastOne(requestLimit)))
 	body = strings.ReplaceAll(body, stallThresholdPlaceholder, strconv.Itoa(wholeSecondsAtLeastOne(stallThreshold)))
+	body = strings.ReplaceAll(body, tokenIdlePlaceholder, strconv.Itoa(wholeSecondsAtLeastOne(tokenIdle)))
+	body = strings.ReplaceAll(body, registryPlaceholder, base64.StdEncoding.EncodeToString(monitorregistry.Embedded()))
+	if i := strings.Index(body, placeholderPrefix); i >= 0 {
+		end := min(i+64, len(body))
+		panic(fmt.Sprintf("monitor runner: placeholder left unsubstituted near %q", body[i:end]))
+	}
 	sum := sha256.Sum256([]byte(body))
 	return &AgentScriptHandler{body: body, sha256: hex.EncodeToString(sum[:])}
 }
@@ -93,7 +168,14 @@ func wholeSecondsAtLeastOne(d time.Duration) int {
 // @Description  reads its skm_ token from a private file (SKEIN_TOKEN_FILE) at
 // @Description  runtime. The operator-configured timings — poll cadence,
 // @Description  backoff ceiling, per-request limit and stall threshold
-// @Description  (sk-579) — are substituted into the body before it is served.
+// @Description  (sk-579) — are substituted into the body before it is served,
+// @Description  together with the token renewal window
+// @Description  (SKEIN_MONITOR_TOKEN_IDLE_TTL, whole seconds) and the monitor
+// @Description  registry (the agents, their methods and the delivery channels,
+// @Description  base64 of the server's registry document). The body is joined
+// @Description  from ordered parts; its SHA-256, which the bootstrap names and
+// @Description  the loader checks, covers the timings, the window and the
+// @Description  registry.
 // @Description  The runner never gives up on transient failures while its
 // @Description  token lives: it backs off within the ceiling, aborts any single
 // @Description  request past the limit, and prints one `degraded` line on a

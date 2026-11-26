@@ -114,7 +114,7 @@ pattern = "*_test.py"
 # mutated; the loader is copied for its tests); its
 # configuration (what is mutated, which tests run) is the [mutmut] section of
 # src/setup.cfg. Targets are mutant name patterns, e.g.
-# "internal.handler.assets.monitor_runner.x_build_url*"; mutmut has no diff mode.
+# "internal.handler.assets.runner.core.x_build_url*"; mutmut has no diff mode.
 [kind.pymutation]
 adapter = "mutmut"
 image = "python:3.13.18-slim-bookworm"

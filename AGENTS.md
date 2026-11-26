@@ -151,8 +151,8 @@ The profile is `.progon/api.toml`; run from the repository root:
 | unit | `progon api unit` | `progon api unit ./internal/<pkg>/ -run '<regexp>'` |
 | integ | `progon api integ` | `progon api integ ./internal/<pkg>/ -run '<regexp>'` |
 | mutation | `progon api mutation ./internal/<pkg>/` | the package patterns are the targets; `--since <ref>` limits it to changed lines |
-| pyunit | `progon api pyunit` | `progon api pyunit <file>` — a path relative to `src`, e.g. `internal/handler/assets/monitor_runner_test.py` |
-| pymutation | `progon api pymutation <mutant pattern>` | the targets are mutmut mutant name patterns, e.g. `'internal.handler.assets.monitor_runner.x_build_url*'`; no `--since` (mutmut has no diff mode) |
+| pyunit | `progon api pyunit` | `progon api pyunit <file>` — a path relative to `src`, e.g. `internal/handler/assets/runner_tests/monitor_runner_test.py` |
+| pymutation | `progon api pymutation <mutant pattern>` | the targets are mutmut mutant name patterns, e.g. `'internal.handler.assets.runner.core.x_build_url*'`; no `--since` (mutmut has no diff mode) |
 
 `integ` starts a `pgvector/pgvector:pg18` fixture with `pg_trgm` and `vector`,
 applies `src/migrations` with golang-migrate and runs the packages serially
@@ -165,12 +165,14 @@ Python image. `pymutation` runs mutmut over the paths named in the `[mutmut]`
 section of `src/setup.cfg`; the tests it drives are the same `*_test.py` files,
 collected by pytest. The Go kinds `unit` and `integ` install `python3` on top of
 the Go image.
-`pymutation` currently measures no mutant: the tests load the runner under the
-module name `monitor_runner_under_test` (or run it as `__main__` in a
-subprocess), so mutmut's trampoline keys do not match
-`internal.handler.assets.monitor_runner.*` and progon reports NOT GREEN (no
-mutant measured). Zero measured is not a green result. The limitation ends when
-the tests load the runner under its package name.
+`pymutation` measures only what the tests run in process: the harness
+(`runner_tests/harness.py#RUNNER_MODULE`) loads the runner under the module
+name of its core part, `internal.handler.assets.runner.core`, which mutmut's
+trampoline keys match. A test that starts the runner (or the loader) as a
+subprocess runs it as `__main__`, so the mutants it would kill are not
+attributed to it and can show as survived. Read a survivor on a line only
+subprocess tests reach as not measured, not as a gap of the suite.
+Zero measured is not a green result.
 
 ### Project specifics
 

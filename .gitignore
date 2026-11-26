@@ -31,7 +31,7 @@ src/docs/
 # Vendor — using go modules, no vendor dir
 vendor/
 
-# Python bytecode (embedded monitor_runner.py asset + its stdlib test)
+# Python bytecode (embedded monitor runner parts + their stdlib tests)
 __pycache__/
 *.pyc
 

@@ -86,6 +86,13 @@ BACKOFF_CEILING_SEC = int("__SKEIN_BACKOFF_CEILING_SEC__")
 REQUEST_LIMIT_SEC = int("__SKEIN_REQUEST_LIMIT_SEC__")
 # A run of failures longer than this prints one non-terminal "degraded" line.
 STALL_THRESHOLD_SEC = int("__SKEIN_STALL_THRESHOLD_SEC__")
+# The sliding renewal window of the monitor token (whole seconds): the
+# server renews the token on every successful poll for this long.
+TOKEN_IDLE_SEC = int("__SKEIN_TOKEN_IDLE_SEC__")
+# The monitor registry (registry.json of the server, base64): the agents,
+# their methods and the delivery channels. It travels inside the body so the
+# body's SHA-256, which the loader checks, covers it too.
+REGISTRY_B64 = "__SKEIN_REGISTRY_B64__"
 
 # --- runner-side tuning (not operator-configurable) -------------------------
 # Cap on the dedupe set so a long-lived monitor cannot grow it without bound.
