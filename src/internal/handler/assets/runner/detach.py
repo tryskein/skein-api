@@ -451,7 +451,8 @@ def run_detached_child():
                 sink = JournalSink(journal, held.doc.get("method"), held.doc.get("channel"), env,
                                    exclusion=exclusion)
             _send_receipt(held.line)
-            work(executor, base, held.token, issue, exclusion, token_file, sink=sink)
+            work(executor, base, held.token, issue, exclusion, token_file, sink=sink,
+                 root=RootClosed(token_file))
         except ConfigInvalid as exc:
             raise Stop("config_invalid", detail="%s (%s)" % (exc.variable, exc.detail))
     except Stop as stop:

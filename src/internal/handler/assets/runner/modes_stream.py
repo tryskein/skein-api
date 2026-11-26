@@ -374,12 +374,13 @@ class StreamOutput(object):
         self.lifecycle(line, stop=True)
 
 
-def print_events(output, events, exit_on_event, stop_lines):
+def print_events(output, events, exit_on_event, stop_lines, statuses=None):
     """Print the events (each with its text from output.event_text) in
     batches. exit_on_event prints one batch, with room for the longest of
     stop_lines (the stop lines that may end the cycle right after it), and
     leaves the rest. Returns the events that got an outcome
-    (printed or unfit), in order. An unfit event gets its outcome only when
+    (printed or unfit), in order; statuses, when given, gets the outcome of
+    each of them. An unfit event gets its outcome only when
     the journal takes its record, before its stand-in is printed; one the
     journal refuses has none and is neither printed nor returned (it waits
     for the next poll of the same page)."""
@@ -392,6 +393,8 @@ def print_events(output, events, exit_on_event, stop_lines):
             # it; then the cursor passes it.
             if output.record(n, STATUS_UNFIT):
                 done.append(n)
+                if statuses is not None:
+                    statuses.append(STATUS_UNFIT)
             continue
         pending.append((n, text, status))
     reserve = output.longest_line(stop_lines) if exit_on_event else None
@@ -416,6 +419,8 @@ def print_events(output, events, exit_on_event, stop_lines):
                 # Delivered by its line; a refused copy is said by degraded.
                 output.record(n, status)
             done.append(n)
+            if statuses is not None:
+                statuses.append(status)
         if exit_on_event:
             break
     return done
@@ -436,6 +441,9 @@ def run_stream_loop(executor, base, token, issue, exclusion, token_file, doc, ou
     slot_lines = cycle_stop_lines(issue, doc["preflightId"])
     output.keep_room(slot_lines)
     cursor = load_cursor(token_file)
+    # The close of the root: the sticky flag, the page budget and the
+    # summary, kept with the cursor (rootclosed.py).
+    root = RootClosed(token_file)
 
     def hold(save, *args):
         _save_or_hold(save, token_file, args, output, executor, base, token, cursor, exclude_session, issue)
@@ -454,7 +462,7 @@ def run_stream_loop(executor, base, token, issue, exclusion, token_file, doc, ou
     while True:
         if tails is not None:
             tails.maybe()
-        status, payload, retry_after = poll_once(executor, base, token, cursor, exclude_session)
+        status, payload, retry_after = poll_once(executor, base, token, cursor, exclude_session, POLL_PAGE_LIMIT)
         if status == 200 and isinstance(payload, dict) and isinstance(payload.get("notifications") or [], list):
             if series_degraded:
                 output.lifecycle({"event": "recovered", "issue": issue,
@@ -469,13 +477,16 @@ def run_stream_loop(executor, base, token, issue, exclusion, token_file, doc, ou
                 source = payload.get("notifications") or []
                 nxt = payload.get("cursor") if isinstance(payload.get("cursor"), dict) else cursor
                 root_closed = payload.get("rootClosed") is True
+                root.received(cursor, source, root_closed)
             events = [n for n in source if not isinstance(n, dict) or n.get("id") not in seen]
             # Events of the excluded session are not printed: their outcome
             # is "own echo" once the journal holds it (US-13); one the journal
             # refuses waits like an unprinted event.
             own = [n for n in events if exclusion.own(n)]
             others = [n for n in events if not exclusion.own(n)]
-            printed = print_events(output, others, exit_on_event, slot_lines)
+            statuses = []
+            printed = print_events(output, others, exit_on_event, slot_lines, statuses)
+            root.tally(statuses)
             done = [n for n in own if output.record(n, OUTCOME_OWN_ECHO, channel=None)] + printed
             for n in done:
                 if isinstance(n, dict) and n.get("id") is not None and n.get("id") not in seen:
@@ -487,9 +498,12 @@ def run_stream_loop(executor, base, token, issue, exclusion, token_file, doc, ou
             left = [n for n in events if id(n) not in done_ids]
             if not left:
                 remainder = None
-                if root_closed:
-                    raise Stop("root_closed", delete_token=True)
-                hold(save_cursor, nxt)
+                if root.page_done(cursor, nxt):
+                    # The rest of the page fit and there is nothing more to
+                    # read: root_closed wins over delivered (INV-11, US-3).
+                    note_read_limited(output.journal, root)
+                    raise Stop("root_closed", delete_token=True, detail=root.summary())
+                hold(save_cursor, nxt, root.record())
                 if exit_on_event and others:
                     raise Stop("delivered", detail=doc["preflightId"])
                 cursor = nxt
@@ -503,12 +517,17 @@ def run_stream_loop(executor, base, token, issue, exclusion, token_file, doc, ou
             remainder = (left, nxt, root_closed)
             if exit_on_event and printed:
                 # The next cycle takes the rest from the state.
-                hold(save_remainder, cursor, left, nxt, root_closed)
+                hold(save_remainder, cursor, left, nxt, root_closed, root.record())
                 raise Stop("delivered", detail=doc["preflightId"])
             # Waiting for the journal (stream prints the whole rest of a
             # page): the rest again after a poll interval.
             time.sleep(jitter(float(POLL_INTERVAL_SEC)))
             continue
+        if status in (401, 403) and remainder is not None:
+            # Lost access wins over the kept rest of a page: its events are
+            # not printed, their outcome is "access lost" (US-12).
+            close_stored(output.journal, doc.get("method"), remainder[0],
+                         "token_expired" if status == 401 else "visibility_lost", env)
         if status == 401:
             raise Stop("token_expired", status=401, delete_token=True)
         if status == 403:
@@ -519,7 +538,7 @@ def run_stream_loop(executor, base, token, issue, exclusion, token_file, doc, ou
                 # Received events keep their delivery; the page after them
                 # starts from now.
                 remainder = (remainder[0], None, remainder[2])
-                hold(save_remainder, None, remainder[0], None, remainder[2])
+                hold(save_remainder, None, remainder[0], None, remainder[2], root.record())
             else:
                 hold(save_cursor, None)
             output.lifecycle({"event": "degraded", "cause": "cursor_reset", "issue": issue,
@@ -557,8 +576,9 @@ def cycle_stop_lines(issue, preflight):
 def cycle_stop_line(reason, issue, preflight):
     """The stop line finish() prints for reason in a client-mode cycle of
     preflight result `preflight`."""
+    detail = {"delivered": preflight, "root_closed": LONGEST_SUMMARY}.get(reason)
     return {"event": STOPS[reason][0], "reason": reason,
-            "action": stop_action(reason, issue, preflight if reason == "delivered" else None, preflight)}
+            "action": stop_action(reason, issue, detail, preflight)}
 
 
 def limited_write(doc):

@@ -268,7 +268,7 @@ def remove_token_file(path, opened=None):
             pass
 
 
-def build_url(base, cursor, exclude_session=""):
+def build_url(base, cursor, exclude_session="", limit=None):
     poll_url = base.rstrip("/") + "/agent/v1/notifications/poll"
     params = {}
     # First poll: cursor is None → send no since_* params → server live-anchors.
@@ -284,6 +284,10 @@ def build_url(base, cursor, exclude_session=""):
     # request byte-identical to the pre-rebind runner. Narrow-only server-side.
     if exclude_session:
         params["exclude_session"] = exclude_session
+    # A client-mode poll names its page size: a full page means more may
+    # follow (reading on after rootClosed, rootclosed.py).
+    if limit is not None:
+        params["limit"] = limit
     if params:
         poll_url += "?" + urllib.parse.urlencode(params)
     return poll_url
@@ -365,6 +369,11 @@ def stop_action(reason, issue, detail=None, preflight=None):
     if reason == "misconfigured":
         return ("The bootstrap of the monitor for issue %s is broken (the server address or the token "
                 "file path is not set). Mint a new monitor with %s." % (issue, mint))
+    if reason == "root_closed" and isinstance(detail, dict):
+        # A client-mode close: the summary of what was received since it.
+        return ("Issue %s is %s. Process the delivered events and do not restart the monitor; if the "
+                "issue is reopened and you still need to follow it, mint a new monitor with %s."
+                % (issue, summary_text(detail), mint))
     if reason == "root_closed":
         return ("Issue %s is closed, so its monitor has finished after delivering everything it owed. "
                 "Nothing to do; if the issue is reopened and you still need to follow it, mint a new "
@@ -511,16 +520,17 @@ class Executor:
             return {"status": 0, "error": "executor_garbled"}
 
 
-def poll_once(executor, base, token, cursor, exclude_session=""):
+def poll_once(executor, base, token, cursor, exclude_session="", limit=None):
     """Issue one poll. exclude_session is the mint's session id or the
-    Exclusion of a client-mode monitor, read again for this poll (US-13).
+    Exclusion of a client-mode monitor, read again for this poll (US-13);
+    limit is the page size a client-mode poll asks for.
 
     Returns (status, payload, retry_after): status is the HTTP status (0 for a
     network failure, a timeout or a request past its limit); payload is the
     decoded JSON value of a 2xx body, or None when it did not parse;
     retry_after is the raw Retry-After header of an HTTP error, or None.
     """
-    answer = executor.request(build_url(base, cursor, exclusion_value(exclude_session)), token)
+    answer = executor.request(build_url(base, cursor, exclusion_value(exclude_session), limit), token)
     status = answer.get("status")
     if not isinstance(status, int):
         return 0, None, None
@@ -567,12 +577,14 @@ class StdoutSink(object):
         emit({"event": "notification", "notification": n})
 
 
-def work(executor, base, token, issue, exclude_session, token_file, sink=None):
+def work(executor, base, token, issue, exclude_session, token_file, sink=None, root=None):
     """The polling loop. Never returns: it ends by raising Stop. sink takes
     the lines (stdout by default); a sink with page(cursor, notifications)
     takes each page whole. A sink that raises JournalUnavailable for a
     notification or a page leaves the page undone: the cursor stays and the
-    same page is polled again."""
+    same page is polled again. root is the RootClosed of a client-mode
+    monitor, which reads on after rootClosed (rootclosed.py); without it the
+    first page with rootClosed ends the monitor."""
     if sink is None:
         sink = StdoutSink(issue)
     if hasattr(sink, "started"):
@@ -593,7 +605,7 @@ def work(executor, base, token, issue, exclude_session, token_file, sink=None):
         if value == saved[0]:
             return
         try:
-            save_cursor(token_file, value)
+            save_cursor(token_file, value, root.record() if root is not None else None)
             saved[0] = value
             state_failed[0] = False
         except (OSError, PlatformRefusal) as exc:
@@ -618,9 +630,12 @@ def work(executor, base, token, issue, exclude_session, token_file, sink=None):
             # A journal-only monitor appends the user's deferred tails
             # periodically too (a detached one does it with its pages).
             sink.maybe_tails()
-        status, payload, retry_after = poll_once(executor, base, token, cursor, exclude_session)
+        status, payload, retry_after = poll_once(executor, base, token, cursor, exclude_session,
+                                                 POLL_PAGE_LIMIT if root is not None else None)
 
         if status == 200 and isinstance(payload, dict) and isinstance(payload.get("notifications") or [], list):
+            if root is not None:
+                root.received(cursor, payload.get("notifications") or [], payload.get("rootClosed") is True)
             if hasattr(sink, "note_poll_ok"):
                 sink.note_poll_ok()
             if series_degraded:
@@ -657,14 +672,24 @@ def work(executor, base, token, issue, exclude_session, token_file, sink=None):
                            "polled again" % exc.reason)
                 time.sleep(jitter(float(POLL_INTERVAL_SEC)))
                 continue
-            # The root issue is closed and everything owed is delivered (the
-            # server decides, INV-12): stop only after printing this page.
-            if payload.get("rootClosed") is True:
+            nxt = payload.get("cursor")
+            nxt = nxt if isinstance(nxt, dict) else cursor
+            if root is not None:
+                # Every event of the page has its outcome: count them, then
+                # stop or read on (rootclosed.py).
+                if hasattr(sink, "page"):
+                    root.tally(load_page_outcomes(token_file, cursor)[0].values())
+                if root.page_done(cursor, nxt):
+                    if hasattr(sink, "journal"):
+                        note_read_limited(sink.journal, root)
+                    raise Stop("root_closed", delete_token=True, detail=root.summary())
+            elif payload.get("rootClosed") is True:
+                # The root issue is closed and everything owed is delivered
+                # (the server decides, INV-12): stop only after printing
+                # this page.
                 raise Stop("root_closed", delete_token=True)
             # Advance the watermark cursor to whatever the server returned.
-            nxt = payload.get("cursor")
-            if isinstance(nxt, dict):
-                cursor = nxt
+            cursor = nxt
             persist(cursor)
             if new_count > 0:
                 # Active dialog → reset to the base cadence.

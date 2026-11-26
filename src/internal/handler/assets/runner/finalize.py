@@ -224,6 +224,9 @@ def finish_client(outcome, issue, token_file, sink=None, write=None, preflight=N
     line = {"event": event, "reason": outcome.reason}
     if outcome.status is not None:
         line["status"] = outcome.status
+    if outcome.reason == "root_closed" and isinstance(outcome.detail, dict):
+        # The summary of the close (rootclosed.py) in the journal line.
+        line["summary"] = dict(outcome.detail)
     if sink is not None:
         if outcome.reason in RECEIPT_STOPS and hasattr(sink, "receipt"):
             sink.receipt(receipt_text(outcome, issue, preflight), receipt_short_text(outcome, issue))

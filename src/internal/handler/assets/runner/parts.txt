@@ -22,6 +22,7 @@ ledger.py
 classify.py
 detect.py
 detach.py
+rootclosed.py
 modes_stream.py
 deliver.py
 finalize.py

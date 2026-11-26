@@ -21,6 +21,10 @@ STATE_FILE_NAME = "state.json"
 # The version of the state document; a document of another version is not
 # read (the monitor starts live).
 STATE_VERSION = 1
+# Parts of the state a save of the cursor or of a page keeps as they are:
+# the exclusion value of one's own echo (echo.py) and the close of the root
+# (rootclosed.py).
+STICKY_STATE_KEYS = ("exclude", "rootClosed")
 
 
 def state_file_path(token_file):
@@ -57,13 +61,16 @@ def load_remainder(token_file, cursor):
     return (list(rest["events"]), nxt if isinstance(nxt, dict) else None, rest.get("rootClosed") is True)
 
 
-def save_remainder(token_file, cursor, events, next_cursor, root_closed):
+def save_remainder(token_file, cursor, events, next_cursor, root_closed, root=None):
     """Keep the cursor and the rest of its page: the events without an
-    outcome yet, the cursor after the page and its rootClosed. Raises
-    OSError or PlatformRefusal when it cannot."""
-    _save_state_doc(token_file, {"version": STATE_VERSION, "cursor": cursor,
-                                 "remainder": {"events": list(events), "next": next_cursor,
-                                               "rootClosed": bool(root_closed)}})
+    outcome yet, the cursor after the page and its rootClosed; root is the
+    record of the close (rootclosed.py) to keep with them. Raises OSError or
+    PlatformRefusal when it cannot."""
+    doc = {"version": STATE_VERSION, "cursor": cursor,
+           "remainder": {"events": list(events), "next": next_cursor, "rootClosed": bool(root_closed)}}
+    if root is not None:
+        doc["rootClosed"] = root
+    _save_state_doc(token_file, doc)
 
 
 def load_page_outcomes(token_file, cursor):
@@ -133,18 +140,33 @@ def _load_state_doc(token_file):
     return doc
 
 
-def save_cursor(token_file, cursor):
+def save_cursor(token_file, cursor, root=None):
     """Write the cursor (None: live-start next time) to the state file
-    atomically. Raises OSError or PlatformRefusal when it cannot."""
-    _save_state_doc(token_file, {"version": STATE_VERSION, "cursor": cursor})
+    atomically, with root, the record of the close (rootclosed.py), when
+    given. Raises OSError or PlatformRefusal when it cannot."""
+    doc = {"version": STATE_VERSION, "cursor": cursor}
+    if root is not None:
+        doc["rootClosed"] = root
+    _save_state_doc(token_file, doc)
+
+
+def load_root_closed(token_file):
+    """The record of the close of a client-mode monitor the state holds
+    (rootclosed.py), or None before the close."""
+    doc = _load_state_doc(token_file)
+    value = doc.get("rootClosed") if doc is not None else None
+    return value if isinstance(value, dict) else None
 
 
 def _save_state_doc(token_file, doc):
-    if "exclude" not in doc:
-        # A save of the cursor or of a page keeps the exclusion value.
-        kept = load_exclusion(token_file)
-        if kept is not None:
-            doc = dict(doc, exclude=kept)
+    missing = [key for key in STICKY_STATE_KEYS if key not in doc]
+    if missing:
+        # A save of the cursor or of a page keeps what it does not set.
+        old = _load_state_doc(token_file) or {}
+        doc = dict(doc)
+        for key in missing:
+            if key in old:
+                doc[key] = old[key]
     data = json.dumps(doc, separators=(",", ":"), sort_keys=True).encode("utf-8")
     path = state_file_path(token_file)
     if os.name == "posix":

@@ -300,7 +300,16 @@ func wholeSecondsAtLeastOne(d time.Duration) int {
 // @Description  fate: `token_expired` (401, `status` 401, file deleted, exit
 // @Description  0); `visibility_lost` (403, `status` 403, deleted, 0);
 // @Description  `root_closed` (the poll reported `rootClosed`, after that
-// @Description  page's notifications; deleted, 0); `token_file_missing`
+// @Description  page's notifications; deleted, 0; in `client` mode the flag
+// @Description  is sticky and the runner reads on while the pages are full,
+// @Description  at most 20 pages after the first one with `rootClosed`,
+// @Description  kept in the state across restarts; `action` and the journal
+// @Description  line carry the summary of the events received since the
+// @Description  close: not delivered, unknown, input without a receipt, does
+// @Description  not fit, and whether reading on was limited; in
+// @Description  exit-on-event it ends only the cycle whose batch held the
+// @Description  rest of such a page with nothing more to read, otherwise the
+// @Description  cycle ends `delivered`); `token_file_missing`
 // @Description  (exit 1; a missing file stays missing, an empty one is
 // @Description  deleted, an unreadable one is left alone); `misconfigured`
 // @Description  (exit 1; deleted when its path is known); `stopped`
