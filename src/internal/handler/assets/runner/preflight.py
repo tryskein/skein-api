@@ -35,8 +35,9 @@
 # Two boundaries are objects: the Detector (hosts of steps 5-6, blind
 # channels of step 7, the host an agent runs under and the address specs of
 # the identity) and the ProbeRunner (runs one probe of a channel). The ones
-# here find nothing and run no probe; the registry detector (detect.py) is
-# the preflight's default, the probe executors plug in through ProbeRunner.
+# here find nothing and run no probe; the registry detector (detect.py) and
+# the probe executors (executors.py#SystemProbeRunner) are the preflight's
+# defaults.
 
 import json
 import os
@@ -638,7 +639,7 @@ def preflight(token_file, env, registry, settings, detector=None, prober=None, p
     if sys.version_info < MIN_PYTHON:
         raise ConfigInvalid("python3", "Python %d.%d or newer is needed" % MIN_PYTHON)
     detector = detector or RegistryDetector()
-    prober = prober or ProbeRunner()
+    prober = prober or SystemProbeRunner()
     journal, external = check_sandbox(token_file, env)
     if placement is None:
         placement = system_placement(registry, settings.record)

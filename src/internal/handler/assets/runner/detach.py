@@ -147,6 +147,7 @@ class WorkingStart(object):
             raise ConfigInvalid(runner_lock_path(token_file, env),
                                 "the runner lock cannot be taken (%s)" % exc.reason)
         sweep_stale_locks(env, self.lock.path)
+        sweep_message_files(token_file)
         self.token = read_token_once(token_file)
         try:
             with StateLock(token_file):
