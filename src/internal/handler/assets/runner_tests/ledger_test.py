@@ -88,6 +88,36 @@ class Base(unittest.TestCase):
 
 
 @unittest.skipUnless(os.name == "posix", "the POSIX ledger")
+class AttemptLockTest(Base):
+    """Review finding C5 of wave 7: an attempt lock is held only by a
+    published attempt (P-11 step 6: the lock goes with its attempt). A
+    begin that ends in an exception leaves no lock, no open descriptor and
+    no file behind."""
+
+    def open_fds(self):
+        return set(os.listdir("/proc/self/fd")) if os.path.isdir("/proc/self/fd") else None
+
+    def test_a_save_that_fails_releases_the_attempt_lock(self):
+        led = self.ledger("mon-a", ident([addr("orca", "t-1")]))
+        led.begin([ev("warm")], "c1").attempt.release()
+        before = self.open_fds()
+        with mock.patch.object(RUNNER.Ledger, "_save", side_effect=RUNNER.LedgerUnavailable("write_failed")):
+            for i in range(3):
+                with self.assertRaises(RUNNER.LedgerUnavailable):
+                    led.begin([ev("e%d" % i)], "c1")
+        self.assertEqual(self.attempt_files(), [], "attempt files were left behind")
+        if before is not None:
+            self.assertEqual(self.open_fds(), before, "descriptors were left open")
+
+    def test_a_full_ledger_releases_the_attempt_lock(self):
+        led = self.ledger("mon-a", ident([addr("orca", "t-1")]))
+        with mock.patch.object(RUNNER, "LEDGER_MAX", 0):
+            with self.assertRaises(RUNNER.LedgerFull):
+                led.begin([ev("e1")], "c1")
+        self.assertEqual(self.attempt_files(), [])
+
+
+@unittest.skipUnless(os.name == "posix", "the POSIX ledger")
 class OneDeliveryTest(Base):
     """Row #45: attempts of two monitors of one addressee publish one; the
     loser frees its attempt; every competitor at every step of the owner

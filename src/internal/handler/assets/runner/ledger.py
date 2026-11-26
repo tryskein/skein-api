@@ -434,6 +434,10 @@ class Ledger(object):
         key = os.urandom(16).hex()
         lock = _FileLock(os.path.join(attempts, key))
         decision = Decision()
+        # The attempt lock goes back unless an Attempt that holds it is
+        # returned: any exception before that (a save refused, a full
+        # ledger) releases the lock and its file.
+        handed = False
         try:
             with self._locked():
                 doc = self._load()
@@ -480,11 +484,14 @@ class Ledger(object):
                                              "sessions": [ev.get("session")]}
                     entry["window"] = {"until": now + _window_len(entry, now), "attempt": key,
                                        "prev": window.get("until") or 0}
-                    decision.published = [str(ev["id"]) for ev in carry]
-                    decision.attempt = Attempt(self, key, lock, decision.published, channel, calls, last, first)
+                    published = [str(ev["id"]) for ev in carry]
                 self._save(doc)
+                if carry:
+                    decision.published = published
+                    decision.attempt = Attempt(self, key, lock, published, channel, calls, last, first)
+                    handed = True
         finally:
-            if decision.attempt is None:
+            if not handed:
                 _remove_quietly(lock.path)
                 lock.release()
         return decision
