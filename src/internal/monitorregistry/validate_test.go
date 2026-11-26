@@ -121,6 +121,18 @@ func TestValidate_RejectsEachRule(t *testing.T) {
 		{"channel without about", func(r *Registry) { r.Channels[1].About = "" }, RuleMissingAbout},
 		{"blind channel outside step 7", func(r *Registry) { r.Channels[2].Step = StepTerminal }, RuleBlindStep},
 		{"engine map to a missing record", func(r *Registry) { r.ZavodEngines["beta-engine"] = "beta" }, RuleUnknownEngineTarget},
+		{"two rows one answer can match", func(r *Registry) {
+			// exit 0 alone, and exit 0 with a JSON field: an answer with exit 0
+			// and that field matches both.
+			r.Channels[0].Outcomes = append(r.Channels[0].Outcomes,
+				OutcomeRow{Match: Match{ExitCode: intp(0), JSON: map[string]string{"warning": "stale"}}, Outcome: OutcomeUnknown})
+		}, RuleAmbiguousSign},
+		{"rows on different criteria that one answer can match", func(r *Registry) {
+			r.Channels[1].Outcomes = []OutcomeRow{
+				{Match: Match{JSON: map[string]string{"status": "queued"}}, Outcome: OutcomeQueued},
+				{Match: Match{JSON: map[string]string{"code": "busy"}}, Outcome: OutcomeRefused},
+			}
+		}, RuleAmbiguousSign},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

@@ -3,7 +3,6 @@ package monitorregistry
 import (
 	"fmt"
 	"regexp"
-	"slices"
 	"strings"
 )
 
@@ -497,42 +496,48 @@ func (v *validator) idle(path string, i Idle) {
 	}
 }
 
-// signs checks that every row of a table has a criterion and that no sign
-// appears twice: a sign maps to exactly one value.
+// signs checks that every row of a table has a criterion and that no answer
+// can match two rows: a sign maps to exactly one value. Two rows overlap
+// when no criterion they both state disagrees — then an answer carrying
+// both rows' fields matches both (an identical row is the plain case).
 func (v *validator) signs(path string, rows []Match) {
-	seen := make(map[string]int, len(rows))
 	for i, m := range rows {
 		rpath := fmt.Sprintf("%s[%d].match", path, i)
 		if m.ExitCode == nil && m.HTTPStatus == nil && len(m.JSON) == 0 {
 			v.add(RuleAmbiguousSign, rpath, "the row has no criterion")
 			continue
 		}
-		key := m.key()
-		if j, dup := seen[key]; dup {
-			v.add(RuleAmbiguousSign, rpath, "the same sign as row %d", j)
+		for j := 0; j < i; j++ {
+			if rows[j].overlaps(m) {
+				v.add(RuleAmbiguousSign, rpath, "an answer can match both this row and row %d", j)
+				break
+			}
 		}
-		seen[key] = i
 	}
 }
 
-// key is a canonical form of a sign for duplicate detection.
-func (m Match) key() string {
-	var b strings.Builder
-	if m.ExitCode != nil {
-		fmt.Fprintf(&b, "exit=%d;", *m.ExitCode)
+// overlaps reports whether one answer can satisfy both signs: every
+// criterion stated by both has the same value. A sign without criteria
+// overlaps nothing (it is refused on its own).
+func (m Match) overlaps(o Match) bool {
+	if m.ExitCode == nil && m.HTTPStatus == nil && len(m.JSON) == 0 {
+		return false
 	}
-	if m.HTTPStatus != nil {
-		fmt.Fprintf(&b, "http=%d;", *m.HTTPStatus)
+	if o.ExitCode == nil && o.HTTPStatus == nil && len(o.JSON) == 0 {
+		return false
 	}
-	keys := make([]string, 0, len(m.JSON))
-	for k := range m.JSON {
-		keys = append(keys, k)
+	if m.ExitCode != nil && o.ExitCode != nil && *m.ExitCode != *o.ExitCode {
+		return false
 	}
-	slices.Sort(keys)
-	for _, k := range keys {
-		fmt.Fprintf(&b, "json:%q=%q;", k, m.JSON[k])
+	if m.HTTPStatus != nil && o.HTTPStatus != nil && *m.HTTPStatus != *o.HTTPStatus {
+		return false
 	}
-	return b.String()
+	for k, want := range m.JSON {
+		if got, both := o.JSON[k]; both && got != want {
+			return false
+		}
+	}
+	return true
 }
 
 func (v *validator) probe(path string, p *Probe) {
