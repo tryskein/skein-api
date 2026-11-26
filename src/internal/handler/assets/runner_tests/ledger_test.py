@@ -125,7 +125,9 @@ class AttemptFileRaceTest(Base):
 
     def test_an_attempt_file_removed_before_its_lock(self):
         led = self.ledger("mon-a", ident([addr("orca", "t-1")]))
-        led.begin([ev("warm")], "c1").attempt.release()
+        warm = led.begin([ev("warm")], "c1").attempt
+        warm.abandon()
+        warm.release()
         real = RUNNER._ledger_fcntl.flock
         removed = []
 
@@ -759,8 +761,10 @@ class TailTest(Base):
         RUNNER.defer_lines(self.journal.path, lines, self.env)
         os.makedirs(os.path.dirname(self.journal.path), 0o700, exist_ok=True)
         for suffix, text in ((".2", lines[0]), (".1", lines[1]), ("", "")):
-            with open(self.journal.path + suffix, "w") as fh:
-                fh.write(text + "\n" if text else "")
+            # Private, as the journal keeps its files.
+            fd = os.open(self.journal.path + suffix, os.O_WRONLY | os.O_CREAT, 0o600)
+            os.write(fd, (text + "\n" if text else "").encode("utf-8"))
+            os.close(fd)
         RUNNER.append_tails(self.env)
         self.assertEqual(self.journal_ids(), ["line-summary"])
 
