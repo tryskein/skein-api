@@ -35,6 +35,14 @@ import uuid
 # The files of the token directory that share the token's fate (P-5).
 TOKEN_DIR_FILES = (STATE_FILE_NAME, EXCLUDE_FILE_NAME, CLIENT_STARTER_FILE, PREFLIGHT_FILE_NAME,
                    STATE_LOCK_NAME)
+# Named points of the end sequence. A test may stop the end at one (the
+# point "token_dir_removed" is the state "directory gone, lock still held");
+# a running monitor registers nothing here.
+FINALIZE_POINTS = {}
+# Descriptors of files of the token directory the runner holds open; the end
+# closes them before any file is removed (P-12). The runner registers here
+# whatever it keeps open there.
+TOKEN_DIR_FDS = set()
 # Stops after which the agent still has access: reported by the channel.
 RECEIPT_STOPS = ("root_closed", "stopped", "internal_error")
 # What the poll answers mean for a waiting delivery.
@@ -128,9 +136,28 @@ def close_waiting(sink, cursor, outcomes, journaled, waiting, outcome, reason):
             pass
 
 
+def _point(name):
+    hook = FINALIZE_POINTS.get(name)
+    if hook is not None:
+        hook()
+
+
+def close_token_dir_fds():
+    """Close every descriptor of the token directory the runner holds."""
+    while TOKEN_DIR_FDS:
+        fd = TOKEN_DIR_FDS.pop()
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+
+
 def apply_file_fate(token_file, delete):
-    """Step 4 of P-12: with the token go the files that share its fate and
-    the leftover message files, then the token directory when it is empty."""
+    """Step 4 of P-12: the descriptors of the token directory are closed;
+    with the token go the files that share its fate and the leftover
+    message files, then the token directory when it is empty."""
+    close_token_dir_fds()
+    _point("descriptors_closed")
     if not delete or not token_file:
         return
     directory = os.path.dirname(os.path.abspath(token_file))
@@ -140,10 +167,12 @@ def apply_file_fate(token_file, delete):
         except OSError:
             pass
     sweep_message_files(token_file)
+    _point("files_removed")
     try:
         os.rmdir(directory)
     except OSError:
-        pass
+        return
+    _point("token_dir_removed")
 
 
 def receipt_text(outcome, issue):

@@ -558,7 +558,13 @@ def take_runner_lock(token_file, env):
         return current_platform().acquire_runner_lock(token_file, 0, env)
     except LockBusy:
         pass
-    with StateLock(token_file):
+    try:
+        state_lock = StateLock(token_file)
+    except PlatformRefusal:
+        # The holder is ending and has removed the token directory: the lock
+        # is busy, not broken (P-12).
+        raise LockBusy(runner_lock_path(token_file, env))
+    with state_lock:
         return current_platform().acquire_runner_lock(token_file, 0, env)
 
 
