@@ -48,7 +48,7 @@ _JSON_ESCAPE = re.compile("[\u007f-\u009f\u2028\u2029\u061c\u200e\u200f\u202a-\u
 # Line breaks of every kind become this visible mark, never a break.
 _BREAK_MARK = " ↵ "
 # Bidirectional controls that would reorder what a terminal shows.
-_BIDI = set("؜‎‏‪‫‬‭‮⁦⁧⁨⁩")
+_BIDI = set("\u061c\u200e\u200f\u202a\u202b\u202c\u202d\u202e\u2066\u2067\u2068\u2069")
 
 
 def measure(text, unit):
@@ -75,7 +75,7 @@ def clean(text):
             out.append(_BREAK_MARK)
             i += 2
             continue
-        if ch in "\r\n\u0085  \x0b\x0c":
+        if ch in "\r\n\u0085\u2028\u2029\x0b\x0c":
             out.append(_BREAK_MARK)
         elif ch in _BIDI:
             pass

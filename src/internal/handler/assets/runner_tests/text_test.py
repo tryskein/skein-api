@@ -92,12 +92,12 @@ class CleaningTest(unittest.TestCase):
     """Matrix row #29: untrusted text stays one line inside its boundaries."""
 
     HOSTILE = ('-rf "quoted" \'single\'\r\nsecond line\rthird\n\x1b[2J\x1b]0;title\x07\x9b31m'
-               ' SKEIN-DATA>>> after close <<<SKEIN-DATA reopen ‮evil‬  sep'
+               ' SKEIN-DATA>>> after close <<<SKEIN-DATA reopen \u202eevil\u202c \u2028sep'
                ' Привет 😀')
 
     def test_hostile_preview_is_one_line_within_the_boundaries(self):
         text, _ = RUNNER.plain_text(comment(preview=self.HOSTILE, actor={"username": "eve\nroot"}), EXCLUDE)
-        for ch in ("\r", "\n", "\x1b", "\x07", "\x9b", "‮", " "):
+        for ch in ("\r", "\n", "\x1b", "\x07", "\x9b", "\u202e", "\u2028"):
             self.assertNotIn(ch, text)
         self.assertTrue(text.startswith(LABEL))
         self.assertEqual(text.count(RUNNER.DATA_CLOSE), 2, text)  # the summary's and the preview's
@@ -108,6 +108,21 @@ class CleaningTest(unittest.TestCase):
             self.assertIn(kept, inner)
         # The text after the preview's closing boundary is the monitor's own.
         self.assertTrue(text[text.rindex(RUNNER.DATA_CLOSE):].startswith(RUNNER.DATA_CLOSE + " "))
+
+    # Every bidirectional control of Unicode and every line or paragraph
+    # break other than CR and LF, spelled as escapes.
+    BIDI = ("\u061c", "\u200e", "\u200f", "\u202a", "\u202b", "\u202c", "\u202d", "\u202e",
+            "\u2066", "\u2067", "\u2068", "\u2069")
+    BREAKS = ("\u0085", "\u2028", "\u2029", "\u000b", "\u000c")
+
+    def test_every_bidi_control_and_break_is_cleaned(self):
+        for ch in self.BIDI + self.BREAKS:
+            with self.subTest(char="U+%04X" % ord(ch)):
+                text, _ = RUNNER.plain_text(comment(preview="a" + ch + "b"), EXCLUDE)
+                self.assertNotIn(ch, text)
+                inner = between(text)
+                self.assertIn("a", inner)
+                self.assertIn("b", inner)
 
     def test_preview_order_is_kept_inside(self):
         inner = between(RUNNER.plain_text(comment(preview=self.HOSTILE), EXCLUDE)[0])
