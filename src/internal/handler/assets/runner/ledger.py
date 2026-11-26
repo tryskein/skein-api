@@ -336,6 +336,12 @@ def _budgets(mine):
     return budgets
 
 
+def _history(spent):
+    """The comparable form of what a channel spent on an event."""
+    spent = spent or {}
+    return (spent.get("calls") or 0, spent.get("lastCall"), spent.get("firstCall"))
+
+
 def _note_series(entry, sessions, now):
     """Count a delivery in the series of one session; True when it makes
     the series (30 in a row within 10 min)."""
@@ -474,7 +480,7 @@ class Ledger(object):
                 entry = self._resolve(doc)
                 now = self.clock()
                 _prune(entry, now)
-                carry, prior = [], None
+                carry, spent_of = [], {}
                 for ev in events:
                     eid = str(ev["id"])
                     rec = entry["events"].get(eid)
@@ -490,10 +496,13 @@ class Ledger(object):
                     if mine and mine.get("outcome") != OUTCOME_REFUSED:
                         decision.own[eid] = mine
                         continue
-                    spent = _budgets(mine).get(channel)
-                    if spent and (prior is None or (spent.get("calls") or 0) > (prior.get("calls") or 0)):
-                        prior = spent
+                    spent_of[eid] = _budgets(mine).get(channel)
                     carry.append(ev)
+                # One attempt carries one budget: the events whose history
+                # on this channel is the first one's; the others wait for an
+                # attempt of their own.
+                prior = spent_of.get(str(carry[0]["id"])) if carry else None
+                carry = [ev for ev in carry if _history(spent_of.get(str(ev["id"]))) == _history(prior)]
                 window = entry.get("window") or {}
                 if carry and now < (window.get("until") or 0):
                     decision.wait_until = window["until"]

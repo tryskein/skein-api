@@ -139,6 +139,27 @@ class ChannelBudgetTest(Base):
 
 
 @unittest.skipUnless(os.name == "posix", "the POSIX ledger")
+class BatchHistoryTest(Base):
+    """Review finding 16 of wave 7 (INV-8 per event: at most 4 calls within
+    the idle window from its own first call): an event without calls is
+    not carried by an attempt with another event's four calls."""
+
+    def test_a_new_event_is_not_carried_by_a_spent_budget(self):
+        led = self.ledger("mon-a", ident([addr("orca", "t-1")]))
+        for _ in range(3):
+            self.deliver(led, ["old"], outcome=REFUSED)
+            self.clock.t += 121
+        d = led.begin([ev("old"), ev("new")], "c1")
+        self.assertEqual((d.published, d.attempt.calls), (["old"], 3))
+        d.attempt.abandon()
+        d.attempt.release()
+        d = led.begin([ev("new"), ev("old")], "c1")
+        self.assertEqual((d.published, d.attempt.calls), (["new"], 0))
+        d.attempt.abandon()
+        d.attempt.release()
+
+
+@unittest.skipUnless(os.name == "posix", "the POSIX ledger")
 class MergedAttemptsTest(Base):
     """Review finding V6 of wave 7 (INV-1: one accepted delivery per
     addressee and event): two attempts published for two addressees that a
