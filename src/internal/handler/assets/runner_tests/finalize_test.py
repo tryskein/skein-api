@@ -47,10 +47,16 @@ def poll_cancel(test, world, server, stale_by=0):
     return cancel
 
 
-def single_fit(world):
-    """A line limit that takes one event of note() but not two."""
-    text, _, _ = world.runner.plain_batch([note(1)], "/x/exclude_session")
-    return len(text) + 40
+def single_fit(world, name="tok-a"):
+    """A line limit that takes one event of note() but not two, for the
+    monitor `name`: the delivery text carries the literal path of its
+    exclusion file, so both are measured on that path, and the limit lies
+    strictly between them."""
+    exclude = os.path.join(world.root, name, "exclude_session")
+    one, _, _ = world.runner.plain_batch([note(1)], exclude)
+    two, _, _ = world.runner.plain_batch([note(1), note(2)], exclude)
+    assert len(two) > len(one)
+    return len(one) + (len(two) - len(one)) // 2
 
 
 @unittest.skipUnless(os.name == "posix", "the POSIX runner")
