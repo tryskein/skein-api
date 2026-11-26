@@ -1,0 +1,5 @@
+# The parts of the client-mode loader that `prepare` writes next to the token
+# (monitor_loader.go#clientLoader), in order. Paths are relative to the
+# assets directory. Blank lines and lines starting with "#" are ignored.
+loader_client/mode.py
+monitor_loader.py

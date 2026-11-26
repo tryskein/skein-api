@@ -225,7 +225,7 @@ func TestMeasureToolResponses(t *testing.T) {
 	// digest and the renewal window are constants of this measurement, not
 	// of a deployment, so the row changes only when the tool's response does.
 	mcptools.RegisterGetMonitorScript(s, pool, notifications.NewStore(pool),
-		monitorcreds.New(pool, measureMonitorIdleTTL), monitorregistry.MustEmbedded(), measureMonitorPublicURL,
+		monitorcreds.New(pool, measureMonitorIdleTTL), measureMonitorRegistry(t), measureMonitorPublicURL,
 		measureMonitorRunnerSHA256, measureMonitorIdleTTL)
 
 	c, err := client.NewInProcessClient(s)
@@ -349,6 +349,10 @@ func TestMeasureToolResponses(t *testing.T) {
 	// against the one without it (SC-009: ≤ + 4 096 bytes).
 	m.callCtx(monitorCtx, "skein_get_monitor_script.client_general_posix",
 		"skein_get_monitor_script", map[string]any{"id": fx.referenceID, "client": "measure-unknown-agent"})
+	// SC-009, STOP & VALIDATE 2: the representative record of the contract
+	// (stream, exit-on-event and a host in the registry) on POSIX.
+	m.callCtx(monitorCtx, "skein_get_monitor_script.client_fixture3_posix",
+		"skein_get_monitor_script", map[string]any{"id": fx.referenceID, "client": measureMonitorFixtureClient})
 
 	fmt.Printf("MEASURE_RESP_TOTAL %d %d\n", m.totalBytes, m.rows)
 
@@ -681,4 +685,63 @@ VALUES ($1, $2, 'fake-hash-for-measure', $3, 'measure', now(), 'manage', false, 
 		_, _ = pool.Exec(context.Background(), `DELETE FROM api_keys WHERE id = $1`, id)
 	})
 	return id
+}
+
+// measureMonitorFixtureClient is the agent record of measureMonitorRegistry.
+const measureMonitorFixtureClient = "measure-fixture"
+
+// measureMonitorRegistry is the embedded registry plus a representative
+// record for the size of a response with `client`: an agent with a stream
+// and an exit-on-event method (instructions as long as the catalogue's
+// streaming tools need) and two warnings, and a host channel the agent can
+// be woken by. Its values describe no real agent.
+func measureMonitorRegistry(t *testing.T) *monitorregistry.Registry {
+	t.Helper()
+	var doc map[string]any
+	if err := json.Unmarshal(monitorregistry.Embedded(), &doc); err != nil {
+		t.Fatalf("decode embedded registry: %v", err)
+	}
+	instruction := func(tool string) string {
+		return "Run `command` with your " + tool + " tool as a background task with the longest " +
+			"timeout it allows and keep the task id; each stdout line is one event. When the task " +
+			"ends, run the same `command` again; do not run a second copy while one is running."
+	}
+	doc["agents"] = []any{map[string]any{
+		"id":      measureMonitorFixtureClient,
+		"about":   "Measurement fixture: an agent with a streaming tool and an exit-on-event fallback.",
+		"source":  "measurement fixture of cmd/api/measure_tools_test.go",
+		"process": map[string]any{"executables": []any{"measure-agent"}},
+		"methods": []any{
+			map[string]any{"kind": "stream", "instruction": instruction("Monitor"),
+				"conditions": map[string]any{"env": []any{map[string]any{"name": "MEASURE_AGENT_MONITOR"}}},
+				"limits": map[string]any{"line": map[string]any{"max": 400, "unit": "chars"},
+					"batch": map[string]any{"max": 50, "unit": "lines"}}},
+			map[string]any{"kind": "exit-on-event", "instruction": instruction("Bash"),
+				"conditions": map[string]any{}},
+		},
+		"warnings": []any{
+			"The streaming tool stops after its timeout; run the same command again when it ends.",
+			"Lines printed while no tool reads them are kept in the journal.",
+		},
+	}}
+	doc["channels"] = []any{map[string]any{
+		"id": "measure-host", "about": "Measurement fixture host.", "source": "measurement fixture",
+		"step": 5, "order": 1, "kind": "addressed", "blind": false,
+		"detect":         map[string]any{"env": []any{map[string]any{"name": "MEASURE_HOST_ID"}}},
+		"executor":       map[string]any{"type": "argv", "argv": []any{"measure-host", "send", "{env:MEASURE_HOST_ID}"}, "feed": "stdin", "timeoutSec": 30},
+		"idle":           map[string]any{"type": "builtin"},
+		"outcomes":       []any{map[string]any{"match": map[string]any{"exitCode": 0}, "outcome": "queued"}},
+		"probeUndefined": true,
+		"addressee":      map[string]any{"process": "none"},
+		"binaries":       map[string]any{"linux": []any{"measure-host"}},
+	}}
+	raw, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatalf("encode fixture registry: %v", err)
+	}
+	reg, err := monitorregistry.Load(raw)
+	if err != nil {
+		t.Fatalf("fixture registry: %v", err)
+	}
+	return reg
 }

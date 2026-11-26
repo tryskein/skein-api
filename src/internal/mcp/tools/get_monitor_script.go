@@ -182,6 +182,9 @@ type getMonitorScriptResponse struct {
 	Client string `json:"client,omitempty"`
 	// Platform is the platform of the setup. Only with client.
 	Platform string `json:"platform,omitempty"`
+	// Preflight is the synchronous command that chooses how the monitor
+	// runs and prints the working command. Only with client.
+	Preflight string `json:"preflight,omitempty"`
 }
 
 func handleGetMonitorScript(issues monitorIssueResolver, watcher monitorWatcher, minter monitorMinter, registry *monitorregistry.Registry, agentPublicURL, runnerSHA256 string) server.ToolHandlerFunc {
@@ -327,23 +330,21 @@ func handleGetMonitorScript(issues monitorIssueResolver, watcher monitorWatcher,
 				resp.Client = monitorGeneralClient
 			}
 			resp.Platform = clientArgs.Platform
-			resp.Usage = monitorClientUsage(clientArgs.Resolution)
+			if clientArgs.Platform == monitorPlatformPOSIX {
+				cmds := buildClientCommands(clientCommandInput{
+					publicURL: agentPublicURL, issueID: issueID, excludeSession: sess,
+					tokenFilePath: tokenFilePath, runnerSHA256: runnerSHA256,
+					client: clientArgs.Client, platform: clientArgs.Platform,
+				})
+				resp.Prepare = cmds.prepare
+				resp.Preflight = cmds.preflight
+				resp.Bootstrap = cmds.bootstrap
+				resp.TokenInstruction = clientTokenInstruction
+			}
+			resp.Usage = monitorClientUsage(clientArgs.Resolution, clientExcludeSessionPath(tokenFilePath))
 		}
 		return skmcp.ToolJSON(resp)
 	}
-}
-
-// monitorClientUsage is the `usage` of a response with `client`: the
-// warnings of the resolved record (for an unknown name, that the general
-// record is used), then the run instructions.
-func monitorClientUsage(r monitorregistry.Resolution) string {
-	var b strings.Builder
-	for _, w := range r.Warnings() {
-		b.WriteString(w)
-		b.WriteString(" ")
-	}
-	b.WriteString(monitorUsageRun)
-	return b.String()
 }
 
 // normalizeMonitorEventTypes validates + normalises the caller's eventTypes.

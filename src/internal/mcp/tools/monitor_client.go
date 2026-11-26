@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"path"
 	"regexp"
 	"strings"
 
@@ -176,4 +177,97 @@ func monitorKnownClients(reg *monitorregistry.Registry) string {
 		return "No client name has a record yet; any name gets the general record."
 	}
 	return "Known clients: " + strings.Join(ids, ", ") + "; any other name gets the general record."
+}
+
+// clientCommandInput is what the commands of a call with `client` carry.
+type clientCommandInput struct {
+	publicURL, issueID, excludeSession, tokenFilePath, runnerSHA256 string
+	client, platform                                                string
+}
+
+// clientCommands are the commands of a call with `client` on POSIX.
+type clientCommands struct {
+	prepare, preflight, bootstrap string
+}
+
+// buildClientCommands builds prepare, preflight and bootstrap of a call with
+// `client` on POSIX. prepare creates the private token directory and writes
+// the client-mode loader into it (monitor_prepare.py); preflight and
+// bootstrap run that loader file with the same variables, preflight with
+// SKEIN_MONITOR_MODE=preflight. Every interpolated value is shell-single-
+// quoted, so a hostile issue id or path cannot leave its quotes; the token
+// itself is in none of them.
+func buildClientCommands(in clientCommandInput) clientCommands {
+	dir := path.Dir(in.tokenFilePath)
+	env := "SKEIN_PUBLIC_URL=" + shellSingleQuote(in.publicURL) +
+		" SKEIN_ISSUE=" + shellSingleQuote(in.issueID) +
+		" SKEIN_TOKEN_FILE=" + shellSingleQuote(in.tokenFilePath) +
+		" SKEIN_EXCLUDE_SESSION=" + shellSingleQuote(in.excludeSession) +
+		" SKEIN_RUNNER_SHA256=" + shellSingleQuote(in.runnerSHA256) +
+		" SKEIN_CLIENT=" + shellSingleQuote(in.client) +
+		" SKEIN_PLATFORM=" + shellSingleQuote(in.platform)
+	run := " python3 " + shellSingleQuote(path.Join(dir, clientLoaderFile))
+	return clientCommands{
+		prepare:   "SKEIN_TOKEN_DIR=" + shellSingleQuote(dir) + " python3 -c " + shellSingleQuote(monitorPrepareScript),
+		preflight: "SKEIN_MONITOR_MODE=preflight " + env + run,
+		bootstrap: env + run,
+	}
+}
+
+// clientLoaderFile is the name of the loader file prepare writes into the
+// token directory.
+const clientLoaderFile = "loader.py"
+
+// clientExcludeSessionFile is the name of the echo exclusion file next to
+// the token (US-13).
+const clientExcludeSessionFile = "exclude_session"
+
+// clientExcludeSessionPath is the literal path of the echo exclusion file.
+func clientExcludeSessionPath(tokenFilePath string) string {
+	if strings.Contains(tokenFilePath, `\`) {
+		return tokenFilePath[:strings.LastIndex(tokenFilePath, `\`)+1] + clientExcludeSessionFile
+	}
+	return path.Join(path.Dir(tokenFilePath), clientExcludeSessionFile)
+}
+
+// clientTokenInstruction is the tokenInstruction of a call with `client`:
+// the Write of the token comes only after the ready line of prepare, and a
+// failed prepare has no Write step.
+const clientTokenInstruction = "Run `prepare`. Only after it prints the line " +
+	`{"event": "prepare_ready", ...}` + " write `token` to `tokenFilePath` with the Write tool " +
+	"(never in a shell command), then follow `usage`. If `prepare` prints " +
+	`{"event": "prepare_failed", ...}` + " or exits non-zero, stop and follow the `action` of that line."
+
+// monitorClientUsage composes the `usage` of a call with `client` from the
+// resolved record: its warnings, the preflight step, the tool and parameters
+// of each of the record's own methods, the detached start, the restart with
+// the working command, the echo exclusion file and the stop lines.
+func monitorClientUsage(r monitorregistry.Resolution, excludePath string) string {
+	var b strings.Builder
+	for _, w := range r.Warnings() {
+		b.WriteString(w)
+		b.WriteString("\n")
+	}
+	b.WriteString("1. Run `preflight`. It prints one JSON line {\"event\": \"preflight\", ...}: " +
+		"`method` is how the monitor runs, `command` is the working command. Keep `command`.\n")
+	b.WriteString("2. Start the monitor with `command` as `method` says:\n")
+	if r.Agent != nil {
+		for _, m := range r.Agent.Methods {
+			name := m.Kind
+			if m.Kind == monitorregistry.MethodDelivery {
+				name = "detached via " + m.Channel
+			}
+			b.WriteString("   - " + name + ": " + m.Instruction + "\n")
+		}
+	}
+	b.WriteString("   - detached or journal: run `command` once in a shell; it returns after the line " +
+		"{\"event\": \"monitor_started\", ...} and the monitor keeps running on its own.\n")
+	b.WriteString("3. Whenever the monitor ends (the tool's time ran out, or a line with \"reason\": " +
+		"\"delivered\"), run the same `command` again: no new preflight, no new mint.\n")
+	b.WriteString("4. If a notification's actorSessionId is your current MCP session, write that " +
+		"session id to " + excludePath + " and do not reply to it; after an MCP reconnect write " +
+		"the new one.\n")
+	b.WriteString("Every stop prints one final JSON line {event, reason, action}: follow its `action`. " +
+		"Reply to comments with skein_comment as usual.")
+	return b.String()
 }

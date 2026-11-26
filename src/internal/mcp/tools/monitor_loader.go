@@ -1,7 +1,13 @@
 package tools
 
 import (
-	_ "embed"
+	"bufio"
+	"bytes"
+	"embed"
+	"encoding/json"
+	"fmt"
+	"io/fs"
+	"path"
 	"strings"
 )
 
@@ -31,4 +37,78 @@ var monitorLoaderSource string
 // asset without its trailing newline.
 func monitorLoader() string {
 	return strings.TrimRight(monitorLoaderSource, "\n")
+}
+
+// monitorAssets holds the parts of the client-mode loader, their manifest
+// and the prepare script of a call with `client`.
+//
+//go:embed assets/monitor_loader.py assets/monitor_prepare.py assets/loader_client/parts.txt assets/loader_client/*.py
+var monitorAssets embed.FS
+
+// clientLoaderSource is the client-mode loader that `prepare` writes next to
+// the token: the parts listed in assets/loader_client/parts.txt, joined in
+// order. Its first part sets _SKEIN_LOADER_MODE = "client" before the body is
+// exec()'d, so the mode follows the loader the agent runs, never an
+// environment variable.
+var clientLoaderSource = mustAssembleAssets(monitorAssets, "assets", "loader_client/parts.txt")
+
+// monitorPrepareScript is the prepare script of a call with `client` on
+// POSIX, with the client loader in it as a Python string literal.
+var monitorPrepareScript = mustPrepareScript()
+
+// clientLoaderPlaceholder is replaced in monitor_prepare.py by the client
+// loader as a Python string literal.
+const clientLoaderPlaceholder = "__SKEIN_CLIENT_LOADER__"
+
+// mustAssembleAssets joins the files that the manifest lists (paths relative
+// to dir) in order. The assets are compiled into the binary, so a missing
+// part is a defect of the build: it panics at start-up.
+func mustAssembleAssets(fsys fs.FS, dir, manifest string) string {
+	list, err := fs.ReadFile(fsys, path.Join(dir, manifest))
+	if err != nil {
+		panic(fmt.Sprintf("monitor loader: reading %s: %v", manifest, err))
+	}
+	var b strings.Builder
+	parts := 0
+	sc := bufio.NewScanner(bytes.NewReader(list))
+	for sc.Scan() {
+		name := strings.TrimSpace(sc.Text())
+		if name == "" || strings.HasPrefix(name, "#") {
+			continue
+		}
+		part, err := fs.ReadFile(fsys, path.Join(dir, name))
+		if err != nil {
+			panic(fmt.Sprintf("monitor loader: reading part %q: %v", name, err))
+		}
+		b.Write(part)
+		if len(part) > 0 && part[len(part)-1] != '\n' {
+			b.WriteByte('\n')
+		}
+		parts++
+	}
+	if err := sc.Err(); err != nil || parts == 0 {
+		panic(fmt.Sprintf("monitor loader: manifest %s lists no part (%v)", manifest, err))
+	}
+	return b.String()
+}
+
+// mustPrepareScript substitutes the client loader into the prepare script
+// as a JSON string, which is also a valid Python string literal (the encoder
+// escapes quotes, backslashes and control characters and emits no "\/").
+func mustPrepareScript() string {
+	script, err := fs.ReadFile(monitorAssets, "assets/monitor_prepare.py")
+	if err != nil {
+		panic(fmt.Sprintf("monitor loader: reading the prepare script: %v", err))
+	}
+	var lit bytes.Buffer
+	enc := json.NewEncoder(&lit)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(clientLoaderSource); err != nil {
+		panic(fmt.Sprintf("monitor loader: encoding the client loader: %v", err))
+	}
+	if bytes.Count(script, []byte(clientLoaderPlaceholder)) != 1 {
+		panic("monitor loader: the prepare script must carry the loader placeholder exactly once")
+	}
+	out := strings.Replace(string(script), clientLoaderPlaceholder, strings.TrimRight(lit.String(), "\n"), 1)
+	return strings.TrimRight(out, "\n")
 }
