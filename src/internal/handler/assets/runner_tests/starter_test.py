@@ -139,10 +139,41 @@ def site_dir(test, source):
 
 
 def loader_server(test, body=MODE_LOADER, loader=None, script=None, poll=None):
-    srv = harness.LoaderServer(script or (lambda h: h.send_body(500, b"")), poll,
-                               loader or (lambda h: h.send_body(200, body)))
+    """A fake server of the loader. Every request for the loader is checked
+    to carry no monitor token (the starter reads none)."""
+    answer = loader or (lambda h: h.send_body(200, body))
+    tokens = []
+
+    def serve(handler):
+        tokens.append(handler.headers.get("X-Skein-Api-Key"))
+        answer(handler)
+    srv = harness.LoaderServer(script or (lambda h: h.send_body(500, b"")), poll, serve)
+
+    def no_token():
+        test.assertEqual([t for t in tokens if t is not None], [], "a loader request carried a monitor token")
+    test.addCleanup(no_token)
     test.addCleanup(srv.stop)
     return srv
+
+
+# The stop lines of the starter refusal table (R-10, "Строки stdout раннера"),
+# whole: event, reason, exit code and the action that names the loader
+# download and the step to take.
+REFUSALS = {
+    "misconfigured": ({"event": "closed", "reason": "misconfigured",
+                       "action": "Loader download: the start command is broken. "
+                                 "Mint a new monitor with the same parameters."}, 1),
+    "server_unreachable": ({"event": "paused", "reason": "server_unreachable",
+                            "action": "Loader download: the server did not serve it. "
+                                      "Run the same command again later."}, 1),
+    "runner_mismatch": ({"event": "closed", "reason": "runner_mismatch",
+                         "action": "Loader download: the server loader is of another build. "
+                                   "Mint a new monitor with the same parameters."}, 1),
+    "config_invalid": ({"event": "closed", "reason": "config_invalid",
+                        "action": "Loader download: Install Python 3.6 or newer. Run the same command again."}, 1),
+    "stopped": ({"event": "paused", "reason": "stopped",
+                 "action": "Loader download: stopped by a signal. Run the same command again."}, 0),
+}
 
 
 def redirect_to(target):
@@ -165,14 +196,12 @@ class StarterRefusalTest(unittest.TestCase):
 
     def assert_refusal(self, form, box, before, result, reason, event, code):
         rc, lines, out, err = result
+        line, want_code = REFUSALS[reason]
+        self.assertEqual((line["event"], want_code), (event, code), "the table and the case disagree")
         self.assertEqual(rc, code, (form, reason, out, err))
-        self.assertEqual(len(lines), 1, (form, reason, out))
-        line = lines[0]
-        self.assertEqual((line.get("reason"), line.get("event")), (reason, event), (form, line))
-        self.assertTrue(line.get("action", "").startswith("Loader download: "), (form, line))
-        for text in (out, err):
-            self.assertNotIn("Traceback", text, (form, reason))
-            self.assertNotIn("Error", text, (form, reason))
+        # stdout is exactly the one compact line of the table, stderr empty.
+        self.assertEqual(out, json.dumps(line, separators=(",", ":")) + "\n", (form, reason))
+        self.assertEqual(err, "", (form, reason))
         self.assertEqual(box.snapshot(), before, (form, reason))
 
     def test_missing_url_or_digest_is_misconfigured(self):
