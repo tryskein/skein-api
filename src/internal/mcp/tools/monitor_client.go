@@ -149,20 +149,15 @@ func windowsTokenFilePath(tokenDir, issueID, discriminator string) string {
 	return strings.TrimRight(tokenDir, `\/`) + `\skein-mon-` + issueID + "-" + discriminator + `\token`
 }
 
-// Windows shells a record may name (monitorregistry.Agent.WindowsShell).
-const (
-	windowsShellGitBash = "git-bash"
-	windowsShellCmd     = "cmd"
-)
-
-// localAppDataCommand is the command that prints %LOCALAPPDATA% in a shell.
-// A record without a named shell, and the general record, run Windows
+// localAppDataCommand is the command that prints %LOCALAPPDATA% in the
+// record's Windows shell (monitorregistry.WindowsShell*, a closed set). A
+// record without a named shell and the general record run Windows
 // PowerShell; pwsh takes the same command.
 func localAppDataCommand(shell string) string {
 	switch shell {
-	case windowsShellGitBash:
+	case monitorregistry.WindowsShellGitBash:
 		return `echo "$LOCALAPPDATA"`
-	case windowsShellCmd:
+	case monitorregistry.WindowsShellCmd:
 		return `echo %LOCALAPPDATA%`
 	default:
 		return `$env:LOCALAPPDATA`

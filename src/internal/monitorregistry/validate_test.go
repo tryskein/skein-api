@@ -122,6 +122,7 @@ func TestValidate_RejectsEachRule(t *testing.T) {
 		{"channel without about", func(r *Registry) { r.Channels[1].About = "" }, RuleMissingAbout},
 		{"blind channel outside step 7", func(r *Registry) { r.Channels[2].Step = StepTerminal }, RuleBlindStep},
 		{"engine map to a missing record", func(r *Registry) { r.ZavodEngines["beta-engine"] = "beta" }, RuleUnknownEngineTarget},
+		{"Windows shell outside the closed set", func(r *Registry) { r.Agents[0].WindowsShell = "gitbash" }, RuleInvalid},
 		{"two rows one answer can match", func(r *Registry) {
 			// exit 0 alone, and exit 0 with a JSON field: an answer with exit 0
 			// and that field matches both.
@@ -285,6 +286,18 @@ func TestValidate_EnvPatternSubset(t *testing.T) {
 		}
 		if rules := rulesOf(t, err); len(rules) != 1 || rules[0] != RuleInvalid {
 			t.Fatalf("pattern %q: %v, want one %s", p, err, RuleInvalid)
+		}
+	}
+}
+
+// TestValidate_AcceptsEveryWindowsShell: each shell of the closed set, and
+// none named, passes.
+func TestValidate_AcceptsEveryWindowsShell(t *testing.T) {
+	for _, sh := range []string{"", WindowsShellPowerShell, WindowsShellPwsh, WindowsShellGitBash, WindowsShellCmd} {
+		r := validRegistry()
+		r.Agents[0].WindowsShell = sh
+		if err := r.Validate(); err != nil {
+			t.Fatalf("Windows shell %q was refused: %v", sh, err)
 		}
 	}
 }

@@ -95,11 +95,21 @@ type Agent struct {
 	// preflight tries them. An agent with no method of its own is woken only
 	// by a host or a blind channel, or gets the journal.
 	Methods []Method `json:"methods"`
-	// WindowsShell is the shell the agent runs commands with on Windows.
+	// WindowsShell is the shell the agent runs commands with on Windows: one
+	// of the WindowsShell* names; empty means none is named, and the agent is
+	// given Windows PowerShell.
 	WindowsShell string `json:"windowsShell,omitempty"`
 	// Warnings are shown to the agent with the instructions of the record.
 	Warnings []string `json:"warnings,omitempty"`
 }
+
+// Windows shells an agent record may name.
+const (
+	WindowsShellPowerShell = "powershell"
+	WindowsShellPwsh       = "pwsh"
+	WindowsShellGitBash    = "git-bash"
+	WindowsShellCmd        = "cmd"
+)
 
 // ProcessSign recognises the agent process by its executable name or by an
 // argument of its command line. At least one of the lists is non-empty.

@@ -230,3 +230,47 @@ func TestGetMonitorScriptClient_ResolvesRecords(t *testing.T) {
 		}
 	})
 }
+
+// TestGetMonitorScriptClient_TokenDirHintNamesTheShellCommand — US-11: a
+// windows call without tokenDir names the command that prints
+// %LOCALAPPDATA% in the record's shell: Git Bash reads the variable with
+// $NAME, cmd with %NAME%, PowerShell (also for the general record and a
+// record without a named shell) with $env:NAME.
+func TestGetMonitorScriptClient_TokenDirHintNamesTheShellCommand(t *testing.T) {
+	cases := []struct{ shell, want string }{
+		{monitorregistry.WindowsShellGitBash, `echo "$LOCALAPPDATA"`},
+		{monitorregistry.WindowsShellCmd, `echo %LOCALAPPDATA%`},
+		{monitorregistry.WindowsShellPwsh, `$env:LOCALAPPDATA`},
+		{monitorregistry.WindowsShellPowerShell, `$env:LOCALAPPDATA`},
+		{"", `$env:LOCALAPPDATA`},
+	}
+	for _, tc := range cases {
+		shellField := ""
+		if tc.shell != "" {
+			shellField = `"windowsShell": "` + tc.shell + `",`
+		}
+		reg, err := monitorregistry.Load([]byte(`{
+  "schemaVersion": 1,
+  "general": {"about": "general", "source": "unit fixture"},
+  "agents": [{"id": "win-agent", "about": "a", "source": "unit fixture", ` + shellField + `
+    "process": {"executables": ["win-agent"]}, "methods": []}],
+  "channels": [], "shells": {"source": "unit fixture", "names": ["sh"]}, "zavodEngines": {}
+}`))
+		if err != nil {
+			t.Fatalf("shell %q: fixture registry: %v", tc.shell, err)
+		}
+		u := newGMSUnit(reg)
+		body := extractToolJSON(t, u.call(t, map[string]any{"id": "sk-42", "client": "win-agent", "platform": "windows"}))
+		if body["code"] != monitorCodeTokenDirRequired {
+			t.Fatalf("shell %q: code = %v", tc.shell, body["code"])
+		}
+		if msg, _ := body["message"].(string); !strings.Contains(msg, tc.want) {
+			t.Fatalf("shell %q: refusal %q does not name %s", tc.shell, msg, tc.want)
+		}
+	}
+	u := newGMSUnit(gmsUnitRegistry(t))
+	body := extractToolJSON(t, u.call(t, map[string]any{"id": "sk-42", "client": "unknown-agent", "platform": "windows"}))
+	if msg, _ := body["message"].(string); !strings.Contains(msg, `$env:LOCALAPPDATA`) {
+		t.Fatalf("general record: refusal %q does not name the PowerShell command", msg)
+	}
+}
