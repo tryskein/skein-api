@@ -37,4 +37,15 @@ func TestAgentRoutes_ReadOnly(t *testing.T) {
 	if len(agentRoutes) == 0 {
 		t.Fatalf("no route under /agent/v1 in the built router — the monitor door is missing")
 	}
+	// The loader route the starter fetches without a monitor token is part of
+	// the door, so the walk above holds it to GET/HEAD as well (R-10, INV-16).
+	found := false
+	for _, route := range agentRoutes {
+		if route == http.MethodGet+" /agent/v1/monitor-loader" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("GET /agent/v1/monitor-loader is not in the built router; /agent/v1 routes: %v", agentRoutes)
+	}
 }

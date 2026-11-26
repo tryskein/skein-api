@@ -82,6 +82,10 @@ type mcpDeps struct {
 	// runnerSHA256 is the digest of the runner body /agent/v1/monitor-script
 	// serves; the bootstrap carries it so the loader verifies the download.
 	runnerSHA256 string
+	// loaderSHA256 is the digest of the loader body /agent/v1/monitor-loader
+	// serves; every start command carries it as SKEIN_LOADER_SHA256 so the
+	// starter verifies the download.
+	loaderSHA256 string
 	// sk-674.18 T024 — the spaces service (skein_user action space_add,
 	// the space of skein_project_create) and SKEIN_PROJECT_DEFAULT_VISIBILITY.
 	spacesSvc                *spaces.Service

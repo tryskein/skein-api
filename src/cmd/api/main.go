@@ -43,6 +43,7 @@ import (
 	"skein-api/internal/logging"
 	"skein-api/internal/mail"
 	mcppkg "skein-api/internal/mcp"
+	mcptools "skein-api/internal/mcp/tools"
 	"skein-api/internal/monitorcreds"
 	"skein-api/internal/monitorregistry"
 	"skein-api/internal/notifications"
@@ -1637,6 +1638,10 @@ func buildRouter(
 		cfg.MonitorStallThreshold,
 		cfg.MonitorTokenIdleTTL,
 	)
+	// The loader the starter of every monitor command downloads from the
+	// /agent/v1 door below without the monitor token; the mint bakes the
+	// digest of its body into every start command (SKEIN_LOADER_SHA256).
+	agentLoaderHandler := handler.NewAgentLoaderHandler(mcptools.ServedLoader())
 	// Reuse the same store instances main() already built for REST —
 	// stores are stateless over the pool; no observable behaviour change,
 	// just one fewer NewStore allocation per process for projects /
@@ -1670,6 +1675,7 @@ func buildRouter(
 		agentPublicURL:      cfg.AgentPublicURL,
 		monitorTokenIdleTTL: cfg.MonitorTokenIdleTTL,
 		runnerSHA256:        agentScriptHandler.SHA256(),
+		loaderSHA256:        agentLoaderHandler.SHA256(),
 		// sk-674.18 T024 — the space of a new project and the admin agent
 		// adding to a space: the same service and defaults as REST.
 		spacesSvc:                spaces.NewService(pool, spacesOptions(cfg)),
@@ -1709,20 +1715,17 @@ func buildRouter(
 	// sk-142.4 — agent task-monitor data plane. SIBLING route group to /mcp,
 	// NOT under the internal API prefix: monitor-token runners are not browser-cookie
 	// callers, and the BFF passes /agent/v1 through on its own door (T3).
-	// Two auth gates, composed like /mcp: the channel secret (only the BFF
-	// holds it) then RequireMonitorToken, which accepts ONLY skm_ tokens
-	// (an ska_ api key is the wrong shape here) and stashes the validated
-	// scope claims in the request context. Read-only by route set: just the
-	// GET poll endpoint in T4 (the monitor-script GET lands in T6).
+	// The channel secret (only the BFF holds it) guards the whole group;
+	// RequireMonitorToken, which accepts ONLY skm_ tokens (an ska_ api key is
+	// the wrong shape here) and stashes the validated scope claims in the
+	// request context, guards every route but the static loader, which the
+	// starter fetches before any token is read. Read-only by route set.
 	// monitorStore is built once above (mcpDepsBundle) and shared with the
 	// skein_get_monitor_script MCP tool — the mint side of this same door.
 	agentPollHandler := handler.NewAgentPollHandler(pool, cfg.MonitorPollSafetyLag)
-	r.Route("/agent/v1", func(r chi.Router) {
-		r.Use(handler.RequireInternalSecret(cfg.InternalSecret, ""))
-		r.Use(auth.RequireMonitorToken(monitorStore, "notifications:poll"))
-		r.Get("/notifications/poll", agentPollHandler.Poll)
-		r.Get("/monitor-script", agentScriptHandler.Script)
-	})
+	handler.MountAgentRoutes(r, cfg.InternalSecret,
+		auth.RequireMonitorToken(monitorStore, "notifications:poll"),
+		agentPollHandler.Poll, agentScriptHandler.Script, agentLoaderHandler.Loader)
 
 	// The internal API of the frontend (contract for skein-web: the BFF
 	// proxies the browser's /api/v1/* here as /ui/v1/* and makes its service

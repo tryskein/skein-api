@@ -39,11 +39,25 @@ func monitorLoader() string {
 	return strings.TrimRight(monitorLoaderSource, "\n")
 }
 
-// monitorAssets holds the parts of the client-mode loader, their manifest
-// and the prepare script of a call with `client`.
+// monitorAssets holds the parts of the served loader and of the client-mode
+// loader, their manifests and the prepare script of a call with `client`.
 //
-//go:embed assets/monitor_loader.py assets/monitor_prepare.py assets/loader_client/parts.txt assets/loader_client/*.py
+//go:embed assets/monitor_loader.py assets/monitor_prepare.py assets/loader_parts.txt assets/loader_client/parts.txt assets/loader_client/*.py
 var monitorAssets embed.FS
+
+// servedLoaderSource is the loader GET /agent/v1/monitor-loader serves: the
+// parts listed in assets/loader_parts.txt, joined in order. It is static code
+// of this build, the same for every caller; the starter runs it with its mode
+// in the loader's namespace, so one body serves both the call without
+// `client` and the call with it.
+var servedLoaderSource = mustAssembleAssets(monitorAssets, "assets", "loader_parts.txt")
+
+// ServedLoader returns the loader source GET /agent/v1/monitor-loader serves.
+// The handler of that route digests it once; the digest is the
+// SKEIN_LOADER_SHA256 of every start command.
+func ServedLoader() string {
+	return servedLoaderSource
+}
 
 // clientLoaderSource is the client-mode loader that `prepare` writes next to
 // the token: the parts listed in assets/loader_client/parts.txt, joined in
