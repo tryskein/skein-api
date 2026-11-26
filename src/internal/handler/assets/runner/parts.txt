@@ -2,4 +2,10 @@
 # (agent_script.go) and the Python tests (runner_tests/harness.py) join the
 # listed files of this directory in this order into one body. Blank lines
 # and lines starting with "#" are ignored.
+#
+# The platform layer comes first: core.py ends by calling main() when run as
+# a script, so every part it uses must already be defined.
+platform.py
+platform_posix.py
+platform_windows.py
 core.py

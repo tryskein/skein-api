@@ -63,6 +63,25 @@
 #                                  renames that file to <path>.opened and
 #                                  writes a new file "swapped\n" at <path>: the
 #                                  path names another inode right after fstat.
+#   SKEIN_TEST_IO_LOG=<path>       file I/O counter: every os.open and built-in
+#                                  open of a path under SKEIN_TEST_IO_WATCH
+#                                  appends "open <path> <fd>" (or
+#                                  "open-failed <path> <errno name>"), and the
+#                                  os.fstat, os.read and os.close of a
+#                                  descriptor so opened append
+#                                  "fstat|read|close <fd>". <path> is absolute,
+#                                  an open relative to dir_fd resolved through
+#                                  /proc/self/fd. Lines are appended in call
+#                                  order, so a reader sees what was opened, by
+#                                  which path, and whether each read of a
+#                                  descriptor came after its fstat.
+#   SKEIN_TEST_IO_WATCH=<dir>      with the counter: the directory whose
+#                                  paths are counted (absolute).
+#   SKEIN_TEST_FOREIGN_INODE=<path>
+#                                  os.fstat, os.lstat and os.stat of the file
+#                                  or directory at <path> (the inode it names
+#                                  at start-up) report another user as owner;
+#                                  everything else keeps its real owner.
 import os
 
 if os.environ.get("SKEIN_TEST_SITE") == "1":
@@ -239,3 +258,92 @@ if os.environ.get("SKEIN_TEST_SITE") == "1":
                         fh.write("swapped\n")
             return st
         os.fstat = _swapping_fstat
+
+    _io_log = os.environ.get("SKEIN_TEST_IO_LOG", "")
+    if _io_log:
+        import builtins
+        import errno as _errno
+        _io_watch = os.path.join(os.path.abspath(os.environ.get("SKEIN_TEST_IO_WATCH", "/")), "")
+        _io_real = {"open": os.open, "fstat": os.fstat, "read": os.read, "close": os.close,
+                    "write": os.write, "builtin_open": builtins.open}
+        _io_fds = set()
+
+        def _io_note(line):
+            fd = _io_real["open"](_io_log, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+            try:
+                _io_real["write"](fd, (line + "\n").encode("utf-8", "surrogateescape"))
+            finally:
+                _io_real["close"](fd)
+
+        def _io_resolve(path, dir_fd):
+            path = os.fsdecode(path)
+            if dir_fd is not None and not os.path.isabs(path):
+                try:
+                    return os.path.join(os.readlink("/proc/self/fd/%d" % dir_fd), path)
+                except OSError:
+                    return path
+            return os.path.abspath(path)
+
+        def _io_watched(path):
+            return path.startswith(_io_watch)
+
+        def _io_open(path, flags, mode=0o777, *, dir_fd=None):
+            full = _io_resolve(path, dir_fd)
+            try:
+                fd = _io_real["open"](path, flags, mode, dir_fd=dir_fd)
+            except OSError as exc:
+                if _io_watched(full):
+                    _io_note("open-failed %s %s" % (full, _errno.errorcode.get(exc.errno, exc.errno)))
+                raise
+            if _io_watched(full):
+                _io_fds.add(fd)
+                _io_note("open %s %d" % (full, fd))
+            return fd
+
+        def _io_builtin_open(file, *args, **kwargs):
+            fh = _io_real["builtin_open"](file, *args, **kwargs)
+            if isinstance(file, (str, bytes)) and _io_watched(_io_resolve(file, None)):
+                _io_note("open %s %d" % (_io_resolve(file, None), fh.fileno()))
+            return fh
+
+        def _io_fstat(fd, *args, **kwargs):
+            if fd in _io_fds:
+                _io_note("fstat %d" % fd)
+            return _io_real["fstat"](fd, *args, **kwargs)
+
+        def _io_read(fd, n):
+            if fd in _io_fds:
+                _io_note("read %d" % fd)
+            return _io_real["read"](fd, n)
+
+        def _io_close(fd):
+            if fd in _io_fds:
+                _io_fds.discard(fd)
+                _io_note("close %d" % fd)
+            return _io_real["close"](fd)
+
+        os.open = _io_open
+        os.fstat = _io_fstat
+        os.read = _io_read
+        os.close = _io_close
+        builtins.open = _io_builtin_open
+
+    _foreign_inode = os.environ.get("SKEIN_TEST_FOREIGN_INODE", "")
+    if _foreign_inode:
+        _fi_st = os.lstat(_foreign_inode)
+        _fi_key = (_fi_st.st_dev, _fi_st.st_ino)
+        _fi_uid = os.getuid() + 1
+
+        def _fi_wrap(real):
+            def _stat(*args, **kwargs):
+                st = real(*args, **kwargs)
+                if (st.st_dev, st.st_ino) != _fi_key:
+                    return st
+                fields = list(st)
+                fields[4] = _fi_uid  # st_uid
+                return os.stat_result(fields)
+            return _stat
+
+        os.fstat = _fi_wrap(os.fstat)
+        os.lstat = _fi_wrap(os.lstat)
+        os.stat = _fi_wrap(os.stat)
