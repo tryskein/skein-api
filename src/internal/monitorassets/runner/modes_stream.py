@@ -503,7 +503,7 @@ def run_stream_loop(executor, base, token, issue, exclusion, token_file, doc, ou
                     # read: root_closed wins over delivered (INV-11, US-3).
                     note_read_limited(output.journal, root)
                     raise Stop("root_closed", delete_token=True, detail=root.summary())
-                hold(save_cursor, nxt, root.record())
+                hold(save_cursor, nxt)
                 if exit_on_event and others:
                     raise Stop("delivered", detail=doc["preflightId"])
                 cursor = nxt
@@ -517,7 +517,7 @@ def run_stream_loop(executor, base, token, issue, exclusion, token_file, doc, ou
             remainder = (left, nxt, root_closed)
             if exit_on_event and printed:
                 # The next cycle takes the rest from the state.
-                hold(save_remainder, cursor, left, nxt, root_closed, root.record())
+                hold(save_remainder, cursor, left, nxt, root_closed)
                 raise Stop("delivered", detail=doc["preflightId"])
             # Waiting for the journal (stream prints the whole rest of a
             # page): the rest again after a poll interval.
@@ -538,7 +538,7 @@ def run_stream_loop(executor, base, token, issue, exclusion, token_file, doc, ou
                 # Received events keep their delivery; the page after them
                 # starts from now.
                 remainder = (remainder[0], None, remainder[2])
-                hold(save_remainder, None, remainder[0], None, remainder[2], root.record())
+                hold(save_remainder, None, remainder[0], None, remainder[2])
             else:
                 hold(save_cursor, None)
             output.lifecycle({"event": "degraded", "cause": "cursor_reset", "issue": issue,

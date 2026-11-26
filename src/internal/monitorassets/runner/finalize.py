@@ -186,6 +186,8 @@ def apply_file_fate(token_file, delete):
     _point("descriptors_closed")
     if not delete or not token_file:
         return
+    # The parts this process held go with the state.
+    _STATE_PARTS.pop(state_file_path(token_file), None)
     directory = os.path.dirname(os.path.abspath(token_file))
     for path in [token_file] + [os.path.join(directory, name) for name in TOKEN_DIR_FILES]:
         try:

@@ -26,6 +26,9 @@ STATE_VERSION = 1
 # (rootclosed.py) and the mark of a runner whose addressee changed
 # (takeover.py).
 STICKY_STATE_KEYS = ("exclude", "rootClosed", "addresseeChanged")
+# Sticky parts this process set (set_state_part), by state file: a save
+# writes them before what the file held.
+_STATE_PARTS = {}
 
 
 def state_file_path(token_file):
@@ -62,16 +65,13 @@ def load_remainder(token_file, cursor):
     return (list(rest["events"]), nxt if isinstance(nxt, dict) else None, rest.get("rootClosed") is True)
 
 
-def save_remainder(token_file, cursor, events, next_cursor, root_closed, root=None):
+def save_remainder(token_file, cursor, events, next_cursor, root_closed):
     """Keep the cursor and the rest of its page: the events without an
-    outcome yet, the cursor after the page and its rootClosed; root is the
-    record of the close (rootclosed.py) to keep with them. Raises OSError or
-    PlatformRefusal when it cannot."""
-    doc = {"version": STATE_VERSION, "cursor": cursor,
-           "remainder": {"events": list(events), "next": next_cursor, "rootClosed": bool(root_closed)}}
-    if root is not None:
-        doc["rootClosed"] = root
-    _save_state_doc(token_file, doc)
+    outcome yet, the cursor after the page and its rootClosed. Raises
+    OSError or PlatformRefusal when it cannot."""
+    _save_state_doc(token_file, {"version": STATE_VERSION, "cursor": cursor,
+                                 "remainder": {"events": list(events), "next": next_cursor,
+                                               "rootClosed": bool(root_closed)}})
 
 
 def load_page_outcomes(token_file, cursor):
@@ -157,14 +157,17 @@ def _load_state_doc(token_file):
     return doc
 
 
-def save_cursor(token_file, cursor, root=None):
+def save_cursor(token_file, cursor):
     """Write the cursor (None: live-start next time) to the state file
-    atomically, with root, the record of the close (rootclosed.py), when
-    given. Raises OSError or PlatformRefusal when it cannot."""
-    doc = {"version": STATE_VERSION, "cursor": cursor}
-    if root is not None:
-        doc["rootClosed"] = root
-    _save_state_doc(token_file, doc)
+    atomically. Raises OSError or PlatformRefusal when it cannot."""
+    _save_state_doc(token_file, {"version": STATE_VERSION, "cursor": cursor})
+
+
+def set_state_part(token_file, key, value):
+    """The value of a sticky part of the state (STICKY_STATE_KEYS) this
+    process holds: the next save of the state writes it, in the same
+    atomic write as the cursor or the page it saves (rootclosed.py)."""
+    _STATE_PARTS.setdefault(state_file_path(token_file), {})[key] = value
 
 
 def load_root_closed(token_file):
@@ -178,10 +181,17 @@ def load_root_closed(token_file):
 def _save_state_doc(token_file, doc):
     missing = [key for key in STICKY_STATE_KEYS if key not in doc]
     if missing:
-        # A save of the cursor or of a page keeps what it does not set.
-        old = _load_state_doc(token_file) or {}
+        # A save of the cursor or of a page keeps what it does not set: the
+        # value this process set, else the one the file held.
+        held = _STATE_PARTS.get(state_file_path(token_file), {})
+        old = None
         doc = dict(doc)
         for key in missing:
+            if key in held:
+                doc[key] = held[key]
+                continue
+            if old is None:
+                old = _load_state_doc(token_file) or {}
             if key in old:
                 doc[key] = old[key]
     data = json.dumps(doc, separators=(",", ":"), sort_keys=True).encode("utf-8")

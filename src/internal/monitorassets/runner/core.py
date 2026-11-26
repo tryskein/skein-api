@@ -331,7 +331,7 @@ def work(executor, base, token, issue, exclude_session, token_file, sink=None, r
         if value == saved[0]:
             return
         try:
-            save_cursor(token_file, value, root.record() if root is not None else None)
+            save_cursor(token_file, value)
             saved[0] = value
             state_failed[0] = False
         except (OSError, PlatformRefusal) as exc:

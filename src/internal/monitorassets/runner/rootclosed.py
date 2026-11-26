@@ -50,6 +50,7 @@ class RootClosed(object):
     the summary, kept in the state."""
 
     def __init__(self, token_file):
+        self.token_file = token_file
         doc = load_root_closed(token_file)
         self.active = doc is not None
         doc = doc or {}
@@ -69,6 +70,7 @@ class RootClosed(object):
             self.active = True
         self.page_cursor = cursor
         self.page_full = len(events) >= POLL_PAGE_LIMIT
+        self._hold()
 
     def tally(self, statuses):
         """Count the outcomes of events that got one now."""
@@ -78,6 +80,7 @@ class RootClosed(object):
             key = _summary_key(status)
             if key is not None:
                 self.counts[key] += 1
+        self._hold()
 
     def page_done(self, cursor, next_cursor):
         """Every event of the page polled at cursor has its outcome; True when
@@ -86,6 +89,7 @@ class RootClosed(object):
             return False
         if next_cursor != cursor:
             self.pages += 1
+        self._hold()
         full = self.page_full and self.page_cursor == cursor
         if not full:
             return True
@@ -93,6 +97,12 @@ class RootClosed(object):
             self.limited = True
             return True
         return False
+
+    def _hold(self):
+        # The next save of the state (the cursor that passes the page, or
+        # the kept rest) writes the close with it.
+        if self.active:
+            set_state_part(self.token_file, "rootClosed", self.record())
 
     def record(self):
         """What the state keeps (None before the close)."""
