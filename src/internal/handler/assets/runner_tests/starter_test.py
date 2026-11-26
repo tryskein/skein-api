@@ -285,21 +285,30 @@ class StarterExecutionTest(unittest.TestCase):
         self.assertTrue(os.path.exists(marker), "the loader with the minted digest was not run")
 
     def test_the_token_is_not_opened(self):
-        srv = loader_server(self)
+        # The loader the starter runs opens exclude_session next to the
+        # token: the positive control that the I/O counter sees opens in the
+        # token directory at all. Everything before that is the starter.
+        control = (b"import os, sys\n"
+                   b"open(os.path.join(os.path.dirname(os.environ['SKEIN_TOKEN_FILE']), 'exclude_session')).close()\n"
+                   b"sys.stdout.write('{\"event\": \"loader_ran\"}\\n')\n"
+                   b"sys.exit(0)\n")
+        srv = loader_server(self, body=control)
         for form in FORMS:
             with self.subTest(form=form):
                 box = TokenDir(self)
                 log = os.path.join(box.root, "io.log")
-                rc, lines, out, err = run_starter(form, box, srv.url(), sha(MODE_LOADER), extra_env={
+                rc, lines, out, err = run_starter(form, box, srv.url(), sha(control), extra_env={
                     "PYTHONPATH": harness.SITE_DIR, "SKEIN_TEST_SITE": "1",
                     "SKEIN_TEST_IO_LOG": log, "SKEIN_TEST_IO_WATCH": box.dir})
                 self.assertEqual(rc, 0, (out, err))
-                self.assertEqual(lines[0]["event"], "loader_ran")
-                opened = []
-                if os.path.exists(log):
-                    with open(log) as fh:
-                        opened = [l for l in fh.read().splitlines() if box.token in l]
-                self.assertEqual(opened, [], "the starter opened the token file")
+                self.assertEqual(lines, [{"event": "loader_ran"}])
+                with open(log) as fh:
+                    entries = fh.read().splitlines()
+                control_path = os.path.join(box.dir, "exclude_session")
+                self.assertTrue([e for e in entries if e.startswith("open %s " % control_path)],
+                                "the I/O counter did not see the control open: %r" % entries)
+                self.assertEqual([e for e in entries if box.token + " " in e or e.endswith(box.token)], [],
+                                 "the token file was opened")
 
     def test_the_mode_travels_in_the_namespace(self):
         srv = loader_server(self)
