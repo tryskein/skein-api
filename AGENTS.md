@@ -165,6 +165,12 @@ Python image. `pymutation` runs mutmut over the paths named in the `[mutmut]`
 section of `src/setup.cfg`; the tests it drives are the same `*_test.py` files,
 collected by pytest. The Go kinds `unit` and `integ` install `python3` on top of
 the Go image.
+`pymutation` currently measures no mutant: the tests load the runner under the
+module name `monitor_runner_under_test` (or run it as `__main__` in a
+subprocess), so mutmut's trampoline keys do not match
+`internal.handler.assets.monitor_runner.*` and progon reports NOT GREEN (no
+mutant measured). Zero measured is not a green result. The limitation ends when
+the tests load the runner under its package name.
 
 ### Project specifics
 
