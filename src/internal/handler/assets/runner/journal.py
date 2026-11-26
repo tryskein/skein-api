@@ -127,10 +127,13 @@ class Journal(object):
         self._write(dict(fields, event=event))
 
     def delivery(self, notification, status, method=None, channel=None, addressee=None,
-                 answered=None, reason=None, with_preview=True):
-        """A change of the status of one event's delivery."""
+                 answer=None, reason=None, with_preview=True):
+        """A change of the status of one event's delivery. answer is the
+        sign of the channel's answer the outcome was matched by, as the
+        entry's outcome row names it ({"exitCode": 0}, {"httpStatus": 409},
+        {"json": {...}}); None when the channel gave no answer."""
         line = {"event": "delivery", "status": status, "method": method, "channel": channel,
-                "addressee": addressee, "channelAnswered": answered, "reason": reason}
+                "addressee": addressee, "channelAnswer": answer, "reason": reason}
         line.update(notification_fields(notification, with_preview))
         self._write(line)
 

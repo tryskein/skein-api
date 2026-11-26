@@ -46,7 +46,7 @@ class JournalTest(unittest.TestCase):
                 "actor": {"username": "user " + TOKEN}, "actorSessionId": "s-" + TOKEN,
                 "commentId": "c-1", "bodyPreview": "my token is " + TOKEN + " ok", "truncated": True}
         self.journal.delivery(note, "failed", method="detached", channel="zavod",
-                              addressee={"zavod": TOKEN}, answered=False, reason="refused " + TOKEN)
+                              addressee={"zavod": TOKEN}, answer={"json": {"error": "refused " + TOKEN}}, reason="refused " + TOKEN)
         self.journal.lifecycle("degraded", cause="channel_failing", detail=[TOKEN, {"k": TOKEN}])
         self.journal.summary_cursor_reset({"ts": TOKEN, "id": 3})
         with open(self.journal.path, "rb") as fh:
@@ -83,17 +83,17 @@ class JournalTest(unittest.TestCase):
                 "actor": {"username": "alice"}, "actorSessionId": "sess-1", "commentId": "c-1",
                 "bodyPreview": "hello", "truncated": True}
         self.journal.delivery(note, "delivered", method="detached", channel="zavod",
-                              addressee="agent-1", answered=True, reason=None)
+                              addressee="agent-1", answer={"exitCode": 0}, reason=None)
         deleted = {"id": 42, "type": "comment.created", "entity": {"type": "issue", "id": "zz-77"},
                    "actor": {"username": "bob"}, "commentId": "c-2"}
         self.journal.delivery(deleted, "delivered", method="detached", channel="zavod",
-                              addressee="agent-1", answered=True)
+                              addressee="agent-1", answer={"exitCode": 0})
         self.journal.delivery(note, "not_delivered", reason="access_lost", with_preview=False)
         first, gone, lost = self.lines()
         for key, want in (("event", "delivery"), ("monitor", "skein-mon-zz-77-0123456789abcdef"),
                           ("issue", "zz-77"), ("notificationId", 41), ("method", "detached"),
                           ("channel", "zavod"), ("addressee", "agent-1"), ("status", "delivered"),
-                          ("channelAnswered", True), ("type", "comment.created"), ("issueId", "zz-77"),
+                          ("channelAnswer", {"exitCode": 0}), ("type", "comment.created"), ("issueId", "zz-77"),
                           ("author", "alice"), ("actorSessionId", "sess-1"), ("commentId", "c-1"),
                           ("bodyPreview", "hello"), ("truncated", True)):
             self.assertEqual(first.get(key), want, key)
