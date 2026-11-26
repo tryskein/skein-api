@@ -816,7 +816,12 @@ def _append_to_journal(path, lines, env):
             continue
         if lid in present:
             continue
-        journal._append((text + "\n").encode("utf-8"))
+        data = (text + "\n").encode("utf-8")
+        if len(data) > JOURNAL_MAX_BYTES:
+            # The journal's limit of a line holds for a tail line too: such
+            # a line is not written (as Journal._write refuses it).
+            continue
+        journal._append(data)
         present.add(lid)
 
 

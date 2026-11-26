@@ -764,6 +764,16 @@ class TailTest(Base):
         RUNNER.append_tails(self.env)
         self.assertEqual(self.journal_ids(), ["line-summary"])
 
+    def test_a_tail_line_over_the_line_limit_is_not_written(self):
+        # Review finding 38 of wave 7: the journal's limit of one line holds
+        # for the lines of a tail.
+        lines = self.lines()
+        big = self.journal.render({"event": "delivery", "status": "access-lost", "pad": "x" * (1 << 20)},
+                                  line_id="line-big")
+        RUNNER.defer_lines(self.journal.path, lines + [big], self.env)
+        RUNNER.append_tails(self.env)
+        self.assertEqual(self.journal_ids(), ["line-0", "line-1", "line-summary"])
+
     def test_attempt_files_are_swept_without_any_tail(self):
         # Review finding 37 of wave 7: the sweep of attempt files no
         # process holds does not depend on a tail existing.
