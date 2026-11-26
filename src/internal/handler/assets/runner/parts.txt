@@ -11,4 +11,6 @@ platform_windows.py
 state.py
 journal.py
 text.py
+registry.py
+overrides.py
 core.py
