@@ -32,6 +32,17 @@ func Embedded() []byte {
 	return bytes.Clone(embedded)
 }
 
+// MustEmbedded loads the embedded registry. The document is compiled into
+// the binary and the startup path refuses to serve on an invalid one, so a
+// failure here is a defect of the build: it panics.
+func MustEmbedded() *Registry {
+	reg, err := Load(embedded)
+	if err != nil {
+		panic(fmt.Sprintf("monitor registry: the embedded registry.json is invalid: %v", err))
+	}
+	return reg
+}
+
 // Registry is the parsed and validated registry document.
 type Registry struct {
 	// SchemaVersion is the version of the document format. Only
@@ -502,6 +513,24 @@ type Resolution struct {
 
 // Known reports whether the client name has its own record.
 func (r Resolution) Known() bool { return r.Agent != nil }
+
+// WindowsShell is the Windows shell of the named record; empty for the
+// general record and for a record that names none.
+func (r Resolution) WindowsShell() string {
+	if r.Agent == nil {
+		return ""
+	}
+	return r.Agent.WindowsShell
+}
+
+// Warnings are the warnings of the resolved record: the general record's
+// (which say the name was not found) for an unknown name.
+func (r Resolution) Warnings() []string {
+	if r.Agent == nil {
+		return r.General.Warnings
+	}
+	return r.Agent.Warnings
+}
 
 // Resolve returns the record of a client name: its own record when the
 // registry has one, the general record otherwise.

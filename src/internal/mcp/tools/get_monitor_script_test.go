@@ -26,6 +26,7 @@ import (
 	"skein-api/internal/auth"
 	"skein-api/internal/handler"
 	"skein-api/internal/monitorcreds"
+	"skein-api/internal/monitorregistry"
 	"skein-api/internal/notifications"
 )
 
@@ -128,7 +129,7 @@ func TestGetMonitorScript_HappyPath(t *testing.T) {
 
 	notifStore := notifications.NewStore(pool)
 	monitorStore := monitorcreds.New(pool, 6*time.Hour)
-	handler := handleGetMonitorScript(pool, notifStore, monitorStore, gmsTestPublicURL, gmsTestRunnerSHA256)
+	handler := handleGetMonitorScript(poolIssueResolver{pool: pool}, notifStore, monitorStore, monitorregistry.MustEmbedded(), gmsTestPublicURL, gmsTestRunnerSHA256)
 	ctx := withCtxKey(userID, "user", keyID)
 
 	req := mcpgo.CallToolRequest{}
@@ -253,7 +254,7 @@ func TestGetMonitorScript_ResponseNamesTheMonitor(t *testing.T) {
 	issueID := prefix + "-1"
 	seedIssue(t, pool, pid, userID, issueID, "monitor me", "open", 2)
 	keyID := seedAPIKeyForTool(t, pool, userID)
-	handler := handleGetMonitorScript(pool, notifications.NewStore(pool), monitorcreds.New(pool, 6*time.Hour), gmsTestPublicURL, gmsTestRunnerSHA256)
+	handler := handleGetMonitorScript(poolIssueResolver{pool: pool}, notifications.NewStore(pool), monitorcreds.New(pool, 6*time.Hour), monitorregistry.MustEmbedded(), gmsTestPublicURL, gmsTestRunnerSHA256)
 
 	sessionless := auth.WithAPIKeyID(auth.WithUserRole(auth.WithUserID(context.Background(), userID), "user"), keyID)
 	sessionless = auth.WithKeyGrant(sessionless, apikeys.Grant{Level: apikeys.LevelManage, Admin: false, Scope: apikeys.Scope{Mode: apikeys.ScopeAll}})
@@ -317,7 +318,7 @@ func TestGetMonitorScript_Subtree(t *testing.T) {
 	seedIssue(t, pool, pid, userID, issueID, "monitor subtree", "open", 2)
 	keyID := seedAPIKeyForTool(t, pool, userID)
 
-	handler := handleGetMonitorScript(pool, notifications.NewStore(pool), monitorcreds.New(pool, 6*time.Hour), gmsTestPublicURL, gmsTestRunnerSHA256)
+	handler := handleGetMonitorScript(poolIssueResolver{pool: pool}, notifications.NewStore(pool), monitorcreds.New(pool, 6*time.Hour), monitorregistry.MustEmbedded(), gmsTestPublicURL, gmsTestRunnerSHA256)
 	ctx := withCtxKey(userID, "user", keyID)
 
 	req := mcpgo.CallToolRequest{}
@@ -356,7 +357,7 @@ func TestGetMonitorScript_RejectsBadEventType(t *testing.T) {
 	seedIssue(t, pool, pid, userID, issueID, "bad type", "open", 2)
 	keyID := seedAPIKeyForTool(t, pool, userID)
 
-	handler := handleGetMonitorScript(pool, notifications.NewStore(pool), monitorcreds.New(pool, 6*time.Hour), gmsTestPublicURL, gmsTestRunnerSHA256)
+	handler := handleGetMonitorScript(poolIssueResolver{pool: pool}, notifications.NewStore(pool), monitorcreds.New(pool, 6*time.Hour), monitorregistry.MustEmbedded(), gmsTestPublicURL, gmsTestRunnerSHA256)
 	ctx := withCtxKey(userID, "user", keyID)
 
 	req := mcpgo.CallToolRequest{}
@@ -398,7 +399,7 @@ func TestGetMonitorScript_MissingAPIKey(t *testing.T) {
 	issueID := prefix + "-1"
 	seedIssue(t, pool, pid, userID, issueID, "no key", "open", 2)
 
-	handler := handleGetMonitorScript(pool, notifications.NewStore(pool), monitorcreds.New(pool, 6*time.Hour), gmsTestPublicURL, gmsTestRunnerSHA256)
+	handler := handleGetMonitorScript(poolIssueResolver{pool: pool}, notifications.NewStore(pool), monitorcreds.New(pool, 6*time.Hour), monitorregistry.MustEmbedded(), gmsTestPublicURL, gmsTestRunnerSHA256)
 	ctx := withCtxKey(userID, "user", uuid.Nil) // no api key id
 
 	req := mcpgo.CallToolRequest{}
@@ -1007,7 +1008,7 @@ func TestGetMonitorScript_RemovesOptOut(t *testing.T) {
 		t.Fatalf("precondition: opt-out recorded and no subscription row")
 	}
 
-	handler := handleGetMonitorScript(pool, notifStore, monitorcreds.New(pool, 6*time.Hour), gmsTestPublicURL, gmsTestRunnerSHA256)
+	handler := handleGetMonitorScript(poolIssueResolver{pool: pool}, notifStore, monitorcreds.New(pool, 6*time.Hour), monitorregistry.MustEmbedded(), gmsTestPublicURL, gmsTestRunnerSHA256)
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]any{"id": issueID}
 	res, err := handler(withCtxKey(userID, "user", keyID), req)

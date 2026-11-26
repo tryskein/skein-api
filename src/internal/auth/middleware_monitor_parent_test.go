@@ -25,6 +25,7 @@ import (
 	"skein-api/internal/auth"
 	"skein-api/internal/mcp/tools"
 	"skein-api/internal/monitorcreds"
+	"skein-api/internal/monitorregistry"
 	"skein-api/internal/notifications"
 	"skein-api/internal/projects"
 	"skein-api/internal/testsupport"
@@ -174,7 +175,7 @@ func TestGetMonitorScript_OutsideTheKeyScopeIsNonexistent(t *testing.T) {
 	f := newParentFixture(t)
 	outside := testsupport.SeedIssue(t, f.pool, f.other, f.user, f.oPrefix+"-1", "outside the scope", "open", 2)
 	s := server.NewMCPServer("monitor-parent", "1", server.WithToolCapabilities(true))
-	tools.RegisterGetMonitorScript(s, f.pool, notifications.NewStore(f.pool), f.store, "http://skein-monitor.test", "0000000000000000000000000000000000000000000000000000000000000000", 6*time.Hour)
+	tools.RegisterGetMonitorScript(s, f.pool, notifications.NewStore(f.pool), f.store, monitorregistry.MustEmbedded(), "http://skein-monitor.test", "0000000000000000000000000000000000000000000000000000000000000000", 6*time.Hour)
 	ctx := auth.WithUserID(context.Background(), f.user)
 	ctx = auth.WithUserRole(ctx, "user")
 	ctx = auth.WithSessionID(ctx, "monitor-parent")

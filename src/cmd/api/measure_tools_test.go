@@ -23,6 +23,7 @@ import (
 	"skein-api/internal/issues"
 	mcptools "skein-api/internal/mcp/tools"
 	"skein-api/internal/monitorcreds"
+	"skein-api/internal/monitorregistry"
 	"skein-api/internal/notifications"
 	"skein-api/internal/projects"
 	"skein-api/internal/testsupport"
@@ -224,7 +225,7 @@ func TestMeasureToolResponses(t *testing.T) {
 	// digest and the renewal window are constants of this measurement, not
 	// of a deployment, so the row changes only when the tool's response does.
 	mcptools.RegisterGetMonitorScript(s, pool, notifications.NewStore(pool),
-		monitorcreds.New(pool, measureMonitorIdleTTL), measureMonitorPublicURL,
+		monitorcreds.New(pool, measureMonitorIdleTTL), monitorregistry.MustEmbedded(), measureMonitorPublicURL,
 		measureMonitorRunnerSHA256, measureMonitorIdleTTL)
 
 	c, err := client.NewInProcessClient(s)
@@ -343,6 +344,11 @@ func TestMeasureToolResponses(t *testing.T) {
 		apikeys.Grant{Level: apikeys.LevelManage, Scope: apikeys.Scope{Mode: apikeys.ScopeAll}})
 	m.callCtx(monitorCtx, "skein_get_monitor_script.no_client",
 		"skein_get_monitor_script", map[string]any{"id": fx.referenceID})
+	// The same call with `client` on POSIX, for a name the registry does
+	// not know (the general record): the response with `client` is compared
+	// against the one without it (SC-009: ≤ + 4 096 bytes).
+	m.callCtx(monitorCtx, "skein_get_monitor_script.client_general_posix",
+		"skein_get_monitor_script", map[string]any{"id": fx.referenceID, "client": "measure-unknown-agent"})
 
 	fmt.Printf("MEASURE_RESP_TOTAL %d %d\n", m.totalBytes, m.rows)
 

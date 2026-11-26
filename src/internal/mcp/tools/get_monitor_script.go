@@ -18,6 +18,7 @@ import (
 	"skein-api/internal/auth"
 	skmcp "skein-api/internal/mcp"
 	"skein-api/internal/monitorcreds"
+	"skein-api/internal/monitorregistry"
 	"skein-api/internal/notifications"
 )
 
@@ -66,8 +67,10 @@ var defaultMonitorEventTypes = []string{"comment.created", "issue.closed"}
 // idleTTL is the token renewal window from cfg.MonitorTokenIdleTTL (sk-579
 // US-2): the description quotes the configured value, never a constant.
 // runnerSHA256 is the hex SHA-256 of the runner body the /agent/v1 door serves
-// (handler.AgentScriptHandler.SHA256), baked into every bootstrap.
-func RegisterGetMonitorScript(s *server.MCPServer, pool *pgxpool.Pool, notifStore *notifications.Store, monitorStore *monitorcreds.Store, agentPublicURL, runnerSHA256 string, idleTTL time.Duration) {
+// (handler.AgentScriptHandler.SHA256), baked into every bootstrap. registry is
+// the monitor registry: the client names the description lists and the
+// records a `client` resolves to.
+func RegisterGetMonitorScript(s *server.MCPServer, pool *pgxpool.Pool, notifStore *notifications.Store, monitorStore *monitorcreds.Store, registry *monitorregistry.Registry, agentPublicURL, runnerSHA256 string, idleTTL time.Duration) {
 	tool := mcpgo.NewTool(
 		"skein_get_monitor_script",
 		mcpgo.WithDescription(
@@ -89,7 +92,9 @@ func RegisterGetMonitorScript(s *server.MCPServer, pool *pgxpool.Pool, notifStor
 				"`bootstrap` command. Run `prepare`, write `token` to "+
 				"`tokenFilePath` with the Write tool and run `bootstrap` as-is — "+
 				"the runner reads the token from that file. Do NOT paste the token "+
-				"into a shell command (it would leak into argv / shell history).",
+				"into a shell command (it would leak into argv / shell history).\n\n"+
+				"If you are not Claude Code, call with `client` (the name of your "+
+				"agent). "+monitorKnownClients(registry),
 		),
 		mcpgo.WithString("id",
 			mcpgo.Required(),
@@ -113,12 +118,47 @@ func RegisterGetMonitorScript(s *server.MCPServer, pool *pgxpool.Pool, notifStor
 				"\"attachment.added\") is rejected with validation_error. "+
 				"Empty / omitted defaults to [\"comment.created\",\"issue.closed\"]."),
 		),
+		mcpgo.WithString("client",
+			mcpgo.Description("Name of your agent (a-z, 0-9, \"-\", up to 64). With it the "+
+				"response carries the monitor setup of that agent; omit it for Claude Code."),
+		),
+		mcpgo.WithString("platform",
+			mcpgo.Description("\"posix\" (default) or \"windows\"; only with client."),
+		),
+		mcpgo.WithString("tokenDir",
+			mcpgo.Description("Required with platform=\"windows\": an absolute private "+
+				"directory of yours with a drive letter, e.g. %LOCALAPPDATA%."),
+		),
 		mcpgo.WithReadOnlyHintAnnotation(false),
 		mcpgo.WithDestructiveHintAnnotation(false),
 		mcpgo.WithIdempotentHintAnnotation(false),
 		mcpgo.WithOpenWorldHintAnnotation(false),
 	)
-	addTool(s, tool, handleGetMonitorScript(pool, notifStore, monitorStore, agentPublicURL, runnerSHA256))
+	addTool(s, tool, handleGetMonitorScript(poolIssueResolver{pool: pool}, notifStore, monitorStore, registry, agentPublicURL, runnerSHA256))
+}
+
+// monitorIssueResolver resolves the project of an issue the caller may see
+// (resolveVisibleIssueProject); a refusal is the tool error to return.
+type monitorIssueResolver interface {
+	ResolveVisibleIssueProject(ctx context.Context, toolName, issueID string, userID uuid.UUID) (uuid.UUID, *mcpgo.CallToolResult)
+}
+
+// monitorWatcher adds the caller's watch of the issue
+// (notifications.Store.AddIssueWatch).
+type monitorWatcher interface {
+	AddIssueWatch(ctx context.Context, issueID string, userID uuid.UUID, subtree bool) error
+}
+
+// monitorMinter mints the monitor credential (monitorcreds.Store.Mint).
+type monitorMinter interface {
+	Mint(ctx context.Context, p monitorcreds.MintParams) (string, monitorcreds.Credential, error)
+}
+
+// poolIssueResolver is the production monitorIssueResolver.
+type poolIssueResolver struct{ pool *pgxpool.Pool }
+
+func (r poolIssueResolver) ResolveVisibleIssueProject(ctx context.Context, toolName, issueID string, userID uuid.UUID) (uuid.UUID, *mcpgo.CallToolResult) {
+	return resolveVisibleIssueProject(ctx, r.pool, toolName, issueID, userID)
 }
 
 type getMonitorScriptResponse struct {
@@ -137,9 +177,14 @@ type getMonitorScriptResponse struct {
 	TokenInstruction string `json:"tokenInstruction"`
 	Bootstrap        string `json:"bootstrap"`
 	Usage            string `json:"usage"`
+	// Client is the record the `client` name resolved to: the name itself,
+	// or "general" when the registry has no record of it. Only with client.
+	Client string `json:"client,omitempty"`
+	// Platform is the platform of the setup. Only with client.
+	Platform string `json:"platform,omitempty"`
 }
 
-func handleGetMonitorScript(pool *pgxpool.Pool, notifStore *notifications.Store, monitorStore *monitorcreds.Store, agentPublicURL, runnerSHA256 string) server.ToolHandlerFunc {
+func handleGetMonitorScript(issues monitorIssueResolver, watcher monitorWatcher, minter monitorMinter, registry *monitorregistry.Registry, agentPublicURL, runnerSHA256 string) server.ToolHandlerFunc {
 	return func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 		start := time.Now()
 		userID, errResp := skmcp.RequireUser(ctx)
@@ -166,6 +211,13 @@ func handleGetMonitorScript(pool *pgxpool.Pool, notifStore *notifications.Store,
 				map[string]any{"eventTypes": req.GetStringSlice("eventTypes", nil)}), nil
 		}
 
+		// client, platform and tokenDir are refused here, before the watch
+		// and the mint, so a refusal leaves neither behind.
+		clientArgs, errResp := parseMonitorClientArgs(req.GetArguments(), registry)
+		if errResp != nil {
+			return errResp, nil
+		}
+
 		// The minted credential is tied to the minting api key for cascade
 		// revoke (spec §5 / R11). RequireAPIKey on /mcp guarantees the id is
 		// in ctx; without it we cannot mint a revocable token, so refuse
@@ -178,7 +230,7 @@ func handleGetMonitorScript(pool *pgxpool.Pool, notifStore *notifications.Store,
 
 		// Resolve the issue's project for the mint scope + run the visibility
 		// check (mirrors skein_watchers(action="watch")).
-		projectID, errResp := resolveVisibleIssueProject(ctx, pool, "skein_get_monitor_script", issueID, userID)
+		projectID, errResp := issues.ResolveVisibleIssueProject(ctx, "skein_get_monitor_script", issueID, userID)
 		if errResp != nil {
 			return errResp, nil
 		}
@@ -199,10 +251,13 @@ func handleGetMonitorScript(pool *pgxpool.Pool, notifStore *notifications.Store,
 			return skmcp.ToolError(ErrCodeInternalError, "failed to derive monitor token path", nil), nil
 		}
 		tokenFilePath := monitorTokenFilePath(issueID, discriminator)
+		if clientArgs.Platform == monitorPlatformWindows {
+			tokenFilePath = windowsTokenFilePath(clientArgs.TokenDir, issueID, discriminator)
+		}
 
 		// Auto-watch first (idempotent; subtree dominance handled by the
 		// store), then mint. If mint fails after this, the watch is harmless.
-		if err := notifStore.AddIssueWatch(ctx, issueID, userID, subtree); err != nil {
+		if err := watcher.AddIssueWatch(ctx, issueID, userID, subtree); err != nil {
 			slog.ErrorContext(ctx, "mcp tool error",
 				"tool", "skein_get_monitor_script", "reason", "add issue watch failed",
 				"userId", userID.String(), "issueId", issueID, "error", err.Error())
@@ -222,7 +277,7 @@ func handleGetMonitorScript(pool *pgxpool.Pool, notifStore *notifications.Store,
 		// the stalled-monitor hint layer reads (not registered since sk-669).
 		sess := auth.SessionIDFrom(ctx)
 
-		plaintext, cred, err := monitorStore.Mint(ctx, monitorcreds.MintParams{
+		plaintext, cred, err := minter.Mint(ctx, monitorcreds.MintParams{
 			UserID:           userID,
 			MintedByAPIKeyID: apiKeyID,
 			Audience:         monitorAudience,
@@ -252,7 +307,7 @@ func handleGetMonitorScript(pool *pgxpool.Pool, notifStore *notifications.Store,
 			"userId", userID.String(), "issueId", issueID, "subtree", subtree,
 			"latencyMs", time.Since(start).Milliseconds())
 
-		return skmcp.ToolJSON(getMonitorScriptResponse{
+		resp := getMonitorScriptResponse{
 			MonitorID:     cred.ID.String(),
 			IssueID:       issueID,
 			Subtree:       subtree,
@@ -265,8 +320,30 @@ func handleGetMonitorScript(pool *pgxpool.Pool, notifStore *notifications.Store,
 				"(never in a shell command), then run `bootstrap` as-is.",
 			Bootstrap: bootstrap,
 			Usage:     monitorUsage,
-		})
+		}
+		if clientArgs.Client != "" {
+			resp.Client = clientArgs.Client
+			if !clientArgs.Resolution.Known() {
+				resp.Client = monitorGeneralClient
+			}
+			resp.Platform = clientArgs.Platform
+			resp.Usage = monitorClientUsage(clientArgs.Resolution)
+		}
+		return skmcp.ToolJSON(resp)
 	}
+}
+
+// monitorClientUsage is the `usage` of a response with `client`: the
+// warnings of the resolved record (for an unknown name, that the general
+// record is used), then the run instructions.
+func monitorClientUsage(r monitorregistry.Resolution) string {
+	var b strings.Builder
+	for _, w := range r.Warnings() {
+		b.WriteString(w)
+		b.WriteString(" ")
+	}
+	b.WriteString(monitorUsageRun)
+	return b.String()
 }
 
 // normalizeMonitorEventTypes validates + normalises the caller's eventTypes.
@@ -431,8 +508,9 @@ func shellSingleQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
-// monitorUsage is the `usage` text of the mint response (sk-579 US-4, US-3).
-const monitorUsage = "Run `bootstrap` via the Claude Code Monitor tool (not `bash &`) with the " +
+// monitorUsageRun is the run instruction of the mint response (sk-579 US-4,
+// US-3).
+const monitorUsageRun = "Run `bootstrap` via the Claude Code Monitor tool (not `bash &`) with the " +
 	"maximum `timeout_ms`, so the runner's stdout JSON lines stream into your context. When " +
 	"that Monitor ends (its `timeout_ms` ran out, or the runner stopped with event \"paused\"), " +
 	"run the same `bootstrap` again: the token file stays in place and the token is valid until " +
@@ -440,6 +518,10 @@ const monitorUsage = "Run `bootstrap` via the Claude Code Monitor tool (not `bas
 	"prints one final JSON line {event, reason, action} — follow its `action`. A \"degraded\" " +
 	"line means the runner is retrying on its own: do not restart it. Reply to comments with " +
 	"skein_comment as usual."
+
+// monitorUsage is the `usage` of a response without `client`.
+const monitorUsage = monitorUsageRun + " If you are not Claude Code, call " +
+	"skein_get_monitor_script again with `client`."
 
 // formatMonitorWindow renders a token lifetime for tool text: whole hours as
 // "6h", whole minutes as "90m", anything else in Go duration form.
