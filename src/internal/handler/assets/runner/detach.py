@@ -357,13 +357,16 @@ class JournalSink(object):
         self.journal.delivery(n, JOURNAL_ONLY_STATUS, method=self.method, channel=self.channel)
 
 
-def delivery_sink(journal, token_file, doc, env, base, issue, token):
+def delivery_sink(journal, token_file, doc, env, base, issue, token, executor):
     """The DeliverySink of a detached monitor: the ledger of the server,
-    the addressee of the preflight, this monitor keyed by its journal."""
+    the addressee of the preflight, this monitor keyed by its journal, and
+    the poll of the access boundary on the runner's request executor."""
     monitor = os.path.splitext(os.path.basename(journal.path))[0]
     ledger = Ledger(base, monitor, identity_from_doc(doc.get("identity")), env=env)
+    clock = SystemClock()
+    cancel = PollCancel(executor, base, token, env.get("SKEIN_EXCLUDE_SESSION", ""), clock)
     return DeliverySink(journal, token_file, doc, load_registry(), env, ledger,
-                        ArgvExecutor(token_file, env, [token]), issue)
+                        ArgvExecutor(token_file, env, [token]), issue, cancel=cancel, clock=clock)
 
 
 def run_detached_child():
@@ -389,7 +392,7 @@ def run_detached_child():
             _send_receipt(held.line)
             journal = Journal(token_file, issue, secrets=[held.token], env=env)
             if held.doc.get("method") == METHOD_DETACHED:
-                sink = delivery_sink(journal, token_file, held.doc, env, base, issue, held.token)
+                sink = delivery_sink(journal, token_file, held.doc, env, base, issue, held.token, executor)
             else:
                 sink = JournalSink(journal, held.doc.get("method"), held.doc.get("channel"))
             sink.lifecycle(held.line)
@@ -408,13 +411,12 @@ def run_detached_child():
     finally:
         executor.stop()
     try:
-        if sink is not None:
-            line = {"event": STOPS[outcome.reason][0], "reason": outcome.reason}
-            if outcome.status is not None:
-                line["status"] = outcome.status
-            sink.lifecycle(line)
         # Before the receipt this is the receipt; after it, stdout is null.
-        return finish(outcome, issue, token_file)
+        if held.lock is None:
+            return finish(outcome, issue, token_file)
+        # P-12 under the one-runner lock, released last.
+        return finish_client(outcome, issue, token_file, sink=sink,
+                             preflight=(held.doc or {}).get("preflightId"))
     finally:
         held.release()
 
@@ -478,6 +480,11 @@ def run_foreground(token_file, issue, env, settings):
     finally:
         executor.stop()
     try:
-        return finish(outcome, issue, token_file, write=output.stop_line if output is not None else None)
+        write = output.stop_line if output is not None else None
+        if held.lock is None:
+            return finish(outcome, issue, token_file, write=write)
+        # P-12 under the one-runner lock, released last.
+        return finish_client(outcome, issue, token_file, write=write,
+                             preflight=(held.doc or {}).get("preflightId"))
     finally:
         held.release()

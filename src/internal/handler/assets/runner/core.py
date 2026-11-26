@@ -325,11 +325,22 @@ STOPS = {
     "already_running": ("duplicate", 0),
     "config_invalid": ("closed", 1),
     "delivered": ("paused", 0),
+    "addressee_gone": ("closed", 0),
 }
 
 
-def stop_action(reason, issue, detail=None):
+def stop_action(reason, issue, detail=None, preflight=None):
+    """The action of a stop line. preflight is the number of the result
+    whose working command resumes a client-mode monitor: the action names
+    it, never repeats the command (INV-17)."""
     mint = 'skein_get_monitor_script(id="%s")' % issue
+    if preflight is not None and reason in ("stopped", "internal_error"):
+        return ("The monitor for issue %s %s. Run the working command of preflight %s again to resume "
+                "it." % (issue, "was stopped by a signal" if reason == "stopped" else "hit an unexpected error",
+                         preflight))
+    if reason == "addressee_gone":
+        return ("The agent the monitor for issue %s delivered to has ended, so the monitor stopped. "
+                "If the work goes on in another agent, mint a new monitor there with %s." % (issue, mint))
     if reason == "config_invalid":
         return ("The monitor for issue %s did not start: %s. Fix that, then run the preflight again; "
                 "do not mint a new monitor: its token is kept." % (issue, detail or "a setting is invalid"))
@@ -373,7 +384,7 @@ class Stop(Exception):
     """A controlled stop: reason (a STOPS key), optional HTTP status, and
     whether the token file is to be deleted."""
 
-    def __init__(self, reason, status=None, delete_token=False, detail=None):
+    def __init__(self, reason, status=None, delete_token=False, detail=None, preflight=None):
         global _stopping
         # Deciding a stop starts the final phase: from here on a signal no
         # longer raises, so it cannot replace this stop or print a second line.
@@ -384,6 +395,8 @@ class Stop(Exception):
         self.delete_token = delete_token
         # What config_invalid names to fix (a variable, a directory).
         self.detail = detail
+        # The number of the preflight result a client-mode action names.
+        self.preflight = preflight
 
 
 class StopSignal(BaseException):
@@ -603,6 +616,8 @@ def work(executor, base, token, issue, exclude_session, token_file, sink=None):
         status, payload, retry_after = poll_once(executor, base, token, cursor, exclude_session)
 
         if status == 200 and isinstance(payload, dict) and isinstance(payload.get("notifications") or [], list):
+            if hasattr(sink, "note_poll_ok"):
+                sink.note_poll_ok()
             if series_degraded:
                 sink.lifecycle({"event": "recovered", "issue": issue,
                                 "failedForSec": int(time.monotonic() - series_started)})
@@ -783,7 +798,7 @@ def finish(outcome, issue, token_file, write=None):
     if outcome.delete_token and token_file:
         remove_token_file(token_file)
     line = {"event": event, "reason": outcome.reason,
-            "action": stop_action(outcome.reason, issue, outcome.detail)}
+            "action": stop_action(outcome.reason, issue, outcome.detail, outcome.preflight)}
     if outcome.status is not None:
         line["status"] = outcome.status
     (write or emit)(line)

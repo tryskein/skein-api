@@ -75,6 +75,11 @@ class AddresseeGone(Exception):
     """The channel's check says the addressee has ended."""
 
 
+class PollStale(Exception):
+    """The last successful poll is older than two intervals: no send until a
+    fresh one (US-12); not a refusal of the channel."""
+
+
 class RefusedBeforeSend(Exception):
     """Nothing was handed to the channel: the addressee is not ready (not in
     the foreground, busy), or the call could not be made."""
@@ -89,6 +94,9 @@ class NoCancel(object):
 
     def check(self):
         return None
+
+    def may_send(self):
+        return True
 
 
 class SystemClock(object):
@@ -127,10 +135,12 @@ class Guard(object):
         self.access_lost = False
 
     def before_send(self):
-        self.attempt.note_call()
         reason = self.pipeline.cancel.check()
         if reason is not None:
             raise DeliveryCancelled(reason)
+        if not self.pipeline.cancel.may_send():
+            raise PollStale()
+        self.attempt.note_call()
         self.pipeline.check_addressee(self.channel)
         self.pipeline.wait_idle(self.channel, self.timeout)
 
@@ -138,6 +148,26 @@ class Guard(object):
         if self.pipeline.cancel.check() is not None:
             self.access_lost = True
             return False
+        try:
+            self.pipeline.check_addressee(self.channel)
+        except (AddresseeChanged, AddresseeGone, RefusedBeforeSend):
+            return False
+        return True
+
+
+class _ReceiptGuard(Guard):
+    """The guard of a stop receipt: no event, no ledger attempt, no cancel
+    (the stop is already decided); the addressee is checked as for any
+    send."""
+
+    def __init__(self, pipeline, channel, timeout):
+        Guard.__init__(self, pipeline, channel, None, timeout)
+
+    def before_send(self):
+        self.pipeline.check_addressee(self.channel)
+        self.pipeline.wait_idle(self.channel, self.timeout)
+
+    def before_commit(self):
         try:
             self.pipeline.check_addressee(self.channel)
         except (AddresseeChanged, AddresseeGone, RefusedBeforeSend):
@@ -226,6 +256,8 @@ class DeliverySink(object):
         self.failing = set()
         # After "addressee changed" the process writes only the journal.
         self.journal_only = False
+        # Set when the channel's check says the addressee has ended.
+        self.gone = False
         self._said = set()
         self._tails_at = None
         # The answer of the last refusal before send, for channel_failing.
@@ -323,15 +355,40 @@ class DeliverySink(object):
         except LedgerUnavailable:
             pass
 
+    def note_poll_ok(self):
+        """A successful poll of the working loop (the access boundary)."""
+        if hasattr(self.cancel, "note_ok"):
+            self.cancel.note_ok()
+
     # --- the page -------------------------------------------------------------
 
     def page(self, cursor, notifications):
         """Carry every event of the page to an outcome. Raises
-        JournalUnavailable (the page is not done: the cursor stays) or
-        DeliveryCancelled."""
+        JournalUnavailable (the page is not done: the cursor stays), or Stop
+        when access is lost or the addressee has ended: the waiting events
+        get their outcome first (finalize.py)."""
+        if hasattr(self.cancel, "cursor"):
+            # A poll during a wait asks from the last fixed outcome.
+            self.cancel.cursor = cursor
+        state = {"pending": []}
+        try:
+            self._page(cursor, notifications, state)
+        except DeliveryCancelled as exc:
+            outcomes, journaled = state["outcomes"], state["journaled"]
+            waiting = [n for n in state["pending"] if str(n["id"]) not in outcomes]
+            close_waiting(self, cursor, outcomes, journaled, waiting, OUTCOME_ACCESS_LOST, exc.reason)
+            raise access_stop(exc.reason)
+        if self.gone:
+            outcomes, journaled = state["outcomes"], state["journaled"]
+            waiting = [n for n in state["pending"] if str(n["id"]) not in outcomes]
+            close_waiting(self, cursor, outcomes, journaled, waiting, OUTCOME_ADDRESSEE_GONE, "addressee_gone")
+            raise Stop("addressee_gone", delete_token=True)
+
+    def _page(self, cursor, notifications, state):
         self._maybe_append_tails()
         events = [n for n in notifications if isinstance(n, dict) and n.get("id") is not None]
         outcomes, journaled = load_page_outcomes(self.token_file, cursor)
+        state["outcomes"], state["journaled"] = outcomes, journaled
         byid = dict((str(n["id"]), n) for n in events)
         # Outcomes the ledger and the state hold but the journal does not
         # yet: they come first after the journal is back.
@@ -339,8 +396,14 @@ class DeliverySink(object):
             if eid not in journaled and eid in byid:
                 self._journal(cursor, outcomes, journaled, byid[eid], status, None, None)
         pending = [n for n in events if str(n["id"]) not in outcomes]
+        state["pending"] = list(pending)
         step = dict((str(n["id"]), 0) for n in pending)
+        reason = self.cancel.check()
+        if reason is not None:
+            raise DeliveryCancelled(reason)
         while pending:
+            if self.gone:
+                return
             if self.journal_only:
                 for n in pending:
                     self._close(cursor, outcomes, journaled, n, JOURNAL_ONLY_STATUS, None, None)
@@ -422,6 +485,10 @@ class DeliverySink(object):
         try:
             try:
                 outcome, sign = driver.send(text, guard)
+            except PollStale:
+                attempt.abandon()
+                self._wait(self.clock.now() + WAIT_STEP_SEC)
+                return
             except RefusedBeforeSend as exc:
                 outcome, sign = OUTCOME_REFUSED, {_NOT_SENT: exc.reason}
             except AddresseeChanged:
@@ -430,6 +497,11 @@ class DeliverySink(object):
                 outcome, sign = OUTCOME_ADDRESSEE_GONE, None
             except DeliveryCancelled:
                 attempt.abandon()
+                raise
+            except StopSignal:
+                # A stop while the channel may have the text: unknown, never
+                # a second send (INV-9).
+                attempt.finish(OUTCOME_UNKNOWN)
                 raise
             changed = outcome == "addressee-changed"
             if changed:
@@ -449,9 +521,12 @@ class DeliverySink(object):
         for n in batch:
             self._close(cursor, outcomes, journaled, n, outcome, channel_id, sign,
                         with_preview=not guard.access_lost)
-        if changed or outcome == OUTCOME_ADDRESSEE_GONE:
+        if outcome == OUTCOME_ADDRESSEE_GONE:
+            # The stop follows when the page loop returns (page()).
+            self.gone = True
+        elif changed:
             self.journal_only = True
-            self._degraded_once("addressee_changed" if changed else "addressee_gone",
+            self._degraded_once("addressee_changed",
                                 action="The addressee of the monitor of issue %s is not the one its "
                                        "preflight saw: events go only to the journal. Run the preflight "
                                        "again to take the monitor over." % self.issue)
@@ -461,6 +536,32 @@ class DeliverySink(object):
         elif outcome in DELIVERED_OUTCOMES and channel_id in self.failing:
             self.failing.discard(channel_id)
             self.lifecycle({"event": "recovered", "issue": self.issue, "channel": channel_id})
+
+    def receipt(self, text):
+        """The receipt of a stop that keeps access (US-12): one text by the
+        first channel of the preflight, after the addressee check, within
+        the budget of INV-8. A failure leaves only the journal line."""
+        channel_id = self.channels[0]
+        channel = self.registry.channel(channel_id) or {}
+        driver = self.drivers.get(channel_id) or ArgvDriver(channel, self.executor)
+        start = self.clock.now()
+        for calls in range(MAX_CALLS):
+            if calls:
+                due = start + sum(RETRY_DELAYS_SEC[:calls])
+                if due - start >= self.idle_window:
+                    return
+                while self.clock.now() < due:
+                    self.clock.sleep(min(WAIT_STEP_SEC, due - self.clock.now()))
+            guard = _ReceiptGuard(self, channel, (channel.get("executor") or {}).get("timeoutSec")
+                                  or PROBE_TIMEOUT_SEC)
+            try:
+                outcome, _ = driver.send(text, guard)
+            except (RefusedBeforeSend, PollStale):
+                continue
+            except (AddresseeChanged, AddresseeGone, DeliveryCancelled):
+                return
+            if outcome != OUTCOME_REFUSED:
+                return
 
     def _exhausted(self, channel_id, batch, step):
         """The budget of the channel ran out for the batch: one

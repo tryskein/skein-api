@@ -297,7 +297,24 @@ func wholeSecondsAtLeastOne(d time.Duration) int {
 // @Description  OS error; `action` names what to fix; kept, 1); `delivered`
 // @Description  (`client` mode, exit-on-event: the batch is out; `paused`,
 // @Description  kept, 0; `action` says to run the working command of the
-// @Description  named preflight again). One runner per token file: in
+// @Description  named preflight again); `addressee_gone` (`client` mode,
+// @Description  detached: the channel's check says the agent has ended;
+// @Description  `closed`, deleted, 0). In `client` mode `stopped` and
+// @Description  `internal_error` name the working command of the preflight
+// @Description  to resume, never repeat it. While a detached monitor waits
+// @Description  to deliver it polls from the cursor of its last fixed
+// @Description  outcome; it sends only when the last successful poll is at
+// @Description  most two poll intervals old; 401 and 403 win over waiting
+// @Description  events, which get "access lost" without the preview (in the
+// @Description  journal, or in the deferred tail with a stop summary when the
+// @Description  journal takes no write). A client-mode runner ends under its
+// @Description  one-runner lock: waiting events get their outcomes, a stop
+// @Description  that keeps access (`root_closed`, `stopped`,
+// @Description  `internal_error`) is reported once by the same channel, the
+// @Description  files sharing the token's fate (state, exclusion file,
+// @Description  starter, preflight result, state lock, message files) and
+// @Description  then the empty token directory are removed with a deleted
+// @Description  token, and the lock is released last. One runner per token file: in
 // @Description  `legacy` mode the runner takes an exclusive non-blocking
 // @Description  flock on the token file it opened and reads the token once
 // @Description  from that descriptor; on a platform without OS file locks it

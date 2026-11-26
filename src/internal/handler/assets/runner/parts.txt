@@ -23,5 +23,6 @@ detect.py
 detach.py
 modes_stream.py
 deliver.py
+finalize.py
 start.py
 core.py
