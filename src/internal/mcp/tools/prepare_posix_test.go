@@ -1,11 +1,7 @@
 package tools
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -14,30 +10,25 @@ import (
 	"testing"
 )
 
+// preparedInput is the input of the prepare runs below: every value a
+// response with `client` carries, so the ready line can be checked for not
+// repeating any of them.
+func preparedInput(tokenDir string) clientCommandInput {
+	return clientCommandInput{
+		publicURL: gmsTestPublicURL, issueID: "sk-1", excludeSession: "prepare-session",
+		tokenFilePath: filepath.Join(tokenDir, "token"), runnerSHA256: gmsTestRunnerSHA256,
+		loaderSHA256: gmsTestLoaderSHA256, client: "some-agent", platform: monitorPlatformPOSIX,
+	}
+}
+
 // runServedPrepare runs the prepare command exactly as a response with
 // `client` serves it (buildClientCommands) under sh with the real python3,
 // for a token file in tokenDir; it returns the exit code and the JSON lines
-// prepare printed.
-func runServedPrepare(t *testing.T, tokenDir string) (int, []map[string]any) {
-	t.Helper()
-	cmds := buildClientCommands(clientCommandInput{
-		publicURL: gmsTestPublicURL, issueID: "sk-1", excludeSession: "s",
-		tokenFilePath: filepath.Join(tokenDir, "token"), runnerSHA256: gmsTestRunnerSHA256,
-		client: "some-agent", platform: monitorPlatformPOSIX,
-	})
-	cmd := exec.Command("sh", "-c", cmds.prepare)
-	cmd.Dir = t.TempDir()
-	out, err := cmd.Output()
-	code := 0
-	if err != nil {
-		exitErr, ok := err.(*exec.ExitError)
-		if !ok {
-			t.Fatalf("run prepare: %v", err)
-		}
-		code = exitErr.ExitCode()
-	}
+// prepare printed. extraEnv is added to the environment of sh.
+func runServedPrepare(t *testing.T, tokenDir string, extraEnv ...string) (int, []map[string]any) {
+	code, out := runServedPrepareRaw(t, tokenDir, extraEnv...)
 	var lines []map[string]any
-	for _, l := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+	for _, l := range strings.Split(strings.TrimSpace(out), "\n") {
 		if l == "" {
 			continue
 		}
@@ -50,47 +41,31 @@ func runServedPrepare(t *testing.T, tokenDir string) (int, []map[string]any) {
 	return code, lines
 }
 
+// runServedPrepareRaw is runServedPrepare with the raw stdout.
+func runServedPrepareRaw(t *testing.T, tokenDir string, extraEnv ...string) (int, string) {
+	t.Helper()
+	cmds := buildClientCommands(preparedInput(tokenDir))
+	cmd := exec.Command("sh", "-c", cmds.prepare)
+	cmd.Dir = t.TempDir()
+	cmd.Env = append(os.Environ(), extraEnv...)
+	out, err := cmd.Output()
+	code := 0
+	if err != nil {
+		exitErr, ok := err.(*exec.ExitError)
+		if !ok {
+			t.Fatalf("run prepare: %v", err)
+		}
+		code = exitErr.ExitCode()
+	}
+	return code, string(out)
+}
+
 func prepareEvents(lines []map[string]any) []string {
 	out := make([]string, len(lines))
 	for i, l := range lines {
 		out[i], _ = l["event"].(string)
 	}
 	return out
-}
-
-// loaderModeOf runs the loader file at path the way the working command
-// does (python3 <file>) against a local server whose runner body prints the
-// _SKEIN_LOADER_MODE the loader handed it, and returns that mode.
-func loaderModeOf(t *testing.T, path string) string {
-	t.Helper()
-	body := []byte("import json, sys\nprint(json.dumps({\"mode\": _SKEIN_LOADER_MODE}))\nsys.exit(0)\n")
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/agent/v1/monitor-script" {
-			http.NotFound(w, r)
-			return
-		}
-		_, _ = w.Write(body)
-	}))
-	defer srv.Close()
-	token := filepath.Join(filepath.Dir(path), "token")
-	if err := os.WriteFile(token, []byte("skm_"+strings.Repeat("m", 43)), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	sum := sha256.Sum256(body)
-	cmd := exec.Command("python3", path)
-	cmd.Env = append(os.Environ(), "SKEIN_PUBLIC_URL="+srv.URL, "SKEIN_TOKEN_FILE="+token,
-		"SKEIN_RUNNER_SHA256="+hex.EncodeToString(sum[:]), "SKEIN_ISSUE=sk-1")
-	out, err := cmd.Output()
-	if err != nil {
-		t.Fatalf("run the loader: %v; stdout %q", err, out)
-	}
-	var got struct {
-		Mode string `json:"mode"`
-	}
-	if err := json.Unmarshal(out, &got); err != nil {
-		t.Fatalf("the served body did not print its mode: %q", out)
-	}
-	return got.Mode
 }
 
 func requirePython(t *testing.T) {
@@ -102,19 +77,63 @@ func requirePython(t *testing.T) {
 	}
 }
 
-// TestServedPrepare_POSIX — П-3 (row #18): the prepare command the server
-// serves creates the token directory new with mode 0700, owned by the
-// caller, writes the client-mode loader into it and prints the ready line;
-// an existing directory, private or not, is refused without the ready line
-// and left as it was.
+// TestServedPrepare_POSIX — П-3, R-9, R-10 (rows #18, #140): the prepare
+// command the server serves checks the Python version first (an old one
+// gets prepare_failed with config_invalid and nothing is created), creates
+// the token directory new with mode 0700, owned by the caller, writes into
+// it only starter.py, byte for byte the starter of a call with `client`, and
+// prints one short ready line that repeats nothing of the response; an
+// existing directory, private or not, is refused without the ready line and
+// left as it was.
 func TestServedPrepare_POSIX(t *testing.T) {
 	requirePython(t)
 
+	t.Run("Python below the minimum", func(t *testing.T) {
+		// sitecustomize runs before the -c script: the interpreter reports
+		// 3.5, the version the minimum (3.6) refuses.
+		site := t.TempDir()
+		if err := os.WriteFile(filepath.Join(site, "sitecustomize.py"),
+			[]byte("import sys\nsys.version_info = (3, 5, 9, 'final', 0)\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		dir := filepath.Join(t.TempDir(), "skein-mon-sk-1-0123456789abcdef")
+		code, lines := runServedPrepare(t, dir, "PYTHONPATH="+site)
+		if code != 1 || strings.Join(prepareEvents(lines), ",") != "prepare_failed" {
+			t.Fatalf("prepare exit %d, lines %v; want 1 and only prepare_failed", code, lines)
+		}
+		if lines[0]["reason"] != "config_invalid" {
+			t.Fatalf("refusal reason = %v, want config_invalid", lines[0]["reason"])
+		}
+		if action, _ := lines[0]["action"].(string); !strings.Contains(action, "3.6") {
+			t.Fatalf("the action does not name the minimum version: %q", action)
+		}
+		if _, err := os.Lstat(dir); !os.IsNotExist(err) {
+			t.Fatalf("an old Python still created the token directory (lstat: %v)", err)
+		}
+	})
+
 	t.Run("new directory", func(t *testing.T) {
 		dir := filepath.Join(t.TempDir(), "skein-mon-sk-1-0123456789abcdef")
-		code, lines := runServedPrepare(t, dir)
-		if code != 0 || strings.Join(prepareEvents(lines), ",") != "prepare_ready" {
-			t.Fatalf("prepare exit %d, lines %v; want 0 and only prepare_ready", code, lines)
+		code, raw := runServedPrepareRaw(t, dir)
+		if code != 0 {
+			t.Fatalf("prepare exit %d, stdout %q; want 0", code, raw)
+		}
+		// One line of at most 128 bytes (SC-012) that repeats no value of
+		// the response (INV-17).
+		ready := strings.TrimSuffix(raw, "\n")
+		if strings.Contains(ready, "\n") || len(ready) > 128 {
+			t.Fatalf("ready output = %q (%d bytes); want one line of at most 128 bytes", raw, len(ready))
+		}
+		var line map[string]any
+		if err := json.Unmarshal([]byte(ready), &line); err != nil || line["event"] != "prepare_ready" {
+			t.Fatalf("ready line = %q; want the prepare_ready event", ready)
+		}
+		in := preparedInput(dir)
+		for _, v := range []string{dir, in.tokenFilePath, in.publicURL, in.issueID, in.excludeSession,
+			in.runnerSHA256, in.loaderSHA256, in.client, "starter.py"} {
+			if strings.Contains(ready, v) {
+				t.Fatalf("ready line %q repeats %q", ready, v)
+			}
 		}
 		st, err := os.Lstat(dir)
 		if err != nil {
@@ -126,12 +145,25 @@ func TestServedPrepare_POSIX(t *testing.T) {
 		if uid := st.Sys().(*syscall.Stat_t).Uid; int(uid) != os.Getuid() {
 			t.Fatalf("token directory owned by %d, want %d", uid, os.Getuid())
 		}
-		loader := filepath.Join(dir, "loader.py")
-		if lines[0]["loader"] != loader {
-			t.Fatalf("ready line names loader %v, want %s", lines[0]["loader"], loader)
+		// Only starter.py: no loader file, no temporary file left behind.
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			t.Fatalf("read the token directory: %v", err)
 		}
-		if mode := loaderModeOf(t, loader); mode != "client" {
-			t.Fatalf("the written loader sets mode %q, want client", mode)
+		if len(entries) != 1 || entries[0].Name() != "starter.py" {
+			names := make([]string, 0, len(entries))
+			for _, e := range entries {
+				names = append(names, e.Name())
+			}
+			t.Fatalf("token directory holds %v, want only starter.py", names)
+		}
+		got, err := os.ReadFile(filepath.Join(dir, "starter.py"))
+		if err != nil {
+			t.Fatalf("read starter.py: %v", err)
+		}
+		if string(got) != monitorStarter(true) {
+			t.Fatalf("starter.py (%d bytes) is not the starter of a call with client (%d bytes)",
+				len(got), len(monitorStarter(true)))
 		}
 	})
 
