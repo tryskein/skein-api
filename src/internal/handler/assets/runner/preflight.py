@@ -487,14 +487,19 @@ def preflight_file_path(token_file):
 
 
 class StateLock(object):
-    """state.lock next to the token, held exclusively while open."""
+    """state.lock next to the token, held exclusively while open. create=
+    False opens only an existing one (PlatformRefusal "not_found" when there
+    is none)."""
 
-    def __init__(self, token_file):
+    def __init__(self, token_file, create=True):
         if _preflight_fcntl is None:
             raise PlatformRefusal("unsupported", STATE_LOCK_NAME)
         path = os.path.join(os.path.dirname(os.path.abspath(token_file)), STATE_LOCK_NAME)
+        flags = os.O_RDWR | getattr(os, "O_NOFOLLOW", 0) | (os.O_CREAT if create else 0)
         try:
-            self._fd = os.open(path, os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0), 0o600)
+            self._fd = os.open(path, flags, 0o600)
+        except FileNotFoundError:
+            raise PlatformRefusal("not_found", path)
         except OSError:
             raise PlatformRefusal("unreadable", path)
         try:
@@ -558,16 +563,16 @@ def take_runner_lock(token_file, env):
         return current_platform().acquire_runner_lock(token_file, 0, env)
     except LockBusy:
         pass
-    if not os.path.exists(token_file):
-        # The holder is ending (its token is gone): opening state.lock would
-        # put a file back into the directory it is removing (P-12).
-        raise LockBusy(runner_lock_path(token_file, env))
     try:
-        state_lock = StateLock(token_file)
-    except PlatformRefusal:
-        # The holder is ending and has removed the token directory: the lock
-        # is busy, not broken (P-12).
-        raise LockBusy(runner_lock_path(token_file, env))
+        # Only an existing state.lock: a holder that is ending removes it with
+        # the token and then the directory, and a competitor must not put it
+        # back (P-12).
+        state_lock = StateLock(token_file, create=False)
+    except PlatformRefusal as exc:
+        if exc.reason == "not_found":
+            # The holder is ending (or has ended): busy, not broken.
+            raise LockBusy(runner_lock_path(token_file, env))
+        raise
     with state_lock:
         return current_platform().acquire_runner_lock(token_file, 0, env)
 

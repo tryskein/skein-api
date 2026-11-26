@@ -366,6 +366,35 @@ class EndUnderLockTest(unittest.TestCase):
 
 
 @unittest.skipUnless(os.name == "posix", "the POSIX runner")
+class CompetingStartTest(unittest.TestCase):
+    """Review findings 19 and 40 of wave 7 (P-12: after the end the token
+    directory is gone; a competing start of a live holder is busy, P-6: a
+    lock that cannot be taken for an OS error is config_invalid, not busy)."""
+
+    def setUp(self):
+        self.world = World(self, [chan("A", "chan-a")])
+        self.mon = self.world.monitor()
+        self.r = self.world.runner
+        self.held = self.r.PosixPlatform.acquire_runner_lock(self.mon.token, 0, self.world.env)
+        self.addCleanup(self.held.release)
+        self.state_lock = os.path.join(os.path.dirname(self.mon.token), "state.lock")
+
+    def test_a_competitor_does_not_put_state_lock_back(self):
+        if os.path.exists(self.state_lock):
+            os.remove(self.state_lock)
+        with self.assertRaises(self.r.LockBusy):
+            self.r.take_runner_lock(self.mon.token, self.world.env)
+        self.assertFalse(os.path.exists(self.state_lock), "a competing start created state.lock")
+
+    def test_a_state_lock_that_cannot_be_opened_is_not_busy(self):
+        if os.path.exists(self.state_lock):
+            os.remove(self.state_lock)
+        os.mkdir(self.state_lock, 0o700)
+        with self.assertRaises(self.r.PlatformRefusal):
+            self.r.take_runner_lock(self.mon.token, self.world.env)
+
+
+@unittest.skipUnless(os.name == "posix", "the POSIX runner")
 class JournalOutageThenStopTest(unittest.TestCase):
     """Review finding V5 of wave 7 (US-12, the access boundary and "a stop
     while the journal refuses": the lines go to the deferred tail; after a
