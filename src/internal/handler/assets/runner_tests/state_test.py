@@ -215,7 +215,14 @@ class Monitor(object):
                 fh.write(RUNNER_BODY)
             argv = [sys.executable, path]
         else:
-            argv = [sys.executable, "-c", harness.served_loader()]
+            # The loader runs from a file: the starter executes its
+            # downloaded bytes, and the served loader is longer than one
+            # argument may be.
+            path = os.path.join(tempfile.mkdtemp(prefix="skein-state-loader-"), "loader.py")
+            test.addCleanup(shutil.rmtree, os.path.dirname(path), True)
+            with open(path, "w") as fh:
+                fh.write(harness.served_loader())
+            argv = [sys.executable, path]
         self.proc = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                      universal_newlines=True,
                                      env=base_env(url, token_path, extra_env))

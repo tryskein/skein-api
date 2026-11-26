@@ -1082,7 +1082,12 @@ def run_loader(url, token="skm_" + "d" * 43, token_as_dir=False, no_url=False,
         env.update(site_env)
     if extra_env:
         env.update(extra_env)
-    proc = subprocess.Popen([sys.executable, "-c", loader], stdout=subprocess.PIPE,
+    # The loader runs from a file: the starter executes its downloaded bytes,
+    # and the served loader is longer than one argument may be.
+    loader_path = os.path.join(tmpdir, "loader.py")
+    with open(loader_path, "w") as fh:
+        fh.write(loader)
+    proc = subprocess.Popen([sys.executable, loader_path], stdout=subprocess.PIPE,
                             stderr=subprocess.PIPE, text=True, env=env)
     try:
         if signal_when is not None:

@@ -1068,7 +1068,13 @@ func TestBootstrapCommand_EndToEnd(t *testing.T) {
 		if assignments == bootstrap {
 			t.Fatalf("bootstrap does not end with the starter:\n%s", bootstrap)
 		}
-		lines, _ := limitCheck(t, assignments+" python3 -c "+shellSingleQuote(ServedLoader()))
+		// The loader runs from a file: the starter executes its downloaded
+		// bytes, and the served loader is longer than one argument may be.
+		loaderPath := filepath.Join(t.TempDir(), "loader.py")
+		if err := os.WriteFile(loaderPath, []byte(ServedLoader()), 0o600); err != nil {
+			t.Fatalf("write loader: %v", err)
+		}
+		lines, _ := limitCheck(t, assignments+" python3 "+shellSingleQuote(loaderPath))
 		assertOneStopLine(t, lines, "server_unreachable", "paused")
 		if !fileExists(token) {
 			t.Fatalf("token file removed on a download timeout")
