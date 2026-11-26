@@ -219,7 +219,7 @@ class Attempt(object):
     note_call before every call of the channel, finish with the outcome,
     release last."""
 
-    def __init__(self, ledger, key, lock, events, channel, calls, last_call):
+    def __init__(self, ledger, key, lock, events, channel, calls, last_call, first_call):
         self.ledger = ledger
         self.key = key
         self._lock = lock
@@ -227,6 +227,9 @@ class Attempt(object):
         self.channel = channel
         self.calls = calls
         self.last_call = last_call
+        # The time of the first call of this delivery on this channel: the
+        # budget of INV-8 runs from it.
+        self.first_call = first_call
 
     def note_call(self):
         """Count a call of the channel in the ledger before it is made."""
@@ -238,9 +241,12 @@ class Attempt(object):
                 if rec and (rec.get("delivering") or {}).get("attempt") == self.key:
                     rec["delivering"]["calls"] = self.calls + 1
                     rec["delivering"]["lastCall"] = now
+                    rec["delivering"]["firstCall"] = self.first_call if self.first_call is not None else now
         self.ledger._change(change)
         self.calls += 1
         self.last_call = now
+        if self.first_call is None:
+            self.first_call = now
 
     def finish(self, outcome):
         """Write the authoritative outcome of the attempt (step 5). Returns
@@ -264,7 +270,7 @@ class Attempt(object):
                 else:
                     rec.setdefault("monitors", {})[self.ledger.monitor] = {
                         "outcome": outcome, "channel": self.channel, "calls": d.get("calls", 0),
-                        "lastCall": d.get("lastCall"), "at": now}
+                        "lastCall": d.get("lastCall"), "firstCall": d.get("firstCall"), "at": now}
             window = entry.get("window") or {}
             if outcome not in ADDRESSEE_OUTCOMES:
                 # Nothing reached the addressee: the window it took is free
@@ -275,6 +281,22 @@ class Attempt(object):
                 result["burst"] = _note_series(entry, sessions, now)
         self.ledger._change(change)
         return result.get("burst", False)
+
+    def abandon(self):
+        """Withdraw a published attempt that made no call (a retry not due
+        yet, a cancel before the send): its records go back to what they
+        were, the window it took is free again."""
+        def change(entry):
+            for eid in self.events:
+                rec = entry["events"].get(eid)
+                if rec is not None and (rec.get("delivering") or {}).get("attempt") == self.key:
+                    rec.pop("delivering")
+                    if not rec.get("addressee") and not rec.get("monitors"):
+                        del entry["events"][eid]
+            window = entry.get("window") or {}
+            if window.get("attempt") == self.key:
+                entry["window"] = {"until": window.get("prev", 0)}
+        self.ledger._change(change)
 
     def release(self):
         """Release the attempt lock and remove its file (step 6)."""
@@ -449,16 +471,17 @@ class Ledger(object):
                         raise LedgerFull()
                     calls = (prior or {}).get("calls") or 0
                     last = (prior or {}).get("lastCall")
+                    first = (prior or {}).get("firstCall")
                     for ev in carry:
                         rec = entry["events"].setdefault(str(ev["id"]), {})
                         rec["at"] = now
                         rec["delivering"] = {"attempt": key, "monitor": self.monitor, "channel": channel,
-                                             "calls": calls, "lastCall": last,
+                                             "calls": calls, "lastCall": last, "firstCall": first,
                                              "sessions": [ev.get("session")]}
                     entry["window"] = {"until": now + _window_len(entry, now), "attempt": key,
                                        "prev": window.get("until") or 0}
                     decision.published = [str(ev["id"]) for ev in carry]
-                    decision.attempt = Attempt(self, key, lock, decision.published, channel, calls, last)
+                    decision.attempt = Attempt(self, key, lock, decision.published, channel, calls, last, first)
                 self._save(doc)
         finally:
             if decision.attempt is None:

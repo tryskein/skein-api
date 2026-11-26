@@ -250,7 +250,25 @@ func wholeSecondsAtLeastOne(d time.Duration) int {
 // @Description  the same command prints only `{event, preflightId, method,
 // @Description  channel}` (the result is marked announced in preflight.json).
 // @Description  A detached or journal monitor writes its lines and events to
-// @Description  the journal.
+// @Description  the journal. A detached monitor also carries every event of
+// @Description  a page to the chosen channel before its cursor moves: an
+// @Description  attempt is published in the shared ledger of the user
+// @Description  (skein-monitor/ledger/, one delivery per addressee and event,
+// @Description  10 s rate window per addressee), the addressee of the
+// @Description  preflight is checked, the record's program is run by its
+// @Description  argument list (never a shell; the text by stdin, a private
+// @Description  message file or one argument), and its answer gives one
+// @Description  outcome by the record's closed table (anything else is
+// @Description  unknown). A refusal before send is retried after 5, 30 and
+// @Description  120 s (at most 4 calls within the idle window), then the
+// @Description  next non-blind channel of the preflight or the journal takes
+// @Description  that event (`degraded` `channel_failing` once per switch,
+// @Description  `recovered` when that channel delivers again); unknown is
+// @Description  never retried (`degraded` `delivery_unknown`); a changed
+// @Description  addressee sends later events to the journal only
+// @Description  (`addressee_changed`); an unusable ledger sends nothing out
+// @Description  (`state_unavailable`); a journal that takes no write holds
+// @Description  new sends and the cursor until it does.
 // @Description
 // @Description  Stop protocol (sk-579 US-3): every controlled stop prints
 // @Description  exactly one last stdout line `{event, reason, action[, status]}`

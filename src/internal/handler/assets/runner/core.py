@@ -555,9 +555,10 @@ class StdoutSink(object):
 
 def work(executor, base, token, issue, exclude_session, token_file, sink=None):
     """The polling loop. Never returns: it ends by raising Stop. sink takes
-    the lines (stdout by default); a sink that raises JournalUnavailable for
-    a notification leaves the page undone: the cursor stays and the same page
-    is polled again."""
+    the lines (stdout by default); a sink with page(cursor, notifications)
+    takes each page whole. A sink that raises JournalUnavailable for a
+    notification or a page leaves the page undone: the cursor stays and the
+    same page is polled again."""
     if sink is None:
         sink = StdoutSink(issue)
     if hasattr(sink, "started"):
@@ -610,6 +611,13 @@ def work(executor, base, token, issue, exclude_session, token_file, sink=None):
             notifs = payload.get("notifications") or []
             new_count = 0
             try:
+                if hasattr(sink, "page"):
+                    # A detached sink carries the whole page to outcomes
+                    # (deliver.py); its state, not the seen set, says what
+                    # is done when the page comes again.
+                    sink.page(cursor, notifs)
+                    new_count = len(notifs)
+                    notifs = []
                 for n in notifs:
                     nid = n.get("id") if isinstance(n, dict) else None
                     if nid is not None and nid in seen:

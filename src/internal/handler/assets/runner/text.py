@@ -104,7 +104,51 @@ def _issue_id(n):
     return None
 
 
-def plain_text(notification, exclude_file, limit=None, unit=UNIT_CHARS):
+def echo_phrase(exclude_file):
+    """The phrase of a plain delivery about one's own echo, with the literal
+    path of the exclusion file (US-13): once per delivery."""
+    return ("If actorSessionId is your current session, this is your own echo: write that "
+            "session id to the file %s and do not reply." % _quoted(exclude_file))
+
+
+def plain_batch(notifications, exclude_file, limit=None, unit=UNIT_CHARS):
+    """The plain text of a batch of events for one delivery: the label
+    once, each event's fields, the echo phrase once (INV-17, US-13). The
+    batch takes the longest run of the events, in order, that fits the
+    limit; only the first event may be cut, the others go whole or wait for
+    the next delivery.
+
+    Returns (text, count, cut): count is the number of events the text
+    carries; (None, 0, False) when even the minimal form of the first event
+    does not fit."""
+    if not notifications:
+        return None, 0, False
+    head = DELIVERY_LABEL + "."
+    tail = echo_phrase(exclude_file)
+    frame = measure(head + " " + " " + tail, unit)
+    room = None if limit is None else limit - frame
+    first, cut = _event_part(notifications[0], room, unit)
+    if first is None:
+        return None, 0, False
+    parts = [first]
+    for n in notifications[1:]:
+        part, _ = _event_part(n, None, unit)
+        candidate = " ".join([head] + parts + [part, tail])
+        if limit is not None and measure(candidate, unit) > limit:
+            break
+        parts.append(part)
+    return " ".join([head] + parts + [tail]), len(parts), cut
+
+
+def _event_part(notification, limit, unit):
+    """The fields of one event without the label and the echo phrase,
+    within limit: (text, cut), or (None, False) when it does not fit."""
+    if limit is not None and limit <= 0:
+        return None, False
+    return plain_text(notification, "", limit, unit, framed=False)
+
+
+def plain_text(notification, exclude_file, limit=None, unit=UNIT_CHARS, framed=True):
     """The plain text of one event for a typed-in channel or a queue, one
     line: the label, type, notification id, issue, author, actorSessionId,
     comment id, the preview within boundaries (or the mark of a deleted
@@ -114,7 +158,8 @@ def plain_text(notification, exclude_file, limit=None, unit=UNIT_CHARS):
     the limit. The last resort is the minimal form: the label, the mandatory
     fields and, when something was cut, the compact mark of the cut.
     Returns (None, False) when even that does not fit: such an event is not
-    delivered by this channel."""
+    delivered by this channel. framed=False leaves out the label and the
+    echo phrase (a part of plain_batch)."""
     n = notification if isinstance(notification, dict) else {}
     head = ["type=" + _quoted(n.get("type")), "notification=" + _quoted(n.get("id")),
             "issue=" + _quoted(_issue_id(n))]
@@ -122,8 +167,7 @@ def plain_text(notification, exclude_file, limit=None, unit=UNIT_CHARS):
         head.append("commentId=" + _quoted(n["commentId"]))
     if "actorSessionId" in n:
         head.append("actorSessionId=" + _quoted(n["actorSessionId"]))
-    tail = ("If actorSessionId is your current session, this is your own echo: write that "
-            "session id to the file %s and do not reply." % _quoted(exclude_file))
+    tail = echo_phrase(exclude_file)
     actor = n.get("actor") if isinstance(n.get("actor"), dict) else {}
     author = ["author=" + _quoted(actor["username"])] if "username" in actor else []
     has_preview = "commentId" in n and isinstance(n.get("bodyPreview"), str)
@@ -132,8 +176,10 @@ def plain_text(notification, exclude_file, limit=None, unit=UNIT_CHARS):
     read = ("read the full comment with skein_comment_get(commentId=%s)" % _quoted(n.get("commentId"))
             if "commentId" in n else "")
 
+    label = [DELIVERY_LABEL + "."] if framed else []
+
     def build(preview_text, cut, with_summary, with_author):
-        parts = [DELIVERY_LABEL + "."] + head + (author if with_author else [])
+        parts = label + head + (author if with_author else [])
         if with_summary and summary:
             parts.append("summary: %s %s %s" % (DATA_OPEN, summary, DATA_CLOSE))
         if "commentId" in n and not has_preview:
@@ -144,7 +190,8 @@ def plain_text(notification, exclude_file, limit=None, unit=UNIT_CHARS):
                 parts.append(PLAIN_CUT_MARK + " " + read + ".")
             elif n.get("truncated") is True:
                 parts.append(PLAIN_TRUNCATED_MARK + " " + read + ".")
-        parts.append(tail)
+        if framed:
+            parts.append(tail)
         return " ".join(parts)
 
     full = build(preview, False, True, True)
@@ -158,7 +205,7 @@ def plain_text(notification, exclude_file, limit=None, unit=UNIT_CHARS):
         text = build("" if preview is not None else None, preview is not None, with_summary, with_author)
         if measure(text, unit) <= limit:
             return text, preview is not None
-    minimal = " ".join([DELIVERY_LABEL + "."] + head)
+    minimal = " ".join(label + head)
     compact = minimal + " " + PLAIN_CUT_MARK
     if measure(compact, unit) <= limit:
         return compact, True

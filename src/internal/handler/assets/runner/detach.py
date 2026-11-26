@@ -357,6 +357,15 @@ class JournalSink(object):
         self.journal.delivery(n, JOURNAL_ONLY_STATUS, method=self.method, channel=self.channel)
 
 
+def delivery_sink(journal, token_file, doc, env, base, issue, token):
+    """The DeliverySink of a detached monitor: the ledger of the server,
+    the addressee of the preflight, this monitor keyed by its journal."""
+    monitor = os.path.splitext(os.path.basename(journal.path))[0]
+    ledger = Ledger(base, monitor, identity_from_doc(doc.get("identity")), env=env)
+    return DeliverySink(journal, token_file, doc, load_registry(), env, ledger,
+                        ArgvExecutor(token_file, env, [token]), issue)
+
+
 def run_detached_child():
     """The detached child: start in the lock order, hand the receipt, then
     poll into the journal until a stop. Returns the exit code."""
@@ -379,7 +388,10 @@ def run_detached_child():
             held.begin(token_file, env, settings, issue)
             _send_receipt(held.line)
             journal = Journal(token_file, issue, secrets=[held.token], env=env)
-            sink = JournalSink(journal, held.doc.get("method"), held.doc.get("channel"))
+            if held.doc.get("method") == METHOD_DETACHED:
+                sink = delivery_sink(journal, token_file, held.doc, env, base, issue, held.token)
+            else:
+                sink = JournalSink(journal, held.doc.get("method"), held.doc.get("channel"))
             sink.lifecycle(held.line)
             work(executor, base, held.token, issue, os.environ.get("SKEIN_EXCLUDE_SESSION", ""),
                  token_file, sink=sink)

@@ -18,8 +18,10 @@ identity.py
 preflight.py
 executors.py
 ledger.py
+classify.py
 detect.py
 detach.py
 modes_stream.py
+deliver.py
 start.py
 core.py

@@ -59,6 +59,28 @@ def save_printed(token_file, cursor, ids):
     _save_state_doc(token_file, {"version": STATE_VERSION, "cursor": cursor, "printed": list(ids)})
 
 
+def load_page_outcomes(token_file, cursor):
+    """The outcomes of the events of the page polled at cursor that a
+    detached monitor fixed, and the ids of those already in the journal:
+    ({id: outcome}, set of ids). Outcomes saved with another cursor do not
+    count."""
+    doc = _load_state_doc(token_file)
+    if doc is None or doc.get("cursor") != cursor:
+        return {}, set()
+    outcomes = doc.get("outcomes")
+    journaled = doc.get("journaled")
+    return (dict(outcomes) if isinstance(outcomes, dict) else {},
+            set(journaled) if isinstance(journaled, list) else set())
+
+
+def save_page_outcomes(token_file, cursor, outcomes, journaled):
+    """Keep the cursor and the outcomes of its page (R-6: after the ledger,
+    before the journal and the cursor). Raises OSError or PlatformRefusal
+    when it cannot."""
+    _save_state_doc(token_file, {"version": STATE_VERSION, "cursor": cursor, "outcomes": dict(outcomes),
+                                 "journaled": sorted(journaled)})
+
+
 def _load_state_doc(token_file):
     path = state_file_path(token_file)
     try:
