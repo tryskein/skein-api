@@ -460,6 +460,11 @@ class DeliverySink(object):
         except LedgerUnavailable:
             pass
 
+    def taken_over(self):
+        """A runner that writes only the journal (its addressee changed)
+        hands over to a successor that waits for its lock (takeover.py)."""
+        return self.journal_only and takeover_requested(self.token_file, self.doc.get("preflightId"))
+
     def note_poll_ok(self):
         """A successful poll of the working loop (the access boundary)."""
         if hasattr(self.cancel, "note_ok"):
@@ -687,10 +692,17 @@ class DeliverySink(object):
             self.gone = True
         elif changed:
             self.journal_only = True
+            try:
+                # The mark lets a new preflight of this token in while this
+                # runner lives (takeover.py).
+                mark_addressee_changed(self.token_file, self.doc.get("preflightId"))
+            except (OSError, PlatformRefusal):
+                pass
             self._degraded_once("addressee_changed",
                                 action="The addressee of the monitor of issue %s is not the one its "
                                        "preflight saw: events go only to the journal. Run the preflight "
-                                       "again to take the monitor over." % self.issue)
+                                       "again, then the working command it prints, to take the monitor "
+                                       "over." % self.issue)
         elif outcome == OUTCOME_UNKNOWN:
             self.lifecycle({"event": "degraded", "cause": "delivery_unknown", "issue": self.issue,
                             "channel": channel_id, "notificationIds": [n["id"] for n in batch]})

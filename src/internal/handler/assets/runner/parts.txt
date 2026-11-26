@@ -21,6 +21,7 @@ executors.py
 ledger.py
 classify.py
 detect.py
+takeover.py
 detach.py
 rootclosed.py
 modes_stream.py

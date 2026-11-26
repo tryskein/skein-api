@@ -34,7 +34,7 @@ import uuid
 
 # The files of the token directory that share the token's fate (P-5).
 TOKEN_DIR_FILES = (STATE_FILE_NAME, EXCLUDE_FILE_NAME, CLIENT_STARTER_FILE, PREFLIGHT_FILE_NAME,
-                   STATE_LOCK_NAME)
+                   TAKEOVER_FILE_NAME, STATE_LOCK_NAME)
 # Named points of the end sequence. A test may stop the end at one (the
 # point "token_dir_removed" is the state "directory gone, lock still held");
 # a running monitor registers nothing here.

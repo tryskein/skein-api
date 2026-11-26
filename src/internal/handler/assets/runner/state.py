@@ -22,9 +22,10 @@ STATE_FILE_NAME = "state.json"
 # read (the monitor starts live).
 STATE_VERSION = 1
 # Parts of the state a save of the cursor or of a page keeps as they are:
-# the exclusion value of one's own echo (echo.py) and the close of the root
-# (rootclosed.py).
-STICKY_STATE_KEYS = ("exclude", "rootClosed")
+# the exclusion value of one's own echo (echo.py), the close of the root
+# (rootclosed.py) and the mark of a runner whose addressee changed
+# (takeover.py).
+STICKY_STATE_KEYS = ("exclude", "rootClosed", "addresseeChanged")
 
 
 def state_file_path(token_file):
@@ -118,6 +119,22 @@ def save_exclusion(token_file, value):
     what the state holds. Raises OSError or PlatformRefusal when it cannot."""
     doc = _load_state_doc(token_file) or {"version": STATE_VERSION, "cursor": None}
     doc["exclude"] = value
+    _save_state_doc(token_file, doc)
+
+
+def addressee_changed(token_file):
+    """The runner of this token marked that its addressee changed (it writes
+    only the journal and may be taken over, takeover.py)."""
+    doc = _load_state_doc(token_file)
+    return doc is not None and isinstance(doc.get("addresseeChanged"), dict)
+
+
+def mark_addressee_changed(token_file, preflight_id, changed=True):
+    """Set (or, with changed False, clear) the mark of a runner whose
+    addressee changed, beside what the state holds. Raises OSError or
+    PlatformRefusal when it cannot."""
+    doc = _load_state_doc(token_file) or {"version": STATE_VERSION, "cursor": None}
+    doc["addresseeChanged"] = {"preflightId": preflight_id} if changed else None
     _save_state_doc(token_file, doc)
 
 

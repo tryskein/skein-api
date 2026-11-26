@@ -15,7 +15,9 @@
 # path. The result, with the identity of the addressee, is saved in
 # preflight.json next to the token under state.lock; the next preflight gets
 # the next number. A preflight never polls and never moves the cursor. With a
-# live runner of the token it answers already_running and changes nothing.
+# live runner of the token it answers already_running and changes nothing,
+# unless that runner's addressee changed: then it writes the new result, and
+# the next working start of it takes the monitor over (takeover.py).
 #
 # Method order (first available, and only it):
 #   1. the override SKEIN_MONITOR_CHANNEL (strict: unavailable -> journal);
@@ -650,7 +652,8 @@ def system_placement(registry, record):
 
 def preflight(token_file, env, registry, settings, detector=None, prober=None, placement=None):
     """Run the preflight and return its line. Raises ConfigInvalid, or Stop
-    (already_running) with a live runner of the token."""
+    (already_running) with a live runner of the token whose addressee did
+    not change."""
     if sys.version_info < MIN_PYTHON:
         raise ConfigInvalid("python3", "Python %d.%d or newer is needed" % MIN_PYTHON)
     detector = detector or RegistryDetector()
@@ -673,7 +676,9 @@ def preflight(token_file, env, registry, settings, detector=None, prober=None, p
         binding = _binding_doc(detector.binding(ctx, choice.channel))
     try:
         with StateLock(token_file):
-            if runner_alive(token_file, env):
+            # A live runner whose addressee changed may be taken over: its
+            # next working start does it (takeover.py).
+            if runner_alive(token_file, env) and not addressee_changed(token_file):
                 raise Stop("already_running")
             last = load_preflight(token_file)
             number = (last["preflightId"] if last else 0) + 1

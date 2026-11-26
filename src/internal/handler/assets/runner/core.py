@@ -346,8 +346,9 @@ def stop_action(reason, issue, detail=None, preflight=None):
         return ("The agent the monitor for issue %s delivered to has ended, so the monitor stopped. "
                 "If the work goes on in another agent, mint a new monitor there with %s." % (issue, mint))
     if reason == "config_invalid":
-        return ("The monitor for issue %s did not start: %s. Fix that, then run the preflight again; "
-                "do not mint a new monitor: its token is kept." % (issue, detail or "a setting is invalid"))
+        return ("The monitor for issue %s did not start: %s. Running this command again does not help: "
+                "fix that, run the preflight again and start the working command its preflight line "
+                "names; do not mint a new monitor: its token is kept." % (issue, detail or "a setting is invalid"))
     if reason == "delivered":
         # detail: the number of the preflight result whose working command
         # restarts the monitor; the command itself is not repeated (INV-17).
@@ -699,7 +700,7 @@ def work(executor, base, token, issue, exclude_session, token_file, sink=None, r
                 backoff = min(backoff + POLL_INTERVAL_SEC, float(BACKOFF_CEILING_SEC))
             # At most one page per poll interval: a tail waiting after a
             # restart comes no faster than ordinary polling.
-            time.sleep(max(jitter(backoff), float(POLL_INTERVAL_SEC)))
+            sleep_or_hand_over(max(jitter(backoff), float(POLL_INTERVAL_SEC)), sink)
             continue
 
         if status in (401, 403) and hasattr(sink, "end_open_page"):
@@ -725,7 +726,7 @@ def work(executor, base, token, issue, exclude_session, token_file, sink=None, r
                                       "restarted from now: notifications since its last successful poll "
                                       "may have been missed — check issue %s with skein_show. "
                                       "Do not restart anything; the monitor keeps running." % issue})
-            time.sleep(jitter(float(POLL_INTERVAL_SEC)))
+            sleep_or_hand_over(jitter(float(POLL_INTERVAL_SEC)), sink)
             continue
 
         # Every other outcome is a transient failure (network, timeout, a
@@ -746,14 +747,14 @@ def work(executor, base, token, issue, exclude_session, token_file, sink=None, r
             wait = retry_after_seconds(retry_after, BACKOFF_CEILING_SEC)
             wait = min(max(float(wait), float(POLL_INTERVAL_SEC)), float(BACKOFF_CEILING_SEC))
             log_stderr("poll rate-limited (429); waiting up to %.1fs" % wait)
-            time.sleep(jitter(wait))
+            sleep_or_hand_over(jitter(wait), sink)
             continue
         backoff = failure_backoff(backoff)
         if status == 200:
             log_stderr("malformed poll response; backing off %.1fs" % backoff)
         else:
             log_stderr("transient poll failure status=%s; backing off %.1fs" % (status, backoff))
-        time.sleep(jitter(backoff))
+        sleep_or_hand_over(jitter(backoff), sink)
 
 
 def run():

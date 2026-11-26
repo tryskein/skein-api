@@ -42,8 +42,8 @@ import time
 import traceback
 
 # How long the synchronous process waits for the start receipt of the
-# detached child.
-START_RECEIPT_TIMEOUT_SEC = 30
+# detached child, beyond the wait of a takeover for the lock.
+START_RECEIPT_TIMEOUT_SEC = 30 + TAKEOVER_WAIT_SEC
 # A file of locks/ older than this and locked by no one is removed by the
 # start of any monitor (P-5).
 STALE_LOCK_AGE_SEC = 24 * 3600
@@ -138,15 +138,23 @@ class WorkingStart(object):
         self.doc = None
         self.line = None
         self.full = False
+        # The takeover request this start made, until its monitor_started is
+        # out or the start fails (takeover.py).
+        self.takeover = None
+        self.token_file = None
+        self.issue = None
+        self.env = None
 
     def begin(self, token_file, env, settings, issue):
         """Take the locks in the order of P-6 and check the result again as
-        the holder. Raises Stop or ConfigInvalid; the lock, once taken, stays
-        held for the stop that follows."""
+        the holder. A lock held by a runner whose addressee changed is taken
+        over (takeover.py). Raises Stop or ConfigInvalid; the lock, once
+        taken, stays held for the stop that follows."""
+        self.token_file, self.issue, self.env = token_file, issue, env
         try:
             self.lock = take_runner_lock(token_file, env)
         except LockBusy:
-            raise Stop("already_running")
+            self.lock, self.takeover = take_over(token_file, env, settings)
         except PlatformRefusal as exc:
             raise ConfigInvalid(runner_lock_path(token_file, env),
                                 "the runner lock cannot be taken (%s)" % exc.reason)
@@ -159,11 +167,48 @@ class WorkingStart(object):
         except (PlatformRefusal, OSError) as exc:
             raise ConfigInvalid(os.path.dirname(os.path.abspath(token_file)),
                                 "the preflight result cannot be read (%s)" % getattr(exc, "reason", exc))
+        if addressee_changed(token_file):
+            # This runner starts with the addressee of its own result.
+            try:
+                mark_addressee_changed(token_file, None, changed=False)
+            except (OSError, PlatformRefusal) as exc:
+                raise ConfigInvalid(state_file_path(token_file),
+                                    "the monitor state cannot be written (%s)" % getattr(exc, "reason", exc))
         ledger_tails_at_start(env)
         self.doc = doc
         # The mark is set by whoever prints the full line, after printing it.
         self.full = doc.get("announced") is not True
         self.line = monitor_started_line(doc, issue, self.full)
+
+    def started(self, journal):
+        """monitor_started is out: a takeover is done - the journal says so
+        and the request is removed."""
+        if self.takeover is None:
+            return
+        try:
+            journal.lifecycle("taken_over", preflightId=self.doc["preflightId"])
+        except JournalUnavailable:
+            pass
+        withdraw_takeover(self.token_file)
+        self.takeover = None
+
+    def failed(self, outcome, journal=None):
+        """The start ended (outcome) before its monitor_started: a takeover it
+        began is not completed - the token and the state with the saved
+        cursor stay, the journal says so. An old runner that ended on its
+        own (its token is gone) leaves only its own stop line."""
+        if self.takeover is None:
+            return
+        if outcome is None or outcome.reason != "token_file_missing":
+            try:
+                if journal is None:
+                    journal = Journal(self.token_file, self.issue,
+                                      secrets=[self.token] if self.token else [], env=self.env)
+                journal.lifecycle("takeover_incomplete", reason=outcome.reason if outcome else None)
+            except (JournalUnavailable, OSError, PlatformRefusal):
+                pass
+        withdraw_takeover(self.token_file, self.takeover)
+        self.takeover = None
 
     def release(self):
         lock, self.lock = self.lock, None
@@ -426,6 +471,7 @@ def run_detached_child():
     held = WorkingStart()
     executor = Executor()
     sink = None
+    journal = None
     outcome = None
     try:
         try:
@@ -451,10 +497,18 @@ def run_detached_child():
                 sink = JournalSink(journal, held.doc.get("method"), held.doc.get("channel"), env,
                                    exclusion=exclusion)
             _send_receipt(held.line)
+            held.started(journal)
             work(executor, base, held.token, issue, exclusion, token_file, sink=sink,
                  root=RootClosed(token_file))
         except ConfigInvalid as exc:
             raise Stop("config_invalid", detail="%s (%s)" % (exc.variable, exc.detail))
+    except TakenOver:
+        # A successor waits for the lock: every outcome, the cursor and the
+        # journal lines are written; release the lock as the last step and
+        # touch nothing more (P-12, takeover.py).
+        executor.stop()
+        held.release()
+        return 0
     except Stop as stop:
         outcome = stop
     except StopSignal:
@@ -465,6 +519,7 @@ def run_detached_child():
         outcome = Stop("internal_error")
     finally:
         executor.stop()
+    held.failed(outcome, journal)
     try:
         # Before the receipt this is the receipt; after it, stdout is null.
         if held.lock is None:
@@ -515,6 +570,7 @@ def run_foreground(token_file, issue, env, settings, doc=None):
     executor = Executor()
     outcome = None
     output = None
+    journal = None
     try:
         try:
             held.begin(token_file, env, settings, issue)
@@ -526,6 +582,7 @@ def run_foreground(token_file, issue, env, settings, doc=None):
             output.keep_room(cycle_stop_lines(issue, held.doc["preflightId"]))
             if output.lifecycle(held.line) and held.full:
                 mark_announced(token_file, held.doc["preflightId"])
+            held.started(journal)
             run_stream_loop(executor, os.environ.get("SKEIN_PUBLIC_URL", ""), held.token, issue,
                             Exclusion(token_file, env.get("SKEIN_EXCLUDE_SESSION", "")), token_file,
                             held.doc, output, env=env)
@@ -541,6 +598,7 @@ def run_foreground(token_file, issue, env, settings, doc=None):
         outcome = Stop("internal_error")
     finally:
         executor.stop()
+    held.failed(outcome, journal)
     try:
         # Before its output exists (a refused begin) the stop line keeps to
         # the line limit of the result the synchronous check read.
