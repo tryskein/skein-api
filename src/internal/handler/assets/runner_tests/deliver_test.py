@@ -915,5 +915,146 @@ class BatchTextTest(unittest.TestCase):
             self.assertIn('actorSessionId="s-%d"' % i, text)
 
 
+@unittest.skipUnless(os.name == "posix", "the POSIX pipeline")
+class AttemptOwnershipTest(unittest.TestCase):
+    """Review round 2 of wave 7, K1 (P-11): the attempt begin published is
+    owned from its begin to its release on every path; a failure before
+    the hand-over withdraws it, so the page goes on and nothing becomes
+    unknown."""
+
+    def setUp(self):
+        self.world = World(self, two_channels())
+        self.sleeps = []
+
+        def bounded():
+            # A held attempt lock would make the page wait without end.
+            self.sleeps.append(1)
+            if len(self.sleeps) > 500:
+                raise AssertionError("the page waits without end")
+        self.world.clock.on_sleep = bounded
+        # Event 1 already has its outcome for the addressee.
+        self.world.monitor("tok-a").page([note(1)])
+
+    def failing_first_journal_write(self, mon, error):
+        real = mon.journal.delivery
+        left = [1]
+
+        def delivery(*args, **kw):
+            if left:
+                left.pop()
+                raise error
+            return real(*args, **kw)
+        mon.journal.delivery = delivery
+
+    def test_a_journal_refusal_on_a_closed_outcome_leaves_no_held_attempt(self):
+        mon = self.world.monitor("tok-b")
+        self.failing_first_journal_write(mon, self.world.runner.JournalUnavailable("write_failed", "j"))
+        with self.assertRaises(self.world.runner.JournalUnavailable):
+            mon.page([note(1), note(2)])
+        mon.page([note(1), note(2)])
+        self.assertEqual(dict((d[0], d[1]) for d in mon.deliveries())[2], "queued")
+        self.assertEqual(len(self.world.prog("chan-a").calls()), 2)
+
+    def test_a_stop_signal_on_a_closed_outcome_withdraws_the_attempt(self):
+        mon = self.world.monitor("tok-b")
+        self.failing_first_journal_write(mon, self.world.runner.StopSignal())
+        with self.assertRaises(self.world.runner.StopSignal):
+            mon.page([note(1), note(2)])
+        restarted = self.world.monitor("tok-b")
+        restarted.page([note(1), note(2)])
+        self.assertEqual(dict((d[0], d[1]) for d in restarted.deliveries())[2], "queued")
+
+
+@unittest.skipUnless(os.name == "posix", "the POSIX pipeline")
+class LastBoundaryTest(unittest.TestCase):
+    """Review round 2 of wave 7, K2 and rows 13, 14, 16: what a blocking
+    check or wait may change is checked again, and the access boundary is
+    the last step before the hand-over and before Enter."""
+
+    def setUp(self):
+        self.world = World(self, two_channels())
+        self.cancel = FlagCancel()
+        self.mon = self.world.monitor(cancel=self.cancel)
+        self.channel = self.world.reg.channel("A")
+
+    def attempt(self, eid="5"):
+        decision = self.mon.sink.ledger.begin([{"id": eid, "session": "s-1"}], "A")
+        self.addCleanup(decision.attempt.release)
+        return decision.attempt
+
+    def test_a_stop_answer_during_the_addressee_check_withholds_enter(self):
+        r = self.world.runner
+        for name, arm in (("401", lambda: setattr(self.cancel, "stop", "token_expired")),
+                          ("stale poll", lambda: setattr(self.cancel, "stale", True))):
+            with self.subTest(case=name):
+                self.cancel.stop, self.cancel.stale = None, False
+                guard = r.Guard(self.mon.sink, self.channel, self.attempt(name), 30)
+                self.mon.sink.check_addressee = lambda channel, timeout=None: arm()
+                self.assertFalse(guard.before_commit())
+                if name == "401":
+                    self.assertEqual(guard.cancel_reason, "token_expired")
+
+    def test_the_addressee_is_checked_again_after_the_idle_wait(self):
+        r = self.world.runner
+        guard = r.Guard(self.mon.sink, self.channel, self.attempt(), 30)
+        calls = []
+
+        def check(channel, timeout=None):
+            calls.append(1)
+            if len(calls) == 2:
+                raise r.AddresseeGone()
+        self.mon.sink.check_addressee = check
+        self.mon.sink.wait_idle = lambda channel, timeout: None
+        with self.assertRaises(r.AddresseeGone):
+            guard.before_send()
+        self.assertFalse(guard.handed)
+
+    def test_a_reservation_lost_during_the_wait_hands_nothing_over(self):
+        r = self.world.runner
+        attempt = self.attempt()
+        guard = r.Guard(self.mon.sink, self.channel, attempt, 30)
+        self.mon.sink.check_addressee = lambda channel, timeout=None: None
+
+        def merge_takes_it(channel, timeout):
+            def change(entry):
+                entry["events"]["5"]["delivering"]["attempt"] = "another-attempt"
+            self.mon.sink.ledger._change(change)
+        self.mon.sink.wait_idle = merge_takes_it
+        with self.assertRaises(r.AttemptLost):
+            guard.before_send()
+        self.assertFalse(guard.handed)
+
+
+@unittest.skipUnless(os.name == "posix", "the POSIX pipeline")
+class BatchOutcomeAndReceiptTest(unittest.TestCase):
+    """Review round 2 of wave 7, rows 17 and 18."""
+
+    def test_the_state_holds_the_outcome_of_the_whole_batch_before_the_journal(self):
+        world = World(self, two_channels())
+        mon = world.monitor()
+        real = mon.journal.delivery
+        left = [1]
+
+        def delivery(*args, **kw):
+            if left:
+                left.pop()
+                raise world.runner.JournalUnavailable("write_failed", "j")
+            return real(*args, **kw)
+        mon.journal.delivery = delivery
+        with self.assertRaises(world.runner.JournalUnavailable):
+            mon.page([note(1), note(2)])
+        self.assertEqual(len(world.prog("chan-a").calls()), 1, "the two events were not one batch")
+        self.assertEqual(world.runner.load_page_outcomes(mon.token, CURSOR)[0], {"1": "queued", "2": "queued"})
+
+    def test_no_receipt_goes_outside_when_the_ledger_is_off(self):
+        world = World(self, two_channels())
+        for flag in ("ledger_off", "journal_only"):
+            with self.subTest(flag=flag):
+                mon = world.monitor("tok-%s" % flag)
+                setattr(mon.sink, flag, True)
+                mon.sink.receipt("receipt text", "short")
+        self.assertEqual(world.prog("chan-a").calls(), [])
+
+
 if __name__ == "__main__":
     unittest.main()
