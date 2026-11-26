@@ -1,5 +1,7 @@
 import signal
 
+_SKEIN_LOADER_MODE = "legacy"
+
 
 class _SkeinLoaderSignal(BaseException):
     pass
@@ -57,14 +59,14 @@ def _skein_loader_action(reason, issue):
                 "stays valid until the renewal window runs out." % issue)
     if reason == "stopped":
         return ("The monitor for issue %s was stopped by a signal while starting. Run the same bootstrap "
-                "again to resume; its token stays valid until the renewal window runs out. Notifications "
-                "from the break are not delivered - check the issue with skein_show(id=\"%s\")." % (issue, issue))
+                "again to resume; its token stays valid until the renewal window runs out." % issue)
     return ("The monitor for issue %s hit an unexpected error. Run the same bootstrap again; if it "
             "happens again, mint a new monitor with %s." % (issue, mint))
 
 
 def _skein_loader_rm(path, opened=None):
     # With opened (the fstat of the file read), delete only that same inode.
+    # Our state file goes with it (st_uid is 0 on Windows).
     import os
     try:
         if opened is not None:
@@ -72,9 +74,18 @@ def _skein_loader_rm(path, opened=None):
             if (cur.st_ino, cur.st_dev) != (opened.st_ino, opened.st_dev):
                 return
         os.remove(path)
-        parent = os.path.dirname(os.path.abspath(path))
-        if os.path.basename(parent).startswith("skein-mon-"):
-            os.rmdir(parent)
+    except OSError:
+        return
+    d = os.path.dirname(os.path.abspath(path))
+    s = os.path.join(d, "state.json")
+    try:
+        if os.lstat(s).st_uid == getattr(os, "getuid", int)():
+            os.remove(s)
+    except OSError:
+        pass
+    try:
+        if os.path.basename(d).startswith("skein-mon-"):
+            os.rmdir(d)
     except OSError:
         pass
 
@@ -156,15 +167,12 @@ def _skein_loader_fetch():
     return body.decode("utf-8")
 
 
-# One protected phase from the moment the handlers exist: they are installed
-# INSIDE the try, so a signal at any later point — heavy imports, download,
-# between download and exec, the runner's own start-up before it installs its
-# handlers — ends in exactly one "stopped" line (US-3, INV-3). After exec the
-# runner owns the protocol and leaves through SystemExit, which passes.
-#
-# The signal handler raises at most once (it sets the stopping flag), and
-# every inner handler sets that flag first. So the outer try only has to catch
-# the one signal that can land at the very start of an inner handler.
+# The handlers are installed INSIDE the try: a signal at any later point
+# (imports, download, the runner's start-up before its own handlers) ends in
+# exactly one "stopped" line (US-3, INV-3); after exec the runner leaves
+# through SystemExit. The handler raises at most once and every inner handler
+# sets the stopping flag first, so the outer try catches only a signal at the
+# very start of one of them.
 _skein_loader_outcome = None
 try:
     try:

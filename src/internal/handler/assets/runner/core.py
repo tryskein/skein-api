@@ -34,9 +34,13 @@
 #     monitor while the token lives, and deleted when the token is dead.
 #
 # Cursor (spec §6 / §9):
-#   - The FIRST poll sends NO since_ts/since_id; the server live-anchors the
-#     cursor at its own now() so the runner gets no historical backlog.
+#   - The FIRST poll of a new token sends NO since_ts/since_id; the server
+#     live-anchors the cursor at its own now() so the runner gets no
+#     historical backlog.
 #   - Every later poll echoes back the cursor (ts, id) from the prior response.
+#   - The cursor is saved next to the token (state.json, the state part) after
+#     every printed page, so a restart with the same token file resumes from
+#     it; the state file is deleted with the token file.
 #   - The server uses a watermark+lag fence, so the overlap can re-deliver a
 #     row; a bounded seen-id set dedupes across that overlap.
 #
@@ -232,18 +236,22 @@ def token_file_private(path, st):
 
 
 def remove_token_file(path, opened=None):
-    """Delete the token file, and its directory when it is the mint's own
-    skein-mon-* directory and nothing else is left in it. With opened (the
-    fstat of the opened file), only that same file is deleted: a path that
-    now names another inode is left alone."""
+    """Delete the token file with its state file, and its directory when it
+    is the mint's own skein-mon-* directory and nothing else is left in it.
+    With opened (the fstat of the opened file), only that same file is
+    deleted: a path that now names another inode is left alone, and so is
+    the state next to it. A token file already gone still takes its state."""
     try:
         if opened is not None:
             cur = os.lstat(path)
             if (cur.st_ino, cur.st_dev) != (opened.st_ino, opened.st_dev):
                 return
         os.remove(path)
+    except FileNotFoundError:
+        pass
     except OSError:
         return
+    remove_state_file(path)
     parent = os.path.dirname(os.path.abspath(path))
     if os.path.basename(parent).startswith("skein-mon-"):
         try:
@@ -332,8 +340,8 @@ def stop_action(reason, issue):
                 "stopped. Do nothing: the monitor is already running." % issue)
     if reason == "stopped":
         return ("The monitor for issue %s was stopped by a signal. Run the same bootstrap again to "
-                "resume; its token stays valid until the renewal window runs out. Notifications from "
-                "the break are not delivered — check the issue with skein_show(id=\"%s\")." % (issue, issue))
+                "resume from where it stopped; its token stays valid until the renewal window runs "
+                "out." % issue)
     return ("The monitor for issue %s hit an unexpected error. Run the same bootstrap again; if it "
             "happens again, mint a new monitor with %s." % (issue, mint))
 
@@ -502,12 +510,29 @@ def failure_backoff(backoff):
     return min(max(backoff, float(POLL_INTERVAL_SEC)) * 2, float(BACKOFF_CEILING_SEC))
 
 
-def work(executor, base, token, issue, exclude_session):
+def work(executor, base, token, issue, exclude_session, token_file):
     """The polling loop. Never returns: it ends by raising Stop."""
     emit({"event": "monitor_started", "issue": issue,
           "pollIntervalSec": POLL_INTERVAL_SEC})
 
-    cursor = None
+    # A restart with the same token file resumes from the saved cursor; a
+    # new token (no state) starts live.
+    cursor = load_cursor(token_file)
+    state_failed = [False]
+
+    def persist(value):
+        # The cursor is saved only after its page was printed. A state that
+        # cannot be written costs the resume after a restart, not the run:
+        # say so once and go on.
+        try:
+            save_cursor(token_file, value)
+            state_failed[0] = False
+        except (OSError, PlatformRefusal) as exc:
+            if not state_failed[0]:
+                log_stderr("monitor runner: cannot save the poll cursor (%s); a restart will "
+                           "start from now" % exc)
+            state_failed[0] = True
+
     seen = set()
     seen_order = []
     backoff = float(POLL_INTERVAL_SEC)
@@ -548,15 +573,18 @@ def work(executor, base, token, issue, exclude_session):
                 raise Stop("root_closed", delete_token=True)
             # Advance the watermark cursor to whatever the server returned.
             nxt = payload.get("cursor")
-            if isinstance(nxt, dict):
+            if isinstance(nxt, dict) and nxt != cursor:
                 cursor = nxt
+                persist(cursor)
             if new_count > 0:
                 # Active dialog → reset to the base cadence.
                 backoff = float(POLL_INTERVAL_SEC)
             else:
                 # Quiet but healthy → grow the sleep toward the ceiling.
                 backoff = min(backoff + POLL_INTERVAL_SEC, float(BACKOFF_CEILING_SEC))
-            time.sleep(jitter(backoff))
+            # At most one page per poll interval: a tail waiting after a
+            # restart comes no faster than ordinary polling.
+            time.sleep(max(jitter(backoff), float(POLL_INTERVAL_SEC)))
             continue
 
         if status == 401:
@@ -572,6 +600,7 @@ def work(executor, base, token, issue, exclude_session):
             # notifications between the last accepted cursor and now may
             # be lost. Not part of a failure run — the next poll is fresh.
             cursor = None
+            persist(None)
             emit({"event": "degraded", "cause": "cursor_reset", "issue": issue,
                   "action": "The server rejected this monitor's poll cursor, so the monitor "
                             "restarted from now: notifications since its last successful poll "
@@ -627,7 +656,7 @@ def run():
         # lock_fd holds the one-runner lock for as long as the runner works;
         # it is released only when run() ends (or the process dies).
         lock_fd, token = open_token(token_file)
-        work(executor, base, token, issue, exclude_session)
+        work(executor, base, token, issue, exclude_session, token_file)
     except Stop as stop:
         outcome = stop
     except StopSignal:

@@ -245,9 +245,9 @@ or pair on an issue, or after posting a blocking question as a comment.
    the process was killed); `duplicate` → a runner already serves this
    token file, do nothing; `closed` with `token_expired` (`status: 401`)
    → mint a new monitor; `visibility_lost` (`status: 403`) → you lost
-   the project, not the token: do not re-mint in a loop. It is
-   live-start (no backlog); it
-   ends with `root_closed` when the ROOT task closes;
+   the project, not the token: do not re-mint in a loop. A new monitor
+   is live-start (no backlog); the same `bootstrap` resumes from its
+   saved cursor. It ends with `root_closed` when the ROOT task closes;
    `skein_watchers(action="monitor_stop", monitorId)` ends it early.
 3. **Self-skip by `actorSessionId`.** Your own events come back down the
    stream. Compare `notification.actorSessionId` with your current

@@ -182,6 +182,15 @@ func wholeSecondsAtLeastOne(d time.Duration) int {
 // @Description  failing run longer than the stall threshold and one
 // @Description  `recovered` line on the first success after it (both
 // @Description  non-terminal; `degraded` names its cause in `cause`).
+// @Description  The poll cursor is saved next to the token file (state.json)
+// @Description  after every printed page: the first run of a new token is
+// @Description  live-start, a restart with the same token file resumes from
+// @Description  the saved cursor, at most one page per poll interval. The
+// @Description  state file shares the token file's fate below. The loader
+// @Description  names its mode to the body (`_SKEIN_LOADER_MODE`, `legacy`
+// @Description  or `client`; none means `legacy`); in `legacy` mode no
+// @Description  environment variable of the agent's machine changes the
+// @Description  runner.
 // @Description
 // @Description  Stop protocol (sk-579 US-3): every controlled stop prints
 // @Description  exactly one last stdout line `{event, reason, action[, status]}`

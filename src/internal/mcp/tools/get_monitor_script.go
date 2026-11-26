@@ -515,7 +515,7 @@ const monitorUsageRun = "Run `bootstrap` via the Claude Code Monitor tool (not `
 	"maximum `timeout_ms`, so the runner's stdout JSON lines stream into your context. When " +
 	"that Monitor ends (its `timeout_ms` ran out, or the runner stopped with event \"paused\"), " +
 	"run the same `bootstrap` again: the token file stays in place and the token is valid until " +
-	"the renewal window runs out; notifications from the break are not delivered. Every stop " +
+	"the renewal window runs out, and the runner resumes from where it stopped. Every stop " +
 	"prints one final JSON line {event, reason, action} — follow its `action`. A \"degraded\" " +
 	"line means the runner is retrying on its own: do not restart it. Reply to comments with " +
 	"skein_comment as usual."
