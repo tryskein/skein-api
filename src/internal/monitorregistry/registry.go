@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"reflect"
 )
 
 //go:embed registry.json
@@ -484,10 +485,14 @@ type Shells struct {
 	Names  []string `json:"names"`
 }
 
-// Load parses a registry document strictly (unknown fields and trailing
-// data are errors) and validates it. Any problem is returned as
+// Load parses a registry document strictly (unknown fields, keys that match
+// a field only up to case, repeated keys and trailing data are errors) and
+// validates it. Any problem is returned as
 // ValidationErrors; the registry is returned only when it is valid.
 func Load(doc []byte) (*Registry, error) {
+	if err := checkStrictJSON(doc, reflect.TypeOf(Registry{})); err != nil {
+		return nil, ValidationErrors{{Rule: RuleMalformed, Path: "$", Detail: err.Error()}}
+	}
 	dec := json.NewDecoder(bytes.NewReader(doc))
 	dec.DisallowUnknownFields()
 	var reg Registry

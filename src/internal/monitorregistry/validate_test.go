@@ -3,6 +3,7 @@ package monitorregistry
 import (
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -187,6 +188,33 @@ func TestLoad(t *testing.T) {
 			if rules := rulesOf(t, err); len(rules) != 1 || rules[0] != RuleMalformed {
 				t.Fatalf("Load(%q) = %v, want %s", doc, err, RuleMalformed)
 			}
+		}
+	})
+	t.Run("case and repeated keys", func(t *testing.T) {
+		doc, err := json.Marshal(validRegistry())
+		if err != nil {
+			t.Fatal(err)
+		}
+		valid := string(doc)
+		for name, bad := range map[string]string{
+			"top-level key in another case": strings.Replace(valid, `"schemaVersion":1`, `"SchemaVersion":1`, 1),
+			"nested key in another case":    strings.Replace(valid, `"about":"fixture agent"`, `"About":"fixture agent"`, 1),
+			"repeated top-level key":        strings.Replace(valid, `"schemaVersion":1`, `"schemaVersion":1,"schemaVersion":1`, 1),
+			"repeated key of a map":         strings.Replace(valid, `"alpha-engine":"alpha"`, `"alpha-engine":"alpha","alpha-engine":"alpha"`, 1),
+		} {
+			if bad == valid {
+				t.Fatalf("%s: the replacement did not apply", name)
+			}
+			_, err := Load([]byte(bad))
+			if err == nil {
+				t.Fatalf("%s: Load accepted the document", name)
+			}
+			if rules := rulesOf(t, err); len(rules) != 1 || rules[0] != RuleMalformed {
+				t.Fatalf("%s: Load = %v, want %s", name, err, RuleMalformed)
+			}
+		}
+		if _, err := Load(doc); err != nil {
+			t.Fatalf("the unaltered document does not load: %v", err)
 		}
 	})
 	t.Run("invalid document runs into Validate", func(t *testing.T) {
