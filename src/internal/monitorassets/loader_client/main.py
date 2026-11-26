@@ -70,6 +70,14 @@ def loader_client_trusted(token_file):
     return stat.S_ISREG(st.st_mode) and token_file_private(starter, st)
 
 
+def loader_client_ours(path):
+    """The token file is ours (looked at, not opened)."""
+    try:
+        return hasattr(os, "getuid") and os.lstat(path).st_uid == os.getuid()
+    except OSError:
+        return False
+
+
 def loader_client_read_token(path):
     """Read the token by the token predicate. Nothing is deleted here: a
     stop that deletes takes the one-runner lock first. Raises Stop."""
@@ -188,7 +196,8 @@ def loader_client_main():
             if not token_file or not base or not want:
                 raise Stop("misconfigured", delete_token=bool(token_file))
             if not loader_client_trusted(token_file):
-                raise Stop("token_file_insecure")
+                # Not read; a token of ours is burnt and goes under the lock.
+                raise Stop("token_file_insecure", delete_token=loader_client_ours(token_file))
             token = loader_client_read_token(token_file)
             body = loader_client_download(base, token, want)
         except Stop as stop:
