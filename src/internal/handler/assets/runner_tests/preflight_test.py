@@ -86,7 +86,7 @@ class FakeDetector(RUNNER.Detector):
     """Hands the preflight the hosts, blind channels and launching host it is
     given; on_hosts runs while the preflight asks for hosts."""
 
-    def __init__(self, hosts=(), blind=(), under=None, on_hosts=None, bound=None):
+    def __init__(self, hosts=(), blind=(), under=None, on_hosts=None, bound=None, panes=None):
         RUNNER.Detector.__init__(self)
         self._hosts = list(hosts)
         self._blind = list(blind)
@@ -95,6 +95,7 @@ class FakeDetector(RUNNER.Detector):
         # Blind channels whose pane binding is confirmed: those it finds,
         # unless told otherwise.
         self._bound = list(blind if bound is None else bound)
+        self._panes = panes or {}
 
     def under_host(self, ctx):
         return self._under
@@ -110,7 +111,7 @@ class FakeDetector(RUNNER.Detector):
     def binding(self, ctx, channel_id):
         if channel_id not in self._bound:
             return None
-        return RUNNER.Binding(ctx.registry.channel(channel_id), True)
+        return RUNNER.Binding(ctx.registry.channel(channel_id), True, pane=self._panes.get(channel_id))
 
 
 def placement(client="alpha"):
@@ -346,6 +347,23 @@ class PreflightLineTest(unittest.TestCase):
         self.assertEqual(taken, [True])
         # The working start after the preflight takes it itself.
         RUNNER.PosixPlatform.acquire_runner_lock(self.box.token, 0, env).release()
+
+    def test_the_pane_binding_of_a_blind_channel_is_saved(self):
+        # "Addressee and check" p. 3: the working runner checks the agent
+        # process in the pane against the binding the preflight confirmed.
+        pane = {"server": "/tmp/tmux-1000/default", "session": "$1", "pane": "%3",
+                "pid": 4242, "start": "1732600000.25"}
+        env = self.box.env(ALPHA_STREAM=None, OWN_Q_ID=None, CFG_DIR=None)
+        line = self.run_preflight(env, FakeDetector(blind=["blind-1"], panes={"blind-1": pane}))
+        self.assertEqual((line["method"], line["channel"]), ("detached", "blind-1"))
+        with open(self.box.preflight_file()) as fh:
+            saved = json.load(fh)
+        self.assertEqual(saved["binding"], {"channel": "blind-1", "multiplexer": False, "depth": None,
+                                            "pane": pane})
+        # No blind channel chosen: no binding.
+        self.run_preflight()
+        with open(self.box.preflight_file()) as fh:
+            self.assertIsNone(json.load(fh)["binding"])
 
     def test_directory_without_write_is_named(self):
         with self.subTest(directory="journal"):

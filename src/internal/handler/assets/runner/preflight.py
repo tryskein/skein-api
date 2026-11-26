@@ -547,6 +547,17 @@ def _identity_doc(identity):
     }
 
 
+def _binding_doc(binding):
+    """The confirmed binding of a chosen blind channel as preflight.json
+    keeps it: the working runner checks the addressee against it before each
+    delivery (the server and session of the multiplexer, the pane id, the PID
+    and start of the agent process in the pane)."""
+    if binding is None:
+        return None
+    return {"channel": binding.channel["id"], "multiplexer": bool(binding.multiplexer),
+            "depth": binding.depth, "pane": dict(binding.pane)}
+
+
 def system_placement(registry, record):
     try:
         chain = ancestry(SystemProcesses, os.getpid())
@@ -574,8 +585,10 @@ def preflight(token_file, env, registry, settings, detector=None, prober=None, p
     warnings = [w for w in settings.warnings if w not in record_warnings] + list(detector.warnings)
     if not external:
         warnings.append("The ledger directory is not writable: no external channel is used.")
+    binding = None
     if choice.channel is not None and registry.is_blind(choice.channel):
         warnings.append(BLIND_WARNING)
+        binding = _binding_doc(detector.binding(ctx, choice.channel))
     try:
         with StateLock(token_file):
             if runner_alive(token_file, env):
@@ -594,6 +607,7 @@ def preflight(token_file, env, registry, settings, detector=None, prober=None, p
                 "overrides": {"SKEIN_MONITOR_CHANNEL": settings.channel,
                               "SKEIN_MONITOR_BLIND": BLIND_OFF if settings.blind_off else None},
                 "identity": _identity_doc(ctx.identity),
+                "binding": binding,
             })
     except (PlatformRefusal, OSError) as exc:
         raise ConfigInvalid(os.path.dirname(os.path.abspath(token_file)),
