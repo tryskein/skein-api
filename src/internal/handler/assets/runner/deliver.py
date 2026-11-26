@@ -145,6 +145,8 @@ class Guard(object):
         # Set when before_commit found another or an ended addressee.
         self.changed = False
         self.gone = False
+        # Set once the text may be handed to the channel (every check held).
+        self.handed = False
 
     def remaining(self):
         """The time left of the attempt's deadline; RefusedBeforeSend when
@@ -165,13 +167,16 @@ class Guard(object):
 
     def before_send(self):
         self.boundary()
+        # Counted first: a refusal of the checks below spends the budget of
+        # INV-8 like a refusal of the channel.
+        self.count_call()
         self.pipeline.check_addressee(self.channel, self.remaining())
         self.pipeline.wait_idle(self.channel, self.remaining())
         # Right before the hand-over: a stop or a stale poll that came
         # during the checks and the wait still wins.
         self.boundary()
         self.remaining()
-        self.count_call()
+        self.handed = True
 
     def count_call(self):
         self.attempt.note_call()
@@ -595,7 +600,6 @@ class DeliverySink(object):
         text, _, _ = plain_batch(batch, self.exclude_file, limit, unit)
         guard = Guard(self, channel, attempt, timeout)
         driver = self.drivers.get(channel_id) or ArgvDriver(channel, self.executor)
-        calls_before = attempt.calls
         try:
             try:
                 outcome, sign = driver.send(text, guard)
@@ -624,8 +628,8 @@ class DeliverySink(object):
                 # receipt never comes before this outcome.
                 if isinstance(exc, (LedgerUnavailable, JournalUnavailable)):
                     raise
-                if attempt.calls == calls_before:
-                    # Before the call was counted: nothing was handed over.
+                if not guard.handed:
+                    # Before the hand-over: nothing reached the channel.
                     self._ledger_step(attempt.abandon)
                     raise
                 self._ledger_step(attempt.finish, OUTCOME_UNKNOWN)
