@@ -359,7 +359,7 @@ def work(executor, base, token, issue, exclude_session, token_file, sink=None, r
         status, payload, retry_after = poll_once(executor, base, token, cursor, exclude_session,
                                                  POLL_PAGE_LIMIT if root is not None else None)
 
-        if status == 200 and isinstance(payload, dict) and isinstance(payload.get("notifications") or [], list):
+        if status == 200 and poll_page_ok(payload):
             if root is not None:
                 root.received(cursor, payload.get("notifications") or [], payload.get("rootClosed") is True)
             if hasattr(sink, "note_poll_ok"):

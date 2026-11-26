@@ -51,8 +51,9 @@ _ACCESS_STOPS = {401: "token_expired", 403: "visibility_lost"}
 
 def poll_page_ok(payload):
     """Whether a 200 answer of the poll is a page (what the working loop
-    takes): a successful poll for the access boundary only then."""
-    return isinstance(payload, dict) and isinstance(payload.get("notifications") or [], list)
+    takes): a dict whose notifications is a list. A successful poll for the
+    access boundary only then; any other 200 is a failed poll."""
+    return isinstance(payload, dict) and isinstance(payload.get("notifications"), list)
 
 
 class PollCancel(object):

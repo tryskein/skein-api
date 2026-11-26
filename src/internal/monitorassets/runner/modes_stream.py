@@ -463,7 +463,7 @@ def run_stream_loop(executor, base, token, issue, exclusion, token_file, doc, ou
         if tails is not None:
             tails.maybe()
         status, payload, retry_after = poll_once(executor, base, token, cursor, exclude_session, POLL_PAGE_LIMIT)
-        if status == 200 and isinstance(payload, dict) and isinstance(payload.get("notifications") or [], list):
+        if status == 200 and poll_page_ok(payload):
             if series_degraded:
                 output.lifecycle({"event": "recovered", "issue": issue,
                                   "failedForSec": int(time.monotonic() - series_started)})
