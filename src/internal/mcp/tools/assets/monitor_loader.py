@@ -1,6 +1,6 @@
 import signal
 
-_SKEIN_LOADER_MODE = "legacy"
+globals().setdefault("_SKEIN_LOADER_MODE", "legacy")
 
 
 class _SkeinLoaderSignal(BaseException):
