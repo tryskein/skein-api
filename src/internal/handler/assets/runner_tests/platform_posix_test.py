@@ -55,7 +55,10 @@ def _write(path, text, mode):
     os.chmod(path, mode)
 
 
-@unittest.skipUnless(os.name == "posix", "the POSIX platform layer")
+# The I/O counter of sitecustomize.py names an open relative to a directory
+# descriptor through /proc/self/fd, which only Linux has.
+@unittest.skipUnless(sys.platform.startswith("linux"),
+                     "the I/O counter resolves directory-relative opens through /proc/self/fd")
 class CheckedReadTest(unittest.TestCase):
     """Matrix row #22: what is checked is what is read; another user's or an
     open file is not read."""
