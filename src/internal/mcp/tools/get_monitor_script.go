@@ -46,8 +46,8 @@ var defaultMonitorEventTypes = []string{"comment.created", "issue.closed"}
 
 // RegisterGetMonitorScript wires the skein_get_monitor_script tool (sk-142.7):
 // one call subscribes the caller to an issue (optionally its subtree), mints a
-// scoped short-lived skm_ monitor token, and returns a ready-to-run bootstrap
-// command that streams new notifications into the agent's context.
+// scoped short-lived skm_ monitor token, and returns the command that starts
+// the runner: `bootstrap` without `client`, `preflight` with it.
 //
 // The token is returned in a separate result field with an instruction to
 // write it to a file in a private (0700) directory that the `prepare` command
@@ -84,9 +84,10 @@ func RegisterGetMonitorScript(s *server.MCPServer, pool *pgxpool.Pool, notifStor
 				"check (the renewal window, configurable on the server) and "+
 				"never lives past "+formatMonitorWindow(monitorcreds.MaxLifetime)+
 				" after minting; (3) returns `monitorId` (the handle to stop this "+
-				"monitor) and a ready-to-run bootstrap command that streams new "+
-				"notifications (new comments AND task closure by default) into "+
-				"your context near-real-time via an autonomous Python runner. "+
+				"monitor) and the command that starts an autonomous Python runner: "+
+				"`bootstrap` without `client`, `preflight` with it (preflight picks "+
+				"how the runner reaches you). It delivers new notifications (new "+
+				"comments AND task closure by default) near-real-time. "+
 				"The runner keeps retrying through server or network trouble and "+
 				"stops by itself when the issue is closed.\n\n"+
 				"SECURITY: the token is returned in the `token` field, NOT in a "+
