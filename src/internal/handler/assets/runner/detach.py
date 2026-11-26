@@ -435,7 +435,7 @@ def run_client():
             doc = check_start(token_file, env, settings)
             if doc["method"] in (METHOD_DETACHED, METHOD_JOURNAL):
                 return start_detached(token_file, issue)
-            return run_foreground(token_file, issue, env, settings)
+            return run_foreground(token_file, issue, env, settings, doc)
         except ConfigInvalid as exc:
             raise Stop("config_invalid", detail="%s (%s)" % (exc.variable, exc.detail))
     except Stop as stop:
@@ -446,10 +446,12 @@ def run_client():
         _stopping = True
         log_stderr("monitor runner: unexpected error\n" + traceback.format_exc())
         outcome = Stop("internal_error")
-    return finish(outcome, issue, token_file)
+    # A stream or exit-on-event result keeps its stop line within its line
+    # limit even when the start failed before the result was checked.
+    return finish(outcome, issue, token_file, write=limited_write(load_preflight(token_file) if token_file else None))
 
 
-def run_foreground(token_file, issue, env, settings):
+def run_foreground(token_file, issue, env, settings, doc=None):
     """stream and exit-on-event: the same lock order in this process, then
     the poll loop on stdout within the limits of the record's method (the
     modes_stream part). Returns the exit code."""
@@ -480,7 +482,9 @@ def run_foreground(token_file, issue, env, settings):
     finally:
         executor.stop()
     try:
-        write = output.stop_line if output is not None else None
+        # Before its output exists (a refused begin) the stop line keeps to
+        # the line limit of the result the synchronous check read.
+        write = output.stop_line if output is not None else limited_write(held.doc or doc)
         if held.lock is None:
             return finish(outcome, issue, token_file, write=write)
         # P-12 under the one-runner lock, released last.

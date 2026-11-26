@@ -429,6 +429,50 @@ class ExitOnEventTest(unittest.TestCase):
         self.assertEqual(got, [([1, 2], "delivered"), ([3, 4], "root_closed")])
 
 
+class ReservedSlotTest(unittest.TestCase):
+    """Review finding 4 of wave 6: the room an exit-on-event batch keeps is
+    that of the longest stop line that may take it, and a line written there
+    is checked against the batch it joins."""
+
+    LIMITS = {"line": {"max": 400, "unit": "chars"}, "batch": {"max": 1000, "unit": "chars"},
+              "rate": {"burst": 1, "intervalSec": 5}}
+
+    def groups(self, out):
+        """The writes joined into batches: a write at the time of the one
+        before it took no turn of its own (the rate gives every turn 5 s)."""
+        groups = []
+        for t, text in out.writes:
+            if groups and groups[-1][0] == t:
+                groups[-1][1].append(text)
+            else:
+                groups.append((t, [text]))
+        return [texts for _, texts in groups]
+
+    def test_root_closed_takes_the_room_of_the_batch_within_its_limit(self):
+        box = Box(self)
+        clock = FakeClock()
+        out = Out(clock)
+        closing = page([1, 2], 2, root_closed=True)
+        for n in closing["notifications"]:
+            n["bodyPreview"] = "p" * 120
+        stop, _ = box.cycle(FakeExecutor([closing]), box.output(self.LIMITS, "exit-on-event", clock=clock,
+                                                                out=out), "exit-on-event")
+        self.assertEqual(stop.reason, "root_closed")
+        last = self.groups(out)[-1]
+        self.assertEqual(json.loads(last[-1])["reason"], "root_closed", "the stop line took a turn of its own")
+        self.assertLessEqual(sum(size(t) for t in last), 1000)
+
+    def test_a_line_longer_than_the_room_takes_a_turn_of_its_own(self):
+        box = Box(self)
+        clock = FakeClock()
+        out = Out(clock)
+        output = box.output(self.LIMITS, "exit-on-event", clock=clock, out=out)
+        output.batch(["x" * 950], reserve=True)
+        output.lifecycle({"event": "degraded", "cause": "poll_failing", "issue": ISSUE, "action": "y" * 300})
+        self.assertEqual(len(self.groups(out)), 2)
+        self.assertGreaterEqual(out.writes[1][0] - out.writes[0][0], 5 - 1e-6)
+
+
 class WindowModelTest(unittest.TestCase):
     """Matrix row #42 (the window model of a harness, US-10 pace), fake
     clock, a synthetic record."""

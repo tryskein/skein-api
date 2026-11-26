@@ -13,6 +13,7 @@ Standard library of Python 3.6 only.
 """
 
 import base64
+import io
 import json
 import os
 import shutil
@@ -34,7 +35,8 @@ REGISTRY = {
     "general": {"about": "general", "source": "test", "warnings": [GENERAL_WARNING]},
     "agents": [
         {"id": "streamer", "process": {"executables": ["streamer"]}, "methods": [
-            {"kind": "stream", "conditions": {}, "instruction": "INSTR-stream"}]},
+            {"kind": "stream", "conditions": {}, "instruction": "INSTR-stream",
+             "limits": {"line": {"max": 300, "unit": "chars"}}}]},
     ],
     "channels": [],
     "shells": {"source": "test", "names": ["sh", "bash"]},
@@ -116,13 +118,18 @@ class Box(object):
             self.pids.append(pid)
             return pid, receipt
 
+        out = io.StringIO()
         with mock.patch.dict(os.environ, env, clear=True), \
                 mock.patch.object(RUNNER, "LOADER_MODE", "client"), \
                 mock.patch.object(RUNNER, "_skein_loader_body", BODY, create=True), \
                 mock.patch.object(RUNNER.PosixPlatform, "spawn_detached", staticmethod(spy)), \
-                mock.patch.object(RUNNER, "emit", lines.append):
+                mock.patch.object(RUNNER, "emit", lines.append), \
+                mock.patch("sys.stdout", out):
             code = RUNNER.run()
-        return code, lines
+        # Lines written as text (the output of a foreground method) follow
+        # the ones emitted as objects.
+        self.text_lines = [l for l in out.getvalue().splitlines() if l]
+        return code, lines + [json.loads(l) for l in self.text_lines]
 
     def lock_busy(self):
         """Whether a process holds the one-runner lock of the token."""
@@ -357,6 +364,33 @@ class JournalMethodTest(unittest.TestCase):
                          'skein_get_monitor_script(id="%s").' % (ISSUE, ISSUE))
         self.assertFalse(os.path.exists(box.token), "the token of a broken bootstrap was kept")
         self.assertEqual(box.pids, [])
+
+
+@unittest.skipUnless(sys.platform.startswith("linux"), "the POSIX flock")
+class ForegroundStopLineTest(unittest.TestCase):
+    """Review finding 4 of wave 6: the stop line of a foreground start that
+    fails before its output exists keeps to the record's line limit (US-10
+    "Service lines within the limit": oh-my-pi, 400 characters, an issue id
+    of 1000)."""
+
+    def test_already_running_of_a_stream_result_keeps_to_the_line_limit(self):
+        box = Box(self)
+        pre = box.preflight(SKEIN_CLIENT="streamer")
+        self.assertEqual(pre["method"], "stream")
+        held = RUNNER.PosixPlatform.acquire_runner_lock(box.token, 0, box.env())
+        self.addCleanup(held.release)
+        code, lines = box.start(pre["preflightId"], SKEIN_CLIENT="streamer", SKEIN_ISSUE="x" * 1000)
+        one_stop(self, code, lines, "already_running", 0)
+        (text,) = box.text_lines
+        self.assertLessEqual(len(text), 300)
+
+    def test_a_refused_check_of_a_stream_result_keeps_to_the_line_limit(self):
+        box = Box(self)
+        pre = box.preflight(SKEIN_CLIENT="streamer")
+        code, lines = box.start(pre["preflightId"] + 1, SKEIN_CLIENT="streamer", SKEIN_ISSUE="x" * 1000)
+        one_stop(self, code, lines, "config_invalid", 1)
+        (text,) = box.text_lines
+        self.assertLessEqual(len(text), 300)
 
 
 @unittest.skipUnless(sys.platform.startswith("linux"), "the POSIX flock")

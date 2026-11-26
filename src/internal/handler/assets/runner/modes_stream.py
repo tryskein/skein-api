@@ -166,8 +166,10 @@ class StreamOutput(object):
         self.out = out
         self.pacer = pacer or Pacer(limits)
         # A line reserved in the batch just written (the stop line of an
-        # exit-on-event cycle): it is written without a turn of its own.
+        # exit-on-event cycle): it is written without a turn of its own, when
+        # it still fits that batch.
         self.reserved = False
+        self.last_batch = []
         # When the journal stopped taking lines (the pacer's clock), or None.
         self._journal_failed_at = None
 
@@ -182,6 +184,7 @@ class StreamOutput(object):
         self.pacer.wait_turn()
         self._write(texts)
         self.reserved = reserve
+        self.last_batch = list(texts)
 
     def line(self, obj):
         """A service line within the line limit, or None when not even its
@@ -198,11 +201,23 @@ class StreamOutput(object):
         text = self.line(obj)
         if text is None:
             return
-        if self.reserved:
+        if self.reserved and self.limits.fits(self.last_batch + [text]):
+            # The line the batch kept room for: no turn of its own.
             self.reserved = False
+            self.last_batch.append(text)
             self._write([text])
         else:
+            # Not reserved, or longer than the room kept: a batch of its own.
             self.batch([text])
+
+    def longest_line(self, objs):
+        """The longest, in the unit of the batch limit, of the service lines
+        of objs within the line limit (None for none)."""
+        texts = [t for t in (self.line(o) for o in objs or []) if t is not None]
+        if not texts:
+            return None
+        return max(texts, key=lambda t: self.limits.batch_size([t]) if self.limits.batch_unit not in _COUNT_UNITS
+                   else measure(t, UNIT_BYTES))
 
     def event_text(self, n):
         """(text, status) of an event: its line, or the stand-in of an event
@@ -281,10 +296,11 @@ class StreamOutput(object):
         self.lifecycle(line)
 
 
-def print_events(output, events, exit_on_event, delivered):
+def print_events(output, events, exit_on_event, stop_lines):
     """Print the events (each with its text from output.event_text) in
-    batches. exit_on_event prints one batch, with room for the delivered
-    stop line, and leaves the rest. Returns the events that got an outcome
+    batches. exit_on_event prints one batch, with room for the longest of
+    stop_lines (the stop lines that may end the cycle right after it), and
+    leaves the rest. Returns the events that got an outcome
     (printed or unfit), in order. An unfit event gets its outcome only when
     the journal takes its record, before its stand-in is printed; one the
     journal refuses has none and is neither printed nor returned (it waits
@@ -300,7 +316,7 @@ def print_events(output, events, exit_on_event, delivered):
                 done.append(n)
             continue
         pending.append((n, text, status))
-    reserve = output.line(delivered) if exit_on_event else None
+    reserve = output.longest_line(stop_lines) if exit_on_event else None
     while pending:
         texts = [t for _, t, _ in pending]
         k = output.take(texts, reserve)
@@ -331,8 +347,10 @@ def run_stream_loop(executor, base, token, issue, exclude_session, token_file, d
     """The poll loop of a stream or exit-on-event monitor. Never returns: it
     ends by raising Stop (delivered ends each exit-on-event cycle)."""
     exit_on_event = doc.get("method") == METHOD_EXIT_ON_EVENT
-    delivered = {"event": STOPS["delivered"][0], "reason": "delivered",
-                 "action": stop_action("delivered", issue, doc["preflightId"])}
+    # The stop lines that may follow the batch of an exit-on-event cycle at
+    # once: the batch keeps room for the longest.
+    slot_lines = [cycle_stop_line(reason, issue, doc["preflightId"])
+                  for reason in ("delivered", "root_closed", "stopped", "internal_error")]
     cursor = load_cursor(token_file)
 
     def hold(save, *args):
@@ -353,7 +371,7 @@ def run_stream_loop(executor, base, token, issue, exclude_session, token_file, d
             printed_before = set(load_printed(token_file, cursor)) if exit_on_event else set()
             events = [n for n in payload.get("notifications") or []
                       if not isinstance(n, dict) or (n.get("id") not in seen and n.get("id") not in printed_before)]
-            done = print_events(output, events, exit_on_event, delivered)
+            done = print_events(output, events, exit_on_event, slot_lines)
             for n in done:
                 if isinstance(n, dict) and n.get("id") is not None:
                     seen.add(n.get("id"))
@@ -413,6 +431,29 @@ def run_stream_loop(executor, base, token, issue, exclude_session, token_file, d
             continue
         backoff = failure_backoff(backoff)
         time.sleep(jitter(backoff))
+
+
+def cycle_stop_line(reason, issue, preflight):
+    """The stop line finish() prints for reason in a client-mode cycle of
+    preflight result `preflight`."""
+    return {"event": STOPS[reason][0], "reason": reason,
+            "action": stop_action(reason, issue, preflight if reason == "delivered" else None, preflight)}
+
+
+def limited_write(doc):
+    """The writer of a stop line that keeps to the line limit of a stream or
+    exit-on-event result doc (its start failed before its output existed);
+    None for another method or no result: the line is printed as it is."""
+    if not isinstance(doc, dict) or doc.get("method") not in (METHOD_STREAM, METHOD_EXIT_ON_EVENT):
+        return None
+    limits = StreamLimits(doc.get("limits"))
+
+    def write(line):
+        text = lifecycle_line(line, limits.line_max, limits.line_unit)
+        if text is not None:
+            sys.stdout.write(text + "\n")
+            sys.stdout.flush()
+    return write
 
 
 def _save_or_hold(save, token_file, args, output, executor, base, token, cursor, exclude_session, issue):
