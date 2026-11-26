@@ -302,7 +302,9 @@ class Attempt(object):
                 # series has now: the delivery that makes a series already
                 # gives the long window.
                 until = now + _window_len(entry, now)
-                if until > (window.get("until") or 0):
+                if window.get("attempt") == self.key or until > (window.get("until") or 0):
+                    # This attempt's window is set anew (a series that ended
+                    # with it shortens it); another's is only lengthened.
                     entry["window"] = {"until": until}
         self.ledger._change(change)
         return result.get("burst", False)
