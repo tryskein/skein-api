@@ -16,4 +16,5 @@ overrides.py
 proctree.py
 identity.py
 preflight.py
+detect.py
 core.py

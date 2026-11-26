@@ -28,8 +28,8 @@
 # Two boundaries are objects: the Detector (hosts of steps 5-6, blind
 # channels of step 7, the host an agent runs under and the address specs of
 # the identity) and the ProbeRunner (runs one probe of a channel). The ones
-# here find nothing and run no probe: the detection and the probe executors
-# plug in through them.
+# here find nothing and run no probe; the registry detector (detect.py) is
+# the preflight's default, the probe executors plug in through ProbeRunner.
 
 import json
 import os
@@ -501,7 +501,7 @@ def preflight(token_file, env, registry, settings, detector=None, prober=None, p
     (already_running) with a live runner of the token."""
     if sys.version_info < MIN_PYTHON:
         raise ConfigInvalid("python3", "Python %d.%d or newer is needed" % MIN_PYTHON)
-    detector = detector or Detector()
+    detector = detector or RegistryDetector()
     prober = prober or ProbeRunner()
     journal, external = check_sandbox(token_file, env)
     if placement is None:
@@ -512,6 +512,8 @@ def preflight(token_file, env, registry, settings, detector=None, prober=None, p
     warnings = list(settings.warnings) + list(detector.warnings)
     if not external:
         warnings.append("The ledger directory is not writable: no external channel is used.")
+    if choice.channel is not None and registry.is_blind(choice.channel):
+        warnings.append(BLIND_WARNING)
     try:
         with StateLock(token_file):
             if runner_alive(token_file, env):
