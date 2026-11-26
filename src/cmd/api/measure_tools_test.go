@@ -510,14 +510,6 @@ def kill_left():
             pass
 atexit.register(kill_left)
 
-def gone(pid, sec):
-    deadline = time.monotonic() + sec
-    while time.monotonic() < deadline:
-        if pid not in runners():
-            return True
-        time.sleep(0.05)
-    return False
-
 runner = harness.render_runner().encode("utf-8")
 loader = harness.served_loader().encode("utf-8")
 page = {"notifications": [], "cursor": {"ts": "2026-01-01T00:00:00Z", "id": 0}}
@@ -534,19 +526,34 @@ def run(cmd):
                           timeout=120)
     return done.returncode, [l for l in done.stdout.decode("utf-8").splitlines() if l]
 
+def leaders():
+    """The detached runners of the token: the leaders of their sessions (a
+    runner's request process shares its session)."""
+    out = []
+    for pid in runners():
+        try:
+            if os.getsid(pid) == pid:
+                out.append(pid)
+        except OSError:
+            pass
+    return out
+
 def start(cmd):
     code, lines = run(cmd)
     if code != 0 or len(lines) != 1 or json.loads(lines[0]).get("event") != "monitor_started":
         sys.exit("the working start did not print one monitor_started: code %r, %r" % (code, lines))
-    pids = runners()
+    pids = leaders()
     if len(pids) != 1:
-        sys.exit("the working start left %d runners of the token, not one" % len(pids))
+        sys.exit("the working start left %d detached runners of the token, not one" % len(pids))
     return lines[0], pids[0]
 
 def stop(pid):
     os.kill(pid, signal.SIGTERM)
-    if not gone(pid, 30):
-        sys.exit("the detached runner did not stop")
+    deadline = time.monotonic() + 30
+    while runners():
+        if time.monotonic() > deadline:
+            sys.exit("the detached runner did not stop")
+        time.sleep(0.05)
 
 run_command = R.preflight(token_file, local, registry, R.read_settings(local, registry, mode="client"))["command"]
 first, pid = start(run_command)
