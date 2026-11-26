@@ -175,6 +175,10 @@ func TestValidate_RejectsEachRule(t *testing.T) {
 		{"order of paths on a tcp-reach probe", func(r *Registry) {
 			r.Channels[0].Probes[0] = Probe{Type: ProbeTCPReach, Source: "fixture", Address: "{env:ALPHA_ADDR}", Paths: []string{"~/.alpha"}}
 		}, RuleInvalid},
+		{"shortening on an outcome other than a refusal", func(r *Registry) {
+			r.Channels[0].Outcomes[0].Shorten = true
+		}, RuleInvalid},
+		{"empty text note", func(r *Registry) { r.Channels[1].TextNotes = []string{" "} }, RuleInvalid},
 		{"address read from a variable of a bad name", func(r *Registry) {
 			r.Channels[0].Address = &AddressSpec{Env: "ALPHA_THREAD", Qualifiers: []string{"ALPHA HOME"}}
 		}, RuleInvalid},
@@ -411,5 +415,18 @@ func TestValidate_AcceptsTheCodexReadings(t *testing.T) {
 	r.Agents[0].Methods[1].Conditions.AgentOptionsAbsent = []string{"--remote"}
 	if err := r.Validate(); err != nil {
 		t.Fatalf("a correct record with the Codex readings was refused: %v", err)
+	}
+}
+
+// TestValidate_AcceptsTheZavodReadings — a refusal that shortens the text
+// and the notes every text of a channel carries pass in a correct record.
+func TestValidate_AcceptsTheZavodReadings(t *testing.T) {
+	r := validRegistry()
+	r.Channels[1].Outcomes = append(r.Channels[1].Outcomes,
+		OutcomeRow{Match: Match{ExitCode: intp(11), JSON: map[string]string{"code": "too_large"}}, Outcome: OutcomeRefused, Shorten: true})
+	r.Channels[1].TextNotes = []string{"Do not reply to this letter."}
+	r.Channels[1].Address = &AddressSpec{Env: "HOST_ID", Qualifiers: []string{"HOST_ROOT_PID"}, RootPIDEnv: "HOST_ROOT_PID"}
+	if err := r.Validate(); err != nil {
+		t.Fatalf("a correct record with the Zavod readings was refused: %v", err)
 	}
 }

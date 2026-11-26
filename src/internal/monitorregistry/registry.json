@@ -187,6 +187,147 @@
         ],
         "perProcess": true
       }
+    },
+    {
+      "id": "zavod",
+      "about": "Zavod: the host mails the event to the agent's own address; Zavod waits until the agent is idle and types the letter into its input.",
+      "source": "Zavod CLI documentation (closed): ZAVOD_ME is the agent's address (a UUID equal to ZAVOD_AGENT_ID), ZAVOD_AGENT_ENGINE_ID its engine, ZAVOD_AGENT_ROOT_PID, ZAVOD_AGENT_ROOT_START and ZAVOD_AGENT_ROOT_BOOT_ID the life of its root process; `zavod --json send <address> --text-file -` takes the body on stdin (a text argument is refused) and prints one JSON envelope with the top-level fields exit_code and code (checked with a refused call: exit_code 11, code letter_too_large, 'nothing was accepted'); exit 0 accepted, 10 partial effect, 11 refused (code caller_not_in_roster: the caller's address is no live agent; code letter_too_large: the body is over 65536 bytes), 12 no connection to the daemon (nothing sent), 13 unknown outcome, 14 protocol error; a direct ring types at most 10000 characters (all unread letters with their envelope); `zavod --json version` asks the local daemon without sending anything; Linux containers and POSIX hosts only.",
+      "step": 5,
+      "order": 1,
+      "kind": "terminal",
+      "blind": false,
+      "detect": {
+        "env": [
+          {
+            "name": "ZAVOD_ME",
+            "pattern": "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
+          },
+          {
+            "name": "ZAVOD_AGENT_ID",
+            "pattern": "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
+          }
+        ]
+      },
+      "executor": {
+        "type": "argv",
+        "argv": [
+          "zavod",
+          "--json",
+          "send",
+          "{env:ZAVOD_ME}",
+          "--text-file",
+          "-"
+        ],
+        "feed": "stdin",
+        "timeoutSec": 30
+      },
+      "idle": {
+        "type": "builtin"
+      },
+      "outcomes": [
+        {
+          "match": {
+            "exitCode": 0
+          },
+          "outcome": "queued"
+        },
+        {
+          "match": {
+            "exitCode": 11,
+            "json": {
+              "code": "caller_not_in_roster"
+            }
+          },
+          "outcome": "addressee-gone"
+        },
+        {
+          "match": {
+            "exitCode": 11,
+            "json": {
+              "code": "letter_too_large"
+            }
+          },
+          "outcome": "refused-before-send",
+          "shorten": true
+        },
+        {
+          "match": {
+            "exitCode": 12
+          },
+          "outcome": "refused-before-send"
+        },
+        {
+          "match": {
+            "exitCode": 10
+          },
+          "outcome": "unknown"
+        },
+        {
+          "match": {
+            "exitCode": 13
+          },
+          "outcome": "unknown"
+        },
+        {
+          "match": {
+            "exitCode": 14
+          },
+          "outcome": "unknown"
+        }
+      ],
+      "probes": [
+        {
+          "type": "argv",
+          "source": "Zavod CLI documentation (closed): `zavod version` prints the protocol and version of the CLI and of the local daemon; exit 0 when the daemon answers.",
+          "argv": [
+            "zavod",
+            "--json",
+            "version"
+          ],
+          "results": [
+            {
+              "match": {
+                "exitCode": 0
+              },
+              "result": "available"
+            }
+          ]
+        }
+      ],
+      "addressee": {
+        "process": "alive",
+        "limitation": "After the letter is accepted (exit 0) Zavod rings the pane on its own: an agent recreated under the same address in that interval gets the letter."
+      },
+      "binaries": {
+        "linux": [
+          "zavod"
+        ],
+        "macos": [
+          "zavod"
+        ]
+      },
+      "limits": {
+        "line": {
+          "max": 10000,
+          "unit": "chars"
+        }
+      },
+      "warnings": [
+        "Events come as Zavod letters from your own address. Do not reply to this letter. Do not clear the input field."
+      ],
+      "textNotes": [
+        "Do not reply to this letter.",
+        "Do not clear the input field."
+      ],
+      "address": {
+        "env": "ZAVOD_ME",
+        "qualifiers": [
+          "ZAVOD_AGENT_ROOT_PID",
+          "ZAVOD_AGENT_ROOT_START",
+          "ZAVOD_AGENT_ROOT_BOOT_ID"
+        ],
+        "rootPidEnv": "ZAVOD_AGENT_ROOT_PID"
+      }
     }
   ],
   "shells": {
@@ -208,5 +349,12 @@
       "pwsh.exe"
     ]
   },
-  "zavodEngines": {}
+  "zavodEngines": {
+    "claude": "claude",
+    "kimi": "claude",
+    "zai-claude": "claude",
+    "nkimi": "kimi",
+    "codex": "codex",
+    "grok": "grok"
+  }
 }

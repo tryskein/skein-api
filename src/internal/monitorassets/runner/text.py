@@ -111,28 +111,32 @@ def echo_phrase(exclude_file):
             "session id to the file %s and do not reply." % _quoted(exclude_file))
 
 
-def plain_batch(notifications, exclude_file, limit=None, unit=UNIT_CHARS):
+def plain_batch(notifications, exclude_file, limit=None, unit=UNIT_CHARS, notes=(), minimal=False):
     """The plain text of a batch of events for one delivery: the label
     once, each event's fields, the echo phrase once (INV-17, US-13). The
     batch takes the longest run of the events, in order, that fits the
     limit; only the first event may be cut, the others go whole or wait for
     the next delivery.
 
+    notes are sentences of the channel every text carries after the label;
+    minimal gives every event its minimal form (a channel refused the full
+    one as too long).
+
     Returns (text, count, cut): count is the number of events the text
     carries; (None, 0, False) when even the minimal form of the first event
     does not fit."""
     if not notifications:
         return None, 0, False
-    head = DELIVERY_LABEL + "."
+    head = " ".join([DELIVERY_LABEL + "."] + [clean(n) for n in notes or ()])
     tail = echo_phrase(exclude_file)
     frame = measure(head + " " + " " + tail, unit)
     room = None if limit is None else limit - frame
-    first, cut = _event_part(notifications[0], room, unit)
+    first, cut = _event_part(notifications[0], room, unit, minimal)
     if first is None:
         return None, 0, False
     parts = [first]
     for n in notifications[1:]:
-        part, _ = _event_part(n, None, unit)
+        part, _ = _event_part(n, None, unit, minimal)
         candidate = " ".join([head] + parts + [part, tail])
         if limit is not None and measure(candidate, unit) > limit:
             break
@@ -140,15 +144,15 @@ def plain_batch(notifications, exclude_file, limit=None, unit=UNIT_CHARS):
     return " ".join([head] + parts + [tail]), len(parts), cut
 
 
-def _event_part(notification, limit, unit):
+def _event_part(notification, limit, unit, minimal=False):
     """The fields of one event without the label and the echo phrase,
     within limit: (text, cut), or (None, False) when it does not fit."""
     if limit is not None and limit <= 0:
         return None, False
-    return plain_text(notification, "", limit, unit, framed=False)
+    return plain_text(notification, "", limit, unit, framed=False, minimal=minimal)
 
 
-def plain_text(notification, exclude_file, limit=None, unit=UNIT_CHARS, framed=True):
+def plain_text(notification, exclude_file, limit=None, unit=UNIT_CHARS, framed=True, minimal=False):
     """The plain text of one event for a typed-in channel or a queue, one
     line: the label, type, notification id, issue, author, actorSessionId,
     comment id, the preview within boundaries (or the mark of a deleted
@@ -194,6 +198,15 @@ def plain_text(notification, exclude_file, limit=None, unit=UNIT_CHARS, framed=T
             parts.append(tail)
         return " ".join(parts)
 
+    if minimal:
+        # The minimal form only: the label, the mandatory fields and the
+        # compact mark when anything else was left out.
+        short = " ".join(label + head)
+        if preview is not None or summary or author:
+            short += " " + PLAIN_CUT_MARK
+        if limit is not None and measure(short, unit) > limit:
+            return None, False
+        return short, preview is not None
     full = build(preview, False, True, True)
     if limit is None or measure(full, unit) <= limit:
         return full, False

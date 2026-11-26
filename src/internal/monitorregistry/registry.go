@@ -306,6 +306,10 @@ type Channel struct {
 	Limits *Limits `json:"limits,omitempty"`
 	// Warnings are shown with the instructions when the channel is chosen.
 	Warnings []string `json:"warnings,omitempty"`
+	// TextNotes are sentences every text this channel delivers carries
+	// right after the label, within the channel's limit (what its source
+	// asks the addressee to know of each delivery).
+	TextNotes []string `json:"textNotes,omitempty"`
 	// Address is the address of the addressee in this channel, as the
 	// preflight reads it from the environment of the agent process; it joins
 	// the identity of the addressee (the ledger key and the check before a
@@ -428,6 +432,10 @@ const (
 type OutcomeRow struct {
 	Match   Match  `json:"match"`
 	Outcome string `json:"outcome"`
+	// Shorten marks a refusal before send that the channel gave because the
+	// text is too long: the next call of the same delivery carries the
+	// minimal form of its events. Only a row of OutcomeRefused sets it.
+	Shorten bool `json:"shorten,omitempty"`
 }
 
 // Match is an answer sign. Every given criterion must hold; at least one is

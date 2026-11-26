@@ -362,6 +362,9 @@ func (v *validator) channel(path string, c *Channel) {
 		if !outcomes[row.Outcome] {
 			v.add(RuleUnknownOutcome, fmt.Sprintf("%s.outcomes[%d].outcome", path, i), "%q is not an outcome", row.Outcome)
 		}
+		if row.Shorten && row.Outcome != OutcomeRefused {
+			v.add(RuleInvalid, fmt.Sprintf("%s.outcomes[%d].shorten", path, i), "only a refusal before send shortens the text")
+		}
 	}
 	v.signs(path+".outcomes", rows)
 	v.criteriaOf(path+".outcomes", rows, c.Executor.Type)
@@ -406,6 +409,11 @@ func (v *validator) channel(path string, c *Channel) {
 	}
 	v.limits(path+".limits", c.Limits)
 	v.warnings(path+".warnings", c.Warnings)
+	for i, n := range c.TextNotes {
+		if strings.TrimSpace(n) == "" || strings.ContainsAny(n, "\r\n") {
+			v.add(RuleInvalid, fmt.Sprintf("%s.textNotes[%d]", path, i), "a note is one non-empty line")
+		}
+	}
 	if a := c.Address; a != nil {
 		if !envNamePattern.MatchString(a.Env) {
 			v.add(RuleInvalid, path+".address.env", "%q is not an environment variable name", a.Env)

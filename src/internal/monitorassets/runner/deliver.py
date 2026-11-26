@@ -316,6 +316,9 @@ class DeliverySink(object):
         self.exclusion = as_exclusion(exclusion) if exclusion is not None else None
         # Channels whose budget ran out: a delivery by one writes recovered.
         self.failing = set()
+        # Ids of events a channel refused as too long (a shortening row of
+        # its table): their next call carries the minimal form.
+        self._shorten = set()
         # After "addressee changed" the process writes only the journal.
         self.journal_only = False
         # Set when the channel's check says the addressee has ended.
@@ -559,7 +562,7 @@ class DeliverySink(object):
             channel = self.registry.channel(channel_id) or {}
             group = [n for n in pending if step[str(n["id"])] == index]
             limit, unit = _line_limit(channel)
-            text, count, _ = plain_batch(group, self.exclude_file, limit, unit)
+            text, count, _ = plain_batch(group, self.exclude_file, limit, unit, channel.get("textNotes"))
             if text is None:
                 step[str(head["id"])] = index + 1
                 if index + 1 >= len(self.channels):
@@ -651,7 +654,8 @@ class DeliverySink(object):
         if len(batch) < len(attempt.events):
             batch = [n for n in batch if str(n["id"]) in attempt.events]
         limit, unit = _line_limit(channel)
-        text, _, _ = plain_batch(batch, self.exclude_file, limit, unit)
+        minimal = all(str(n["id"]) in self._shorten for n in batch)
+        text, _, _ = plain_batch(batch, self.exclude_file, limit, unit, channel.get("textNotes"), minimal)
         guard = Guard(self, channel, attempt, timeout)
         driver = self.drivers.get(channel_id) or ArgvDriver(channel, self.executor)
         try:
@@ -713,6 +717,10 @@ class DeliverySink(object):
         if outcome == OUTCOME_REFUSED:
             # Kept pending: the next turn calls again when due, or switches.
             self._last_refusal = sign
+            if any(row.get("shorten") and row.get("match") == sign for row in channel.get("outcomes") or []):
+                # Too long for the channel: the next call carries the
+                # minimal form; refused again, the budget goes on (INV-8).
+                self._shorten.update(str(n["id"]) for n in batch)
             return
         self._close_batch(cursor, outcomes, journaled, batch, outcome, channel_id, sign,
                           with_preview=not guard.access_lost)
@@ -755,6 +763,11 @@ class DeliverySink(object):
             return
         channel_id = self.channels[0]
         channel = self.registry.channel(channel_id) or {}
+        notes = [clean(n) for n in channel.get("textNotes") or []]
+        if notes:
+            # The notes of the channel go with every text it delivers.
+            text = " ".join([text] + notes)
+            short = " ".join([short] + notes) if short is not None else None
         limit, unit = _line_limit(channel)
         if limit is not None and measure(text, unit) > limit:
             if short is None or measure(short, unit) > limit:
