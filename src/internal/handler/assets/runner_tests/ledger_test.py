@@ -117,7 +117,7 @@ class AttemptLockTest(Base):
         self.assertEqual(self.attempt_files(), [])
 
 
-@unittest.skipUnless(os.name == "posix", "the POSIX ledger")
+@unittest.skipUnless(os.name == "posix" and os.path.isdir("/proc/self/fd"), "the POSIX ledger with procfs")
 class AttemptFileRaceTest(Base):
     """Review finding 34 of wave 7 (P-11: a "delivering" record is never
     visible without its attempt lock held): an attempt file removed by the
@@ -861,6 +861,59 @@ class TailTest(Base):
         self.addCleanup(held.release)
         self.assertEqual(self.journal_ids(), ["line-0", "line-1", "line-summary"])
         self.assertEqual(self.tails(), [])
+
+
+@unittest.skipUnless(os.name == "posix", "the POSIX ledger")
+class WindowInFlightTest(Base):
+    """Review round 2 of wave 7, row 7 (INV-8 rate window): no attempt of
+    an addressee starts while the attempt that holds its window is in
+    flight, however long it takes; its end sets the window anew."""
+
+    def test_a_second_monitor_waits_for_the_attempt_in_flight(self):
+        who = ident([addr("A", "addr-1")])
+        first, second = self.ledger("m1", who), self.ledger("m2", who)
+        d1 = first.begin([ev("1")], "c1")
+        self.assertIsNotNone(d1.attempt)
+        # The first attempt is still in its checks long past its window.
+        self.clock.t += 120
+        d2 = second.begin([ev("2")], "c1")
+        self.assertIsNone(d2.attempt)
+        self.assertEqual(d2.pending, ["2"])
+        d1.attempt.note_call()
+        d1.attempt.finish(QUEUED)
+        d1.attempt.release()
+        d3 = second.begin([ev("2")], "c1")
+        self.assertIsNone(d3.attempt)
+        self.assertIsNotNone(d3.wait_until, "the end of the first attempt sets the window anew")
+        self.clock.t = d3.wait_until
+        d4 = second.begin([ev("2")], "c1")
+        self.addCleanup(d4.attempt.release)
+        self.assertIsNotNone(d4.attempt)
+
+
+@unittest.skipUnless(os.name == "posix", "the POSIX ledger")
+class UnusableLedgerTest(Base):
+    """Review round 2 of wave 7, row 21: a ledger document without a usable
+    collection of addressees, and a lock directory that vanished, are an
+    unusable ledger (no external delivery), not an error of the runner."""
+
+    def test_a_document_without_usable_addressees(self):
+        led = self.ledger("m1", ident([addr("A", "addr-1")]))
+        self.deliver(led, ["1"])
+        path = led._path()
+        for name, doc in (("no addressees", {}), ("not a list", {"addressees": {}}),
+                          ("an entry that is no object", {"addressees": [1]})):
+            with self.subTest(case=name):
+                with open(path) as fh:
+                    version = json.load(fh)["version"]
+                with open(path, "w") as fh:
+                    json.dump(dict(doc, version=version), fh)
+                with self.assertRaises(RUNNER.LedgerUnavailable):
+                    led.begin([ev("2")], "c1")
+
+    def test_a_lock_whose_directory_vanished(self):
+        with self.assertRaises(RUNNER.LedgerUnavailable):
+            RUNNER._FileLock(os.path.join(self.root, "gone", "ledger.lock"))
 
 
 if __name__ == "__main__":
