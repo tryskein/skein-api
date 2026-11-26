@@ -331,7 +331,8 @@ def _run_posix(argv, env, stdin_data, timeout_sec):
     except OSError as exc:
         raise ExecutorRefusal("the program cannot be started (%s)" % (exc.strerror or exc))
     # The program leads its own session and group: the group is named by
-    # its pid while any member is left.
+    # its pid while any member is left. The clean-up is armed from here: the
+    # set-up of the pipes below is inside it.
     group = proc.pid
     out_fd, err_fd = proc.stdout.fileno(), proc.stderr.fileno()
     chunks = {out_fd: [], err_fd: []}
@@ -340,12 +341,12 @@ def _run_posix(argv, env, stdin_data, timeout_sec):
     reading = set([out_fd, err_fd])
     in_fd = proc.stdin.fileno() if stdin_data is not None else None
     pending = memoryview(stdin_data) if stdin_data is not None else None
-    for fd in list(reading) + ([in_fd] if in_fd is not None else []):
-        os.set_blocking(fd, False)
-    deadline = time.monotonic() + max(timeout_sec, 0)
     ended_at = None
     timed_out = False
     try:
+        for fd in list(reading) + ([in_fd] if in_fd is not None else []):
+            os.set_blocking(fd, False)
+        deadline = time.monotonic() + max(timeout_sec, 0)
         while True:
             now = time.monotonic()
             if ended_at is None and proc.poll() is not None:
