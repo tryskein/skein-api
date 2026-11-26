@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"path"
 	"sort"
 	"strings"
 	"testing"
@@ -10,6 +11,7 @@ import (
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 
+	"skein-api/internal/handler"
 	"skein-api/internal/monitorcreds"
 	"skein-api/internal/monitorregistry"
 )
@@ -139,9 +141,10 @@ func TestGetMonitorScriptClient_RefusedBeforeSideEffects(t *testing.T) {
 }
 
 // TestGetMonitorScriptClient_WithoutClientUnchanged — US-1, SC-004, ИНВ-7
-// (row #13): without client, platform and tokenDir the response has exactly
-// the fields it had before them, the bootstrap keeps its inline-loader form,
-// and the usage and the tool schema point an agent at `client`.
+// (rows #13, #138): without client, platform and tokenDir the response has
+// exactly the fields it had before them, the bootstrap runs the starter with
+// SKEIN_LOADER_SHA256 (R-10), and the usage and the tool schema point an
+// agent at `client`.
 func TestGetMonitorScriptClient_WithoutClientUnchanged(t *testing.T) {
 	u := newGMSUnit(gmsUnitRegistry(t))
 	res := u.call(t, map[string]any{"id": "sk-42"})
@@ -160,8 +163,10 @@ func TestGetMonitorScriptClient_WithoutClientUnchanged(t *testing.T) {
 		t.Fatalf("response fields = %v, want %v", keys, want)
 	}
 	bootstrap, _ := body["bootstrap"].(string)
-	if !strings.HasPrefix(bootstrap, "SKEIN_PUBLIC_URL=") || !strings.Contains(bootstrap, " python3 -c ") {
-		t.Fatalf("bootstrap lost its inline-loader form:\n%s", bootstrap)
+	if !strings.HasPrefix(bootstrap, "SKEIN_PUBLIC_URL=") ||
+		!strings.HasSuffix(bootstrap, " python3 -c "+shellSingleQuote(monitorStarter(false))) ||
+		!strings.Contains(bootstrap, " SKEIN_LOADER_SHA256="+shellSingleQuote(gmsTestLoaderSHA256)+" ") {
+		t.Fatalf("bootstrap is not the starter with SKEIN_LOADER_SHA256:\n%s", bootstrap)
 	}
 	if strings.Contains(bootstrap, "SKEIN_CLIENT=") || strings.Contains(bootstrap, "SKEIN_PLATFORM=") {
 		t.Fatalf("bootstrap without client carries client variables:\n%s", bootstrap)
@@ -181,15 +186,17 @@ func TestGetMonitorScriptClient_WithoutClientUnchanged(t *testing.T) {
 			t.Fatalf("tool schema has no %q parameter", param)
 		}
 	}
-	if !strings.Contains(tool.Tool.Description, "`client`") || !strings.Contains(tool.Tool.Description, "unit-agent") {
-		t.Fatalf("description does not name client and the registry's ids:\n%s", tool.Tool.Description)
+	if !strings.Contains(tool.Tool.Description, "`client`") {
+		t.Fatalf("description does not name client:\n%s", tool.Tool.Description)
 	}
 }
 
-// TestGetMonitorScriptClient_ResolvesRecords — ИНВ-13, API surface (row #14):
-// a known id answers with client equal to the id, an unknown id of the right
-// form answers with the general record and its warning, and client without
-// platform is posix.
+// TestGetMonitorScriptClient_ResolvesRecords — ИНВ-13, API surface (rows #14,
+// #138): a known id answers with client equal to the id and no bootstrap
+// key, an unknown id of the right form answers with the general record and
+// its warning carrying the full list of ids, and client without platform is
+// posix. The record's own warnings are the preflight line's instruction, not
+// the usage (INV-17).
 func TestGetMonitorScriptClient_ResolvesRecords(t *testing.T) {
 	reg := gmsUnitRegistry(t)
 	ids := reg.AgentIDs()
@@ -202,8 +209,11 @@ func TestGetMonitorScriptClient_ResolvesRecords(t *testing.T) {
 		if body["client"] != id || body["platform"] != monitorPlatformPOSIX {
 			t.Fatalf("client %q: response client = %v platform = %v", id, body["client"], body["platform"])
 		}
-		if usage, _ := body["usage"].(string); !strings.Contains(usage, "unit-agent-warning-2c9d") {
-			t.Fatalf("client %q: usage lost the record's warning:\n%s", id, usage)
+		if _, ok := body["bootstrap"]; ok {
+			t.Fatalf("client %q: the response has a bootstrap key", id)
+		}
+		if usage, _ := body["usage"].(string); strings.Contains(usage, "unit-agent-warning-2c9d") {
+			t.Fatalf("client %q: usage repeats the record's warning, which the instruction carries:\n%s", id, usage)
 		}
 	}
 
@@ -215,6 +225,11 @@ func TestGetMonitorScriptClient_ResolvesRecords(t *testing.T) {
 	if usage, _ := body["usage"].(string); !strings.Contains(usage, reg.General.Warnings[0]) {
 		t.Fatalf("unknown client: usage lacks the general record's warning:\n%s", usage)
 	}
+	if _, ok := body["bootstrap"]; ok {
+		t.Fatal("unknown client: the response has a bootstrap key")
+	}
+	usage, _ := body["usage"].(string)
+	assertSameIDs(t, warnedIDs(t, usage), ids)
 
 	t.Run("records of the embedded registry", func(t *testing.T) {
 		embedded := monitorregistry.MustEmbedded()
@@ -273,4 +288,156 @@ func TestGetMonitorScriptClient_TokenDirHintNamesTheShellCommand(t *testing.T) {
 	if msg, _ := body["message"].(string); !strings.Contains(msg, `$env:LOCALAPPDATA`) {
 		t.Fatalf("general record: refusal %q does not name the PowerShell command", msg)
 	}
+}
+
+// warnedIDs returns the ids the warning of the general record lists in usage
+// ("Client ids with a record: a, b." or "...: none yet.").
+func warnedIDs(t *testing.T, usage string) []string {
+	t.Helper()
+	const lead = "Client ids with a record: "
+	i := strings.Index(usage, lead)
+	if i < 0 {
+		t.Fatalf("usage lists no client ids:\n%s", usage)
+	}
+	rest := usage[i+len(lead):]
+	end := strings.Index(rest, ".")
+	if end < 0 {
+		t.Fatalf("the list of client ids does not end:\n%s", usage)
+	}
+	list := rest[:end]
+	if list == "none yet" {
+		return nil
+	}
+	return strings.Split(list, ", ")
+}
+
+func assertSameIDs(t *testing.T, got, want []string) {
+	t.Helper()
+	g := append([]string(nil), got...)
+	w := append([]string(nil), want...)
+	sort.Strings(g)
+	sort.Strings(w)
+	if strings.Join(g, ",") != strings.Join(w, ",") {
+		t.Fatalf("listed ids = %v, want the registry's %v", got, want)
+	}
+}
+
+// The marker of the loader's own text: it must not appear in any field of a
+// response (R-10).
+const gmsLoaderMarker = "_skein_loader_fetch"
+
+// TestGetMonitorScriptClient_StartCommands — R-10, INV-17, the table of the
+// response fields (row #147). Without client the bootstrap runs the starter
+// with SKEIN_LOADER_SHA256 of the loader handler and SKEIN_RUNNER_SHA256, and
+// no field carries the loader. With client there is no bootstrap key at all,
+// preflight is the one start command (SKEIN_MONITOR_MODE=preflight, the
+// starter.py of the token directory, both digests) and prepare writes
+// starter.py; usage holds no instruction of any record of the registry.
+func TestGetMonitorScriptClient_StartCommands(t *testing.T) {
+	if !strings.Contains(ServedLoader(), gmsLoaderMarker) {
+		t.Fatalf("the served loader no longer holds the marker %q", gmsLoaderMarker)
+	}
+	loaderSHA256 := handler.NewAgentLoaderHandler(ServedLoader()).SHA256()
+	reg := gmsUnitRegistry(t)
+	unit := func() *gmsUnit {
+		u := newGMSUnit(reg)
+		u.handler = handleGetMonitorScript(u.issues, u.watcher, u.minter, reg, gmsTestPublicURL, gmsTestRunnerSHA256, loaderSHA256)
+		return u
+	}
+	noLoader := func(t *testing.T, body map[string]any) {
+		t.Helper()
+		for k, v := range body {
+			if sv, ok := v.(string); ok && strings.Contains(sv, gmsLoaderMarker) {
+				t.Fatalf("field %s carries the loader text", k)
+			}
+		}
+	}
+
+	t.Run("without client", func(t *testing.T) {
+		body := extractToolJSON(t, unit().call(t, map[string]any{"id": "sk-42"}))
+		noLoader(t, body)
+		bootstrap, _ := body["bootstrap"].(string)
+		for _, want := range []string{
+			" SKEIN_LOADER_SHA256=" + shellSingleQuote(loaderSHA256) + " ",
+			" SKEIN_RUNNER_SHA256=" + shellSingleQuote(gmsTestRunnerSHA256) + " ",
+		} {
+			if !strings.Contains(bootstrap, want) {
+				t.Fatalf("bootstrap lacks %q:\n%s", want, bootstrap)
+			}
+		}
+		if !strings.HasSuffix(bootstrap, " python3 -c "+shellSingleQuote(monitorStarter(false))) {
+			t.Fatalf("bootstrap does not run the starter:\n%s", bootstrap)
+		}
+	})
+
+	for _, client := range []string{"unit-agent", "not-in-registry"} {
+		t.Run("with client "+client, func(t *testing.T) {
+			body := extractToolJSON(t, unit().call(t, map[string]any{"id": "sk-42", "client": client}))
+			noLoader(t, body)
+			if _, ok := body["bootstrap"]; ok {
+				t.Fatalf("the response has a bootstrap key: %q", body["bootstrap"])
+			}
+			tokenFile, _ := body["tokenFilePath"].(string)
+			starter := path.Join(path.Dir(tokenFile), "starter.py")
+			preflight, _ := body["preflight"].(string)
+			for _, want := range []string{
+				"SKEIN_MONITOR_MODE=preflight ",
+				" SKEIN_LOADER_SHA256=" + shellSingleQuote(loaderSHA256) + " ",
+				" SKEIN_RUNNER_SHA256=" + shellSingleQuote(gmsTestRunnerSHA256) + " ",
+			} {
+				if !strings.Contains(preflight, want) {
+					t.Fatalf("preflight lacks %q:\n%s", want, preflight)
+				}
+			}
+			if !strings.HasPrefix(preflight, "SKEIN_MONITOR_MODE=preflight ") ||
+				!strings.HasSuffix(preflight, " python3 "+shellSingleQuote(starter)) {
+				t.Fatalf("preflight does not run %s in preflight mode:\n%s", starter, preflight)
+			}
+			if prepare, _ := body["prepare"].(string); !strings.Contains(prepare, "starter.py") ||
+				strings.Contains(prepare, "loader.py") {
+				t.Fatalf("prepare does not write starter.py:\n%s", prepare)
+			}
+			usage, _ := body["usage"].(string)
+			for _, a := range reg.Agents {
+				for _, m := range a.Methods {
+					if m.Instruction != "" && strings.Contains(usage, m.Instruction) {
+						t.Fatalf("usage carries the instruction of %s/%s:\n%s", a.ID, m.Kind, usage)
+					}
+				}
+			}
+		})
+	}
+}
+
+// monitorMainAgentIDs are the ids of the main agents the description lists
+// (ИНВ-17, С3).
+var monitorMainAgentIDs = []string{"claude", "codex", "grok", "kimi", "gemini", "opencode", "qwen-code", "cursor", "copilot", "hermes"}
+
+// TestGetMonitorScriptClient_DescriptionAndFullList — ИНВ-17, С3 (row #148):
+// the description names exactly the ten main agent ids and no other id of
+// the registry; the warning for an unknown id lists every id of the
+// embedded registry (compared as a set).
+func TestGetMonitorScriptClient_DescriptionAndFullList(t *testing.T) {
+	for _, reg := range []*monitorregistry.Registry{monitorregistry.MustEmbedded(), gmsUnitRegistry(t)} {
+		s := server.NewMCPServer("t", "0", server.WithToolCapabilities(false))
+		RegisterGetMonitorScript(s, nil, nil, nil, reg, gmsTestPublicURL, gmsTestRunnerSHA256, gmsTestLoaderSHA256, 0)
+		desc := s.GetTool("skein_get_monitor_script").Tool.Description
+		main := map[string]bool{}
+		for _, id := range monitorMainAgentIDs {
+			main[id] = true
+			if !strings.Contains(desc, id) {
+				t.Fatalf("description does not name the main agent %q:\n%s", id, desc)
+			}
+		}
+		for _, id := range reg.AgentIDs() {
+			if !main[id] && strings.Contains(desc, id) {
+				t.Fatalf("description lists %q, which is not a main agent:\n%s", id, desc)
+			}
+		}
+	}
+
+	embedded := monitorregistry.MustEmbedded()
+	body := extractToolJSON(t, newGMSUnit(embedded).call(t, map[string]any{"id": "sk-42", "client": "no-such-agent-1103"}))
+	usage, _ := body["usage"].(string)
+	assertSameIDs(t, warnedIDs(t, usage), embedded.AgentIDs())
 }
