@@ -110,6 +110,17 @@ mode = "unittest-files"
 start = "."
 pattern = "*_test.py"
 
+# The same Python tests on the lowest Python of POSIX (R-9): only the
+# *_py36_test.py files, written on the stdlib of Python 3.6, under a 3.6
+# image. Narrowed run: a path relative to src.
+[kind.pyunit36]
+adapter = "python"
+image = "python:3.6.15-slim-bullseye"
+[kind.pyunit36.options]
+mode = "unittest-files"
+start = "."
+pattern = "*_py36_test.py"
+
 # Mutation testing of the Python runner with mutmut (only the runner is
 # mutated; the loader is copied for its tests); its
 # configuration (what is mutated, which tests run) is the [mutmut] section of
