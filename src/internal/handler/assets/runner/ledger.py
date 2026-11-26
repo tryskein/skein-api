@@ -297,6 +297,13 @@ class Attempt(object):
                     entry["window"] = {"until": window.get("prev", 0)}
             elif outcome != OUTCOME_ADDRESSEE_GONE:
                 result["burst"] = _note_series(entry, sessions, now)
+                # The window runs from the transfer, not from the publish
+                # (an idle wait may come between), with the length the
+                # series has now: the delivery that makes a series already
+                # gives the long window.
+                until = now + _window_len(entry, now)
+                if until > (window.get("until") or 0):
+                    entry["window"] = {"until": until}
         self.ledger._change(change)
         return result.get("burst", False)
 

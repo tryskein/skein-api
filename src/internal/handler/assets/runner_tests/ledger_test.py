@@ -139,10 +139,8 @@ class ChannelBudgetTest(Base):
 
 
 @unittest.skipUnless(os.name == "posix", "the POSIX ledger")
-class SeriesEndTest(Base):
-    """Review finding 15 of wave 7 (US-13: a series is 30 deliveries of one
-    session within 10 min; it ends with a delivery of another session or
-    after 10 min without one; during it the window is 60 s, else 10 s)."""
+class _Series(Base):
+    """Deliveries of a series (US-13) for the tests below."""
 
     def series(self, led):
         for i in range(30):
@@ -166,11 +164,52 @@ class SeriesEndTest(Base):
             return 10
         return d.wait_until - t0
 
+
+@unittest.skipUnless(os.name == "posix", "the POSIX ledger")
+class SeriesEndTest(_Series):
+    """Review finding 15 of wave 7 (US-13: a series is 30 deliveries of one
+    session within 10 min; it ends with a delivery of another session or
+    after 10 min without one; during it the window is 60 s, else 10 s)."""
+
     def test_a_pause_over_ten_minutes_ends_the_series(self):
         led = self.ledger("mon-a", ident([addr("orca", "t-1")]))
         self.series(led)
         self.clock.t += 601
         self.assertEqual(self.window_after_one(led, "after-pause", "same"), 10)
+
+
+@unittest.skipUnless(os.name == "posix", "the POSIX ledger")
+class WindowFromTransferTest(_Series):
+    """Review finding 35 of wave 7 (P-11 rate: one delivery per addressee
+    per 10 s, 60 s during a series of one session): the window is counted
+    from the delivery, and the delivery that makes the series already
+    gives 60 s."""
+
+    def test_the_window_runs_from_the_transfer(self):
+        a = self.ledger("mon-a", ident([addr("orca", "t-1")]))
+        b = self.ledger("mon-b", ident([addr("orca", "t-1")]))
+        d = a.begin([ev("e1")], "c1")
+        start = self.clock.t
+        self.clock.t = start + 15    # a long idle wait before the transfer
+        d.attempt.note_call()
+        d.attempt.finish(QUEUED)
+        d.attempt.release()
+        self.clock.t = start + 16
+        self.assertEqual(b.begin([ev("e2")], "c1").wait_until, start + 15 + 10)
+
+    def test_the_thirtieth_delivery_gives_the_long_window(self):
+        led = self.ledger("mon-a", ident([addr("orca", "t-1")]))
+        self.series(led)
+        last = self.clock.t - 10
+        d = led.begin([ev("next", session="same")], "c1")
+        self.assertIsNone(d.attempt)
+        self.assertEqual(d.wait_until, last + 60)
+
+    def test_another_session_ends_the_series(self):
+        led = self.ledger("mon-a", ident([addr("orca", "t-1")]))
+        self.series(led)
+        self.clock.t += 50
+        self.assertEqual(self.window_after_one(led, "other", "another"), 10)
 
 
 @unittest.skipUnless(os.name == "posix", "the POSIX ledger")
@@ -572,16 +611,23 @@ class LimitsAndRateTest(Base):
         self.assertEqual(self.b.begin([ev("e2")], "c1").published, ["e2"])
 
     def test_a_series_of_one_session_widens_the_window(self):
+        # US-13: 30 deliveries of one session within 10 min make a series;
+        # the window is then 60 s instead of 10 s, and the series is said
+        # once (single_session_burst).
         burst = []
-        for i in range(RUNNER.SERIES_COUNT):
+        for i in range(30):
             d = self.a.begin([ev("s%d" % i, session="same")], "c1")
             self.assertEqual(d.published, ["s%d" % i], i)
             d.attempt.note_call()
             burst.append(d.attempt.finish(QUEUED))
             d.attempt.release()
-            self.clock.t += RUNNER.WINDOW_SEC
+            self.clock.t += 10
         self.assertEqual(burst.count(True), 1)
         self.assertTrue(burst[-1])
+        last = self.clock.t - 10
+        d = self.a.begin([ev("next", session="same")], "c1")
+        self.assertEqual(d.wait_until, last + 60)
+        self.clock.t = last + 60
         d = self.a.begin([ev("next", session="same")], "c1")
         t0 = self.clock.t
         d.attempt.note_call()
@@ -589,7 +635,7 @@ class LimitsAndRateTest(Base):
         d.attempt.release()
         self.clock.t = t0 + 30
         waiting = self.b.begin([ev("later")], "c1")
-        self.assertEqual(waiting.wait_until, t0 + RUNNER.WINDOW_SERIES_SEC)
+        self.assertEqual(waiting.wait_until, t0 + 60)
 
 
 @unittest.skipUnless(os.name == "posix", "the POSIX ledger")
