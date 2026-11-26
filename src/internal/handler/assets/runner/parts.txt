@@ -9,4 +9,5 @@ platform.py
 platform_posix.py
 platform_windows.py
 state.py
+journal.py
 core.py
