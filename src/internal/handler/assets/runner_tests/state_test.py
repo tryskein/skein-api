@@ -16,6 +16,7 @@ Run on its own: python3 internal/handler/assets/runner_tests/state_test.py
 """
 
 import hashlib
+import io
 import json
 import os
 import queue
@@ -400,6 +401,61 @@ class TailPaceTest(unittest.TestCase):
         self.assertEqual(len(clock.sleeps), 4)
         for wait in clock.sleeps:
             self.assertGreaterEqual(wait, self.POLL_SEC, clock.sleeps)
+
+
+def _run_in_process(test, mod, srv, tok, stop_after_sleeps):
+    """Run mod.run() on tok against srv under a virtual clock until its
+    stop_after_sleeps-th wait; returns its stdout lines."""
+    mod.time = _VirtualTime(stop_after_sleeps=stop_after_sleeps)
+    mod.random = _LowRandom()
+    saved = {k: os.environ.get(k) for k in ("SKEIN_PUBLIC_URL", "SKEIN_TOKEN_FILE", "SKEIN_ISSUE",
+                                             "SKEIN_EXCLUDE_SESSION")}
+    test.addCleanup(_restore_env, saved)
+    os.environ.update({"SKEIN_PUBLIC_URL": srv.url(), "SKEIN_TOKEN_FILE": tok.token,
+                       "SKEIN_ISSUE": harness.ROOT})
+    os.environ.pop("SKEIN_EXCLUDE_SESSION", None)
+    out = io.StringIO()
+    real_stdout = sys.stdout
+    sys.stdout = out
+    try:
+        mod.run()
+    except _EndRun:
+        pass
+    finally:
+        sys.stdout = real_stdout
+    return [json.loads(line) for line in out.getvalue().splitlines() if line.strip()]
+
+
+class CursorSaveRetryTest(unittest.TestCase):
+    """US-12: a cursor whose save failed is saved on a later page, so a
+    restart still delivers the event of the break."""
+
+    def test_failed_save_is_retried_and_the_restart_keeps_the_gap_event(self):
+        srv = EventServer()
+        self.addCleanup(srv.stop)
+        tok = TokenDir(self)
+        first = harness.load_runner(poll_sec=1, ceiling_sec=1)
+        real_save = first.save_cursor
+        calls = []
+
+        def flaky_save(token_file, value):
+            calls.append(value)
+            if len(calls) == 1:
+                raise OSError("no space left on the device")
+            return real_save(token_file, value)
+
+        first.save_cursor = flaky_save
+        # Live-start anchors at event 0 and its save fails; the next polls
+        # answer the same cursor.
+        _run_in_process(self, first, srv, tok, stop_after_sleeps=3)
+        self.assertGreaterEqual(len(calls), 2, calls)
+        self.assertEqual(tok.saved_cursor_id(), 0)
+
+        gap = srv.push()
+        second = harness.load_runner(poll_sec=1, ceiling_sec=1)
+        lines = _run_in_process(self, second, srv, tok, stop_after_sleeps=1)
+        self.assertEqual([l["notification"]["id"] for l in lines if l.get("event") == "notification"],
+                         [gap])
 
 
 def _restore_env(saved):

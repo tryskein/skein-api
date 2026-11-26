@@ -518,19 +518,25 @@ def work(executor, base, token, issue, exclude_session, token_file):
     # A restart with the same token file resumes from the saved cursor; a
     # new token (no state) starts live.
     cursor = load_cursor(token_file)
+    # The cursor the state file holds: a failed save is retried on every
+    # later page until the file matches the cursor in memory again.
+    saved = [cursor]
     state_failed = [False]
 
     def persist(value):
         # The cursor is saved only after its page was printed. A state that
         # cannot be written costs the resume after a restart, not the run:
         # say so once and go on.
+        if value == saved[0]:
+            return
         try:
             save_cursor(token_file, value)
+            saved[0] = value
             state_failed[0] = False
         except (OSError, PlatformRefusal) as exc:
             if not state_failed[0]:
-                log_stderr("monitor runner: cannot save the poll cursor (%s); a restart will "
-                           "start from now" % exc)
+                log_stderr("monitor runner: cannot save the poll cursor (%s); until it is saved, "
+                           "a restart resumes from an older cursor or from now" % exc)
             state_failed[0] = True
 
     seen = set()
@@ -573,9 +579,9 @@ def work(executor, base, token, issue, exclude_session, token_file):
                 raise Stop("root_closed", delete_token=True)
             # Advance the watermark cursor to whatever the server returned.
             nxt = payload.get("cursor")
-            if isinstance(nxt, dict) and nxt != cursor:
+            if isinstance(nxt, dict):
                 cursor = nxt
-                persist(cursor)
+            persist(cursor)
             if new_count > 0:
                 # Active dialog → reset to the base cadence.
                 backoff = float(POLL_INTERVAL_SEC)
