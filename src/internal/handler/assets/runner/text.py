@@ -13,6 +13,7 @@
 # skein_comment_get.
 
 import json
+import re
 import unicodedata
 
 # The label every plain-text delivery starts with (US-10).
@@ -35,6 +36,10 @@ MANDATORY_LIFECYCLE_FIELDS = ("event", "reason", "cause", "preflightId")
 PLAIN_CUT_MARK = "deliveryCut=true"
 # What replaces a long lifecycle field that does not fit.
 SEE_JOURNAL = "see journal"
+# Characters a JSON line keeps only as \u escapes: DEL, the C1 controls
+# (NEL and CSI among them), the line and paragraph separators and the
+# bidirectional controls. json.dumps escapes the C0 controls itself.
+_JSON_ESCAPE = re.compile("[\u007f-\u009f\u2028\u2029\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]")
 # Line breaks of every kind become this visible mark, never a break.
 _BREAK_MARK = " ↵ "
 # Bidirectional controls that would reorder what a terminal shows.
@@ -170,7 +175,11 @@ def _longest_fit(make, longest, limit, unit):
 
 
 def _dumps(obj):
-    return json.dumps(obj, ensure_ascii=False, separators=(",", ":"))
+    """One JSON line: non-ASCII text stays readable, but every character that
+    a reader may take for a line break or that reorders or controls a
+    terminal is written as a \\u escape."""
+    text = json.dumps(obj, ensure_ascii=False, separators=(",", ":"))
+    return _JSON_ESCAPE.sub(lambda m: "\\u%04x" % ord(m.group()), text)
 
 
 def notification_line(notification, limit=None, unit=UNIT_CHARS):

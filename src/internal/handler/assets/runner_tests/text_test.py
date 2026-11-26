@@ -160,6 +160,18 @@ class NotificationLineTest(unittest.TestCase):
         self.assertNotIn("bodyPreview", obj["notification"])
         self.assertEqual(obj["notification"]["summary"], "")
 
+    def test_line_breaking_and_terminal_characters_are_escaped(self):
+        unsafe = ["\u2028", "\u2029", "\u0085", "\u009b", "\u007f", "\u061c", "\u200e", "\u200f",
+                  "\u202a", "\u202b", "\u202c", "\u202d", "\u202e", "\u2066", "\u2067", "\u2068",
+                  "\u2069", "\u0080", "\u009f"]
+        preview = "start " + " x ".join(unsafe) + " Привет end"
+        line = RUNNER.notification_line(comment(preview=preview))
+        for ch in unsafe:
+            self.assertNotIn(ch, line, "U+%04X left raw" % ord(ch))
+        self.assertEqual(len(line.splitlines()), 1)
+        self.assertIn("Привет", line)
+        self.assertEqual(json.loads(line)["notification"]["bodyPreview"], preview)
+
     def test_minimal_form_just_under_the_limit_is_delivered(self):
         event = self.unicode_event(preview_len=800)
         event["entity"] = {"type": "issue", "id": "i" * 200, "title": "A task"}
