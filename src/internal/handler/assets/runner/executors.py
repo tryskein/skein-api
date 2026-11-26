@@ -76,15 +76,17 @@ class ExecutorRefusal(Exception):
 class CallResult(object):
     """What a call of a channel program gave: its exit code (None when it
     was killed on timeout), stdout and stderr as bytes (capped), the JSON
-    object stdout held (None when it held none) and whether the timeout
-    ended it."""
+    object stdout held (None when it held none, or when stdout was cut at
+    the cap: a prefix of a longer answer is not that answer), whether the
+    timeout ended it and whether stdout was cut."""
 
-    def __init__(self, exit_code, stdout, stderr, timed_out):
+    def __init__(self, exit_code, stdout, stderr, timed_out, truncated=False):
         self.exit_code = exit_code
         self.stdout = stdout
         self.stderr = stderr
         self.timed_out = timed_out
-        self.json = parse_json_object(stdout)
+        self.truncated = truncated
+        self.json = None if truncated else parse_json_object(stdout)
 
 
 def parse_json_object(raw):
@@ -243,6 +245,7 @@ class _Reader(threading.Thread):
         self.pipe = pipe
         self.chunks = []
         self.size = 0
+        self.cut = False
 
     def run(self):
         try:
@@ -251,6 +254,8 @@ class _Reader(threading.Thread):
                 if not chunk:
                     return
                 room = OUTPUT_CAP_BYTES - self.size
+                if len(chunk) > room:
+                    self.cut = True
                 if room > 0:
                     self.chunks.append(chunk[:room])
                     self.size += min(len(chunk), room)
@@ -331,6 +336,7 @@ def _run_posix(argv, env, stdin_data, timeout_sec):
     out_fd, err_fd = proc.stdout.fileno(), proc.stderr.fileno()
     chunks = {out_fd: [], err_fd: []}
     sizes = {out_fd: 0, err_fd: 0}
+    cut = {out_fd: False, err_fd: False}
     reading = set([out_fd, err_fd])
     in_fd = proc.stdin.fileno() if stdin_data is not None else None
     pending = memoryview(stdin_data) if stdin_data is not None else None
@@ -367,6 +373,8 @@ def _run_posix(argv, env, stdin_data, timeout_sec):
                     reading.discard(fd)
                     continue
                 room = OUTPUT_CAP_BYTES - sizes[fd]
+                if len(chunk) > room:
+                    cut[fd] = True
                 if room > 0:
                     chunks[fd].append(chunk[:room])
                     sizes[fd] += min(len(chunk), room)
@@ -401,7 +409,7 @@ def _run_posix(argv, env, stdin_data, timeout_sec):
         if proc.returncode is None:
             proc.wait()
     return CallResult(None if timed_out else proc.returncode, b"".join(chunks[out_fd]), b"".join(chunks[err_fd]),
-                      timed_out)
+                      timed_out, cut[out_fd])
 
 
 def _run_threads(argv, env, stdin_data, timeout_sec):
@@ -434,7 +442,8 @@ def _run_threads(argv, env, stdin_data, timeout_sec):
             pipe.close()
         except OSError:
             pass
-    return CallResult(None if timed_out else proc.returncode, readers[0].data(), readers[1].data(), timed_out)
+    return CallResult(None if timed_out else proc.returncode, readers[0].data(), readers[1].data(), timed_out,
+                      readers[0].cut)
 
 
 class ArgvExecutor(object):

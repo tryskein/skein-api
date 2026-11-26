@@ -133,6 +133,14 @@ class ProgramWaitTest(unittest.TestCase):
         self.assertLess(took, 10)
         self.assertTrue(_wait_gone(self.descendant()), "a descendant on the pipes outlived the call")
 
+    def test_a_stdout_cut_at_the_cap_is_no_answer_of_the_table(self):
+        # Review finding 31 of wave 7: a prefix of a longer answer that
+        # happens to parse is not the answer.
+        code = "import sys; sys.stdout.write('{\"state\":\"queued\"}' + ' ' * 70000 + 'x')"
+        result = RUNNER.run_program([sys.executable, "-c", code], dict(os.environ), None, 10)
+        self.assertTrue(result.truncated)
+        self.assertIsNone(result.json)
+
     def test_a_timeout_kills_every_process_of_the_program(self):
         argv = ["sh", "-c", "sleep 60 & echo $! > %s; sleep 60" % self.pidfile]
         started = time.monotonic()
