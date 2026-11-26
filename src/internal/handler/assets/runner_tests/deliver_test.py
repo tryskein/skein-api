@@ -477,7 +477,11 @@ class TwoStepCancelTest(unittest.TestCase):
             if program == "insert":
                 cancel.stop = "token_expired"
         first.spy.after = after
-        first.page([note(1)])
+        # The stop answer that withheld Enter stops the monitor with its
+        # access stop once the event has its outcome (US-12).
+        with self.assertRaises(r.Stop) as caught:
+            first.page([note(1)])
+        self.assertEqual(caught.exception.reason, "token_expired")
         self.assertEqual(len(insert.calls()), 1)
         self.assertEqual(enter.calls(), [])
         self.assertEqual(world.prog("chan-b").calls(), [])
@@ -972,6 +976,9 @@ class LastBoundaryTest(unittest.TestCase):
     the last step before the hand-over and before Enter."""
 
     def setUp(self):
+        self.fresh()
+
+    def fresh(self):
         self.world = World(self, two_channels())
         self.cancel = FlagCancel()
         self.mon = self.world.monitor(cancel=self.cancel)
@@ -987,8 +994,10 @@ class LastBoundaryTest(unittest.TestCase):
         for name, arm in (("401", lambda: setattr(self.cancel, "stop", "token_expired")),
                           ("stale poll", lambda: setattr(self.cancel, "stale", True))):
             with self.subTest(case=name):
-                self.cancel.stop, self.cancel.stale = None, False
-                guard = r.Guard(self.mon.sink, self.channel, self.attempt(name), 30)
+                # A world of its own: the attempt of the case before holds
+                # the addressee's window.
+                self.fresh()
+                guard = self.world.runner.Guard(self.mon.sink, self.channel, self.attempt(name), 30)
                 self.mon.sink.check_addressee = lambda channel, timeout=None: arm()
                 self.assertFalse(guard.before_commit())
                 if name == "401":
