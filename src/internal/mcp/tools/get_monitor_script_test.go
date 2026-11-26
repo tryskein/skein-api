@@ -161,10 +161,21 @@ func TestGetMonitorScript_HappyPath(t *testing.T) {
 	if !strings.Contains(bootstrap, "SKEIN_TOKEN_FILE=") || !strings.Contains(bootstrap, "python3 -c") {
 		t.Fatalf("bootstrap shape unexpected:\n%s", bootstrap)
 	}
-	// The runner-fetch must carry a timeout so a hung connection cannot block
-	// the bootstrap forever before the runner starts (Finding 2).
+	// R-10, US-1 (difference 3): the bootstrap runs the starter, not the
+	// loader, and names the loader it may execute. The starter's download
+	// carries a timeout so a hung connection cannot block the bootstrap
+	// forever (Finding 2).
+	if !strings.HasSuffix(bootstrap, " python3 -c "+shellSingleQuote(monitorStarter(false))) {
+		t.Fatalf("bootstrap does not run the starter:\n%s", bootstrap)
+	}
+	if strings.Contains(bootstrap, "_skein_loader_fetch") {
+		t.Fatalf("bootstrap carries the loader text:\n%s", bootstrap)
+	}
 	if !strings.Contains(bootstrap, "timeout=") {
-		t.Fatalf("bootstrap loader missing urlopen timeout:\n%s", bootstrap)
+		t.Fatalf("bootstrap starter missing urlopen timeout:\n%s", bootstrap)
+	}
+	if !strings.Contains(bootstrap, "SKEIN_LOADER_SHA256="+shellSingleQuote(gmsTestLoaderSHA256)+" ") {
+		t.Fatalf("bootstrap must bake SKEIN_LOADER_SHA256 from the served loader:\n%s", bootstrap)
 	}
 	// sk-164 FR-2 (T085/F3): the mint bakes the caller's CURRENT MCP session into
 	// SKEIN_EXCLUDE_SESSION so the detached runner sends it as the exclude_session
@@ -584,6 +595,9 @@ func TestBuildMonitorBootstrap_HostileInputs(t *testing.T) {
 	// replace the python3 invocation with a printf that echoes the env vars.
 	// We reconstruct just the assignments + a safe command.
 	assignments := strings.TrimSuffix(b, " python3 -c "+shellSingleQuote(monitorStarter(false)))
+	if assignments == b {
+		t.Fatalf("bootstrap does not end with the starter:\n%s", b)
+	}
 	// The VAR=val prefix exports into the CHILD process environment; a builtin
 	// printf in the same shell would not see it via $VAR expansion, so run a
 	// child `sh -c` that reads the vars from its inherited environment.
@@ -635,6 +649,9 @@ func TestBuildMonitorBootstrap_BakesSession(t *testing.T) {
 	hb := buildMonitorBootstrap("https://skein.example", "sk-42", hostileSess,
 		monitorTokenFilePath("sk-42", "0badc0de0badc0de"), gmsTestRunnerSHA256, gmsTestLoaderSHA256)
 	assignments := strings.TrimSuffix(hb, " python3 -c "+shellSingleQuote(monitorStarter(false)))
+	if assignments == hb {
+		t.Fatalf("bootstrap does not end with the starter:\n%s", hb)
+	}
 	script := assignments + ` sh -c 'printf "%s" "$SKEIN_EXCLUDE_SESSION"'`
 	out, err := exec.Command("sh", "-c", script).Output()
 	if err != nil {
@@ -662,9 +679,11 @@ func TestBuildMonitorBootstrap_BakesSession(t *testing.T) {
 // python3 the test is skipped.
 // ---------------------------------------------------------------------------
 
-// bootstrapServer serves the monitor-script door and the poll door.
+// bootstrapServer serves the monitor-loader door, the monitor-script door
+// and the poll door.
 type bootstrapServer struct {
 	srv     *httptest.Server
+	loader  func(w http.ResponseWriter, r *http.Request)
 	script  func(w http.ResponseWriter, r *http.Request)
 	polled  chan struct{}
 	mu      sync.Mutex
@@ -672,14 +691,19 @@ type bootstrapServer struct {
 	nextID  int
 }
 
-func newBootstrapServer(t *testing.T, runnerBody []byte) *bootstrapServer {
+func newBootstrapServer(t *testing.T, loader *handler.AgentLoaderHandler, runnerBody []byte) *bootstrapServer {
 	t.Helper()
 	b := &bootstrapServer{polled: make(chan struct{}, 1000), nextID: 500}
+	b.loader = loader.Loader
 	b.script = func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/x-python")
 		_, _ = w.Write(runnerBody)
 	}
 	b.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/agent/v1/monitor-loader" {
+			b.loader(w, r)
+			return
+		}
 		if r.URL.Path == "/agent/v1/monitor-script" {
 			b.script(w, r)
 			return
@@ -825,6 +849,9 @@ func TestBootstrapCommand_EndToEnd(t *testing.T) {
 	scriptHandler.Script(rec, httptest.NewRequest(http.MethodGet, "/agent/v1/monitor-script", nil))
 	runnerBody := rec.Body.Bytes()
 	runnerSHA256 := scriptHandler.SHA256()
+	// The starter of every command downloads the loader the route serves.
+	loader := handler.NewAgentLoaderHandler(ServedLoader())
+	loaderSHA256 := loader.SHA256()
 
 	newToken := func(t *testing.T) string {
 		path := filepath.Join(t.TempDir(), "skein-monitor.token")
@@ -839,9 +866,9 @@ func TestBootstrapCommand_EndToEnd(t *testing.T) {
 	}
 
 	t.Run("SIGTERM keeps the file and the same command starts the monitor again", func(t *testing.T) {
-		srv := newBootstrapServer(t, runnerBody)
+		srv := newBootstrapServer(t, loader, runnerBody)
 		token := newToken(t)
-		command := buildMonitorBootstrap(srv.srv.URL, "zz-24", "sess-24", token, runnerSHA256, gmsTestLoaderSHA256)
+		command := buildMonitorBootstrap(srv.srv.URL, "zz-24", "sess-24", token, runnerSHA256, loaderSHA256)
 
 		first := startBootstrap(t, command)
 		if got := first.next(t); got["event"] != "monitor_started" {
@@ -874,19 +901,51 @@ func TestBootstrapCommand_EndToEnd(t *testing.T) {
 
 	t.Run("a runner other than the minted one is not run", func(t *testing.T) {
 		marker := filepath.Join(t.TempDir(), "executed")
-		srv := newBootstrapServer(t, []byte("open("+strconv.Quote(marker)+", \"w\").write(\"x\")\n"))
+		srv := newBootstrapServer(t, loader, []byte("open("+strconv.Quote(marker)+", \"w\").write(\"x\")\n"))
 		token := newToken(t)
-		run := startBootstrap(t, buildMonitorBootstrap(srv.srv.URL, "zz-24", "", token, runnerSHA256, gmsTestLoaderSHA256))
+		run := startBootstrap(t, buildMonitorBootstrap(srv.srv.URL, "zz-24", "", token, runnerSHA256, loaderSHA256))
 		assertOneStopLine(t, run.rest(t), "runner_mismatch", "closed")
 		if fileExists(marker) {
 			t.Fatalf("the loader executed a runner whose digest differs from the minted one")
 		}
 	})
 
+	t.Run("a loader other than the minted one is refused by the starter, files untouched", func(t *testing.T) {
+		srv := newBootstrapServer(t, loader, runnerBody)
+		srv.loader = func(w http.ResponseWriter, r *http.Request) {
+			_, _ = w.Write([]byte("open(\"/dev/null\", \"w\")\n"))
+		}
+		srv.script = func(w http.ResponseWriter, r *http.Request) {
+			t.Error("the runner was downloaded although the loader did not match")
+			w.WriteHeader(http.StatusInternalServerError)
+		}
+		token := newToken(t)
+		before, err := os.ReadFile(token)
+		if err != nil {
+			t.Fatal(err)
+		}
+		run := startBootstrap(t, buildMonitorBootstrap(srv.srv.URL, "zz-24", "", token, runnerSHA256, loaderSHA256))
+		lines := run.rest(t)
+		if len(lines) != 1 || lines[0]["reason"] != "runner_mismatch" || lines[0]["event"] != "closed" {
+			t.Fatalf("lines = %v, want one runner_mismatch/closed line of the starter", lines)
+		}
+		if a, _ := lines[0]["action"].(string); !strings.HasPrefix(a, "Loader download") {
+			t.Fatalf("the action does not name the loader download: %q", a)
+		}
+		_ = run.cmd.Wait()
+		if code := run.cmd.ProcessState.ExitCode(); code != 1 {
+			t.Fatalf("exit code = %d, want 1", code)
+		}
+		after, err := os.ReadFile(token)
+		if err != nil || string(after) != string(before) {
+			t.Fatalf("the starter touched the token file (%v)", err)
+		}
+	})
+
 	t.Run("prepare keeps a token written with the default mode private", func(t *testing.T) {
 		// The Write tool sets no mode: a token file of 0644 is accepted only
 		// inside the 0700 directory that prepare creates.
-		srv := newBootstrapServer(t, runnerBody)
+		srv := newBootstrapServer(t, loader, runnerBody)
 		token := filepath.Join(t.TempDir(), "skein-mon-zz-24-0123456789abcdef", "token")
 		if out, err := exec.Command("sh", "-c", monitorPrepareCommand(token)).CombinedOutput(); err != nil {
 			t.Fatalf("prepare: %v: %s", err, out)
@@ -897,14 +956,14 @@ func TestBootstrapCommand_EndToEnd(t *testing.T) {
 		if err := os.Chmod(token, 0o644); err != nil {
 			t.Fatalf("chmod token: %v", err)
 		}
-		run := startBootstrap(t, buildMonitorBootstrap(srv.srv.URL, "zz-24", "", token, runnerSHA256, gmsTestLoaderSHA256))
+		run := startBootstrap(t, buildMonitorBootstrap(srv.srv.URL, "zz-24", "", token, runnerSHA256, loaderSHA256))
 		if got := run.next(t); got["event"] != "monitor_started" {
 			t.Fatalf("first line = %v, want monitor_started", got)
 		}
 	})
 
 	t.Run("a token file other users can read is refused", func(t *testing.T) {
-		srv := newBootstrapServer(t, runnerBody)
+		srv := newBootstrapServer(t, loader, runnerBody)
 		dir := t.TempDir()
 		if err := os.Chmod(dir, 0o755); err != nil {
 			t.Fatalf("chmod dir: %v", err)
@@ -920,7 +979,7 @@ func TestBootstrapCommand_EndToEnd(t *testing.T) {
 			t.Error("the token of a file others can read was sent to the server")
 			w.WriteHeader(http.StatusUnauthorized)
 		}
-		run := startBootstrap(t, buildMonitorBootstrap(srv.srv.URL, "zz-24", "", token, runnerSHA256, gmsTestLoaderSHA256))
+		run := startBootstrap(t, buildMonitorBootstrap(srv.srv.URL, "zz-24", "", token, runnerSHA256, loaderSHA256))
 		assertOneStopLine(t, run.rest(t), "token_file_insecure", "closed")
 		if fileExists(token) {
 			t.Fatalf("our readable token file kept on token_file_insecure, want it deleted")
@@ -928,10 +987,10 @@ func TestBootstrapCommand_EndToEnd(t *testing.T) {
 	})
 
 	t.Run("download failure is server_unreachable and keeps the file", func(t *testing.T) {
-		srv := newBootstrapServer(t, runnerBody)
+		srv := newBootstrapServer(t, loader, runnerBody)
 		srv.script = func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusInternalServerError) }
 		token := newToken(t)
-		run := startBootstrap(t, buildMonitorBootstrap(srv.srv.URL, "zz-24", "", token, runnerSHA256, gmsTestLoaderSHA256))
+		run := startBootstrap(t, buildMonitorBootstrap(srv.srv.URL, "zz-24", "", token, runnerSHA256, loaderSHA256))
 		assertOneStopLine(t, run.rest(t), "server_unreachable", "paused")
 		if !fileExists(token) {
 			t.Fatalf("token file removed on server_unreachable")
@@ -939,9 +998,9 @@ func TestBootstrapCommand_EndToEnd(t *testing.T) {
 	})
 
 	t.Run("internal error of the runner body keeps the file", func(t *testing.T) {
-		srv := newBootstrapServer(t, runnerBody)
+		srv := newBootstrapServer(t, loader, runnerBody)
 		token := newToken(t)
-		run := startBootstrap(t, buildMonitorBootstrap(srv.srv.URL, "zz-24", "", token, runnerSHA256, gmsTestLoaderSHA256),
+		run := startBootstrap(t, buildMonitorBootstrap(srv.srv.URL, "zz-24", "", token, runnerSHA256, loaderSHA256),
 			"PYTHONPATH="+site, "SKEIN_TEST_SITE=1", "SKEIN_TEST_RANDOM=raise")
 		assertOneStopLine(t, run.rest(t), "internal_error", "paused")
 		if !fileExists(token) {
@@ -951,7 +1010,7 @@ func TestBootstrapCommand_EndToEnd(t *testing.T) {
 
 	t.Run("the body download has a finite positive limit", func(t *testing.T) {
 		release := make(chan struct{})
-		srv := newBootstrapServer(t, runnerBody)
+		srv := newBootstrapServer(t, loader, runnerBody)
 		srv.script = func(w http.ResponseWriter, r *http.Request) {
 			select { // accept, never answer
 			case <-release:
@@ -961,7 +1020,7 @@ func TestBootstrapCommand_EndToEnd(t *testing.T) {
 		defer close(release)
 		token := newToken(t)
 		connectLog := filepath.Join(t.TempDir(), "connect")
-		run := startBootstrap(t, buildMonitorBootstrap(srv.srv.URL, "zz-24", "", token, runnerSHA256, gmsTestLoaderSHA256),
+		run := startBootstrap(t, buildMonitorBootstrap(srv.srv.URL, "zz-24", "", token, runnerSHA256, loaderSHA256),
 			"PYTHONPATH="+site, "SKEIN_TEST_SITE=1", "SKEIN_TEST_CONNECT_LOG="+connectLog)
 		lines := run.rest(t)
 		_ = run.cmd.Wait()
