@@ -52,6 +52,12 @@ mark = {"program": NAME, "argv": sys.argv[1:], "stdin": data.decode("utf-8", "re
         "env": dict((k, os.environ.get(k)) for k in WATCH), "time": time.time(), "pid": os.getpid()}
 with open(LOG, "a") as fh:
     fh.write(json.dumps(mark) + "\n")
+if answer.get("kill"):
+    import signal
+    try:
+        os.kill(answer["kill"], signal.SIGKILL)
+    except OSError:
+        pass
 if answer.get("hang"):
     time.sleep(3600)
 if answer.get("delay"):
@@ -68,7 +74,7 @@ class FakeProgram(object):
     """A program named name in directory bindir. respond() scripts its
     answers: the n-th call gets the n-th answer, later calls the last one.
     An answer is {"exit": int, "stdout": str or a JSON value, "delay": sec,
-    "hang": bool}."""
+    "hang": bool, "kill": pid (killed during the call)}."""
 
     def __init__(self, bindir, name, log=None, watch=()):
         self.dir = bindir

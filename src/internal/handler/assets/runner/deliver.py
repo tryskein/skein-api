@@ -324,6 +324,21 @@ class DeliverySink(object):
             if verdict == "changed" or (verdict is None and channel.get("kind") == "terminal"):
                 raise AddresseeChanged()
 
+    def _same_process(self, channel):
+        """For a channel that checks the agent process: it is still the
+        process of the preflight (same pid and start). True for a channel
+        that does not check it."""
+        if (channel.get("addressee") or {}).get("process") not in ("alive", "foreground"):
+            return True
+        process = self.identity.get("process")
+        if not process:
+            return False
+        try:
+            info = current_platform().process_info(process[0])
+        except PlatformRefusal:
+            return False
+        return info is not None and info.start == process[1]
+
     def wait_idle(self, channel, timeout):
         """The idle wait of a record that runs a command for it: exit code 0
         means idle; anything else, or no answer in time, is a refusal before
@@ -511,6 +526,11 @@ class DeliverySink(object):
                 attempt.finish(OUTCOME_UNKNOWN)
                 raise
             changed = outcome == "addressee-changed"
+            if not changed and outcome != OUTCOME_REFUSED and not self._same_process(channel):
+                # The agent process changed while a one-step call ran: the
+                # text may have reached another process ("unknown", never
+                # sent again), later events go to the journal.
+                changed = True
             if changed:
                 # Not sent; the event's outcome is "unknown" (the table of
                 # outcomes), later events go to the journal.
