@@ -226,7 +226,7 @@ func TestMeasureToolResponses(t *testing.T) {
 	// of a deployment, so the row changes only when the tool's response does.
 	mcptools.RegisterGetMonitorScript(s, pool, notifications.NewStore(pool),
 		monitorcreds.New(pool, measureMonitorIdleTTL), measureMonitorRegistry(t), measureMonitorPublicURL,
-		measureMonitorRunnerSHA256, measureMonitorIdleTTL)
+		measureMonitorRunnerSHA256, measureMonitorRunnerSHA256, measureMonitorIdleTTL)
 
 	c, err := client.NewInProcessClient(s)
 	if err != nil {

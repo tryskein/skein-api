@@ -70,7 +70,7 @@ type gmsUnit struct {
 
 func newGMSUnit(reg *monitorregistry.Registry) *gmsUnit {
 	u := &gmsUnit{issues: &fakeMonitorIssues{}, watcher: &fakeMonitorWatcher{}, minter: &fakeMonitorMinter{}}
-	u.handler = handleGetMonitorScript(u.issues, u.watcher, u.minter, reg, gmsTestPublicURL, gmsTestRunnerSHA256)
+	u.handler = handleGetMonitorScript(u.issues, u.watcher, u.minter, reg, gmsTestPublicURL, gmsTestRunnerSHA256, gmsTestLoaderSHA256)
 	u.ctx = withCtxKey(uuid.New(), "user", uuid.New())
 	return u
 }
@@ -171,7 +171,7 @@ func TestGetMonitorScriptClient_WithoutClientUnchanged(t *testing.T) {
 	}
 
 	s := server.NewMCPServer("t", "0", server.WithToolCapabilities(false))
-	RegisterGetMonitorScript(s, nil, nil, nil, gmsUnitRegistry(t), gmsTestPublicURL, gmsTestRunnerSHA256, 0)
+	RegisterGetMonitorScript(s, nil, nil, nil, gmsUnitRegistry(t), gmsTestPublicURL, gmsTestRunnerSHA256, gmsTestLoaderSHA256, 0)
 	tool := s.GetTool("skein_get_monitor_script")
 	if tool == nil {
 		t.Fatal("tool not registered")

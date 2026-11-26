@@ -36,6 +36,9 @@ const gmsTestPublicURL = "https://skein.example"
 // the loader.
 const gmsTestRunnerSHA256 = "5f2b0c8e5f2b0c8e5f2b0c8e5f2b0c8e5f2b0c8e5f2b0c8e5f2b0c8e5f2b0c8e"
 
+// gmsTestLoaderSHA256 stands for the loader digest in the same tests.
+const gmsTestLoaderSHA256 = "a1d0c6e8a1d0c6e8a1d0c6e8a1d0c6e8a1d0c6e8a1d0c6e8a1d0c6e8a1d0c6e8"
+
 // seedAPIKeyForTool inserts an active api_keys row owned by userID and returns
 // its id. The skein_get_monitor_script mint path stamps minted_by_api_key_id
 // = this id (FK → api_keys ON DELETE CASCADE), so withCtx's random key id
@@ -129,7 +132,7 @@ func TestGetMonitorScript_HappyPath(t *testing.T) {
 
 	notifStore := notifications.NewStore(pool)
 	monitorStore := monitorcreds.New(pool, 6*time.Hour)
-	handler := handleGetMonitorScript(poolIssueResolver{pool: pool}, notifStore, monitorStore, monitorregistry.MustEmbedded(), gmsTestPublicURL, gmsTestRunnerSHA256)
+	handler := handleGetMonitorScript(poolIssueResolver{pool: pool}, notifStore, monitorStore, monitorregistry.MustEmbedded(), gmsTestPublicURL, gmsTestRunnerSHA256, gmsTestLoaderSHA256)
 	ctx := withCtxKey(userID, "user", keyID)
 
 	req := mcpgo.CallToolRequest{}
@@ -254,7 +257,7 @@ func TestGetMonitorScript_ResponseNamesTheMonitor(t *testing.T) {
 	issueID := prefix + "-1"
 	seedIssue(t, pool, pid, userID, issueID, "monitor me", "open", 2)
 	keyID := seedAPIKeyForTool(t, pool, userID)
-	handler := handleGetMonitorScript(poolIssueResolver{pool: pool}, notifications.NewStore(pool), monitorcreds.New(pool, 6*time.Hour), monitorregistry.MustEmbedded(), gmsTestPublicURL, gmsTestRunnerSHA256)
+	handler := handleGetMonitorScript(poolIssueResolver{pool: pool}, notifications.NewStore(pool), monitorcreds.New(pool, 6*time.Hour), monitorregistry.MustEmbedded(), gmsTestPublicURL, gmsTestRunnerSHA256, gmsTestLoaderSHA256)
 
 	sessionless := auth.WithAPIKeyID(auth.WithUserRole(auth.WithUserID(context.Background(), userID), "user"), keyID)
 	sessionless = auth.WithKeyGrant(sessionless, apikeys.Grant{Level: apikeys.LevelManage, Admin: false, Scope: apikeys.Scope{Mode: apikeys.ScopeAll}})
@@ -318,7 +321,7 @@ func TestGetMonitorScript_Subtree(t *testing.T) {
 	seedIssue(t, pool, pid, userID, issueID, "monitor subtree", "open", 2)
 	keyID := seedAPIKeyForTool(t, pool, userID)
 
-	handler := handleGetMonitorScript(poolIssueResolver{pool: pool}, notifications.NewStore(pool), monitorcreds.New(pool, 6*time.Hour), monitorregistry.MustEmbedded(), gmsTestPublicURL, gmsTestRunnerSHA256)
+	handler := handleGetMonitorScript(poolIssueResolver{pool: pool}, notifications.NewStore(pool), monitorcreds.New(pool, 6*time.Hour), monitorregistry.MustEmbedded(), gmsTestPublicURL, gmsTestRunnerSHA256, gmsTestLoaderSHA256)
 	ctx := withCtxKey(userID, "user", keyID)
 
 	req := mcpgo.CallToolRequest{}
@@ -357,7 +360,7 @@ func TestGetMonitorScript_RejectsBadEventType(t *testing.T) {
 	seedIssue(t, pool, pid, userID, issueID, "bad type", "open", 2)
 	keyID := seedAPIKeyForTool(t, pool, userID)
 
-	handler := handleGetMonitorScript(poolIssueResolver{pool: pool}, notifications.NewStore(pool), monitorcreds.New(pool, 6*time.Hour), monitorregistry.MustEmbedded(), gmsTestPublicURL, gmsTestRunnerSHA256)
+	handler := handleGetMonitorScript(poolIssueResolver{pool: pool}, notifications.NewStore(pool), monitorcreds.New(pool, 6*time.Hour), monitorregistry.MustEmbedded(), gmsTestPublicURL, gmsTestRunnerSHA256, gmsTestLoaderSHA256)
 	ctx := withCtxKey(userID, "user", keyID)
 
 	req := mcpgo.CallToolRequest{}
@@ -399,7 +402,7 @@ func TestGetMonitorScript_MissingAPIKey(t *testing.T) {
 	issueID := prefix + "-1"
 	seedIssue(t, pool, pid, userID, issueID, "no key", "open", 2)
 
-	handler := handleGetMonitorScript(poolIssueResolver{pool: pool}, notifications.NewStore(pool), monitorcreds.New(pool, 6*time.Hour), monitorregistry.MustEmbedded(), gmsTestPublicURL, gmsTestRunnerSHA256)
+	handler := handleGetMonitorScript(poolIssueResolver{pool: pool}, notifications.NewStore(pool), monitorcreds.New(pool, 6*time.Hour), monitorregistry.MustEmbedded(), gmsTestPublicURL, gmsTestRunnerSHA256, gmsTestLoaderSHA256)
 	ctx := withCtxKey(userID, "user", uuid.Nil) // no api key id
 
 	req := mcpgo.CallToolRequest{}
@@ -508,7 +511,7 @@ func TestGetMonitorScript_BootstrapUsesSuppliedPath(t *testing.T) {
 		monitorTokenFilePath(issueID, "aaaaaaaaaaaaaaaa"),
 		monitorTokenFilePath(issueID, "bbbbbbbbbbbbbbbb"),
 	} {
-		b := buildMonitorBootstrap("https://skein.example", issueID, "mcp-session-1d7a", want, gmsTestRunnerSHA256)
+		b := buildMonitorBootstrap("https://skein.example", issueID, "mcp-session-1d7a", want, gmsTestRunnerSHA256, gmsTestLoaderSHA256)
 		if !strings.Contains(b, " SKEIN_TOKEN_FILE="+shellSingleQuote(want)+" ") {
 			t.Fatalf("bootstrap must embed the supplied token path %q:\n%s", want, b)
 		}
@@ -557,7 +560,7 @@ func TestBuildMonitorBootstrap_HostileInputs(t *testing.T) {
 	hostileID := "sk-1';touch " + marker + ";'"
 
 	hostileTokenFile := monitorTokenFilePath(hostileID, "0badc0de0badc0de")
-	b := buildMonitorBootstrap(hostileURL, hostileID, "", hostileTokenFile, gmsTestRunnerSHA256)
+	b := buildMonitorBootstrap(hostileURL, hostileID, "", hostileTokenFile, gmsTestRunnerSHA256, gmsTestLoaderSHA256)
 
 	// sk-164 FR-2: the rebind env var is always present (empty here → '').
 	if !strings.Contains(b, "SKEIN_EXCLUDE_SESSION='") {
@@ -580,7 +583,7 @@ func TestBuildMonitorBootstrap_HostileInputs(t *testing.T) {
 	// Evaluate the bootstrap's env assignments without running python3:
 	// replace the python3 invocation with a printf that echoes the env vars.
 	// We reconstruct just the assignments + a safe command.
-	assignments := strings.TrimSuffix(b, " python3 -c "+shellSingleQuote(monitorLoader()))
+	assignments := strings.TrimSuffix(b, " python3 -c "+shellSingleQuote(monitorStarter(false)))
 	// The VAR=val prefix exports into the CHILD process environment; a builtin
 	// printf in the same shell would not see it via $VAR expansion, so run a
 	// child `sh -c` that reads the vars from its inherited environment.
@@ -618,7 +621,7 @@ func TestBuildMonitorBootstrap_HostileInputs(t *testing.T) {
 // empty-session case asserted in TestBuildMonitorBootstrap_HostileInputs.
 func TestBuildMonitorBootstrap_BakesSession(t *testing.T) {
 	b := buildMonitorBootstrap("https://skein.example", "sk-42", "mcp-session-1d7a",
-		monitorTokenFilePath("sk-42", "0badc0de0badc0de"), gmsTestRunnerSHA256)
+		monitorTokenFilePath("sk-42", "0badc0de0badc0de"), gmsTestRunnerSHA256, gmsTestLoaderSHA256)
 	if !strings.Contains(b, "SKEIN_EXCLUDE_SESSION='mcp-session-1d7a' ") {
 		t.Fatalf("bootstrap must bake the current session into SKEIN_EXCLUDE_SESSION:\n%s", b)
 	}
@@ -630,8 +633,8 @@ func TestBuildMonitorBootstrap_BakesSession(t *testing.T) {
 	marker := filepath.Join(t.TempDir(), "pwned")
 	hostileSess := "s';touch " + marker + ";'"
 	hb := buildMonitorBootstrap("https://skein.example", "sk-42", hostileSess,
-		monitorTokenFilePath("sk-42", "0badc0de0badc0de"), gmsTestRunnerSHA256)
-	assignments := strings.TrimSuffix(hb, " python3 -c "+shellSingleQuote(monitorLoader()))
+		monitorTokenFilePath("sk-42", "0badc0de0badc0de"), gmsTestRunnerSHA256, gmsTestLoaderSHA256)
+	assignments := strings.TrimSuffix(hb, " python3 -c "+shellSingleQuote(monitorStarter(false)))
 	script := assignments + ` sh -c 'printf "%s" "$SKEIN_EXCLUDE_SESSION"'`
 	out, err := exec.Command("sh", "-c", script).Output()
 	if err != nil {
@@ -838,7 +841,7 @@ func TestBootstrapCommand_EndToEnd(t *testing.T) {
 	t.Run("SIGTERM keeps the file and the same command starts the monitor again", func(t *testing.T) {
 		srv := newBootstrapServer(t, runnerBody)
 		token := newToken(t)
-		command := buildMonitorBootstrap(srv.srv.URL, "zz-24", "sess-24", token, runnerSHA256)
+		command := buildMonitorBootstrap(srv.srv.URL, "zz-24", "sess-24", token, runnerSHA256, gmsTestLoaderSHA256)
 
 		first := startBootstrap(t, command)
 		if got := first.next(t); got["event"] != "monitor_started" {
@@ -873,7 +876,7 @@ func TestBootstrapCommand_EndToEnd(t *testing.T) {
 		marker := filepath.Join(t.TempDir(), "executed")
 		srv := newBootstrapServer(t, []byte("open("+strconv.Quote(marker)+", \"w\").write(\"x\")\n"))
 		token := newToken(t)
-		run := startBootstrap(t, buildMonitorBootstrap(srv.srv.URL, "zz-24", "", token, runnerSHA256))
+		run := startBootstrap(t, buildMonitorBootstrap(srv.srv.URL, "zz-24", "", token, runnerSHA256, gmsTestLoaderSHA256))
 		assertOneStopLine(t, run.rest(t), "runner_mismatch", "closed")
 		if fileExists(marker) {
 			t.Fatalf("the loader executed a runner whose digest differs from the minted one")
@@ -894,7 +897,7 @@ func TestBootstrapCommand_EndToEnd(t *testing.T) {
 		if err := os.Chmod(token, 0o644); err != nil {
 			t.Fatalf("chmod token: %v", err)
 		}
-		run := startBootstrap(t, buildMonitorBootstrap(srv.srv.URL, "zz-24", "", token, runnerSHA256))
+		run := startBootstrap(t, buildMonitorBootstrap(srv.srv.URL, "zz-24", "", token, runnerSHA256, gmsTestLoaderSHA256))
 		if got := run.next(t); got["event"] != "monitor_started" {
 			t.Fatalf("first line = %v, want monitor_started", got)
 		}
@@ -917,7 +920,7 @@ func TestBootstrapCommand_EndToEnd(t *testing.T) {
 			t.Error("the token of a file others can read was sent to the server")
 			w.WriteHeader(http.StatusUnauthorized)
 		}
-		run := startBootstrap(t, buildMonitorBootstrap(srv.srv.URL, "zz-24", "", token, runnerSHA256))
+		run := startBootstrap(t, buildMonitorBootstrap(srv.srv.URL, "zz-24", "", token, runnerSHA256, gmsTestLoaderSHA256))
 		assertOneStopLine(t, run.rest(t), "token_file_insecure", "closed")
 		if fileExists(token) {
 			t.Fatalf("our readable token file kept on token_file_insecure, want it deleted")
@@ -928,7 +931,7 @@ func TestBootstrapCommand_EndToEnd(t *testing.T) {
 		srv := newBootstrapServer(t, runnerBody)
 		srv.script = func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusInternalServerError) }
 		token := newToken(t)
-		run := startBootstrap(t, buildMonitorBootstrap(srv.srv.URL, "zz-24", "", token, runnerSHA256))
+		run := startBootstrap(t, buildMonitorBootstrap(srv.srv.URL, "zz-24", "", token, runnerSHA256, gmsTestLoaderSHA256))
 		assertOneStopLine(t, run.rest(t), "server_unreachable", "paused")
 		if !fileExists(token) {
 			t.Fatalf("token file removed on server_unreachable")
@@ -938,7 +941,7 @@ func TestBootstrapCommand_EndToEnd(t *testing.T) {
 	t.Run("internal error of the runner body keeps the file", func(t *testing.T) {
 		srv := newBootstrapServer(t, runnerBody)
 		token := newToken(t)
-		run := startBootstrap(t, buildMonitorBootstrap(srv.srv.URL, "zz-24", "", token, runnerSHA256),
+		run := startBootstrap(t, buildMonitorBootstrap(srv.srv.URL, "zz-24", "", token, runnerSHA256, gmsTestLoaderSHA256),
 			"PYTHONPATH="+site, "SKEIN_TEST_SITE=1", "SKEIN_TEST_RANDOM=raise")
 		assertOneStopLine(t, run.rest(t), "internal_error", "paused")
 		if !fileExists(token) {
@@ -958,7 +961,7 @@ func TestBootstrapCommand_EndToEnd(t *testing.T) {
 		defer close(release)
 		token := newToken(t)
 		connectLog := filepath.Join(t.TempDir(), "connect")
-		run := startBootstrap(t, buildMonitorBootstrap(srv.srv.URL, "zz-24", "", token, runnerSHA256),
+		run := startBootstrap(t, buildMonitorBootstrap(srv.srv.URL, "zz-24", "", token, runnerSHA256, gmsTestLoaderSHA256),
 			"PYTHONPATH="+site, "SKEIN_TEST_SITE=1", "SKEIN_TEST_CONNECT_LOG="+connectLog)
 		lines := run.rest(t)
 		_ = run.cmd.Wait()
@@ -1008,7 +1011,7 @@ func TestGetMonitorScript_RemovesOptOut(t *testing.T) {
 		t.Fatalf("precondition: opt-out recorded and no subscription row")
 	}
 
-	handler := handleGetMonitorScript(poolIssueResolver{pool: pool}, notifStore, monitorcreds.New(pool, 6*time.Hour), monitorregistry.MustEmbedded(), gmsTestPublicURL, gmsTestRunnerSHA256)
+	handler := handleGetMonitorScript(poolIssueResolver{pool: pool}, notifStore, monitorcreds.New(pool, 6*time.Hour), monitorregistry.MustEmbedded(), gmsTestPublicURL, gmsTestRunnerSHA256, gmsTestLoaderSHA256)
 	req := mcpgo.CallToolRequest{}
 	req.Params.Arguments = map[string]any{"id": issueID}
 	res, err := handler(withCtxKey(userID, "user", keyID), req)

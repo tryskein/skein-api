@@ -82,7 +82,6 @@ func TestClientCommands_HostileInputsStayQuoted(t *testing.T) {
 		name, command, mode string
 	}{
 		{"preflight", cmds.preflight, "preflight"},
-		{"bootstrap", cmds.bootstrap, "<unset>"},
 	} {
 		args, env := runWithFakePython(t, c.command)
 		if len(args) != 1 || args[0] != loaderPath {

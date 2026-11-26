@@ -60,7 +60,7 @@ func newGMSIntegFixture(t *testing.T) *gmsIntegFixture {
 	seedIssue(t, pool, pid, userID, issueID, "monitor me", "open", 2)
 	keyID := seedAPIKeyForTool(t, pool, userID)
 	h := handleGetMonitorScript(poolIssueResolver{pool: pool}, notifications.NewStore(pool),
-		monitorcreds.New(pool, 6*time.Hour), gmsIntegRegistry(t), gmsTestPublicURL, gmsTestRunnerSHA256)
+		monitorcreds.New(pool, 6*time.Hour), gmsIntegRegistry(t), gmsTestPublicURL, gmsTestRunnerSHA256, gmsTestLoaderSHA256)
 	ctx := withCtxKey(userID, "user", keyID)
 	return &gmsIntegFixture{
 		pool: pool, userID: userID, issueID: issueID, ctx: ctx,

@@ -580,7 +580,7 @@ func (f *hintFixture) server(pool *pgxpool.Pool) *server.MCPServer {
 	store := monitorcreds.New(pool, 6*time.Hour)
 	notifStore := notifications.NewStore(f.pool)
 	issuesStore := issues.NewStore(f.pool)
-	RegisterGetMonitorScript(s, f.pool, notifStore, store, monitorregistry.MustEmbedded(), gmsTestPublicURL, gmsTestRunnerSHA256, 6*time.Hour)
+	RegisterGetMonitorScript(s, f.pool, notifStore, store, monitorregistry.MustEmbedded(), gmsTestPublicURL, gmsTestRunnerSHA256, gmsTestLoaderSHA256, 6*time.Hour)
 	RegisterWatchers(s, f.pool, projects.NewStore(f.pool), notifStore, store)
 	RegisterClose(s, f.pool, issuesStore)
 	RegisterShow(s, f.pool, issuesStore, dependencies.NewStore(f.pool))
@@ -588,7 +588,7 @@ func (f *hintFixture) server(pool *pgxpool.Pool) *server.MCPServer {
 		return mcpgo.NewToolResultText(`{"ok":true}`), nil
 	})
 	s.Use(MonitorStalledMiddleware(MonitorStalledConfig{
-		Source: store, Threshold: hintThreshold, AgentPublicURL: gmsTestPublicURL, RunnerSHA256: gmsTestRunnerSHA256,
+		Source: store, Threshold: hintThreshold, AgentPublicURL: gmsTestPublicURL, RunnerSHA256: gmsTestRunnerSHA256, LoaderSHA256: gmsTestLoaderSHA256,
 	}))
 	return s
 }
@@ -1079,7 +1079,7 @@ func TestMonitorStalledMiddleware_OnlyVisibleProjects(t *testing.T) {
 	f := testsupport.SeedTenancy(t, pool)
 	store := monitorcreds.New(pool, 6*time.Hour)
 	srv := probeServer(textAnswer(`{"ok":true}`, false), MonitorStalledMiddleware(MonitorStalledConfig{
-		Source: store, Threshold: hintThreshold, AgentPublicURL: gmsTestPublicURL, RunnerSHA256: gmsTestRunnerSHA256,
+		Source: store, Threshold: hintThreshold, AgentPublicURL: gmsTestPublicURL, RunnerSHA256: gmsTestRunnerSHA256, LoaderSHA256: gmsTestLoaderSHA256,
 	}))
 	ctx := context.Background()
 

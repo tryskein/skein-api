@@ -272,7 +272,7 @@ func mcpRegisterToolsFn(d mcpDeps) func(*server.MCPServer) {
 		// returns a bootstrap command (token in a private file, never in argv).
 		// The registry is the embedded one, the same document the startup
 		// path validated (buildServingRouter).
-		mcptools.RegisterGetMonitorScript(s, d.pool, d.notifStore, d.monitorCredsStore, monitorregistry.MustEmbedded(), d.agentPublicURL, d.runnerSHA256, d.monitorTokenIdleTTL)
+		mcptools.RegisterGetMonitorScript(s, d.pool, d.notifStore, d.monitorCredsStore, monitorregistry.MustEmbedded(), d.agentPublicURL, d.runnerSHA256, d.loaderSHA256, d.monitorTokenIdleTTL)
 
 		// sk-669 — the monitorStalled response layer (sk-579 US-5,
 		// mcptools.MonitorStalledMiddleware) is deliberately NOT registered:

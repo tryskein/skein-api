@@ -78,6 +78,9 @@ type MonitorStalledConfig struct {
 	// RunnerSHA256 is the digest of the served runner the rebuilt bootstrap
 	// verifies (handler.AgentScriptHandler.SHA256).
 	RunnerSHA256 string
+	// LoaderSHA256 is the digest of the served loader the starter of the
+	// rebuilt bootstrap verifies (handler.AgentLoaderHandler.SHA256).
+	LoaderSHA256 string
 	// Timeout bounds the hint's work; zero means monitorStalledTimeout.
 	Timeout time.Duration
 }
@@ -198,7 +201,7 @@ func attachMonitorStalled(ctx context.Context, cfg MonitorStalledConfig, res *mc
 			IssueID:             m.IssueID,
 			LastPollSucceededAt: m.LastPollSucceededAt,
 			Mine:                m.Mine,
-			Bootstrap:           buildMonitorBootstrap(cfg.AgentPublicURL, m.IssueID, m.IssuedSessionID, m.TokenFilePath, cfg.RunnerSHA256),
+			Bootstrap:           buildMonitorBootstrap(cfg.AgentPublicURL, m.IssueID, m.IssuedSessionID, m.TokenFilePath, cfg.RunnerSHA256, cfg.LoaderSHA256),
 			Action:              action,
 		})
 	}

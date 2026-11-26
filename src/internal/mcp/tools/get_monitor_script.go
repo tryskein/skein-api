@@ -67,10 +67,11 @@ var defaultMonitorEventTypes = []string{"comment.created", "issue.closed"}
 // idleTTL is the token renewal window from cfg.MonitorTokenIdleTTL (sk-579
 // US-2): the description quotes the configured value, never a constant.
 // runnerSHA256 is the hex SHA-256 of the runner body the /agent/v1 door serves
-// (handler.AgentScriptHandler.SHA256), baked into every bootstrap. registry is
-// the monitor registry: the client names the description lists and the
-// records a `client` resolves to.
-func RegisterGetMonitorScript(s *server.MCPServer, pool *pgxpool.Pool, notifStore *notifications.Store, monitorStore *monitorcreds.Store, registry *monitorregistry.Registry, agentPublicURL, runnerSHA256 string, idleTTL time.Duration) {
+// (handler.AgentScriptHandler.SHA256) and loaderSHA256 that of the loader body
+// (handler.AgentLoaderHandler.SHA256), both baked into every start command.
+// registry is the monitor registry: the records a `client` resolves to and
+// the full list of ids the warning of the general record names.
+func RegisterGetMonitorScript(s *server.MCPServer, pool *pgxpool.Pool, notifStore *notifications.Store, monitorStore *monitorcreds.Store, registry *monitorregistry.Registry, agentPublicURL, runnerSHA256, loaderSHA256 string, idleTTL time.Duration) {
 	tool := mcpgo.NewTool(
 		"skein_get_monitor_script",
 		mcpgo.WithDescription(
@@ -88,13 +89,14 @@ func RegisterGetMonitorScript(s *server.MCPServer, pool *pgxpool.Pool, notifStor
 				"your context near-real-time via an autonomous Python runner. "+
 				"The runner keeps retrying through server or network trouble and "+
 				"stops by itself when the issue is closed.\n\n"+
-				"SECURITY: the token is returned in the `token` field, NOT in the "+
-				"`bootstrap` command. Run `prepare`, write `token` to "+
-				"`tokenFilePath` with the Write tool and run `bootstrap` as-is — "+
+				"SECURITY: the token is returned in the `token` field, NOT in a "+
+				"command. Run `prepare`, write `token` to "+
+				"`tokenFilePath` with the Write tool, then start the monitor as `usage` says — "+
 				"the runner reads the token from that file. Do NOT paste the token "+
 				"into a shell command (it would leak into argv / shell history).\n\n"+
-				"If you are not Claude Code, call with `client` (the name of your "+
-				"agent). "+monitorKnownClients(registry),
+				"If you are not Claude Code, call with `client`: the id of your agent, "+
+				"e.g. "+monitorMainClients+"; an unknown id gets the general "+
+				"record, and the response warns with the full list of ids.",
 		),
 		mcpgo.WithString("id",
 			mcpgo.Required(),
@@ -134,7 +136,7 @@ func RegisterGetMonitorScript(s *server.MCPServer, pool *pgxpool.Pool, notifStor
 		mcpgo.WithIdempotentHintAnnotation(false),
 		mcpgo.WithOpenWorldHintAnnotation(false),
 	)
-	addTool(s, tool, handleGetMonitorScript(poolIssueResolver{pool: pool}, notifStore, monitorStore, registry, agentPublicURL, runnerSHA256))
+	addTool(s, tool, handleGetMonitorScript(poolIssueResolver{pool: pool}, notifStore, monitorStore, registry, agentPublicURL, runnerSHA256, loaderSHA256))
 }
 
 // monitorIssueResolver resolves the project of an issue the caller may see
@@ -175,19 +177,23 @@ type getMonitorScriptResponse struct {
 	// before the token is written.
 	Prepare          string `json:"prepare"`
 	TokenInstruction string `json:"tokenInstruction"`
-	Bootstrap        string `json:"bootstrap"`
-	Usage            string `json:"usage"`
+	// Bootstrap starts the monitor of a call without `client`. A call with
+	// `client` has one start command, Preflight, and no bootstrap key
+	// (omitempty: without `client` it is never empty).
+	Bootstrap string `json:"bootstrap,omitempty"`
+	Usage     string `json:"usage"`
 	// Client is the record the `client` name resolved to: the name itself,
 	// or "general" when the registry has no record of it. Only with client.
 	Client string `json:"client,omitempty"`
 	// Platform is the platform of the setup. Only with client.
 	Platform string `json:"platform,omitempty"`
-	// Preflight is the synchronous command that chooses how the monitor
-	// runs and prints the working command. Only with client.
+	// Preflight is the one start command of a call with `client`: it chooses
+	// how the monitor runs and prints the working command (`command` of its
+	// line). Only with client.
 	Preflight string `json:"preflight,omitempty"`
 }
 
-func handleGetMonitorScript(issues monitorIssueResolver, watcher monitorWatcher, minter monitorMinter, registry *monitorregistry.Registry, agentPublicURL, runnerSHA256 string) server.ToolHandlerFunc {
+func handleGetMonitorScript(issues monitorIssueResolver, watcher monitorWatcher, minter monitorMinter, registry *monitorregistry.Registry, agentPublicURL, runnerSHA256, loaderSHA256 string) server.ToolHandlerFunc {
 	return func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 		start := time.Now()
 		userID, errResp := skmcp.RequireUser(ctx)
@@ -303,7 +309,7 @@ func handleGetMonitorScript(issues monitorIssueResolver, watcher monitorWatcher,
 		// in verbatim: it must be byte-identical to the response field, and the
 		// suffix is random per call, so recomputing here would yield a different
 		// path.
-		bootstrap := buildMonitorBootstrap(agentPublicURL, issueID, sess, tokenFilePath, runnerSHA256)
+		bootstrap := buildMonitorBootstrap(agentPublicURL, issueID, sess, tokenFilePath, runnerSHA256, loaderSHA256)
 
 		slog.InfoContext(ctx, "mcp tool ok",
 			"tool", "skein_get_monitor_script",
@@ -330,18 +336,19 @@ func handleGetMonitorScript(issues monitorIssueResolver, watcher monitorWatcher,
 				resp.Client = monitorGeneralClient
 			}
 			resp.Platform = clientArgs.Platform
+			// One start command with `client`: no bootstrap key (R-10, INV-17).
+			resp.Bootstrap = ""
 			if clientArgs.Platform == monitorPlatformPOSIX {
 				cmds := buildClientCommands(clientCommandInput{
 					publicURL: agentPublicURL, issueID: issueID, excludeSession: sess,
-					tokenFilePath: tokenFilePath, runnerSHA256: runnerSHA256,
+					tokenFilePath: tokenFilePath, runnerSHA256: runnerSHA256, loaderSHA256: loaderSHA256,
 					client: clientArgs.Client, platform: clientArgs.Platform,
 				})
 				resp.Prepare = cmds.prepare
 				resp.Preflight = cmds.preflight
-				resp.Bootstrap = cmds.bootstrap
 				resp.TokenInstruction = clientTokenInstruction
 			}
-			resp.Usage = monitorClientUsage(clientArgs.Resolution, clientExcludeSessionPath(tokenFilePath))
+			resp.Usage = monitorClientUsage(clientArgs.Resolution, registry, clientExcludeSessionPath(tokenFilePath))
 		}
 		return skmcp.ToolJSON(resp)
 	}
@@ -488,16 +495,20 @@ func monitorPrepareCommand(tokenFilePath string) string {
 // hostile session string cannot break out of the command.
 //
 // runnerSHA256 is baked as SKEIN_RUNNER_SHA256: the loader executes the
-// downloaded runner only when its SHA-256 equals it. The digest travels over
-// the MCP channel, so whoever alters the HTTP download cannot also alter it.
-func buildMonitorBootstrap(publicURL, issueID, excludeSession, tokenFilePath, runnerSHA256 string) string {
+// downloaded runner only when its SHA-256 equals it. loaderSHA256 is baked as
+// SKEIN_LOADER_SHA256: the starter (the code of the command, run with
+// `python3 -c`) executes the downloaded loader only when its SHA-256 equals
+// it (R-10). The digests travel over the MCP channel, so whoever alters an
+// HTTP download cannot also alter them.
+func buildMonitorBootstrap(publicURL, issueID, excludeSession, tokenFilePath, runnerSHA256, loaderSHA256 string) string {
 	tokenFileValue := shellSingleQuote(tokenFilePath)
 	return "SKEIN_PUBLIC_URL=" + shellSingleQuote(publicURL) +
 		" SKEIN_ISSUE=" + shellSingleQuote(issueID) +
 		" SKEIN_TOKEN_FILE=" + tokenFileValue +
 		" SKEIN_EXCLUDE_SESSION=" + shellSingleQuote(excludeSession) +
 		" SKEIN_RUNNER_SHA256=" + shellSingleQuote(runnerSHA256) +
-		" python3 -c " + shellSingleQuote(monitorLoader())
+		" SKEIN_LOADER_SHA256=" + shellSingleQuote(loaderSHA256) +
+		" python3 -c " + shellSingleQuote(monitorStarter(false))
 }
 
 // shellSingleQuote wraps s in POSIX single quotes, escaping any embedded

@@ -234,7 +234,8 @@ or pair on an issue, or after posting a blocking question as a comment.
 1. `skein_get_monitor_script(id, subtree=…)` returns `token`,
    `tokenFilePath`, `prepare`, `bootstrap`, `monitorId`. Run `prepare`,
    then write the token to `tokenFilePath` with the Write tool — never
-   into a command line.
+   into a command line. Not Claude Code: call it with `client`; that
+   response has `preflight` instead of `bootstrap` — follow its `usage`.
 2. Run `bootstrap` under the Claude Code `Monitor` tool with the maximum
    `timeout_ms` (plain `bash` / `python3` without one). It prints
    one JSON object per line: `{"event":"notification","notification":{…}}`
