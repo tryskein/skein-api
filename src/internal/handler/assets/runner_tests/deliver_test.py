@@ -540,6 +540,28 @@ class AccessBoundaryAtHandOverTest(unittest.TestCase):
         self.assertEqual(len(waits), 2)
         self.assertEqual([d[:2] for d in mon.deliveries()], [(1, "queued")])
 
+    def test_the_steps_of_an_attempt_share_one_deadline(self):
+        # Review finding 20 of wave 7 (INV-8: every call within the idle
+        # window): the idle wait spends of the attempt's time, the call gets
+        # what is left, not a whole timeout again.
+        world = World(self, two_channels())
+        mon = world.monitor()
+        timeouts = []
+        inner = mon.spy.call
+
+        def call(spec, text, timeout):
+            timeouts.append(timeout)
+            return inner(spec, text, timeout)
+        mon.spy.call = call
+
+        def idle(sink, channel, timeout):
+            world.clock.t += 1.5
+        with mock.patch.object(world.runner.DeliverySink, "wait_idle", idle):
+            mon.page([note(1)])
+        # The channel's timeout is 2 s (chan()).
+        self.assertEqual(len(timeouts), 1)
+        self.assertLessEqual(timeouts[0], 0.5 + 1e-9)
+
     def test_a_poll_gone_stale_after_the_insert_withholds_enter(self):
         world = World(self, two_channels())
         insert, enter = fake_channel.two_step(world.bin)
