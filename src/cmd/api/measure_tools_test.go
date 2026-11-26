@@ -458,79 +458,101 @@ func measureMonitorStart(m *respMeasurer, noClient, fixture string) {
 // measureWorkingCommandPy runs the runner's preflight (the body the server
 // serves, loaded by the runner tests' harness) in the token directory that
 // prepare made, with the SKEIN_* variables of the preflight command in
-// MEASURE_PREFLIGHT, then starts the monitor twice by the `command` of its
-// line, as the loader would run the body in client mode, against a local
-// poll server that answers empty pages: the first start by the result, and
-// a restart after the detached runner was stopped by a signal. Then it runs a
-// preflight of the same token against a registry whose record of the
-// fixture client has only an exit-on-event method, and one working cycle
-// of its command against a page with one event. It prints {"command",
-// "first", "restart", "delivered"}: the command, the two monitor_started
-// lines and the last line of the cycle as printed. The state home is a
-// directory of the measurement.
-const measureWorkingCommandPy = `import base64, io, json, os, shlex, signal, sys, time
+// MEASURE_PREFLIGHT; that command is the measured one. Then it starts the
+// monitor twice the way an agent does: the `command` of the line of a
+// preflight of the same token against a local server (its address and the
+// SHA-256 of the loader and the runner it serves are the only values that
+// differ), run by sh, through the starter prepare wrote, the served loader
+// and the served runner: the first start by the result, and a restart after
+// the detached runner was stopped by a signal (it is found by its token
+// file). Then it runs a preflight of the same token against a registry
+// whose record of the fixture client has only an exit-on-event method, and
+// one working cycle of its command, run by sh the same way, against a page
+// with one event. It prints {"command", "first", "restart", "delivered"}:
+// the command, the two monitor_started lines and the last line of the
+// cycle as printed. The state home is a directory of the measurement. A
+// detached runner of the token left by a failure is killed on exit.
+const measureWorkingCommandPy = `import atexit, base64, hashlib, json, os, shlex, signal, subprocess, sys, time
 sys.path.insert(0, os.getcwd())
 import harness
 R = harness.load_runner()
-env = {"HOME": os.environ["MEASURE_STATE_HOME"], "XDG_STATE_HOME": os.environ["MEASURE_STATE_HOME"],
-       "PATH": os.environ.get("PATH", "")}
+home = os.environ["MEASURE_STATE_HOME"]
+env = {"HOME": home, "XDG_STATE_HOME": home, "PATH": os.environ.get("PATH", "")}
 for word in shlex.split(os.environ["MEASURE_PREFLIGHT"]):
     name, sep, value = word.partition("=")
     if sep and name.startswith("SKEIN_"):
         env[name] = value
+token_file = env["SKEIN_TOKEN_FILE"]
 registry = R.load_registry()
 settings = R.read_settings(env, registry, mode="client")
-command = R.preflight(env["SKEIN_TOKEN_FILE"], env, registry, settings)["command"]
+command = R.preflight(token_file, env, registry, settings)["command"]
 
-# The working start: the variables of the command, the loader's namespace.
-srv = harness.ScriptedServer(lambda h, qs: h.send_json(200, harness.EMPTY))
-run_env = dict(env)
-for word in shlex.split(command):
-    name, sep, value = word.partition("=")
-    if sep and name.startswith("SKEIN_"):
-        run_env[name] = value
-run_env["SKEIN_PUBLIC_URL"] = srv.url()
-os.environ.clear()
-os.environ.update(run_env)
-R.LOADER_MODE = "client"
-R._skein_loader_body = harness.render_runner()
-pids = []
-spawn = R.PosixPlatform.spawn_detached
-def spy(*args):
-    pid, receipt = spawn(*args)
-    pids.append(pid)
-    return pid, receipt
-R.PosixPlatform.spawn_detached = staticmethod(spy)
-
-def start():
-    out, real = io.StringIO(), sys.stdout
-    sys.stdout = out
-    try:
-        code = R.run_client()
-    finally:
-        sys.stdout = real
-    lines = [l for l in out.getvalue().splitlines() if l]
-    if code != 0 or len(lines) != 1 or json.loads(lines[0]).get("event") != "monitor_started" or not pids:
-        sys.exit("the working start did not print one monitor_started: code %r, %r" % (code, lines))
-    return lines[0]
-
-def stop():
-    pid = pids.pop()
-    os.kill(pid, signal.SIGTERM)
-    deadline = time.monotonic() + 30
-    while time.monotonic() < deadline:
+def runners():
+    """The pids of processes that run a monitor of this token file."""
+    mark = ("SKEIN_TOKEN_FILE=" + token_file).encode()
+    pids = []
+    for name in os.listdir("/proc"):
+        if not name.isdigit() or int(name) == os.getpid():
+            continue
         try:
-            os.kill(pid, 0)
-        except ProcessLookupError:
-            return
-        time.sleep(0.05)
-    sys.exit("the detached runner did not stop")
+            with open("/proc/%s/environ" % name, "rb") as fh:
+                if mark in fh.read().split(b"\0"):
+                    pids.append(int(name))
+        except OSError:
+            pass
+    return pids
 
-first = start()
-stop()
-restart = start()
-stop()
-srv.stop()
+def kill_left():
+    for pid in runners():
+        try:
+            os.killpg(pid, signal.SIGKILL)
+        except OSError:
+            pass
+atexit.register(kill_left)
+
+def gone(pid, sec):
+    deadline = time.monotonic() + sec
+    while time.monotonic() < deadline:
+        if pid not in runners():
+            return True
+        time.sleep(0.05)
+    return False
+
+runner = harness.render_runner().encode("utf-8")
+loader = harness.served_loader().encode("utf-8")
+page = {"notifications": [], "cursor": {"ts": "2026-01-01T00:00:00Z", "id": 0}}
+srv = harness.LoaderServer(script=lambda h: h.send_body(200, runner),
+                           poll=lambda h: h.send_body(200, json.dumps(page).encode()))
+atexit.register(srv.stop)
+local = dict(env, SKEIN_PUBLIC_URL=srv.url(), SKEIN_LOADER_SHA256=hashlib.sha256(loader).hexdigest(),
+             SKEIN_RUNNER_SHA256=hashlib.sha256(runner).hexdigest())
+shell_env = {"HOME": home, "XDG_STATE_HOME": home, "PATH": env["PATH"]}
+
+def run(cmd):
+    """The command as the agent runs it: its printed lines and exit code."""
+    done = subprocess.run(["sh", "-c", cmd], env=shell_env, stdout=subprocess.PIPE, stderr=sys.stderr,
+                          timeout=120)
+    return done.returncode, [l for l in done.stdout.decode("utf-8").splitlines() if l]
+
+def start(cmd):
+    code, lines = run(cmd)
+    if code != 0 or len(lines) != 1 or json.loads(lines[0]).get("event") != "monitor_started":
+        sys.exit("the working start did not print one monitor_started: code %r, %r" % (code, lines))
+    pids = runners()
+    if len(pids) != 1:
+        sys.exit("the working start left %d runners of the token, not one" % len(pids))
+    return lines[0], pids[0]
+
+def stop(pid):
+    os.kill(pid, signal.SIGTERM)
+    if not gone(pid, 30):
+        sys.exit("the detached runner did not stop")
+
+run_command = R.preflight(token_file, local, registry, R.read_settings(local, registry, mode="client"))["command"]
+first, pid = start(run_command)
+stop(pid)
+restart, pid = start(run_command)
+stop(pid)
 if "journal" not in json.loads(first) or "journal" in json.loads(restart):
     sys.exit("the first start is not the full line or the restart is not the short one: %s / %s" % (first, restart))
 
@@ -542,25 +564,12 @@ doc["agents"] = [{"id": env["SKEIN_CLIENT"], "about": "measurement", "source": "
                   "methods": [{"kind": "exit-on-event", "conditions": {},
                                "instruction": "Run command as a background task; run it again when it ends."}]}]
 exit_registry = R.load_registry(base64.b64encode(json.dumps(doc).encode()).decode())
-exit_settings = R.read_settings(env, exit_registry, mode="client")
-exit_command = R.preflight(env["SKEIN_TOKEN_FILE"], env, exit_registry, exit_settings)["command"]
+exit_command = R.preflight(token_file, local, exit_registry,
+                           R.read_settings(local, exit_registry, mode="client"))["command"]
 page = {"notifications": [{"id": 7, "type": "comment_added", "entity": {"type": "issue", "id": env["SKEIN_ISSUE"]},
                            "actor": {"username": "measure"}, "commentId": "c-7", "bodyPreview": "measured event"}],
         "cursor": {"ts": "2026-01-01T00:00:01Z", "id": 7}}
-srv = harness.ScriptedServer(lambda h, qs: h.send_json(200, page))
-for word in shlex.split(exit_command):
-    name, sep, value = word.partition("=")
-    if sep and name.startswith("SKEIN_"):
-        os.environ[name] = value
-os.environ["SKEIN_PUBLIC_URL"] = srv.url()
-out, real = io.StringIO(), sys.stdout
-sys.stdout = out
-try:
-    code = R.run_client()
-finally:
-    sys.stdout = real
-srv.stop()
-cycle = [l for l in out.getvalue().splitlines() if l]
+code, cycle = run(exit_command)
 if code != 0 or not cycle or json.loads(cycle[-1]).get("reason") != "delivered":
     sys.exit("the exit-on-event cycle did not end with delivered: code %r, %r" % (code, cycle))
 sys.stdout.write(json.dumps({"command": command, "first": first, "restart": restart, "delivered": cycle[-1]}))
