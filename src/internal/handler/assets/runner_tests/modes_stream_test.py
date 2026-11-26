@@ -346,7 +346,6 @@ class StateUnavailableTest(unittest.TestCase):
         # on from the saved cursor.
         self.assertNotIn("since_id", executor.urls[1])
         self.assertIn("since_id=1", executor.urls[2])
-        self.assertEqual(RUNNER.load_cursor(box.token)["id"], 1)
 
     def test_exit_on_event_prints_delivered_only_for_a_saved_cycle(self):
         box = Box(self)

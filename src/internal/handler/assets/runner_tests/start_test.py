@@ -333,8 +333,9 @@ class AnnouncedTest(unittest.TestCase):
 
         code, _ = box.start(pre["preflightId"], on_emit=on_emit)
         self.assertEqual((code, lines[1]["reason"]), (1, "internal_error"))
-        # The child of the unprinted receipt does not run on.
-        self.assertTrue(wait_until(lambda: not alive(box.pids[-1])))
+        # The child of the unprinted receipt does not run on: nothing holds
+        # the lock (the spy never saw its pid: the spawn raised).
+        self.assertTrue(wait_until(lambda: not box.lock_busy()))
         code, lines = box.start(pre["preflightId"])
         self.assertEqual((code, set(lines[0])), (0, FULL_KEYS))
 
