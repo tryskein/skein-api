@@ -41,6 +41,7 @@ import (
 	"skein-api/internal/dependencies"
 	"skein-api/internal/issues"
 	"skein-api/internal/monitorcreds"
+	"skein-api/internal/monitorregistry"
 	"skein-api/internal/notifications"
 	"skein-api/internal/projects"
 	"skein-api/internal/search"
@@ -72,13 +73,21 @@ type wiringStack struct {
 // the router with buildRouter. Only the dependencies the exercised doors
 // reach are real; the rest are nil, as in newRouterWithOAuthServers.
 func newWiringStack(t *testing.T) *wiringStack {
+	return newWiringStackWith(t, "http://skein-wiring.test", nil)
+}
+
+// newWiringStackWith is newWiringStack with the public agent URL the mint
+// bakes into its commands and, when registryDoc is not nil, the monitor
+// registry the served runner carries, validated by buildServingRouter as at
+// startup (the seam of buildRouterWithRegistry).
+func newWiringStackWith(t *testing.T, publicURL string, registryDoc []byte) *wiringStack {
 	t.Helper()
 	pool := testsupport.NewTestPool(t)
 
 	t.Setenv("DATABASE_URL", os.Getenv("TEST_DATABASE_URL"))
 	t.Setenv("SKEIN_INTERNAL_SECRET", wiringInternalSecret)
 	t.Setenv("ENVIRONMENT", "development")
-	t.Setenv("SKEIN_AGENT_PUBLIC_URL", "http://skein-wiring.test")
+	t.Setenv("SKEIN_AGENT_PUBLIC_URL", publicURL)
 	cfg, err := config.Load()
 	if err != nil {
 		t.Fatalf("config.Load: %v", err)
@@ -108,19 +117,33 @@ func newWiringStack(t *testing.T) *wiringStack {
 	if err != nil {
 		t.Fatalf("search.NewService: %v", err)
 	}
-	router, _ := buildRouter(
-		pool, cfg,
-		nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, // REST handlers authH…dashboardH
-		nil,                                         // usersStore
-		issues.NewStore(pool),                       // issuesStore
-		dependencies.NewStore(pool),                 // depsStore
-		projects.NewStore(pool),                     // projectsStore
-		notifications.NewStore(pool),                // notifStore — the monitor tool's auto-watch
-		nil,                                         // remindersStore
-		searchSvc,                                   // searchSvc
-		nil,                                         // s3Client
-		nil, nil, nil, nil, nil, nil, nil, nil, nil, // attachmentsH…pushH
-	)
+	build := func(doc []byte) (chi.Router, func()) {
+		return buildRouterWithRegistry(doc,
+			pool, cfg,
+			nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, // REST handlers authH…dashboardH
+			nil,                                         // usersStore
+			issues.NewStore(pool),                       // issuesStore
+			dependencies.NewStore(pool),                 // depsStore
+			projects.NewStore(pool),                     // projectsStore
+			notifications.NewStore(pool),                // notifStore — the monitor tool's auto-watch
+			nil,                                         // remindersStore
+			searchSvc,                                   // searchSvc
+			nil,                                         // s3Client
+			nil, nil, nil, nil, nil, nil, nil, nil, nil, // attachmentsH…pushH
+		)
+	}
+	var router chi.Router
+	if registryDoc == nil {
+		router, _ = build(nil)
+	} else {
+		var err error
+		router, _, err = buildServingRouter(registryDoc, func(_ *monitorregistry.Registry, doc []byte) (chi.Router, func()) {
+			return build(doc)
+		})
+		if err != nil {
+			t.Fatalf("buildServingRouter: %v", err)
+		}
+	}
 	return &wiringStack{t: t, pool: pool, cfg: cfg, router: router, owner: owner,
 		project: project, root: root, keyID: keyID, key: plain}
 }
@@ -559,4 +582,244 @@ func runWiringRunner(t *testing.T, body []byte, serverURL string, budget time.Du
 		run.probe = string(raw)
 	}
 	return run
+}
+
+// wiringChannelID is the channel of the fixture registry of the client-path
+// test: an own delivery whose program refuses before sending.
+const wiringChannelID = "wiring-queue"
+
+// wiringClientRegistry is a valid registry document with one agent record
+// ("alpha") whose method is the delivery by wiringChannelID; the channel's
+// program (on PATH) answers exit code 3, a refusal before send.
+func wiringClientRegistry(t *testing.T) []byte {
+	t.Helper()
+	exit0, exit3 := 0, 3
+	reg := monitorregistry.Registry{
+		SchemaVersion: 1,
+		General:       monitorregistry.General{About: "general record", Source: "fixture", Warnings: []string{"not found"}},
+		Agents: []monitorregistry.Agent{{
+			ID: "alpha", About: "fixture agent", Source: "fixture",
+			Process: monitorregistry.ProcessSign{Executables: []string{"alpha"}},
+			Methods: []monitorregistry.Method{
+				{Kind: monitorregistry.MethodDelivery, Channel: wiringChannelID, Instruction: "run detached"},
+			},
+		}},
+		Channels: []monitorregistry.Channel{{
+			ID: wiringChannelID, About: "own delivery", Source: "fixture",
+			Step: monitorregistry.StepOwnDelivery, Order: 1, Kind: monitorregistry.KindAddressed,
+			Detect: monitorregistry.Conditions{Env: []monitorregistry.EnvCondition{{Name: "WIRING_QUEUE_ID", Pattern: "[a-z0-9-]+"}}},
+			Executor: monitorregistry.Executor{Type: monitorregistry.ExecutorArgv,
+				Argv: []string{"wiringq", "{env:WIRING_QUEUE_ID}"}, Feed: monitorregistry.FeedStdin, TimeoutSec: 30},
+			Idle: monitorregistry.Idle{Type: monitorregistry.IdleNone},
+			Outcomes: []monitorregistry.OutcomeRow{
+				{Match: monitorregistry.Match{ExitCode: &exit0}, Outcome: monitorregistry.OutcomeQueued},
+				{Match: monitorregistry.Match{ExitCode: &exit3}, Outcome: monitorregistry.OutcomeRefused},
+			},
+			ProbeUndefined: true,
+			Addressee:      monitorregistry.AddresseeCheck{Process: monitorregistry.ProcessNone},
+			Binaries:       map[string][]string{monitorregistry.PlatformLinux: {"wiringq"}},
+		}},
+		Shells:       monitorregistry.Shells{Source: "fixture", Names: []string{"sh", "bash"}},
+		ZavodEngines: map[string]string{"alpha-engine": "alpha"},
+	}
+	doc, err := json.Marshal(reg)
+	if err != nil {
+		t.Fatalf("marshal registry: %v", err)
+	}
+	return doc
+}
+
+// wiringShell runs command with sh in env; returns its stdout lines as JSON
+// objects.
+func wiringShell(t *testing.T, command string, env []string) []map[string]any {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	cmd := osexec.CommandContext(ctx, "sh", "-c", command)
+	cmd.Env = env
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("%s: %v\nstdout:\n%s\nstderr:\n%s", command[:min(len(command), 60)], err, stdout.String(), stderr.String())
+	}
+	var lines []map[string]any
+	sc := bufio.NewScanner(&stdout)
+	sc.Buffer(make([]byte, 1<<20), 1<<20)
+	for sc.Scan() {
+		var obj map[string]any
+		if err := json.Unmarshal(sc.Bytes(), &obj); err != nil {
+			t.Fatalf("stdout line is not JSON: %q", sc.Text())
+		}
+		lines = append(lines, obj)
+	}
+	return lines
+}
+
+// wiringJournal reads every journal line under the state home.
+func wiringJournal(stateHome string) []map[string]any {
+	paths, _ := filepath.Glob(filepath.Join(stateHome, "skein-monitor", "journal", "*"))
+	var out []map[string]any
+	for _, p := range paths {
+		raw, err := os.ReadFile(p)
+		if err != nil {
+			continue
+		}
+		for _, l := range strings.Split(string(raw), "\n") {
+			var obj map[string]any
+			if json.Unmarshal([]byte(l), &obj) == nil {
+				out = append(out, obj)
+			}
+		}
+	}
+	return out
+}
+
+// TestMonitorConfigWiring_IdleWindowReachesTheClientPath — test matrix row
+// #11 (US-12 "liveness of the token", the named path of the idle window).
+// SKEIN_MONITOR_TOKEN_IDLE_TTL comes from config.Load with a value that is
+// no other timing and not the default; the router carries a fixture registry
+// through its seam. The path is the one an agent takes: the MCP call with
+// `client`, `prepare`, the token written 0644, `preflight`, the working
+// command of its line; starter, loader, runner download and polls go through
+// a local adapter that adds the internal secret, as the proxy does. The
+// detached runner runs on the virtual clock.
+//
+// Deviation from the wording of the row: the channel refuses before send
+// instead of taking the call and never answering, because the executor's
+// wait on a channel call is a select with a real timeout that the virtual
+// clock does not cover. The same parameter is observed: INV-8 calls a
+// channel again only after a proven refusal, after 5, 30 and 120 s, and only
+// within the idle window from the first call; with a window of 100 s the
+// calls are at 0, 5 and 35 s and a fourth (at 155 s) is not made, while the
+// default window of 6 h would allow it.
+func TestMonitorConfigWiring_IdleWindowReachesTheClientPath(t *testing.T) {
+	if _, err := osexec.LookPath("python3"); err != nil {
+		t.Skip("python3 not available")
+	}
+	const window = 100 * time.Second
+	t.Setenv("SKEIN_MONITOR_TOKEN_IDLE_TTL", "100s")
+	t.Setenv("SKEIN_MONITOR_POLL_SAFETY_LAG", "1s")
+
+	// The adapter is the proxy: it adds the internal secret and hands the
+	// request to the router built below.
+	var router atomic.Value
+	adapter := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r.Header.Set(auth.HeaderInternalSecret, wiringInternalSecret)
+		router.Load().(chi.Router).ServeHTTP(w, r)
+	}))
+	t.Cleanup(adapter.Close)
+	s := newWiringStackWith(t, adapter.URL, wiringClientRegistry(t))
+	router.Store(s.router)
+	if s.cfg.MonitorTokenIdleTTL != window {
+		t.Fatalf("config.Load idle window = %s, want %s", s.cfg.MonitorTokenIdleTTL, window)
+	}
+
+	actor, _ := testsupport.SeedUser(t, s.pool, "user")
+	t.Cleanup(func() {
+		_, _ = s.pool.Exec(context.Background(), `DELETE FROM events WHERE actor_user_id = $1`, actor)
+	})
+
+	issuing := s.initialize()
+	minted := s.callTool(issuing, "skein_get_monitor_script", map[string]any{
+		"id": s.root, "client": "alpha", "platform": "posix", "eventTypes": []string{"issue.status_changed"}})
+	var mint struct {
+		MonitorID     string `json:"monitorId"`
+		Token         string `json:"token"`
+		TokenFilePath string `json:"tokenFilePath"`
+		Prepare       string `json:"prepare"`
+		Preflight     string `json:"preflight"`
+	}
+	if err := json.Unmarshal([]byte(minted[0]), &mint); err != nil {
+		t.Fatalf("mint response: %v\n%s", err, minted[0])
+	}
+	if mint.Prepare == "" || mint.Preflight == "" {
+		t.Fatalf("a call with client has prepare and preflight: %s", minted[0])
+	}
+	monitorID := uuid.MustParse(mint.MonitorID)
+	// The runner stops on its own once its token is gone (401), and the
+	// token directory goes with it.
+	t.Cleanup(func() {
+		_, _ = s.pool.Exec(context.Background(), `DELETE FROM monitor_credentials WHERE id = $1`, monitorID)
+		deadline := time.Now().Add(30 * time.Second)
+		for time.Now().Before(deadline) {
+			if _, err := os.Stat(filepath.Dir(mint.TokenFilePath)); os.IsNotExist(err) {
+				return
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+	})
+
+	home := t.TempDir()
+	stateHome := filepath.Join(home, "state")
+	bin := filepath.Join(home, "bin")
+	if err := os.MkdirAll(bin, 0o700); err != nil {
+		t.Fatalf("bin: %v", err)
+	}
+	calls := filepath.Join(home, "calls")
+	fake := "#!/bin/sh\ncat >/dev/null\necho call >> '" + calls + "'\nexit 3\n"
+	if err := os.WriteFile(filepath.Join(bin, "wiringq"), []byte(fake), 0o700); err != nil {
+		t.Fatalf("fake channel: %v", err)
+	}
+	site, err := filepath.Abs(filepath.Join("..", "..", "internal", "handler", "testdata", "runner_site"))
+	if err != nil {
+		t.Fatalf("site dir: %v", err)
+	}
+	var env []string
+	for _, kv := range os.Environ() {
+		if !strings.HasPrefix(kv, "SKEIN_") && !strings.HasPrefix(kv, "PATH=") && !strings.HasPrefix(kv, "XDG_STATE_HOME=") {
+			env = append(env, kv)
+		}
+	}
+	env = append(env, "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"XDG_STATE_HOME="+stateHome, "WIRING_QUEUE_ID=thread-11")
+
+	// prepare, then the token written like the Write tool does (0644).
+	if lines := wiringShell(t, mint.Prepare, env); len(lines) != 1 || lines[0]["event"] != "prepare_ready" {
+		t.Fatalf("prepare = %v", lines)
+	}
+	if err := os.WriteFile(mint.TokenFilePath, []byte(mint.Token), 0o644); err != nil {
+		t.Fatalf("write token: %v", err)
+	}
+	lines := wiringShell(t, mint.Preflight, env)
+	pre := lines[len(lines)-1]
+	if pre["event"] != "preflight" || pre["method"] != "detached" || pre["channel"] != wiringChannelID {
+		t.Fatalf("preflight line = %v", pre)
+	}
+	command, _ := pre["command"].(string)
+
+	// The working command, the detached runner on the virtual clock.
+	runEnv := append(append([]string(nil), env...), "PYTHONPATH="+site, "SKEIN_TEST_SITE=1",
+		"SKEIN_TEST_VCLOCK=1", "SKEIN_TEST_RANDOM=1.0")
+	started := wiringShell(t, command, runEnv)
+	if last := started[len(started)-1]; last["event"] != "monitor_started" {
+		t.Fatalf("working command = %v", started)
+	}
+
+	// An event the token sees, past the safety lag.
+	s.exec(`INSERT INTO events (occurred_at, type, entity_type, entity_id, project_id,
+                    actor, actor_user_id, actor_session_id, actor_type, payload)
+VALUES (now(), 'issue.status_changed', 'issue', $1, $2, 'tester', $3, NULL, 'human', '{}'::jsonb)`,
+		s.root, s.project, actor)
+
+	var outcome map[string]any
+	deadline := time.Now().Add(90 * time.Second)
+	for outcome == nil && time.Now().Before(deadline) {
+		for _, l := range wiringJournal(stateHome) {
+			if l["event"] == "delivery" {
+				outcome = l
+			}
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	if outcome == nil {
+		t.Fatalf("no delivery outcome in the journal; journal: %v", wiringJournal(stateHome))
+	}
+	if outcome["status"] != "refused-before-send" {
+		t.Errorf("outcome = %v, want refused-before-send", outcome["status"])
+	}
+	raw, _ := os.ReadFile(calls)
+	// Calls at 0, 5 and 35 s of the 100 s window; the one at 155 s is past it.
+	if got := strings.Count(string(raw), "call"); got != 3 {
+		t.Errorf("channel calls = %d, want 3 within a window of %s (INV-8: 0, 5, 35 s; not 155 s)", got, window)
+	}
 }
