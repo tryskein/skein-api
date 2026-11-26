@@ -148,7 +148,10 @@ class _FileLock(object):
         try:
             self.fd = os.open(path, flags, 0o600)
         except FileNotFoundError:
-            raise
+            if not create:
+                raise
+            # The directory went between resolving the path and the open.
+            raise LedgerUnavailable("open_failed")
         except OSError as exc:
             raise LedgerUnavailable(exc.strerror or "open_failed")
         try:
@@ -458,6 +461,12 @@ class Ledger(object):
         except ValueError:
             raise LedgerUnavailable("corrupt")
         if not isinstance(doc, dict) or doc.get("version") != LEDGER_VERSION:
+            raise LedgerUnavailable("corrupt")
+        addressees = doc.get("addressees")
+        if not isinstance(addressees, list) or not all(
+                isinstance(e, dict) and isinstance(e.get("events", {}), dict) for e in addressees):
+            # A document without a usable collection of addressees is as
+            # unusable as one that does not parse.
             raise LedgerUnavailable("corrupt")
         return doc
 
