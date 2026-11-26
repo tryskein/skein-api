@@ -438,7 +438,10 @@ def run_stream_loop(executor, base, token, issue, exclude_session, token_file, d
     # yet given an outcome in full; an exit-on-event cycle resumes it from
     # the state.
     remainder = load_remainder(token_file, cursor) if exit_on_event else None
+    # Ids given an outcome by this process, the most recent SEEN_IDS_CAP of
+    # them (a monitor lives up to 12 h).
     seen = set()
+    seen_order = []
     backoff = float(POLL_INTERVAL_SEC)
     series_started = None
     series_degraded = False
@@ -461,8 +464,11 @@ def run_stream_loop(executor, base, token, issue, exclude_session, token_file, d
             events = [n for n in source if not isinstance(n, dict) or n.get("id") not in seen]
             done = print_events(output, events, exit_on_event, slot_lines)
             for n in done:
-                if isinstance(n, dict) and n.get("id") is not None:
+                if isinstance(n, dict) and n.get("id") is not None and n.get("id") not in seen:
                     seen.add(n.get("id"))
+                    seen_order.append(n.get("id"))
+                    if len(seen_order) > SEEN_IDS_CAP:
+                        seen.discard(seen_order.pop(0))
             done_ids = set(id(n) for n in done)
             left = [n for n in events if id(n) not in done_ids]
             if not left:
