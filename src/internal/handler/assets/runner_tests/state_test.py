@@ -114,6 +114,15 @@ class EventServer(harness.ThreadingHTTPServer):
     def cursor_at(event_id):
         return {"ts": "2026-01-01T00:00:%02dZ" % (event_id % 60), "id": event_id}
 
+    def wait_polls(self, count, timeout=20):
+        """Wait until the server has answered count polls: a monitor's first
+        poll is live-start and anchors past every event pushed before it."""
+        deadline = time.monotonic() + timeout
+        while len(self.polls) < count:
+            if time.monotonic() > deadline:
+                raise AssertionError("only %d polls, want %d" % (len(self.polls), count))
+            _real_sleep(0.05)
+
     def push(self):
         with self.lock:
             nid = self.newest() + 1
@@ -281,6 +290,7 @@ class CursorTest(unittest.TestCase):
         tok = TokenDir(self)
         first = Monitor(self, self.srv.url(), tok.token)
         first.wait_for(is_event("monitor_started"))
+        self.srv.wait_polls(1)
         one = self.srv.push()
         first.wait_for(notification_id(one))
         tok.wait_saved(one)
@@ -481,6 +491,7 @@ class FileFateTest(unittest.TestCase):
         tok = TokenDir(self)
         live = Monitor(self, self.srv.url(), tok.token)
         live.wait_for(is_event("monitor_started"))
+        self.srv.wait_polls(1)
         one = self.srv.push()
         live.wait_for(notification_id(one))
         tok.wait_saved(one)
@@ -530,6 +541,7 @@ class LegacyModeTest(unittest.TestCase):
         tok = TokenDir(self)
         mon = Monitor(self, srv.url(), tok.token, extra_env=env)
         mon.wait_for(is_event("monitor_started"))
+        srv.wait_polls(1)
         nid = srv.push()
         mon.wait_for(notification_id(nid))
         self.assertEqual(mon.stop(), 0)
