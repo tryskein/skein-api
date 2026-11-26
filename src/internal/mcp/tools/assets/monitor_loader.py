@@ -2,11 +2,6 @@ import signal
 
 globals().setdefault("_SKEIN_LOADER_MODE", "legacy")
 
-if _SKEIN_LOADER_MODE == "client":
-    # The client branch (monitorassets/loader_client/main.py); it never
-    # returns. Without `client` the loader below runs as before.
-    loader_client_main()
-
 
 class _SkeinLoaderSignal(BaseException):
     pass
@@ -185,6 +180,12 @@ try:
     try:
         signal.signal(signal.SIGTERM, _skein_loader_on_signal)
         signal.signal(signal.SIGINT, _skein_loader_on_signal)
+        if _SKEIN_LOADER_MODE == "client":
+            # The client branch (monitorassets/loader_client), carried as the
+            # source _skein_loader_client_src; it never returns. Without
+            # `client` none of it runs.
+            exec(compile(_skein_loader_client_src, "<skein-loader-client>", "exec"), globals())
+            loader_client_main()
         _skein_loader_body = _skein_loader_fetch()
         exec(_skein_loader_body)
     except SystemExit:

@@ -66,14 +66,34 @@ func mustStarter(mode string) string {
 }
 
 // servedLoaderSource is the loader GET /agent/v1/monitor-loader serves: the
-// parts of the client branch (internal/monitorassets, loader_client/parts.txt:
-// the runner's shared parts and the branch itself), then the parts listed in
-// assets/loader_parts.txt, joined in order. It is static code of this build,
-// the same for every caller; the starter runs it with its mode in the
-// loader's namespace, so one body serves both the call without `client` and
-// the call with it.
-var servedLoaderSource = mustAssembleAssets(monitorassets.LoaderClient, monitorassets.LoaderClientDir, "parts.txt") +
+// source of the client branch (internal/monitorassets, loader_client/parts.txt:
+// the runner's shared parts and the branch itself) as the string
+// _skein_loader_client_src, then the parts listed in assets/loader_parts.txt,
+// joined in order. The loader runs that source only in client mode, after its
+// signal handlers are installed. It is static code of this build, the same
+// for every caller; the starter runs it with its mode in the loader's
+// namespace, so one body serves both the call without `client` and the call
+// with it.
+var servedLoaderSource = mustClientSourceLine() +
 	mustAssembleAssets(monitorAssets, "assets", "loader_parts.txt")
+
+// loaderClientSourceName is the name of the client branch's source in the
+// loader's namespace.
+const loaderClientSourceName = "_skein_loader_client_src"
+
+// mustClientSourceLine is the first line of the served loader: the source of
+// the client branch as a JSON string, which is also a valid Python string
+// literal (the encoder escapes quotes, backslashes and control characters).
+func mustClientSourceLine() string {
+	src := mustAssembleAssets(monitorassets.LoaderClient, monitorassets.LoaderClientDir, "parts.txt")
+	var lit bytes.Buffer
+	enc := json.NewEncoder(&lit)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(src); err != nil {
+		panic(fmt.Sprintf("monitor loader: encoding the client branch: %v", err))
+	}
+	return loaderClientSourceName + " = " + lit.String()
+}
 
 // ServedLoader returns the loader source GET /agent/v1/monitor-loader serves.
 // The handler of that route digests it once; the digest is the

@@ -74,11 +74,13 @@ def _join_manifest(manifest):
 
 
 def served_loader():
-    """The loader the route serves: the parts of the client branch
-    (LOADER_CLIENT_MANIFEST), then those of loader_parts.txt, joined in
-    order the way monitor_loader.go assembles them. The starter runs these
+    """The loader the route serves: the source of the client branch
+    (LOADER_CLIENT_MANIFEST) as the string _skein_loader_client_src, then
+    the parts of loader_parts.txt, joined in order the way
+    monitor_loader.go assembles them. The starter runs these
     bytes; a test that runs the loader runs them too."""
-    return _join_manifest(LOADER_CLIENT_MANIFEST) + _join_manifest(LOADER_PARTS_MANIFEST)
+    client = json.dumps(_join_manifest(LOADER_CLIENT_MANIFEST), ensure_ascii=False)
+    return "_skein_loader_client_src = " + client + "\n" + _join_manifest(LOADER_PARTS_MANIFEST)
 
 
 def starter(client):
