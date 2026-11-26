@@ -118,6 +118,34 @@ class AttemptLockTest(Base):
 
 
 @unittest.skipUnless(os.name == "posix", "the POSIX ledger")
+class AttemptFileRaceTest(Base):
+    """Review finding 34 of wave 7 (P-11: a "delivering" record is never
+    visible without its attempt lock held): an attempt file removed by the
+    sweep before it was locked is not the one an attempt publishes."""
+
+    def test_an_attempt_file_removed_before_its_lock(self):
+        led = self.ledger("mon-a", ident([addr("orca", "t-1")]))
+        led.begin([ev("warm")], "c1").attempt.release()
+        real = RUNNER._ledger_fcntl.flock
+        removed = []
+
+        def flock(fd, op):
+            path = os.readlink("/proc/self/fd/%d" % fd)
+            if not removed and os.path.dirname(path) == os.path.realpath(self.attempts_dir()):
+                os.remove(path)    # the sweep, between open and flock
+                removed.append(path)
+            return real(fd, op)
+
+        with mock.patch.object(RUNNER._ledger_fcntl, "flock", flock):
+            d = led.begin([ev("e1")], "c1")
+        self.assertTrue(removed)
+        self.assertTrue(os.path.exists(os.path.join(self.attempts_dir(), d.attempt.key)),
+                        "the published attempt has no file")
+        d.attempt.abandon()
+        d.attempt.release()
+
+
+@unittest.skipUnless(os.name == "posix", "the POSIX ledger")
 class RecordLimitTest(Base):
     """Review finding 17 of wave 7 (P-11: an addressee holds at most 10 000
     records younger than 24 h; a full ledger is unavailable): an outcome

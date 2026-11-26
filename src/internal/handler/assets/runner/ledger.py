@@ -343,6 +343,24 @@ def _budgets(mine):
     return budgets
 
 
+def _new_attempt_lock(attempts):
+    """(key, lock) of a new attempt file, locked and still in place: the
+    sweep of unheld attempt files may remove one between its creation and
+    its lock, and a lock on a removed file would publish a key whose file
+    is gone (another monitor would take its owner for dead)."""
+    for _ in range(8):
+        key = os.urandom(16).hex()
+        lock = _FileLock(os.path.join(attempts, key))
+        try:
+            st, cur = os.fstat(lock.fd), os.lstat(lock.path)
+            if (st.st_dev, st.st_ino) == (cur.st_dev, cur.st_ino):
+                return key, lock
+        except OSError:
+            pass
+        lock.release()
+    raise LedgerUnavailable("attempt_file_lost")
+
+
 def _history(spent):
     """The comparable form of what a channel spent on an event."""
     spent = spent or {}
@@ -476,8 +494,7 @@ class Ledger(object):
         root = self._root()
         attempts = os.path.join(root, ATTEMPTS_DIR_NAME)
         _private_dir(attempts)
-        key = os.urandom(16).hex()
-        lock = _FileLock(os.path.join(attempts, key))
+        key, lock = _new_attempt_lock(attempts)
         decision = Decision()
         # The attempt lock goes back unless an Attempt that holds it is
         # returned: any exception before that (a save refused, a full
