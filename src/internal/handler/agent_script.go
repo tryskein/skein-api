@@ -202,11 +202,17 @@ func wholeSecondsAtLeastOne(d time.Duration) int {
 // @Description  chooses how the monitor runs by the method order (override
 // @Description  SKEIN_MONITOR_CHANNEL, the record's stream, own delivery
 // @Description  command and exit-on-event, hosts, blind channels unless
-// @Description  SKEIN_MONITOR_BLIND=off, journal; a channel whose probe says
-// @Description  unavailable is skipped), checks that the token, journal and
-// @Description  ledger directories take a write, saves the result with its
-// @Description  number and the addressee identity in preflight.json next to
-// @Description  the token under state.lock, and prints one line `{event:
+// @Description  SKEIN_MONITOR_BLIND=off, journal; in the automatic walk a
+// @Description  channel whose probe says unavailable is skipped, a forced
+// @Description  channel that is unavailable gives the journal). It checks
+// @Description  that the token and journal directories take a write (else
+// @Description  `config_invalid` naming the directory); a ledger directory
+// @Description  that takes no write is a warning and no external channel is
+// @Description  used. It saves the result with its number, reason, warnings,
+// @Description  journal, the addressee identity, the pane binding of a blind
+// @Description  channel and a degraded cause of the detection in
+// @Description  preflight.json next to the token under state.lock, and
+// @Description  prints one line `{event:
 // @Description  "preflight", preflightId, client, method, channel, reason,
 // @Description  warnings, journal, command, instruction}`. `client` is the
 // @Description  record used (its id, or `general` for an unknown name).
@@ -221,7 +227,9 @@ func wholeSecondsAtLeastOne(d time.Duration) int {
 // @Description
 // @Description  Stop protocol (sk-579 US-3): every controlled stop prints
 // @Description  exactly one last stdout line `{event, reason, action[, status]}`
-// @Description  — the only line that carries `reason`. `event` is `closed`
+// @Description  — the only line with `reason` and `action` together (the
+// @Description  preflight line also has a `reason`: why the method was
+// @Description  chosen, never a stop). `event` is `closed`
 // @Description  (this bootstrap cannot restart the monitor), `paused` (the
 // @Description  same bootstrap can) or `duplicate` (a second runner on a
 // @Description  token file that already has one). `action` is a finished
@@ -236,8 +244,9 @@ func wholeSecondsAtLeastOne(d time.Duration) int {
 // @Description  (SIGTERM/SIGINT; kept, 0); `internal_error` (kept, 1,
 // @Description  traceback to stderr only); `already_running` (`duplicate`,
 // @Description  file untouched, 0); `config_invalid` (`client` mode: an
-// @Description  invalid override, client name or platform, a directory
-// @Description  that takes no write, an old Python; `action` names what to
+// @Description  invalid override, client name or platform, a token or
+// @Description  journal directory that takes no write, an old Python;
+// @Description  `action` names what to
 // @Description  fix; kept, 1). One runner per token file: the runner
 // @Description  takes an exclusive non-blocking flock on the token file it
 // @Description  opened and reads the token once from that descriptor; on a
