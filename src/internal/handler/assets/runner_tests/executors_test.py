@@ -86,6 +86,20 @@ def _wait_gone(pid, sec=10):
     return _gone(pid)
 
 
+class FakeMonotonic(object):
+    """A monotonic clock each reading of which moves it on by a step: the
+    deadlines of a call run out after a bounded number of its waits,
+    whatever the real time."""
+
+    def __init__(self, step=0.05):
+        self.t = 1000.0
+        self.step = step
+
+    def __call__(self):
+        self.t += self.step
+        return self.t
+
+
 @unittest.skipUnless(os.name == "posix", "the POSIX program group")
 class ProgramWaitTest(unittest.TestCase):
     """Review findings C4 and V3 of wave 7 (P-7: a call is bounded by its
@@ -124,9 +138,11 @@ class ProgramWaitTest(unittest.TestCase):
 
     def test_a_descendant_holding_the_pipes_after_the_program_ended(self):
         argv = ["sh", "-c", "sleep 60 & echo $! > %s; echo done" % self.pidfile]
-        started = time.monotonic()
-        result = RUNNER.run_program(argv, dict(os.environ), None, 10)
-        took = time.monotonic() - started
+        clock = FakeMonotonic()
+        with mock.patch.object(RUNNER.time, "monotonic", clock):
+            started = clock.t
+            result = RUNNER.run_program(argv, dict(os.environ), None, 10)
+            took = clock.t - started
         self.assertEqual((result.exit_code, result.stdout.strip()), (0, b"done"))
         # The program ended at once; the wait does not last the descendant's
         # minute, nor the call's timeout of 10 s.
@@ -143,11 +159,16 @@ class ProgramWaitTest(unittest.TestCase):
 
     def test_a_timeout_kills_every_process_of_the_program(self):
         argv = ["sh", "-c", "sleep 60 & echo $! > %s; sleep 60" % self.pidfile]
-        started = time.monotonic()
-        result = RUNNER.run_program(argv, dict(os.environ), b"text", 1)
+        clock = FakeMonotonic()
+        with mock.patch.object(RUNNER.time, "monotonic", clock):
+            started = clock.t
+            result = RUNNER.run_program(argv, dict(os.environ), b"text", 1)
+            took = clock.t - started
         self.assertTrue(result.timed_out)
         self.assertIsNone(result.exit_code)
-        self.assertLess(time.monotonic() - started, 1 + 5)
+        # The timeout and the grace of the readers, on the clock the call
+        # reads: not the minute of the program.
+        self.assertLess(took, 1 + 5)
         self.assertTrue(_wait_gone(self.descendant()), "a descendant outlived the timeout")
 
     def test_a_stop_signal_during_the_call_kills_the_program_and_its_descendants(self):
@@ -166,6 +187,82 @@ class ProgramWaitTest(unittest.TestCase):
             program = int(fh.read().strip())
         self.assertTrue(_wait_gone(program), "the program outlived the stop")
         self.assertTrue(_wait_gone(self.descendant()), "a descendant outlived the stop")
+
+    def test_a_descendant_that_left_the_pipes_does_not_outlive_the_call(self):
+        # Review round 2 of wave 7, K4: both pipes reach their end before the
+        # grace (the descendant redirected them), and the descendant is still
+        # killed with the program's group.
+        argv = ["sh", "-c", "(exec >/dev/null 2>&1 </dev/null; exec sleep 60) & echo $! > %s; echo done"
+                % self.pidfile]
+        result = RUNNER.run_program(argv, dict(os.environ), None, 10)
+        self.assertEqual((result.exit_code, result.stdout.strip()), (0, b"done"))
+        self.assertTrue(_wait_gone(self.descendant()), "a descendant without the pipes outlived the call")
+
+    def test_a_failure_while_setting_up_the_pipes_kills_the_program(self):
+        # Review round 2 of wave 7, row 19: the clean-up is armed before the
+        # set-up of the pipes.
+        started = []
+        real_popen = RUNNER.subprocess.Popen
+
+        def popen(*args, **kw):
+            proc = real_popen(*args, **kw)
+            started.append(proc)
+            return proc
+        with mock.patch.object(RUNNER.subprocess, "Popen", popen), \
+                mock.patch.object(RUNNER.os, "set_blocking", mock.Mock(side_effect=RuntimeError("set-up"))):
+            with self.assertRaises(RuntimeError):
+                RUNNER.run_program(["sh", "-c", "sleep 60"], dict(os.environ), None, 10)
+        self.assertEqual(len(started), 1)
+        self.assertIsNotNone(started[0].returncode, "the program outlived a failed set-up")
+
+
+@unittest.skipUnless(os.name == "posix", "the POSIX process group stands in for the Windows job")
+class ThreadWaitTest(ProgramWaitTest):
+    """Review round 2 of wave 7, K3: the wait of a platform without select
+    on pipes (reader threads), run here on POSIX, where the process tree of
+    the call is its session: the call returns within its timeout plus the
+    readers' grace whatever the descendants do, and none of them outlives
+    it. The cases of ProgramWaitTest run through it."""
+
+    def setUp(self):
+        ProgramWaitTest.setUp(self)
+        patcher = mock.patch.object(RUNNER, "_run_posix", RUNNER._run_threads)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_a_stop_signal_during_the_call_kills_the_program_and_its_descendants(self):
+        argv = ["sh", "-c", "echo $$ > %s.prog; sleep 60 & echo $! > %s; sleep 60" % (self.pidfile, self.pidfile)]
+        real_wait = RUNNER.subprocess.Popen.wait
+
+        def wait(proc, timeout=None):
+            # The stop arrives while the call waits for the program.
+            if timeout is not None and self.descendant():
+                raise RUNNER.StopSignal()
+            return real_wait(proc, timeout)
+
+        with mock.patch.object(RUNNER.subprocess.Popen, "wait", wait):
+            with self.assertRaises(RUNNER.StopSignal):
+                RUNNER.run_program(argv, dict(os.environ), None, 30)
+        with open(self.pidfile + ".prog") as fh:
+            program = int(fh.read().strip())
+        self.assertTrue(_wait_gone(program), "the program outlived the stop")
+        self.assertTrue(_wait_gone(self.descendant()), "a descendant outlived the stop")
+
+    def test_a_failure_while_setting_up_the_pipes_kills_the_program(self):
+        started = []
+        real_popen = RUNNER.subprocess.Popen
+
+        def popen(*args, **kw):
+            proc = real_popen(*args, **kw)
+            started.append(proc)
+            return proc
+        with mock.patch.object(RUNNER.subprocess, "Popen", popen), \
+                mock.patch.object(RUNNER, "_Reader", mock.Mock(side_effect=RuntimeError("set-up"))):
+            with self.assertRaises(RuntimeError):
+                RUNNER.run_program(["sh", "-c", "sleep 60"], dict(os.environ), None, 10)
+        self.assertEqual(len(started), 1)
+        self.assertIsNotNone(started[0].returncode, "the program outlived a failed set-up")
+
 
 
 @unittest.skipUnless(os.name == "posix", "the POSIX executor")
