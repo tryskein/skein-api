@@ -365,6 +365,34 @@ class ProcessTest(unittest.TestCase):
             time.sleep(0.05)
         self.assertFalse(os.path.exists("/proc/%d" % pid), "the ended child stayed a zombie")
 
+    def test_the_stdin_of_a_child_stays_open_until_its_receipt_is_dealt_with(self):
+        # The child prints its receipt, then reads its stdin to the end.
+        child = ("import sys; sys.stdin.buffer.readline(); print('ready', flush=True); "
+                 "sys.stdin.buffer.read(); print('went on', flush=True)")
+        seen = []
+
+        def on_receipt(receipt):
+            seen.append(receipt)
+            return True
+
+        pid, receipt = PLATFORM.spawn_detached([sys.executable, "-c", child], b"body\n",
+                                               dict(os.environ), 30, on_receipt)
+        self.assertEqual((receipt, seen), ("ready", ["ready"]))
+        deadline = time.monotonic() + 10
+        while os.path.exists("/proc/%d" % pid) and time.monotonic() < deadline:
+            time.sleep(0.05)
+        self.assertFalse(os.path.exists("/proc/%d" % pid), "the child did not go on after its stdin closed")
+
+    def test_a_receipt_turned_down_kills_the_child(self):
+        child = "import sys, time; print('odd', flush=True); time.sleep(60)"
+        pid, receipt = PLATFORM.spawn_detached([sys.executable, "-c", child], b"",
+                                               dict(os.environ), 30, lambda r: False)
+        self.assertEqual(receipt, "odd")
+        deadline = time.monotonic() + 10
+        while os.path.exists("/proc/%d" % pid) and time.monotonic() < deadline:
+            time.sleep(0.05)
+        self.assertFalse(os.path.exists("/proc/%d" % pid), "a turned-down child is still running")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -52,11 +52,13 @@ RUNNER_BODY_NAME = "_skein_loader_body"
 # Set in the namespace of the detached child by DETACHED_CHILD_SRC.
 DETACHED_CHILD_NAME = "_SKEIN_DETACHED_CHILD"
 DETACHED_CHILD = globals().get(DETACHED_CHILD_NAME) is True
-# The detached child: reads the body from stdin and runs it as a client
-# runner that knows it is the child.
+# The detached child: reads the body from stdin (its length in bytes on a
+# line, then the body; stdin stays open, see _send_receipt) and runs it as a
+# client runner that knows it is the child.
 DETACHED_CHILD_SRC = (
     "import sys\n"
-    "b = sys.stdin.buffer.read().decode('utf-8')\n"
+    "r = sys.stdin.buffer\n"
+    "b = r.read(int(r.readline())).decode('utf-8')\n"
     "g = {'__name__': '__main__', '_SKEIN_LOADER_MODE': 'client', '%s': True, '%s': b}\n"
     "exec(compile(b, '<skein-monitor-runner>', 'exec'), g)\n" % (DETACHED_CHILD_NAME, RUNNER_BODY_NAME))
 # The status of an event that went only to the journal.
@@ -262,29 +264,44 @@ class _HeldSignals(object):
 
 def start_detached(token_file, issue):
     """Start the detached child and print its receipt; returns the exit code.
-    Raises Stop or ConfigInvalid for a start that did not reach the child."""
-    global _stopping
+    Raises Stop or ConfigInvalid for a start that did not reach the child.
+
+    The child waits for the end of its stdin before its first poll, and this
+    process closes it only after the receipt is printed: monitor_started is
+    printed while the child is alive, holds the lock and has not polled. A
+    receipt that is not a line of the protocol, or one this process cannot
+    print, kills the child."""
     body = runner_body()
     if body is None:
         log_stderr("monitor runner: the loader did not keep the runner body (%s); "
                    "the detached child cannot be started" % RUNNER_BODY_NAME)
         raise Stop("internal_error")
-    with _HeldSignals():
-        try:
-            pid, receipt = current_platform().spawn_detached(
-                [sys.executable, "-c", DETACHED_CHILD_SRC], body.encode("utf-8"),
-                dict(os.environ), START_RECEIPT_TIMEOUT_SEC)
-        except PlatformRefusal as exc:
-            raise ConfigInvalid("SKEIN_PLATFORM", "a detached start is not available here (%s)" % exc.reason)
+    data = body.encode("utf-8")
+    printed = []
+
+    def on_receipt(receipt):
+        global _stopping
         line = _receipt_line(receipt)
         if line is None:
             # Silent or gone: it must not run unknown to the agent.
-            _kill_group(pid)
             log_stderr("monitor runner: the detached child gave no start receipt")
-            raise Stop("internal_error")
+            return False
         # The start is decided: a signal held until now does not undo it.
         _stopping = True
-    emit(line)
+        emit(line)
+        printed.append(line)
+        return True
+
+    with _HeldSignals():
+        try:
+            current_platform().spawn_detached(
+                [sys.executable, "-c", DETACHED_CHILD_SRC], b"%d\n" % len(data) + data,
+                dict(os.environ), START_RECEIPT_TIMEOUT_SEC, on_receipt)
+        except PlatformRefusal as exc:
+            raise ConfigInvalid("SKEIN_PLATFORM", "a detached start is not available here (%s)" % exc.reason)
+    if not printed:
+        raise Stop("internal_error")
+    line = printed[0]
     if line["event"] == "monitor_started":
         return 0
     return STOPS[line["reason"]][1]
@@ -308,27 +325,26 @@ def _receipt_line(receipt):
     return None
 
 
-def _kill_group(pid):
-    try:
-        os.killpg(pid, signal.SIGKILL)
-    except (OSError, AttributeError):
-        try:
-            os.kill(pid, signal.SIGKILL)
-        except OSError:
-            pass
-
-
 def _send_receipt(line):
-    """Hand the start receipt to the synchronous process, then point stdout
-    at the null device: nothing reads it any more."""
+    """Hand the start receipt to the synchronous process and wait until it
+    has printed it (it closes this process's stdin then, or ends), then
+    point stdout and stdin at the null device: nothing reads or writes them
+    any more."""
     try:
         emit(line)
         failed = False
     except OSError:
         failed = True
-    devnull = os.open(os.devnull, os.O_WRONLY)
+    if not failed:
+        try:
+            while sys.stdin.buffer.read(65536):
+                pass
+        except (OSError, ValueError):
+            pass
+    devnull = os.open(os.devnull, os.O_RDWR)
     try:
         os.dup2(devnull, sys.stdout.fileno())
+        os.dup2(devnull, sys.stdin.fileno())
     finally:
         os.close(devnull)
     if failed:
@@ -389,13 +405,19 @@ def run_detached_child():
             env = dict(os.environ)
             settings = read_settings(env, load_registry())
             held.begin(token_file, env, settings, issue)
-            _send_receipt(held.line)
             journal = Journal(token_file, issue, secrets=[held.token], env=env)
+            # Ready means the journal took the monitor_started line: a
+            # journal that refuses it is a refused start, before the receipt.
+            fields = dict(held.line)
+            try:
+                journal.lifecycle(fields.pop("event"), **fields)
+            except JournalUnavailable as exc:
+                raise ConfigInvalid(exc.path, "the journal cannot be written (%s)" % exc.reason)
             if held.doc.get("method") == METHOD_DETACHED:
                 sink = delivery_sink(journal, token_file, held.doc, env, base, issue, held.token, executor)
             else:
                 sink = JournalSink(journal, held.doc.get("method"), held.doc.get("channel"))
-            sink.lifecycle(held.line)
+            _send_receipt(held.line)
             work(executor, base, held.token, issue, os.environ.get("SKEIN_EXCLUDE_SESSION", ""),
                  token_file, sink=sink)
         except ConfigInvalid as exc:

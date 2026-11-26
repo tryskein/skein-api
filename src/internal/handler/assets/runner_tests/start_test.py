@@ -102,7 +102,7 @@ class Box(object):
         settings = RUNNER.read_settings(env, REG, mode="client")
         return RUNNER.preflight(self.token, env, REG, settings, detector=RUNNER.Detector())
 
-    def start(self, number, before_spawn=None, **extra):
+    def start(self, number, before_spawn=None, on_emit=None, **extra):
         """The working command with SKEIN_MONITOR_PREFLIGHT=number, run as
         the loader runs it; returns (exit code, printed lines)."""
         run = {"SKEIN_MONITOR_MODE": "run", "SKEIN_MONITOR_PREFLIGHT": str(number)}
@@ -123,7 +123,7 @@ class Box(object):
                 mock.patch.object(RUNNER, "LOADER_MODE", "client"), \
                 mock.patch.object(RUNNER, "_skein_loader_body", BODY, create=True), \
                 mock.patch.object(RUNNER.PosixPlatform, "spawn_detached", staticmethod(spy)), \
-                mock.patch.object(RUNNER, "emit", lines.append), \
+                mock.patch.object(RUNNER, "emit", on_emit or lines.append), \
                 mock.patch("sys.stdout", out):
             code = RUNNER.run()
         # Lines written as text (the output of a foreground method) follow
@@ -257,6 +257,41 @@ class MonitorStartedTest(unittest.TestCase):
                 self.assertEqual(box.server.requests, [])
                 for pid in box.pids:
                     self.assertTrue(wait_until(lambda: not alive(pid)), "a refused child is still running")
+
+
+@unittest.skipUnless(sys.platform.startswith("linux"), "the POSIX detached start")
+class ReceiptTest(unittest.TestCase):
+    """Review finding 8 of wave 6: the receipt is printed while the child
+    holds the lock and before it polls, and the child is ready only once its
+    journal took the monitor_started line."""
+
+    def test_monitor_started_is_printed_before_the_child_polls(self):
+        # Every poll answers 401: a child that polled before the print would
+        # have ended and released the lock by then.
+        box = Box(self, lambda h, qs: h.send_json(401, {"error": "token_expired"}))
+        pre = box.preflight()
+        seen = []
+
+        def on_emit(line):
+            seen.append((line.get("event"), box.lock_busy(), len(box.server.requests)))
+
+        code, _ = box.start(pre["preflightId"], on_emit=on_emit)
+        self.assertEqual(code, 0)
+        self.assertEqual(seen, [("monitor_started", True, 0)])
+        # Then it polls, gets 401 and ends.
+        self.assertTrue(wait_until(lambda: not alive(box.pids[-1])))
+        self.assertTrue([l for l in box.journal_lines() if l.get("reason") == "token_expired"])
+
+    def test_a_journal_that_refuses_the_child_is_a_refused_start(self):
+        box = Box(self)
+        pre = box.preflight()
+        journal_dir = os.path.join(box.state_home, "skein-monitor", "journal")
+        code, lines = box.start(pre["preflightId"], before_spawn=lambda: os.chmod(journal_dir, 0o755))
+        one_stop(self, code, lines, "config_invalid", 1)
+        self.assertIn(journal_dir, lines[0]["action"])
+        self.assertEqual(box.server.requests, [])
+        self.assertTrue(wait_until(lambda: not alive(box.pids[-1])))
+        self.assertFalse(box.lock_busy())
 
 
 @unittest.skipUnless(sys.platform.startswith("linux"), "the POSIX detached start")

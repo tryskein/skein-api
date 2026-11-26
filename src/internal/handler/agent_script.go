@@ -252,8 +252,10 @@ func wholeSecondsAtLeastOne(d time.Duration) int {
 // @Description  removes files of locks/ older than 24 h that no one holds.
 // @Description  The command that starts a detached process prints exactly
 // @Description  one line and returns: `monitor_started` when the detached
-// @Description  process is alive and holds the lock, or the stop line of its
-// @Description  failed start. `monitor_started` of the first start by a
+// @Description  process is alive, holds the lock and its journal took that
+// @Description  line (it polls only after the line is printed), or the stop
+// @Description  line of its failed start (a journal that refuses the line is
+// @Description  `config_invalid`). `monitor_started` of the first start by a
 // @Description  result is `{event, preflightId, method, channel, issue,
 // @Description  pollIntervalSec, reason, warnings, journal}`; a restart by
 // @Description  the same command prints only `{event, preflightId, method,

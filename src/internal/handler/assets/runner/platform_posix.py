@@ -8,6 +8,7 @@
 import errno
 import os
 import select
+import signal
 import stat
 import subprocess
 import sys
@@ -217,14 +218,21 @@ class PosixPlatform(object):
         raise PlatformRefusal("unsupported", "process_info")
 
     @staticmethod
-    def spawn_detached(argv, stdin_data, env, receipt_timeout_sec):
+    def spawn_detached(argv, stdin_data, env, receipt_timeout_sec, on_receipt=None):
         """Start argv in a new session (P-6), hand it stdin_data (bytes) on
         its stdin and wait up to receipt_timeout_sec for its first stdout line,
         the start receipt. Returns (pid, receipt): receipt is the line without
         its newline, or None when the process closed stdout or was silent for
         the whole wait. The pipes of this process are closed on return; the
         child outlives it, and a daemon thread of this process reaps it when
-        it ends first, so it never lingers as a zombie."""
+        it ends first, so it never lingers as a zombie.
+
+        With on_receipt, the child's stdin stays open until on_receipt(receipt)
+        has returned, so a child that waits for the end of its stdin goes on
+        only after the caller has dealt with the receipt; on_receipt returning
+        false (or raising) kills the child's group first, while it is not
+        reaped yet (a reaped pid may name another process). Without it, stdin
+        is closed once stdin_data is written."""
         proc = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                 stderr=subprocess.DEVNULL, env=env, close_fds=True,
                                 start_new_session=True)
@@ -232,12 +240,36 @@ class PosixPlatform(object):
         try:
             try:
                 proc.stdin.write(stdin_data)
+                proc.stdin.flush()
+                if on_receipt is None:
+                    proc.stdin.close()
+            except BrokenPipeError:
+                pass
+            receipt = _read_line(proc.stdout.fileno(), receipt_timeout_sec)
+            if on_receipt is not None:
+                keep = False
+                try:
+                    keep = on_receipt(receipt)
+                finally:
+                    if not keep:
+                        _kill_unreaped(proc)
+            return proc.pid, receipt
+        finally:
+            try:
                 proc.stdin.close()
             except BrokenPipeError:
                 pass
-            return proc.pid, _read_line(proc.stdout.fileno(), receipt_timeout_sec)
-        finally:
             proc.stdout.close()
+
+
+def _kill_unreaped(proc):
+    """Kill the group of a child of spawn_detached that is not reaped yet."""
+    if proc.poll() is not None:
+        return
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except OSError:
+        pass
 
 
 _O_NONBLOCK = getattr(os, "O_NONBLOCK", 0)
