@@ -193,14 +193,14 @@ class StreamOutput(object):
 
     def lifecycle(self, obj):
         """A service line: to the journal, and to stdout as a batch of its
-        own (or in the reserved place)."""
+        own (or in the reserved place). True when it went to stdout."""
         self._journal_lifecycle(obj)
-        self._print_service(obj)
+        return self._print_service(obj)
 
     def _print_service(self, obj):
         text = self.line(obj)
         if text is None:
-            return
+            return False
         if self.reserved and self.limits.fits(self.last_batch + [text]):
             # The line the batch kept room for: no turn of its own.
             self.reserved = False
@@ -209,6 +209,7 @@ class StreamOutput(object):
         else:
             # Not reserved, or longer than the room kept: a batch of its own.
             self.batch([text])
+        return True
 
     def longest_line(self, objs):
         """The longest, in the unit of the batch limit, of the service lines

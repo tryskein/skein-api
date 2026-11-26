@@ -37,6 +37,8 @@ REGISTRY = {
         {"id": "streamer", "process": {"executables": ["streamer"]}, "methods": [
             {"kind": "stream", "conditions": {}, "instruction": "INSTR-stream",
              "limits": {"line": {"max": 300, "unit": "chars"}}}]},
+        {"id": "exiter", "process": {"executables": ["exiter"]}, "methods": [
+            {"kind": "exit-on-event", "conditions": {}, "instruction": "INSTR-exit"}]},
     ],
     "channels": [],
     "shells": {"source": "test", "names": ["sh", "bash"]},
@@ -292,6 +294,74 @@ class ReceiptTest(unittest.TestCase):
         self.assertEqual(box.server.requests, [])
         self.assertTrue(wait_until(lambda: not alive(box.pids[-1])))
         self.assertFalse(box.lock_busy())
+
+
+def event_page(nid):
+    """A page of one event: an exit-on-event cycle that polls it ends with
+    delivered."""
+    return {"notifications": [{"id": nid, "type": "comment_added", "entity": {"type": "issue", "id": ISSUE},
+                               "actor": {"username": "bob"}, "commentId": "c-%d" % nid, "bodyPreview": "hi"}],
+            "cursor": {"ts": "2026-01-01T00:00:%02dZ" % nid, "id": nid}}
+
+
+def event_per_poll():
+    """A new event on every poll."""
+    served = []
+
+    def respond(h, qs):
+        served.append(1)
+        h.send_json(200, event_page(len(served)))
+    return respond
+
+
+@unittest.skipUnless(sys.platform.startswith("linux"), "the POSIX detached start")
+class AnnouncedTest(unittest.TestCase):
+    """Review finding 5 of wave 6: a result is marked announced only after
+    its full monitor_started is printed, so a start whose line was not
+    printed leaves the next start full."""
+
+    def test_a_detached_receipt_that_cannot_be_printed_leaves_the_next_start_full(self):
+        box = Box(self)
+        pre = box.preflight()
+        lines = []
+
+        def on_emit(line):
+            if line.get("event") == "monitor_started" and not lines:
+                lines.append("refused")
+                raise BrokenPipeError(32, "Broken pipe")
+            lines.append(line)
+
+        code, _ = box.start(pre["preflightId"], on_emit=on_emit)
+        self.assertEqual((code, lines[1]["reason"]), (1, "internal_error"))
+        # The child of the unprinted receipt does not run on.
+        self.assertTrue(wait_until(lambda: not alive(box.pids[-1])))
+        code, lines = box.start(pre["preflightId"])
+        self.assertEqual((code, set(lines[0])), (0, FULL_KEYS))
+
+    def test_a_foreground_line_that_cannot_be_printed_leaves_the_next_start_full(self):
+        box = Box(self, event_per_poll())
+        pre = box.preflight(SKEIN_CLIENT="exiter")
+        self.assertEqual(pre["method"], "exit-on-event")
+        real = RUNNER.StreamOutput._write
+        calls = []
+
+        def write(output, texts):
+            calls.append(texts)
+            if len(calls) == 1:
+                raise BrokenPipeError(32, "Broken pipe")
+            real(output, texts)
+
+        with mock.patch.object(RUNNER.StreamOutput, "_write", write):
+            code, lines = box.start(pre["preflightId"], SKEIN_CLIENT="exiter")
+        self.assertEqual((code, [l["reason"] for l in lines]), (1, ["internal_error"]))
+        code, lines = box.start(pre["preflightId"], SKEIN_CLIENT="exiter")
+        self.assertEqual(code, 0)
+        self.assertEqual(set(lines[0]), FULL_KEYS)
+        self.assertEqual([l["event"] for l in lines[1:]], ["notification", "paused"])
+        # Printed in full: the next start is short.
+        code, lines = box.start(pre["preflightId"], SKEIN_CLIENT="exiter")
+        self.assertEqual(lines[0], {"event": "monitor_started", "preflightId": pre["preflightId"],
+                                    "method": "exit-on-event", "channel": "stdout"})
 
 
 @unittest.skipUnless(sys.platform.startswith("linux"), "the POSIX detached start")

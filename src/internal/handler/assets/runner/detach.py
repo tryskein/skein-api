@@ -27,8 +27,9 @@
 #
 # monitor_started (C1, INV-17): the full line - preflightId, method, channel,
 # reason, warnings, journal - on the first start by a preflight result
-# (preflight.json gets the mark "announced" under state.lock); a restart by
-# the same working command prints only {event, preflightId, method, channel}.
+# (preflight.json gets the mark "announced" under state.lock once that line
+# is printed); a restart by the same working command prints only {event,
+# preflightId, method, channel}.
 # A new result, a takeover included, is a new preflight.json without the
 # mark, so its first start is full again.
 
@@ -136,6 +137,7 @@ class WorkingStart(object):
         self.token = None
         self.doc = None
         self.line = None
+        self.full = False
 
     def begin(self, token_file, env, settings, issue):
         """Take the locks in the order of P-6 and check the result again as
@@ -154,20 +156,32 @@ class WorkingStart(object):
         try:
             with StateLock(token_file):
                 doc = check_result(token_file, env, settings)
-                full = doc.get("announced") is not True
-                if full:
-                    save_preflight(token_file, dict(doc, announced=True))
         except (PlatformRefusal, OSError) as exc:
             raise ConfigInvalid(os.path.dirname(os.path.abspath(token_file)),
-                                "the preflight result cannot be read or marked (%s)" % getattr(exc, "reason", exc))
+                                "the preflight result cannot be read (%s)" % getattr(exc, "reason", exc))
         ledger_tails_at_start(env)
         self.doc = doc
-        self.line = monitor_started_line(doc, issue, full)
+        # The mark is set by whoever prints the full line, after printing it.
+        self.full = doc.get("announced") is not True
+        self.line = monitor_started_line(doc, issue, self.full)
 
     def release(self):
         lock, self.lock = self.lock, None
         if lock is not None:
             lock.release()
+
+
+def mark_announced(token_file, preflight_id):
+    """Mark preflight result preflight_id announced in preflight.json, under
+    state.lock: its full monitor_started has been printed. A mark that
+    cannot be written costs a second full line, not the start."""
+    try:
+        with StateLock(token_file):
+            doc = load_preflight(token_file)
+            if doc is not None and doc["preflightId"] == preflight_id and doc.get("announced") is not True:
+                save_preflight(token_file, dict(doc, announced=True))
+    except (PlatformRefusal, OSError) as exc:
+        log_stderr("monitor runner: cannot mark the preflight result announced (%s)" % getattr(exc, "reason", exc))
 
 
 def ledger_tails_at_start(env):
@@ -290,6 +304,9 @@ def start_detached(token_file, issue):
         _stopping = True
         emit(line)
         printed.append(line)
+        if line["event"] == "monitor_started" and "reason" in line:
+            # The full line is out; the child waits until this returns.
+            mark_announced(token_file, line["preflightId"])
         return True
 
     with _HeldSignals():
@@ -488,7 +505,8 @@ def run_foreground(token_file, issue, env, settings, doc=None):
             limits = StreamLimits(held.doc.get("limits"))
             journal = Journal(token_file, issue, secrets=[held.token], env=env)
             output = StreamOutput(limits, journal, held.doc.get("method"), held.doc.get("journal"), issue=issue)
-            output.lifecycle(held.line)
+            if output.lifecycle(held.line) and held.full:
+                mark_announced(token_file, held.doc["preflightId"])
             run_stream_loop(executor, os.environ.get("SKEIN_PUBLIC_URL", ""), held.token, issue,
                             os.environ.get("SKEIN_EXCLUDE_SESSION", ""), token_file, held.doc, output)
         except ConfigInvalid as exc:
