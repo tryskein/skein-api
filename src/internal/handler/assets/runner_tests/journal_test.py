@@ -54,6 +54,30 @@ class JournalTest(unittest.TestCase):
         self.assertEqual(len(data.splitlines()), 3)
         self.assertNotIn(TOKEN.encode("ascii"), data)
 
+    def test_token_in_a_key_is_not_written(self):
+        # A key that json escapes (non-ASCII, a quote, a backslash) around the
+        # token: no raw form of it may reach the file either.
+        details = {"\u043a\u043b\u044e\u0447 \"%s\\" % TOKEN: "v", "nested": {TOKEN: [TOKEN]}}
+        self.journal.lifecycle("degraded", cause="channel_failing", details=details)
+        with open(self.journal.path, "rb") as fh:
+            data = fh.read()
+        self.assertNotIn(TOKEN.encode("ascii"), data)
+        line = json.loads(data.decode("utf-8"))
+
+        def strings(value):
+            if isinstance(value, dict):
+                for k, v in value.items():
+                    yield k
+                    for s in strings(v):
+                        yield s
+            elif isinstance(value, list):
+                for v in value:
+                    for s in strings(v):
+                        yield s
+            elif isinstance(value, str):
+                yield value
+        self.assertFalse([s for s in strings(line) if TOKEN in s], line)
+
     def test_delivery_line_carries_the_journal_fields(self):
         note = {"id": 41, "type": "comment.created", "entity": {"type": "issue", "id": "zz-77"},
                 "actor": {"username": "alice"}, "actorSessionId": "sess-1", "commentId": "c-1",

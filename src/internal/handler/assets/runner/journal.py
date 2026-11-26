@@ -147,10 +147,13 @@ class Journal(object):
     def _write(self, record):
         record = dict(record, ts=_utc_now(), monitor=self.monitor, issue=self.issue)
         record = _redact(record, self._secrets)
-        data = (json.dumps(record, separators=(",", ":"), sort_keys=True) + "\n").encode("utf-8")
-        if any(s.encode("utf-8") in data for s in self._secrets):
-            # A secret in a key or in an escaped form: the line is not written.
+        text = json.dumps(record, separators=(",", ":"), sort_keys=True)
+        if _holds_secret(json.loads(text), self._secrets):
+            # Redaction missed it (a value of another type): the line is not
+            # written. Checked on the decoded line, so an escaped form of a
+            # secret is found too.
             raise JournalUnavailable("secret_in_line", self.path)
+        data = (text + "\n").encode("utf-8")
         directory = os.path.dirname(self.path)
         plat = current_platform()
         try:
@@ -228,7 +231,19 @@ def _redact(value, secrets):
             value = value.replace(s, REDACTED)
         return value
     if isinstance(value, dict):
-        return dict((k, _redact(v, secrets)) for k, v in value.items())
+        # Keys are redacted too: a secret may name a field of free-form details.
+        return dict((_redact(str(k), secrets), _redact(v, secrets)) for k, v in value.items())
     if isinstance(value, (list, tuple)):
         return [_redact(v, secrets) for v in value]
     return value
+
+
+def _holds_secret(value, secrets):
+    """True when a secret appears in any key or string of value."""
+    if isinstance(value, str):
+        return any(s in value for s in secrets)
+    if isinstance(value, dict):
+        return any(_holds_secret(k, secrets) or _holds_secret(v, secrets) for k, v in value.items())
+    if isinstance(value, list):
+        return any(_holds_secret(v, secrets) for v in value)
+    return False
