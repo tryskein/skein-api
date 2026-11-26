@@ -473,6 +473,41 @@ class ReservedSlotTest(unittest.TestCase):
         self.assertGreaterEqual(out.writes[1][0] - out.writes[0][0], 5 - 1e-6)
 
 
+class PageRestTest(unittest.TestCase):
+    """Review finding 6 of wave 6: a page printed in part goes on from the
+    rest kept of it, not from a new poll whose page may differ (US-12)."""
+
+    def test_an_event_gone_from_the_second_poll_is_still_delivered(self):
+        box = Box(self)
+        limits = {"batch": {"max": 3, "unit": "lines"}}
+        got = []
+        first = page([1, 2, 3, 4], 4)
+        # By the second cycle event 3 has left the monitor's subtree.
+        second = page([1, 2, 4], 4)
+        for answer in (first, second):
+            out = Out()
+            stop, _ = box.cycle(FakeExecutor([answer]), box.output(limits, "exit-on-event", out=out),
+                                "exit-on-event")
+            got.append(([l["notification"]["id"] for l in out.lines() if l["event"] == "notification"],
+                        stop.reason))
+        self.assertEqual(got, [([1, 2], "delivered"), ([3, 4], "delivered")])
+        self.assertEqual(RUNNER.load_cursor(box.token)["id"], 4)
+
+    def test_a_stream_rest_waiting_for_the_journal_is_kept_across_polls(self):
+        box = Box(self)
+        JournalDown(box, 1)
+        long_event = dict(event(9), actorSessionId="x" * 300)
+        first = page([1], 9)
+        first["notifications"].insert(0, long_event)
+        # The second poll no longer has event 9.
+        executor = FakeExecutor([first, page([1], 9)])
+        stop, _ = box.cycle(executor, box.output({"line": {"max": 60, "unit": "chars"}}, "stream"), "stream")
+        self.assertEqual(stop.reason, "token_expired")
+        unfit = [l for l in box.journal_lines() if l.get("notificationId") == 9 and l.get("status") == "unfit"]
+        self.assertEqual(len(unfit), 1)
+        self.assertIn("since_id=9", executor.urls[2])
+
+
 class WindowModelTest(unittest.TestCase):
     """Matrix row #42 (the window model of a harness, US-10 pace), fake
     clock, a synthetic record."""

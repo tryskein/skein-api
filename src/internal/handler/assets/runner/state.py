@@ -41,22 +41,29 @@ def load_cursor(token_file):
     return None
 
 
-def load_printed(token_file, cursor):
-    """The notification ids already printed from the page polled at cursor
-    (an exit-on-event cycle that printed part of a page), or an empty list:
-    the next cycle polls the same page and skips them. Ids saved with
-    another cursor do not count."""
+def load_remainder(token_file, cursor):
+    """The rest of the page polled at cursor that an exit-on-event cycle
+    printed only in part: (events, cursor after the page, rootClosed), or
+    None. The next cycle takes these events from here, not from a new poll
+    of the same page, whose events may differ by then (US-12). A rest saved
+    with another cursor does not count."""
     doc = _load_state_doc(token_file)
     if doc is None or doc.get("cursor") != cursor:
-        return []
-    ids = doc.get("printed")
-    return list(ids) if isinstance(ids, list) else []
+        return None
+    rest = doc.get("remainder")
+    if not isinstance(rest, dict) or not isinstance(rest.get("events"), list) or not rest["events"]:
+        return None
+    nxt = rest.get("next")
+    return (list(rest["events"]), nxt if isinstance(nxt, dict) else None, rest.get("rootClosed") is True)
 
 
-def save_printed(token_file, cursor, ids):
-    """Keep the cursor and record the ids printed from its page. Raises
+def save_remainder(token_file, cursor, events, next_cursor, root_closed):
+    """Keep the cursor and the rest of its page: the events without an
+    outcome yet, the cursor after the page and its rootClosed. Raises
     OSError or PlatformRefusal when it cannot."""
-    _save_state_doc(token_file, {"version": STATE_VERSION, "cursor": cursor, "printed": list(ids)})
+    _save_state_doc(token_file, {"version": STATE_VERSION, "cursor": cursor,
+                                 "remainder": {"events": list(events), "next": next_cursor,
+                                               "rootClosed": bool(root_closed)}})
 
 
 def load_page_outcomes(token_file, cursor):

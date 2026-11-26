@@ -28,8 +28,13 @@
 #     window of the previous batch to close (its length plus a margin), so
 #     two batches never share a window.
 #   - stream with client writes every printed event to the journal too.
+#   - A page whose events do not all get an outcome in one round keeps the
+#     rest (and the cursor after the page, and its rootClosed): the next
+#     round takes them from there, not from a new poll whose page may differ
+#     (US-12); its poll only keeps the access boundary. exit-on-event keeps
+#     the rest in the state for the next cycle.
 #   - exit-on-event: a batch, flushed; then the cursor (or, for a page only
-#     partly printed, the ids printed from it); then exactly one stop line,
+#     partly printed, its rest); then exactly one stop line,
 #     delivered (paused, exit 0, token kept), whose action names the working
 #     command of the preflight result by its number without repeating it.
 #     A runner killed between the output and the cursor repeats those events
@@ -357,6 +362,10 @@ def run_stream_loop(executor, base, token, issue, exclude_session, token_file, d
     def hold(save, *args):
         _save_or_hold(save, token_file, args, output, executor, base, token, cursor, exclude_session, issue)
 
+    # (events, cursor after the page, rootClosed) of a page received but not
+    # yet given an outcome in full; an exit-on-event cycle resumes it from
+    # the state.
+    remainder = load_remainder(token_file, cursor) if exit_on_event else None
     seen = set()
     backoff = float(POLL_INTERVAL_SEC)
     series_started = None
@@ -369,23 +378,24 @@ def run_stream_loop(executor, base, token, issue, exclude_session, token_file, d
                                   "failedForSec": int(time.monotonic() - series_started)})
             series_started = None
             series_degraded = False
-            printed_before = set(load_printed(token_file, cursor)) if exit_on_event else set()
-            events = [n for n in payload.get("notifications") or []
-                      if not isinstance(n, dict) or (n.get("id") not in seen and n.get("id") not in printed_before)]
+            if remainder is not None:
+                # The rest of a page already received: its events, not those
+                # of this poll, which only kept the access boundary (US-12).
+                source, nxt, root_closed = remainder
+            else:
+                source = payload.get("notifications") or []
+                nxt = payload.get("cursor") if isinstance(payload.get("cursor"), dict) else cursor
+                root_closed = payload.get("rootClosed") is True
+            events = [n for n in source if not isinstance(n, dict) or n.get("id") not in seen]
             done = print_events(output, events, exit_on_event, slot_lines)
             for n in done:
                 if isinstance(n, dict) and n.get("id") is not None:
                     seen.add(n.get("id"))
-            complete = len(done) == len(events)
-            if not complete and (not exit_on_event or not done):
-                # Events wait for the journal (stream prints the whole rest
-                # of a page, so nothing else is left): the same page again
-                # after a poll interval, the cursor stays.
-                time.sleep(jitter(float(POLL_INTERVAL_SEC)))
-                continue
-            nxt = payload.get("cursor") if isinstance(payload.get("cursor"), dict) else cursor
-            if complete:
-                if payload.get("rootClosed") is True:
+            done_ids = set(id(n) for n in done)
+            left = [n for n in events if id(n) not in done_ids]
+            if not left:
+                remainder = None
+                if root_closed:
                     raise Stop("root_closed", delete_token=True)
                 hold(save_cursor, nxt)
                 if exit_on_event and events:
@@ -395,20 +405,31 @@ def run_stream_loop(executor, base, token, issue, exclude_session, token_file, d
                                                                       float(BACKOFF_CEILING_SEC))
                 time.sleep(max(jitter(backoff), float(POLL_INTERVAL_SEC)))
                 continue
-            if exit_on_event:
-                # The rest of the page waits for the next cycle, which polls
-                # the same page and skips what was printed.
-                ids = sorted(printed_before | set(n.get("id") for n in done
-                                                  if isinstance(n, dict) and n.get("id") is not None))
-                hold(save_printed, cursor, ids)
+            # Events of the page without an outcome yet: they are kept, the
+            # cursor stays before the page, and the next round takes them
+            # from here, not from a new poll whose page may differ.
+            remainder = (left, nxt, root_closed)
+            if exit_on_event and done:
+                # The next cycle takes the rest from the state.
+                hold(save_remainder, cursor, left, nxt, root_closed)
                 raise Stop("delivered", detail=doc["preflightId"])
+            # Waiting for the journal (stream prints the whole rest of a
+            # page): the rest again after a poll interval.
+            time.sleep(jitter(float(POLL_INTERVAL_SEC)))
+            continue
         if status == 401:
             raise Stop("token_expired", status=401, delete_token=True)
         if status == 403:
             raise Stop("visibility_lost", status=403, delete_token=True)
         if status == 400 and cursor is not None:
             cursor = None
-            hold(save_cursor, None)
+            if remainder is not None:
+                # Received events keep their delivery; the page after them
+                # starts from now.
+                remainder = (remainder[0], None, remainder[2])
+                hold(save_remainder, None, remainder[0], None, remainder[2])
+            else:
+                hold(save_cursor, None)
             output.lifecycle({"event": "degraded", "cause": "cursor_reset", "issue": issue,
                               "action": "The server rejected this monitor's poll cursor, so the monitor "
                                         "restarted from now: notifications since its last successful poll "
