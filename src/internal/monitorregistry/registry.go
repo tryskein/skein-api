@@ -152,8 +152,11 @@ type Conditions struct {
 }
 
 // EnvCondition holds when the variable is set and non-empty and, when
-// Pattern is given, matches it as a whole (Go RE2 and Python re agree on
-// the syntax the registry uses: anchors, classes, repetition counts).
+// Pattern is given, the WHOLE value matches it (Go: the pattern compiled as
+// ^(?:Pattern)$; Python: re.fullmatch). The server validates the pattern
+// with Go RE2 and the runner applies it with Python re, so Pattern is limited
+// to a subset both read the same way (envPatternSubset in validate.go): no
+// anchors, no escape classes like \d or \w, no flags, no POSIX classes.
 type EnvCondition struct {
 	Name    string `json:"name"`
 	Pattern string `json:"pattern,omitempty"`

@@ -262,7 +262,9 @@ func (v *validator) conditions(path string, c Conditions) {
 			v.add(RuleInvalid, epath+".name", "%q is not an environment variable name", e.Name)
 		}
 		if e.Pattern != "" {
-			if _, err := regexp.Compile(e.Pattern); err != nil {
+			if err := envPatternSubset(e.Pattern); err != nil {
+				v.add(RuleInvalid, epath+".pattern", "pattern is outside the subset Go and Python read alike: %v", err)
+			} else if _, err := regexp.Compile("^(?:" + e.Pattern + ")$"); err != nil {
 				v.add(RuleInvalid, epath+".pattern", "pattern does not compile: %v", err)
 			}
 		}
@@ -621,4 +623,162 @@ func (v *validator) addressee(path string, c *Channel) {
 		}
 		v.signs(path+".command.results", rows)
 	}
+}
+
+// envPatternMeta are the characters with a meaning in a pattern.
+const envPatternMeta = `\.^$|?*+()[]{}`
+
+// envPatternSubset checks that an EnvCondition pattern stays inside the
+// regular-expression subset Go RE2 and Python re read the same way, given
+// whole-value matching on both sides:
+//
+//   - literals: printable ASCII other than the metacharacters
+//     \ . ^ $ | ? * + ( ) [ ] { }, or a metacharacter (or "-") escaped with
+//     a backslash; no other escape (\d \w \s \b \z \A \x… differ or do
+//     not exist in one of them);
+//   - "." (any character but a newline in both);
+//   - a class [...] or [^...] of literals and ranges a-z, with \ ] [ - ^
+//     escaped; no "[:", no "&&", "||", "--" or "~~" (Python warns of set
+//     operations there);
+//   - groups (...) and (?:...), alternation |;
+//   - quantifiers * + ? (each optionally followed by ? for the lazy form)
+//     and {n}, {n,}, {n,m} with n, m <= 1000 after an atom; no {,m} and no
+//     lone "{" (Go and Python disagree on both);
+//   - no anchors ^ and $ (the whole value is matched anyway, and $ before a
+//     trailing newline differs), no flags (?i) and no other (?… group.
+func envPatternSubset(p string) error {
+	atom := false // the previous element can take a quantifier
+	depth := 0
+	for i := 0; i < len(p); i++ {
+		c := p[i]
+		if c < 0x20 || c > 0x7e {
+			return fmt.Errorf("character %q at %d is not printable ASCII", c, i)
+		}
+		switch c {
+		case '\\':
+			if i+1 >= len(p) || !strings.ContainsRune(envPatternMeta+"-", rune(p[i+1])) {
+				return fmt.Errorf("escape at %d is not an escaped metacharacter", i)
+			}
+			i++
+			atom = true
+		case '.':
+			atom = true
+		case '^', '$':
+			return fmt.Errorf("anchor %q at %d: the whole value is matched without anchors", c, i)
+		case '|':
+			atom = false
+		case '(':
+			if strings.HasPrefix(p[i:], "(?") {
+				if !strings.HasPrefix(p[i:], "(?:") {
+					return fmt.Errorf("group at %d: only (...) and (?:...) are allowed", i)
+				}
+				i += 2
+			}
+			depth++
+			atom = false
+		case ')':
+			if depth == 0 {
+				return fmt.Errorf("unbalanced ) at %d", i)
+			}
+			depth--
+			atom = true
+		case '[':
+			end, err := envPatternClass(p, i)
+			if err != nil {
+				return err
+			}
+			i = end
+			atom = true
+		case ']', '}':
+			return fmt.Errorf("unescaped %q at %d", c, i)
+		case '*', '+', '?':
+			if !atom {
+				return fmt.Errorf("quantifier %q at %d has nothing to repeat", c, i)
+			}
+			if i+1 < len(p) && p[i+1] == '?' {
+				i++
+			}
+			atom = false
+		case '{':
+			if !atom {
+				return fmt.Errorf("repetition at %d has nothing to repeat", i)
+			}
+			end, err := envPatternRepeat(p, i)
+			if err != nil {
+				return err
+			}
+			i = end
+			if i+1 < len(p) && p[i+1] == '?' {
+				i++
+			}
+			atom = false
+		default:
+			atom = true
+		}
+	}
+	if depth != 0 {
+		return fmt.Errorf("unbalanced (")
+	}
+	return nil
+}
+
+// envPatternClass checks the class starting at p[start] == '[' and returns
+// the index of its closing ']'.
+func envPatternClass(p string, start int) (int, error) {
+	i := start + 1
+	if i < len(p) && p[i] == '^' {
+		i++
+	}
+	first := true
+	for ; i < len(p); i++ {
+		c := p[i]
+		switch {
+		case c == ']' && !first:
+			return i, nil
+		case c == ']' || c == '[':
+			return 0, fmt.Errorf("unescaped %q in the class at %d", c, start)
+		case c == '\\':
+			if i+1 >= len(p) || !strings.ContainsRune(`\]-^[`, rune(p[i+1])) {
+				return 0, fmt.Errorf("escape in the class at %d is not \\ ] - ^ or [", start)
+			}
+			i++
+		case c < 0x20 || c > 0x7e:
+			return 0, fmt.Errorf("character %q in the class at %d is not printable ASCII", c, start)
+		}
+		for _, op := range []string{"&&", "||", "--", "~~"} {
+			if strings.HasPrefix(p[i:], op) {
+				return 0, fmt.Errorf("%q in the class at %d", op, start)
+			}
+		}
+		first = false
+	}
+	return 0, fmt.Errorf("class at %d is not closed", start)
+}
+
+// envPatternRepeat checks the repetition starting at p[start] == '{' and
+// returns the index of its closing '}'.
+func envPatternRepeat(p string, start int) (int, error) {
+	end := strings.IndexByte(p[start:], '}')
+	if end < 0 {
+		return 0, fmt.Errorf("repetition at %d is not closed", start)
+	}
+	body := p[start+1 : start+end]
+	lo, hi, comma := strings.Cut(body, ",")
+	num := func(s string) bool {
+		if s == "" || len(s) > 4 {
+			return false
+		}
+		n := 0
+		for _, r := range s {
+			if r < '0' || r > '9' {
+				return false
+			}
+			n = n*10 + int(r-'0')
+		}
+		return n <= 1000
+	}
+	if !num(lo) || (comma && hi != "" && !num(hi)) {
+		return 0, fmt.Errorf("repetition at %d must be {n}, {n,} or {n,m} with n, m <= 1000", start)
+	}
+	return start + end, nil
 }

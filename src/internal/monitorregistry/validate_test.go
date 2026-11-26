@@ -29,7 +29,7 @@ func validRegistry() *Registry {
 			{
 				ID: "alpha-queue", About: "own delivery", Source: "fixture", Step: StepOwnDelivery, Order: 1,
 				Kind:     KindAddressed,
-				Detect:   Conditions{Env: []EnvCondition{{Name: "ALPHA_THREAD", Pattern: "^[0-9a-f-]+$"}}},
+				Detect:   Conditions{Env: []EnvCondition{{Name: "ALPHA_THREAD", Pattern: "[0-9a-f-]+"}}},
 				Executor: Executor{Type: ExecutorArgv, Argv: []string{"alpha", "queue", "{env:ALPHA_THREAD}"}, Feed: FeedStdin, TimeoutSec: 30},
 				Idle:     Idle{Type: IdleNone},
 				Outcomes: []OutcomeRow{
@@ -255,4 +255,36 @@ func TestLoad(t *testing.T) {
 			t.Fatalf("Resolve(gamma) = %+v, want the general record", other)
 		}
 	})
+}
+
+// TestValidate_EnvPatternSubset — an EnvCondition pattern is validated by
+// Go and applied by Python, so only the subset both read alike passes:
+// constructs whose meaning differs (escape classes, anchors, POSIX classes,
+// {,m}, flags, class set operations) are refused.
+func TestValidate_EnvPatternSubset(t *testing.T) {
+	accepted := []string{
+		"[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}",
+		"skm_[A-Za-z0-9]+",
+		`a\.b|c(?:d|e)*?`,
+		"[^/]+",
+	}
+	refused := []string{`\d+`, "^abc$", `a\z`, "[[:alpha:]]+", "a{,3}", "(?i)abc", "[a&&b]", "a{2", "(ab", "x{1001}", "é"}
+	for _, p := range accepted {
+		r := validRegistry()
+		r.Channels[0].Detect.Env[0].Pattern = p
+		if err := r.Validate(); err != nil {
+			t.Fatalf("pattern %q was refused: %v", p, err)
+		}
+	}
+	for _, p := range refused {
+		r := validRegistry()
+		r.Channels[0].Detect.Env[0].Pattern = p
+		err := r.Validate()
+		if err == nil {
+			t.Fatalf("pattern %q was accepted", p)
+		}
+		if rules := rulesOf(t, err); len(rules) != 1 || rules[0] != RuleInvalid {
+			t.Fatalf("pattern %q: %v, want one %s", p, err, RuleInvalid)
+		}
+	}
 }
