@@ -559,6 +559,48 @@ class AccessBoundaryAtHandOverTest(unittest.TestCase):
 
 
 @unittest.skipUnless(os.name == "posix", "the POSIX pipeline")
+class StopDuringCallTest(unittest.TestCase):
+    """Review finding V1 of wave 7 (INV-9: "unknown" is never sent again;
+    US-12: the receipt of a stop comes after the events' outcomes): a stop
+    while the channel may have the text fixes "unknown" in the state and
+    the journal before the stop goes on; a stop before the call was counted
+    hands nothing over and fixes nothing."""
+
+    def test_a_stop_after_the_channel_took_the_text(self):
+        world = World(self, two_channels())
+        mon = world.monitor()
+
+        def stop(program):
+            raise world.runner.StopSignal()
+        mon.spy.after = stop
+        with self.assertRaises(world.runner.StopSignal):
+            mon.page([note(1)])
+        self.assertEqual([d[:3] for d in mon.deliveries()], [(1, "unknown", "A")])
+        outcomes, _ = world.runner.load_page_outcomes(mon.token, CURSOR)
+        self.assertEqual(outcomes, {"1": "unknown"})
+        # The next start of the token sends nothing again.
+        again = world.monitor()
+        again.page([note(1)])
+        self.assertEqual(len(world.prog("chan-a").calls()), 1)
+
+    def test_a_stop_before_the_call_fixes_nothing(self):
+        world = World(self, two_channels())
+        mon = world.monitor()
+
+        def stop(sink, channel, timeout):
+            raise world.runner.StopSignal()
+        with mock.patch.object(world.runner.DeliverySink, "wait_idle", stop):
+            with self.assertRaises(world.runner.StopSignal):
+                mon.page([note(1)])
+        self.assertEqual(world.prog("chan-a").calls(), [])
+        self.assertEqual(mon.deliveries(), [])
+        # Not lost: the next start delivers it.
+        again = world.monitor()
+        again.page([note(1)])
+        self.assertEqual([d[:2] for d in again.deliveries()], [(1, "queued")])
+
+
+@unittest.skipUnless(os.name == "posix", "the POSIX pipeline")
 class JournalAndLedgerTest(unittest.TestCase):
     """Row #56: a journal that takes no write after the channel took the
     text holds new sends and the page; after it is back the outcome of the

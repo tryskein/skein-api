@@ -570,6 +570,7 @@ class DeliverySink(object):
         text, _, _ = plain_batch(batch, self.exclude_file, limit, unit)
         guard = Guard(self, channel, attempt, timeout)
         driver = self.drivers.get(channel_id) or ArgvDriver(channel, self.executor)
+        calls_before = attempt.calls
         try:
             try:
                 outcome, sign = driver.send(text, guard)
@@ -586,10 +587,19 @@ class DeliverySink(object):
             except DeliveryCancelled:
                 self._ledger_step(attempt.abandon)
                 raise
-            except StopSignal:
-                # A stop while the channel may have the text: unknown, never
-                # a second send (INV-9).
+            except (StopSignal, Exception) as exc:
+                # A stop (or an error) while the channel may have the text:
+                # unknown, never a second send (INV-9) - in the ledger, the
+                # state and the journal before the stop goes on, so its
+                # receipt never comes before this outcome.
+                if isinstance(exc, (LedgerUnavailable, JournalUnavailable)):
+                    raise
+                if attempt.calls == calls_before:
+                    # Before the call was counted: nothing was handed over.
+                    self._ledger_step(attempt.abandon)
+                    raise
                 self._ledger_step(attempt.finish, OUTCOME_UNKNOWN)
+                self._close_unsure(cursor, outcomes, journaled, batch, channel_id)
                 raise
             changed = outcome == "addressee-changed"
             if not changed and outcome != OUTCOME_REFUSED and not self._same_process(channel):
@@ -671,6 +681,16 @@ class DeliverySink(object):
                         "channel": channel_id, "lastAnswer": self._last_refusal})
         for n in batch:
             step[str(n["id"])] += 1
+
+    def _close_unsure(self, cursor, outcomes, journaled, batch, channel_id):
+        """The batch of a call a stop interrupted: unknown, as far as the
+        state and the journal take it (what they refuse, the next start
+        recovers from the ledger)."""
+        for n in batch:
+            try:
+                self._close(cursor, outcomes, journaled, n, OUTCOME_UNKNOWN, channel_id, {"interrupted": True})
+            except (JournalUnavailable, OSError, PlatformRefusal):
+                pass
 
     def _close(self, cursor, outcomes, journaled, n, status, channel, sign, with_preview=True):
         """The outcome of one event: into the state, then the journal."""
