@@ -121,3 +121,42 @@ image = "python:3.13.18-slim-bookworm"
 timeout_seconds = 7200
 [kind.pymutation.options]
 install = "python3 -m pip install --user mutmut==3.8.1"
+
+# Size measurements of the MCP surface: scripts/progon/measure.sh runs
+# scripts/measure-tools-list.sh and scripts/measure-tool-responses.sh and
+# prints MEASURE_* lines. Run from the repository root (the scripts address
+# src/ themselves); the response measurement needs the same migrated
+# Postgres as integ.
+[kind.measure]
+adapter = "shell"
+workdir = "."
+memory_mib = 3072
+timeout_seconds = 3600
+test_timeout_seconds = 1800
+prepare = [
+  "go install -tags postgres github.com/golang-migrate/migrate/v4/cmd/migrate@v4.20.1",
+  "\"$(go env GOPATH)/bin/migrate\" -path src/migrations -database \"$TEST_DATABASE_URL\" up",
+]
+[kind.measure.env]
+TEST_DATABASE_URL = "postgres://skein:test@pg:5432/skein?sslmode=disable"
+[kind.measure.options]
+shell = ["bash"]
+[kind.measure.selection]
+default = ["scripts/progon/measure.sh"]
+[[kind.measure.fixture]]
+name = "pg"
+image = "pgvector/pgvector:pg18"
+pull = true
+cpu = 1
+memory_mib = 2048
+tmpfs = ["/var/lib/postgresql/data"]
+ready = ["pg_isready", "-U", "skein", "-d", "skein", "-h", "127.0.0.1"]
+init = [
+  ["psql", "-v", "ON_ERROR_STOP=1", "-U", "skein", "-d", "skein", "-c", "CREATE EXTENSION IF NOT EXISTS pg_trgm; CREATE EXTENSION IF NOT EXISTS vector;"],
+]
+[kind.measure.fixture.env]
+POSTGRES_USER = "skein"
+POSTGRES_PASSWORD = "test"
+POSTGRES_DB = "skein"
+PGDATA = "/var/lib/postgresql/data/pgdata"
+POSTGRES_INITDB_ARGS = "--locale-provider=builtin --builtin-locale=C.UTF-8 --lc-collate=C.UTF-8 --lc-ctype=C.UTF-8"

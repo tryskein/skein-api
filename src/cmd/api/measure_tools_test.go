@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	"github.com/google/uuid"
@@ -16,10 +17,13 @@ import (
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 
+	"skein-api/internal/apikeys"
 	"skein-api/internal/auth"
 	"skein-api/internal/dependencies"
 	"skein-api/internal/issues"
 	mcptools "skein-api/internal/mcp/tools"
+	"skein-api/internal/monitorcreds"
+	"skein-api/internal/notifications"
 	"skein-api/internal/projects"
 	"skein-api/internal/testsupport"
 )
@@ -32,6 +36,14 @@ import (
 // sk-255.3 ended up quoting numbers produced by two different ad-hoc
 // scripts that disagreed by 60 chars on the same commit.
 const measureEnv = "SKEIN_MEASURE_TOOLS"
+
+// The fixed input of the skein_get_monitor_script row of
+// TestMeasureToolResponses.
+const (
+	measureMonitorPublicURL    = "https://skein.example.test"
+	measureMonitorRunnerSHA256 = "0000000000000000000000000000000000000000000000000000000000000000"
+	measureMonitorIdleTTL      = 6 * time.Hour
+)
 
 // TestMeasureToolsList prints the size of the tools/list payload the
 // production registration produces, per tool and in total.
@@ -208,6 +220,12 @@ func TestMeasureToolResponses(t *testing.T) {
 	mcptools.RegisterClose(s, pool, issuesStore)
 	mcptools.RegisterCreate(s, pool, issuesStore, depsStore, projectsStore)
 	mcptools.RegisterEpicCreate(s, pool, issuesStore, projectsStore)
+	// skein_get_monitor_script on a fixed input: the public URL, the runner
+	// digest and the renewal window are constants of this measurement, not
+	// of a deployment, so the row changes only when the tool's response does.
+	mcptools.RegisterGetMonitorScript(s, pool, notifications.NewStore(pool),
+		monitorcreds.New(pool, measureMonitorIdleTTL), measureMonitorPublicURL,
+		measureMonitorRunnerSHA256, measureMonitorIdleTTL)
 
 	c, err := client.NewInProcessClient(s)
 	if err != nil {
@@ -290,6 +308,7 @@ func TestMeasureToolResponses(t *testing.T) {
 			"id":              fx.closeTargetID,
 			"expectedVersion": fx.closeTargetVersion,
 			"reason":          "baseline measurement",
+			"closeOutcome":    "done",
 		})
 
 	// SC-007 — create with the duplicate gate NOT firing.
@@ -313,6 +332,17 @@ func TestMeasureToolResponses(t *testing.T) {
 			"kind":           "autonomous",
 			"childTemplates": children,
 		})
+
+	// SC-009 — skein_get_monitor_script without `client`: the baseline the
+	// growth of the response without `client` (≤ 200 bytes) and the response
+	// with `client` (≤ this + 4 096 bytes) are compared against. The mint
+	// needs the caller's API key; only this call carries one, so the rows
+	// above keep the context they were baselined with.
+	monitorKey := seedMeasureAPIKey(t, pool, fx.callerID)
+	monitorCtx := auth.WithKeyGrant(auth.WithAPIKeyID(ctx, monitorKey),
+		apikeys.Grant{Level: apikeys.LevelManage, Scope: apikeys.Scope{Mode: apikeys.ScopeAll}})
+	m.callCtx(monitorCtx, "skein_get_monitor_script.no_client",
+		"skein_get_monitor_script", map[string]any{"id": fx.referenceID})
 
 	fmt.Printf("MEASURE_RESP_TOTAL %d %d\n", m.totalBytes, m.rows)
 
@@ -338,11 +368,16 @@ type respMeasurer struct {
 // error payload would be a number describing the wrong thing), prints the
 // MEASURE_RESP row and returns the raw payload.
 func (m *respMeasurer) call(label, tool string, args map[string]any) string {
+	return m.callCtx(m.ctx, label, tool, args)
+}
+
+// callCtx is call with the request context given by the caller.
+func (m *respMeasurer) callCtx(ctx context.Context, label, tool string, args map[string]any) string {
 	m.t.Helper()
 	req := mcpgo.CallToolRequest{}
 	req.Params.Name = tool
 	req.Params.Arguments = args
-	res, err := m.c.CallTool(m.ctx, req)
+	res, err := m.c.CallTool(ctx, req)
 	if err != nil {
 		m.t.Fatalf("%s: CallTool: %v", label, err)
 	}
@@ -574,6 +609,12 @@ func seedMeasureFixture(t *testing.T, pool *pgxpool.Pool) *measureFixture {
 	// warning, and SC-006 is stated on a close WITHOUT warnings).
 	fx.closeTargetID = testsupport.SeedLockedIssue(t, pool, projectID, callerID,
 		prefix+"-4", fx.sessionID, 0)
+	// The lock belongs to a session AND a user (sk-424): without the owner
+	// the close answers locked_by_other even for the same session string.
+	if _, err := pool.Exec(context.Background(),
+		`UPDATE issues SET locked_by_user_id = $2 WHERE id = $1`, fx.closeTargetID, callerID); err != nil {
+		t.Fatalf("set close-target lock owner: %v", err)
+	}
 	testsupport.SetAssignee(t, pool, fx.closeTargetID, callerName)
 	if err := pool.QueryRow(context.Background(),
 		`SELECT version FROM issues WHERE id = $1`, fx.closeTargetID).
@@ -613,4 +654,25 @@ func seedIssueComponent(t *testing.T, pool *pgxpool.Pool, issueID string, compon
 		 ON CONFLICT DO NOTHING`, issueID, componentID); err != nil {
 		t.Fatalf("seed component on %s: %v", issueID, err)
 	}
+}
+
+// seedMeasureAPIKey inserts an API key row for the caller: the monitor mint
+// references the calling key (FK to api_keys), so the key must be real.
+func seedMeasureAPIKey(t *testing.T, pool *pgxpool.Pool, userID uuid.UUID) uuid.UUID {
+	t.Helper()
+	id := uuid.Must(uuid.NewRandom())
+	prefix := "ska_" + strings.ReplaceAll(id.String()[:12], "-", "")
+	_, err := pool.Exec(context.Background(), `
+INSERT INTO api_keys (id, user_id, key_hash, prefix, label, created_at,
+                      level, is_admin, scope_mode)
+VALUES ($1, $2, 'fake-hash-for-measure', $3, 'measure', now(), 'manage', false, 'all')`, id, userID, prefix)
+	if err != nil {
+		t.Fatalf("seed api key: %v", err)
+	}
+	// Registered after the fixture → runs first in LIFO cleanup, so the
+	// CASCADE drops the minted monitor credentials before the user goes.
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM api_keys WHERE id = $1`, id)
+	})
+	return id
 }

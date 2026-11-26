@@ -153,6 +153,7 @@ The profile is `.progon/api.toml`; run from the repository root:
 | mutation | `progon api mutation ./internal/<pkg>/` | the package patterns are the targets; `--since <ref>` limits it to changed lines |
 | pyunit | `progon api pyunit` | `progon api pyunit <file>` — a path relative to `src`, e.g. `internal/handler/assets/runner_tests/monitor_runner_test.py` |
 | pymutation | `progon api pymutation <mutant pattern>` | the targets are mutmut mutant name patterns, e.g. `'internal.handler.assets.runner.core.x_build_url*'`; no `--since` (mutmut has no diff mode) |
+| measure | `progon api measure` | none: one script, `scripts/progon/measure.sh`; it prints `MEASURE_*` lines of `scripts/measure-tools-list.sh` and `scripts/measure-tool-responses.sh` against the same Postgres fixture and migrations as `integ` |
 
 `integ` starts a `pgvector/pgvector:pg18` fixture with `pg_trgm` and `vector`,
 applies `src/migrations` with golang-migrate and runs the packages serially
@@ -262,7 +263,8 @@ part of the release.
   HTTP server and the runner as subprocesses and takes tens of seconds.
 - `scripts/measure-tool-responses.sh` needs a migrated database in
   `TEST_DATABASE_URL`; the integration harness does not forward its measurement
-  switch, so the harness is not a way to run it.
+  switch, so the harness is not a way to run it. `progon api measure` runs it
+  on a test VM.
 
 ### Kinds without automatic runs
 
