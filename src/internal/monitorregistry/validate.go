@@ -341,6 +341,7 @@ func (v *validator) channel(path string, c *Channel) {
 		}
 	}
 	v.signs(path+".outcomes", rows)
+	v.criteriaOf(path+".outcomes", rows, c.Executor.Type)
 
 	switch {
 	case len(c.Probes) > 0 && c.ProbeUndefined:
@@ -522,6 +523,22 @@ func (v *validator) signs(path string, rows []Match) {
 	}
 }
 
+// criteriaOf checks that every row uses only criteria the answer of its
+// executor has: an argv program has an exit code and no HTTP status, an
+// http request has a status and no exit code. A row with the other
+// criterion could never match.
+func (v *validator) criteriaOf(path string, rows []Match, executor string) {
+	for i, m := range rows {
+		rpath := fmt.Sprintf("%s[%d].match", path, i)
+		switch {
+		case executor == ExecutorArgv && m.HTTPStatus != nil:
+			v.add(RuleInvalid, rpath+".httpStatus", "an argv answer has no HTTP status")
+		case executor == ExecutorHTTP && m.ExitCode != nil:
+			v.add(RuleInvalid, rpath+".exitCode", "an http answer has no exit code")
+		}
+	}
+}
+
 // overlaps reports whether one answer can satisfy both signs: every
 // criterion stated by both has the same value. A sign without criteria
 // overlaps nothing (it is refused on its own).
@@ -569,6 +586,7 @@ func (v *validator) probe(path string, p *Probe) {
 			}
 		}
 		v.signs(path+".results", rows)
+		v.criteriaOf(path+".results", rows, ExecutorArgv)
 	default:
 		if len(p.Argv) > 0 {
 			if p.Type == ProbeSocketConnect || p.Type == ProbeTCPReach {
@@ -626,6 +644,7 @@ func (v *validator) addressee(path string, c *Channel) {
 			}
 		}
 		v.signs(path+".command.results", rows)
+		v.criteriaOf(path+".command.results", rows, ExecutorArgv)
 	}
 }
 

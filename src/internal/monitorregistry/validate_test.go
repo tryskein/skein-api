@@ -122,6 +122,25 @@ func TestValidate_RejectsEachRule(t *testing.T) {
 		{"channel without about", func(r *Registry) { r.Channels[1].About = "" }, RuleMissingAbout},
 		{"blind channel outside step 7", func(r *Registry) { r.Channels[2].Step = StepTerminal }, RuleBlindStep},
 		{"engine map to a missing record", func(r *Registry) { r.ZavodEngines["beta-engine"] = "beta" }, RuleUnknownEngineTarget},
+		{"unknown schema version", func(r *Registry) { r.SchemaVersion = 2 }, RuleSchemaVersion},
+		{"id outside the id form", func(r *Registry) { r.Channels[1].ID = "Host" }, RuleBadID},
+		{"row without a criterion", func(r *Registry) {
+			r.Channels[1].Outcomes = append(r.Channels[1].Outcomes, OutcomeRow{Outcome: OutcomeUnknown})
+		}, RuleAmbiguousSign},
+		{"probes and probe undefined at once", func(r *Registry) { r.Channels[0].ProbeUndefined = true }, RuleProbeChoice},
+		{"neither probes nor probe undefined", func(r *Registry) { r.Channels[1].ProbeUndefined = false }, RuleProbeChoice},
+		{"channel at step 7 that is not blind", func(r *Registry) {
+			r.Channels[1].Step = StepBlind
+			r.Channels[1].Order = 2
+		}, RuleBlindStep},
+		{"step outside the method order", func(r *Registry) { r.Channels[1].Step = 4 }, RuleInvalid},
+		{"HTTP status in the table of an argv channel", func(r *Registry) {
+			r.Channels[1].Outcomes[0].Match.HTTPStatus = intp(200)
+		}, RuleInvalid},
+		{"exit code in the table of an http channel", func(r *Registry) {
+			r.Channels[1].Executor = Executor{Type: ExecutorHTTP, TimeoutSec: 30,
+				HTTP: &HTTPRequest{Method: "POST", URL: "{env:HOST_URL}", BodyField: "text"}}
+		}, RuleInvalid},
 		{"Windows shell outside the closed set", func(r *Registry) { r.Agents[0].WindowsShell = "gitbash" }, RuleInvalid},
 		{"two rows one answer can match", func(r *Registry) {
 			// exit 0 alone, and exit 0 with a JSON field: an answer with exit 0
