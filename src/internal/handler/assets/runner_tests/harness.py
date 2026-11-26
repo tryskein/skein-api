@@ -38,6 +38,9 @@ REGISTRY_JSON = os.path.join(HERE, "..", "..", "..", "monitorregistry", "registr
 SITE_DIR = os.path.join(HERE, "..", "..", "testdata", "runner_site")
 # The loader asset (one part of the served loader).
 LOADER_SRC = os.path.join(HERE, "..", "..", "..", "mcp", "tools", "assets", "monitor_loader.py")
+# The starter asset (monitor_loader.go#monitorStarter substitutes the mode).
+STARTER_SRC = os.path.join(os.path.dirname(LOADER_SRC), "monitor_starter.py")
+STARTER_CLIENT_PLACEHOLDER = "__SKEIN_STARTER_CLIENT__"
 # The manifest of the loader GET /agent/v1/monitor-loader serves
 # (monitor_loader.go#servedLoaderSource); paths relative to its directory.
 LOADER_PARTS_MANIFEST = os.path.join(os.path.dirname(LOADER_SRC), "loader_parts.txt")
@@ -68,6 +71,17 @@ def served_loader():
     if not chunks:
         raise AssertionError("the loader manifest lists no part")
     return "".join(chunks)
+
+
+def starter(client):
+    """The starter the server serves: of a call with `client` (written by
+    prepare as starter.py) or without it (the text of the bootstrap), without
+    the trailing newline, as monitor_loader.go#mustStarter builds it."""
+    with open(STARTER_SRC, "r") as fh:
+        text = fh.read()
+    if text.count(STARTER_CLIENT_PLACEHOLDER) != 1:
+        raise AssertionError("the starter must carry the mode placeholder exactly once")
+    return text.replace(STARTER_CLIENT_PLACEHOLDER, "1" if client else "0", 1).rstrip("\n")
 
 
 def part_names():
@@ -193,6 +207,9 @@ class _LoaderHandler(BaseHTTPRequestHandler):
         if parsed.path == "/agent/v1/monitor-script":
             srv.script_hits += 1
             srv.script(self)
+        elif parsed.path == "/agent/v1/monitor-loader":
+            srv.loader_hits += 1
+            srv.loader(self)
         else:
             srv.poll(self)
 
@@ -214,11 +231,14 @@ class _LoaderHandler(BaseHTTPRequestHandler):
 class LoaderServer(ThreadingHTTPServer):
     daemon_threads = True
 
-    def __init__(self, script, poll=None):
+    def __init__(self, script, poll=None, loader=None):
         super().__init__(("127.0.0.1", 0), _LoaderHandler)
         self.script = script
         self.poll = poll or (lambda h: h.send_body(200, json.dumps(EMPTY).encode()))
+        # The loader route answers with the served loader unless told otherwise.
+        self.loader = loader or (lambda h: h.send_body(200, served_loader().encode("utf-8")))
         self.script_hits = 0
+        self.loader_hits = 0
         threading.Thread(target=self.serve_forever, daemon=True).start()
 
     def url(self):

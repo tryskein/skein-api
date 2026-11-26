@@ -149,7 +149,7 @@ class Sandbox(object):
                "ALPHA_STREAM": "1", "OWN_Q_ID": "q-1", "CFG_DIR": self.cfg,
                "SKEIN_PUBLIC_URL": "http://127.0.0.1:9", "SKEIN_ISSUE": "zz-77", "SKEIN_TOKEN_FILE": self.token,
                "SKEIN_EXCLUDE_SESSION": "sess-1", "SKEIN_RUNNER_SHA256": "ab" * 32,
-               "SKEIN_CLIENT": "alpha", "SKEIN_PLATFORM": "posix"}
+               "SKEIN_LOADER_SHA256": "cd" * 32, "SKEIN_CLIENT": "alpha", "SKEIN_PLATFORM": "posix"}
         env.update(extra)
         return dict((k, v) for k, v in env.items() if v is not None)
 
@@ -272,20 +272,23 @@ class PreflightLineTest(unittest.TestCase):
                                 detector or FakeDetector(), FakeProbe(), placement())
 
     def test_line_carries_the_working_command(self):
+        # Row #141: the working command repeats the variables, the starter
+        # path and both digests of the preflight command, with
+        # SKEIN_MONITOR_MODE=run, SKEIN_MONITOR_PREFLIGHT and the overrides.
         line = self.run_preflight(channel="journal", forced="journal", blind_off=True)
-        self.assertEqual(sorted(line), ["channel", "command", "event", "journal", "method", "preflightId",
-                                        "reason", "warnings"])
+        self.assertEqual(sorted(line), ["channel", "client", "command", "event", "instruction", "journal",
+                                        "method", "preflightId", "reason", "warnings"])
         self.assertEqual(line["event"], "preflight")
         self.assertEqual(line["preflightId"], 1)
         self.assertEqual(os.path.dirname(line["journal"]),
                          os.path.join(self.box.state_home, "skein-monitor", "journal"))
-        bootstrap = ("SKEIN_PUBLIC_URL='http://127.0.0.1:9' SKEIN_ISSUE='zz-77' SKEIN_TOKEN_FILE='%s' "
-                     "SKEIN_EXCLUDE_SESSION='sess-1' SKEIN_RUNNER_SHA256='%s' SKEIN_CLIENT='alpha' "
-                     "SKEIN_PLATFORM='posix' python3 '%s'"
-                     % (self.box.token, "ab" * 32, os.path.join(self.box.token_dir, "loader.py")))
+        variables = ("SKEIN_PUBLIC_URL='http://127.0.0.1:9' SKEIN_ISSUE='zz-77' SKEIN_TOKEN_FILE='%s' "
+                     "SKEIN_EXCLUDE_SESSION='sess-1' SKEIN_RUNNER_SHA256='%s' SKEIN_LOADER_SHA256='%s' "
+                     "SKEIN_CLIENT='alpha' SKEIN_PLATFORM='posix' python3 '%s'"
+                     % (self.box.token, "ab" * 32, "cd" * 32, os.path.join(self.box.token_dir, "starter.py")))
         self.assertEqual(line["command"],
-                         "SKEIN_MONITOR_PREFLIGHT=1 SKEIN_MONITOR_CHANNEL='journal' SKEIN_MONITOR_BLIND=off "
-                         + bootstrap)
+                         "SKEIN_MONITOR_MODE=run SKEIN_MONITOR_PREFLIGHT=1 SKEIN_MONITOR_CHANNEL='journal' "
+                         "SKEIN_MONITOR_BLIND='off' " + variables)
 
     def test_next_preflight_takes_the_next_number(self):
         self.assertEqual(self.run_preflight()["preflightId"], 1)
@@ -353,23 +356,11 @@ class PreflightLineTest(unittest.TestCase):
             self.assertEqual(ctx.exception.variable, os.path.dirname(token))
 
 
-def client_loader():
-    """The client-mode loader `prepare` writes: its parts in manifest order."""
-    assets = os.path.dirname(harness.LOADER_SRC)
-    chunks = []
-    with open(os.path.join(assets, "loader_client", "parts.txt")) as fh:
-        for line in fh:
-            name = line.strip()
-            if name and not name.startswith("#"):
-                with open(os.path.join(assets, name)) as part:
-                    chunks.append(part.read().rstrip("\n") + "\n")
-    return "".join(chunks)
-
-
 @unittest.skipUnless(os.name == "posix", "the POSIX preflight")
 class PreflightProcessTest(unittest.TestCase):
-    """Matrix row #34: the preflight as the agent runs it, through the client
-    loader: one line, printed before the command returns, and no poll."""
+    """Matrix rows #34, #141: the preflight as the agent runs it, through the
+    starter.py that prepare writes, the served loader and the runner: one
+    line, printed before the command returns, and no poll."""
 
     def test_one_line_and_no_poll(self):
         box = Sandbox(self)
@@ -382,21 +373,25 @@ class PreflightProcessTest(unittest.TestCase):
 
         srv = harness.LoaderServer(lambda h: h.send_body(200, body), poll)
         self.addCleanup(srv.stop)
-        loader = os.path.join(box.token_dir, "loader.py")
-        with open(loader, "w") as fh:
-            fh.write(client_loader())
+        starter = os.path.join(box.token_dir, "starter.py")
+        with open(starter, "w") as fh:
+            fh.write(harness.starter(client=True))
         env = dict(os.environ)
         env.update(box.env(SKEIN_PUBLIC_URL=srv.url(), SKEIN_RUNNER_SHA256=hashlib.sha256(body).hexdigest(),
+                           SKEIN_LOADER_SHA256=hashlib.sha256(harness.served_loader().encode("utf-8")).hexdigest(),
                            SKEIN_CLIENT="no-such-agent", SKEIN_MONITOR_MODE="preflight",
                            PATH=os.environ.get("PATH", "")))
-        proc = subprocess.run([sys.executable, loader], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        proc = subprocess.run([sys.executable, starter], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                               env=env, timeout=60, universal_newlines=True)
         lines = [json.loads(l) for l in proc.stdout.splitlines() if l.strip()]
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual(len(lines), 1, lines)
         self.assertEqual(lines[0]["event"], "preflight")
         self.assertEqual(lines[0]["method"], "journal")
-        self.assertIn("general record", " ".join(lines[0]["warnings"]))
+        # The general record is named by the client field, not by a warning
+        # text (SC-012).
+        self.assertEqual(lines[0]["client"], "general")
+        self.assertEqual(srv.loader_hits, 1)
         self.assertEqual(srv.script_hits, 1)
         self.assertEqual(polls, [])
         self.assertFalse(os.path.exists(os.path.join(box.token_dir, "state.json")))
