@@ -475,6 +475,45 @@ class ReissueCommandTest(unittest.TestCase):
         self.assertIn("working command", lines[0]["action"])
 
 
+# The longest single argument Linux passes to a new program (MAX_ARG_STRLEN)
+# and the most of the loader the starter reads (monitor_starter.py).
+ARG_MAX_ONE = 32 * 4096
+STARTER_LOADER_CAP = 1 << 20
+
+
+@unittest.skipUnless(os.name == "posix", "the POSIX starters")
+class StarterRunsTheBytesTest(unittest.TestCase):
+    """The served loader is longer than one argument may be; both starters
+    run it, because they execute the bytes they downloaded, never pass them
+    to a new program. A starter that handed the loader on by argv would fail
+    here (E2BIG) as soon as the loader outgrew one argument."""
+
+    def test_the_loader_fits_the_starter_and_not_an_argument(self):
+        size = len(harness.served_loader().encode("utf-8"))
+        self.assertLess(size, STARTER_LOADER_CAP)
+        self.assertGreater(size, ARG_MAX_ONE, "the loader fits one argument: this test proves nothing")
+
+    def test_both_starters_run_the_served_loader(self):
+        for form in ("file", "text"):
+            with self.subTest(form=form):
+                box = Box(self)
+                srv = server(self, status(401))
+                env = box.env(srv.url())
+                if form == "file":
+                    argv = [sys.executable, box.starter_file]
+                else:
+                    argv = [sys.executable, "-c", harness.starter(client=False)]
+                    for name in ("SKEIN_MONITOR_MODE", "SKEIN_MONITOR_PREFLIGHT", "SKEIN_MONITOR_CHANNEL",
+                                 "SKEIN_MONITOR_BLIND", "SKEIN_CLIENT", "SKEIN_PLATFORM"):
+                        env.pop(name, None)
+                proc = subprocess.run(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env,
+                                      universal_newlines=True, timeout=90)
+                lines = [json.loads(l) for l in proc.stdout.splitlines() if l.strip()]
+                self.assertEqual(srv.loader_hits, 1, proc.stderr)
+                self.assertEqual(srv.script_hits, 1, "the loader did not run: %s" % proc.stderr)
+                self.assertEqual([l["reason"] for l in lines], ["token_expired"], proc.stderr)
+
+
 def loader_namespace():
     """The parts of the client branch of the loader, run in a namespace of
     this process."""
