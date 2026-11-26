@@ -1008,20 +1008,15 @@ func TestBootstrapCommand_EndToEnd(t *testing.T) {
 		}
 	})
 
-	t.Run("the body download has a finite positive limit", func(t *testing.T) {
-		release := make(chan struct{})
-		srv := newBootstrapServer(t, loader, runnerBody)
-		srv.script = func(w http.ResponseWriter, r *http.Request) {
-			select { // accept, never answer
-			case <-release:
-			case <-r.Context().Done():
-			}
-		}
-		defer close(release)
-		token := newToken(t)
+	// Both downloads of a start have a finite positive limit: the starter's
+	// download of the loader and the loader's download of the runner. The
+	// connection hook makes the first download it meets time out, so the
+	// runner download is reached by running the served loader directly with
+	// the variables of the same bootstrap.
+	limitCheck := func(t *testing.T, command string) ([]map[string]any, *bootRun) {
+		t.Helper()
 		connectLog := filepath.Join(t.TempDir(), "connect")
-		run := startBootstrap(t, buildMonitorBootstrap(srv.srv.URL, "zz-24", "", token, runnerSHA256, loaderSHA256),
-			"PYTHONPATH="+site, "SKEIN_TEST_SITE=1", "SKEIN_TEST_CONNECT_LOG="+connectLog)
+		run := startBootstrap(t, command, "PYTHONPATH="+site, "SKEIN_TEST_SITE=1", "SKEIN_TEST_CONNECT_LOG="+connectLog)
 		lines := run.rest(t)
 		_ = run.cmd.Wait()
 		raw, err := os.ReadFile(connectLog)
@@ -1036,10 +1031,45 @@ func TestBootstrapCommand_EndToEnd(t *testing.T) {
 		if _, err := fmt.Sscanf(log, "timeout %g", &timeout); err != nil || timeout <= 0 {
 			t.Fatalf("recorded download timeout %q, want a finite positive value", log)
 		}
-		assertOneStopLine(t, lines, "server_unreachable", "paused")
 		if code := run.cmd.ProcessState.ExitCode(); code != 1 {
 			t.Fatalf("exit code = %d, want 1", code)
 		}
+		return lines, run
+	}
+
+	t.Run("the loader download of the starter has a finite positive limit", func(t *testing.T) {
+		srv := newBootstrapServer(t, loader, runnerBody)
+		token := newToken(t)
+		lines, _ := limitCheck(t, buildMonitorBootstrap(srv.srv.URL, "zz-24", "", token, runnerSHA256, loaderSHA256))
+		if len(lines) != 1 || lines[0]["reason"] != "server_unreachable" || lines[0]["event"] != "paused" {
+			t.Fatalf("lines = %v, want one server_unreachable/paused line of the starter", lines)
+		}
+		if a, _ := lines[0]["action"].(string); !strings.HasPrefix(a, "Loader download") {
+			t.Fatalf("the action does not name the loader download: %q", a)
+		}
+		if !fileExists(token) {
+			t.Fatalf("token file removed on a download timeout")
+		}
+	})
+
+	t.Run("the runner download of the loader has a finite positive limit", func(t *testing.T) {
+		release := make(chan struct{})
+		srv := newBootstrapServer(t, loader, runnerBody)
+		srv.script = func(w http.ResponseWriter, r *http.Request) {
+			select { // accept, never answer
+			case <-release:
+			case <-r.Context().Done():
+			}
+		}
+		defer close(release)
+		token := newToken(t)
+		bootstrap := buildMonitorBootstrap(srv.srv.URL, "zz-24", "", token, runnerSHA256, loaderSHA256)
+		assignments := strings.TrimSuffix(bootstrap, " python3 -c "+shellSingleQuote(monitorStarter(false)))
+		if assignments == bootstrap {
+			t.Fatalf("bootstrap does not end with the starter:\n%s", bootstrap)
+		}
+		lines, _ := limitCheck(t, assignments+" python3 -c "+shellSingleQuote(ServedLoader()))
+		assertOneStopLine(t, lines, "server_unreachable", "paused")
 		if !fileExists(token) {
 			t.Fatalf("token file removed on a download timeout")
 		}
