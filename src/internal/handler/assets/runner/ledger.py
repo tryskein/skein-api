@@ -279,9 +279,16 @@ class Attempt(object):
                     rec["addressee"] = {"outcome": outcome, "monitor": self.ledger.monitor,
                                         "channel": self.channel, "at": now}
                 else:
-                    rec.setdefault("monitors", {})[self.ledger.monitor] = {
+                    monitors = rec.setdefault("monitors", {})
+                    budgets = _budgets(monitors.get(self.ledger.monitor))
+                    # The budget of INV-8 is the channel's: a refusal by one
+                    # channel does not overwrite what another one spent.
+                    budgets[self.channel] = {"calls": d.get("calls", 0), "lastCall": d.get("lastCall"),
+                                             "firstCall": d.get("firstCall")}
+                    monitors[self.ledger.monitor] = {
                         "outcome": outcome, "channel": self.channel, "calls": d.get("calls", 0),
-                        "lastCall": d.get("lastCall"), "firstCall": d.get("firstCall"), "at": now}
+                        "lastCall": d.get("lastCall"), "firstCall": d.get("firstCall"), "at": now,
+                        "budgets": budgets}
             window = entry.get("window") or {}
             if outcome not in ADDRESSEE_OUTCOMES:
                 # Nothing reached the addressee: the window it took is free
@@ -315,6 +322,18 @@ class Attempt(object):
         if lock is not None:
             _remove_quietly(lock.path)
             lock.release()
+
+
+def _budgets(mine):
+    """{channel: {calls, lastCall, firstCall}} of a monitor's own record:
+    what each channel spent of the budget of INV-8 on the event."""
+    if not mine:
+        return {}
+    budgets = dict(mine.get("budgets") or {})
+    if not budgets and mine.get("channel") is not None:
+        budgets[mine["channel"]] = {"calls": mine.get("calls") or 0, "lastCall": mine.get("lastCall"),
+                                    "firstCall": mine.get("firstCall")}
+    return budgets
 
 
 def _note_series(entry, sessions, now):
@@ -471,9 +490,9 @@ class Ledger(object):
                     if mine and mine.get("outcome") != OUTCOME_REFUSED:
                         decision.own[eid] = mine
                         continue
-                    if mine and mine.get("channel") == channel:
-                        prior = mine if prior is None or (mine.get("calls") or 0) > (prior.get("calls") or 0) \
-                            else prior
+                    spent = _budgets(mine).get(channel)
+                    if spent and (prior is None or (spent.get("calls") or 0) > (prior.get("calls") or 0)):
+                        prior = spent
                     carry.append(ev)
                 window = entry.get("window") or {}
                 if carry and now < (window.get("until") or 0):

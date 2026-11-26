@@ -118,6 +118,27 @@ class AttemptLockTest(Base):
 
 
 @unittest.skipUnless(os.name == "posix", "the POSIX ledger")
+class ChannelBudgetTest(Base):
+    """Review finding 14 of wave 7 (INV-8: at most 4 calls of a channel
+    that refuses before send, kept in the ledger so a restart continues
+    them): the budget is the channel's - a refusal by the next channel
+    does not give the first one its budget back."""
+
+    def test_a_refusal_by_another_channel_keeps_the_first_budget(self):
+        led = self.ledger("mon-a", ident([addr("orca", "t-1")]))
+        for _ in range(4):
+            self.deliver(led, ["e1"], channel="c1", outcome=REFUSED)
+            self.clock.t += 121
+        self.deliver(led, ["e1"], channel="c2", outcome=REFUSED)
+        self.clock.t += 121
+        # The restart: the ledger says what c1 already spent.
+        d = led.begin([ev("e1")], "c1")
+        self.assertEqual(d.attempt.calls, 4)
+        d.attempt.abandon()
+        d.attempt.release()
+
+
+@unittest.skipUnless(os.name == "posix", "the POSIX ledger")
 class MergedAttemptsTest(Base):
     """Review finding V6 of wave 7 (INV-1: one accepted delivery per
     addressee and event): two attempts published for two addressees that a
