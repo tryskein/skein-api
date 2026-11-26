@@ -118,6 +118,24 @@ class AttemptLockTest(Base):
 
 
 @unittest.skipUnless(os.name == "posix", "the POSIX ledger")
+class RecordLimitTest(Base):
+    """Review finding 17 of wave 7 (P-11: an addressee holds at most 10 000
+    records younger than 24 h; a full ledger is unavailable): an outcome
+    without a call keeps to the limit too, and old records make room."""
+
+    def test_an_outcome_without_a_call_keeps_to_the_limit(self):
+        led = self.ledger("mon-a", ident([addr("orca", "t-1")]))
+        with mock.patch.object(RUNNER, "LEDGER_MAX", 3):
+            led.record(["u1", "u2", "u3"], "does-not-fit")
+            with self.assertRaises(RUNNER.LedgerFull):
+                led.record(["u4"], "does-not-fit")
+            self.clock.t += 24 * 3600 + 1
+            led.record(["u4"], "does-not-fit")
+        self.assertEqual(led.outcome_of("u1"), (None, None), "a record older than 24 h was kept")
+        self.assertEqual(led.outcome_of("u4")[0], "does-not-fit")
+
+
+@unittest.skipUnless(os.name == "posix", "the POSIX ledger")
 class ChannelBudgetTest(Base):
     """Review finding 14 of wave 7 (INV-8: at most 4 calls of a channel
     that refuses before send, kept in the ledger so a restart continues

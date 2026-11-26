@@ -570,10 +570,16 @@ class Ledger(object):
 
     def record(self, events, outcome, channel=None):
         """Write an outcome no channel call produced (does not fit, own echo,
-        access lost before any send) for events of this monitor."""
+        access lost before any send) for events of this monitor, within the
+        limit of the addressee's records (LedgerFull past it)."""
         now = self.clock()
 
         def change(entry):
+            _prune(entry, now)
+            live = [r for r in entry["events"].values() if r.get("at", 0) > now - RETAIN_SEC]
+            new = set(str(e) for e in events if str(e) not in entry["events"])
+            if len(live) + len(new) > LEDGER_MAX:
+                raise LedgerFull()
             for eid in events:
                 rec = entry["events"].setdefault(str(eid), {})
                 rec["at"] = now
