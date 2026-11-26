@@ -70,7 +70,8 @@ class FakeProbe(object):
 
 
 class FakeBinder(object):
-    """Binds the channels it is given: {id: (confirmed, multiplexer, depth)}."""
+    """Binds the channels it is given: {id: (confirmed, multiplexer, depth)}
+    or {id: (confirmed, multiplexer, depth, descendant)}."""
 
     def __init__(self, bindings=None):
         self.bindings = bindings or {}
@@ -79,8 +80,9 @@ class FakeBinder(object):
         spec = self.bindings.get(chan["id"])
         if spec is None:
             return None
-        confirmed, multiplexer, depth = spec
-        return RUNNER.Binding(chan, confirmed, multiplexer, depth)
+        confirmed, multiplexer, depth = spec[:3]
+        descendant = spec[3] if len(spec) > 3 else None
+        return RUNNER.Binding(chan, confirmed, multiplexer, depth, descendant=descendant)
 
 
 def context(env, client="alpha", bindings=None, answers=None, nested=False, blind_off=False):
@@ -222,7 +224,15 @@ class BlindOrderTest(unittest.TestCase):
         ctx = context({"TERM_X_HANDLE": "t-1"}, bindings={"mux-1": (True, True, 2)})
         self.assertEqual(ctx.detector.hosts(ctx), [])
         self.assertEqual(RUNNER.choose(ctx).channel, "mux-1")
-        ctx = context({"TERM_X_HANDLE": "t-1"}, bindings={"mux-1": (False, True, 2)})
+        # A descendant of a tmux pane whose binding is not confirmed: step 6
+        # and the other blind channels are still skipped, and the
+        # multiplexer is not used.
+        ctx = context({"TERM_X_HANDLE": "t-1"},
+                      bindings={"mux-1": (False, True, 2, True), "emu-1": (True, False, None)})
+        self.assertEqual(ctx.detector.hosts(ctx), [])
+        self.assertEqual(ctx.detector.blind(ctx), [])
+        # Not in any multiplexer pane: step 6 is reached.
+        ctx = context({"TERM_X_HANDLE": "t-1"}, bindings={"mux-1": (False, True, 2, False)})
         self.assertEqual(ctx.detector.hosts(ctx), ["term-x"])
 
 

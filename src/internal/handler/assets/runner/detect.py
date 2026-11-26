@@ -42,15 +42,20 @@ BLIND_WARNING = "Blind delivery: the text is typed into the agent's pane and can
 
 
 class Binding(object):
-    """The binding of the runner to a pane of a blind channel: confirmed when
-    the runner is a descendant of the agent process in that pane and the
-    pane's id, PID and the agent process's start are known; multiplexer for a
+    """The binding of the runner to a pane of a blind channel. Two facts, two
+    flags: descendant when the runner is a descendant of a pane of that
+    channel (it decides the skip of step 6 and of the other blind channels
+    inside a multiplexer pane); confirmed when, beyond that, the runner is a
+    descendant of the agent process in the pane and the pane's id, PID and
+    the agent process's start are known (it decides whether the channel may
+    be used). A confirmed binding is a descendant one. multiplexer for a
     tmux/Zellij pane; depth the distance of the pane's process from the
     runner in the chain (nearest first); pane what the delivery needs."""
 
-    def __init__(self, channel, confirmed, multiplexer=False, depth=None, pane=None):
+    def __init__(self, channel, confirmed, multiplexer=False, depth=None, pane=None, descendant=None):
         self.channel = channel
         self.confirmed = confirmed
+        self.descendant = bool(confirmed) if descendant is None else (descendant or bool(confirmed))
         self.multiplexer = multiplexer
         self.depth = depth
         self.pane = pane or {}
@@ -100,7 +105,7 @@ class RegistryDetector(Detector):
         return None
 
     def in_multiplexer(self, ctx):
-        return any(b.confirmed and b.multiplexer for b in self.bindings(ctx))
+        return any(b.descendant and b.multiplexer for b in self.bindings(ctx))
 
     def zavod_holds(self, ctx, channel):
         """The conditions US-5 puts on detecting Zavod: ZAVOD_ME is a UUID
@@ -173,5 +178,9 @@ class RegistryDetector(Detector):
                        key=lambda b: b.depth if b.depth is not None else 1 << 30)
         if muxes:
             return [b.channel["id"] for b in muxes]
+        # Inside a multiplexer pane the other blind channels are skipped,
+        # even when the binding to that pane is not confirmed.
+        if self.in_multiplexer(ctx):
+            return []
         # Condition (3): only channels whose binding is confirmed.
         return [b.channel["id"] for b in confirmed]
