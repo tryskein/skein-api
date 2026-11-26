@@ -36,7 +36,11 @@ def main():
     except OSError as exc:
         _refuse("token_dir_failed", "The token directory %s could not be created (%s). Fix the "
                 "cause, then mint a new monitor with skein_get_monitor_script." % (token_dir, exc.strerror))
-    st = os.lstat(token_dir)
+    try:
+        st = os.lstat(token_dir)
+    except OSError as exc:
+        _refuse("token_dir_failed", "The token directory %s could not be checked (%s). Fix the "
+                "cause, then mint a new monitor with skein_get_monitor_script." % (token_dir, exc.strerror))
     if (not stat.S_ISDIR(st.st_mode) or st.st_uid != os.getuid()
             or stat.S_IMODE(st.st_mode) & 0o077):
         _refuse("token_dir_insecure", "The token directory %s is not a private directory of yours. "
