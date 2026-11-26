@@ -231,9 +231,8 @@ def stop_action(reason, issue, detail=None, preflight=None):
         return ("The agent the monitor for issue %s delivered to has ended, so the monitor stopped. "
                 "If the work goes on in another agent, mint a new monitor there with %s." % (issue, mint))
     if reason == "config_invalid":
-        return ("The monitor for issue %s did not start: %s. Running this command again does not help: "
-                "fix that, run the preflight again and start the working command its preflight line "
-                "names; do not mint a new monitor: its token is kept." % (issue, detail or "a setting is invalid"))
+        return ("The monitor for issue %s did not start: %s. Fix that, then run the preflight again and its "
+                "working command; do not mint a new monitor: its token is kept." % (issue, detail or "a setting is invalid"))
     if reason == "delivered":
         # detail: the number of the preflight result whose working command
         # restarts the monitor; the command itself is not repeated (INV-17).
