@@ -16,7 +16,7 @@ import (
 // a command would hand the real interpreter.
 const fakePython = `#!/bin/sh
 for a in "$@"; do printf 'ARG=%s\0' "$a"; done
-for v in SKEIN_TOKEN_DIR SKEIN_MONITOR_MODE SKEIN_PUBLIC_URL SKEIN_ISSUE SKEIN_TOKEN_FILE SKEIN_EXCLUDE_SESSION SKEIN_CLIENT SKEIN_PLATFORM; do
+for v in SKEIN_TOKEN_DIR SKEIN_MONITOR_MODE SKEIN_PUBLIC_URL SKEIN_ISSUE SKEIN_TOKEN_FILE SKEIN_EXCLUDE_SESSION SKEIN_RUNNER_SHA256 SKEIN_LOADER_SHA256 SKEIN_CLIENT SKEIN_PLATFORM; do
 	eval "printf '%s=%s\0' \"\$v\" \"\${$v-<unset>}\""
 done
 `
@@ -48,12 +48,13 @@ func runWithFakePython(t *testing.T, command string) (args []string, env map[str
 	return args, env
 }
 
-// TestClientCommands_HostileInputsStayQuoted — П-3, ИНВ-5 (row #15): with a
-// hostile issue id and token path (quotes, $(), spaces, a newline), prepare,
-// preflight and bootstrap hand python3 exactly the intended values, the
-// injection's marker file never appears, preflight carries
-// SKEIN_MONITOR_MODE=preflight and both run commands carry SKEIN_CLIENT and
-// SKEIN_PLATFORM.
+// TestClientCommands_HostileInputsStayQuoted — П-3, ИНВ-5, R-10 (rows #15,
+// #139): with a hostile issue id and token path (quotes, $(), spaces, a
+// newline), prepare and preflight (with client) and bootstrap (without it)
+// hand python3 exactly the intended values, and the injection's marker file
+// never appears. preflight runs the starter.py of the token directory with
+// SKEIN_MONITOR_MODE=preflight, both digests, SKEIN_CLIENT and
+// SKEIN_PLATFORM; bootstrap runs the starter text with both digests.
 func TestClientCommands_HostileInputsStayQuoted(t *testing.T) {
 	if _, err := exec.LookPath("sh"); err != nil {
 		t.Skip("sh not available")
@@ -64,11 +65,11 @@ func TestClientCommands_HostileInputsStayQuoted(t *testing.T) {
 	in := clientCommandInput{
 		publicURL: "https://h.example/`touch " + marker + "`", issueID: hostileID,
 		excludeSession: "sess'; touch " + marker, tokenFilePath: tokenFile,
-		runnerSHA256: gmsTestRunnerSHA256, client: "some-agent", platform: monitorPlatformPOSIX,
+		runnerSHA256: gmsTestRunnerSHA256, loaderSHA256: gmsTestLoaderSHA256,
+		client: "some-agent", platform: monitorPlatformPOSIX,
 	}
 	cmds := buildClientCommands(in)
 	dir := path.Dir(tokenFile)
-	loaderPath := path.Join(dir, "loader.py")
 
 	args, env := runWithFakePython(t, cmds.prepare)
 	if len(args) != 2 || args[0] != "-c" || args[1] != monitorPrepareScript {
@@ -78,26 +79,40 @@ func TestClientCommands_HostileInputsStayQuoted(t *testing.T) {
 		t.Fatalf("prepare SKEIN_TOKEN_DIR = %q, want %q", env["SKEIN_TOKEN_DIR"], dir)
 	}
 
-	for _, c := range []struct {
-		name, command, mode string
-	}{
-		{"preflight", cmds.preflight, "preflight"},
-	} {
-		args, env := runWithFakePython(t, c.command)
-		if len(args) != 1 || args[0] != loaderPath {
-			t.Fatalf("%s handed python3 %q, want the loader file %q", c.name, args, loaderPath)
-		}
-		want := map[string]string{
-			"SKEIN_MONITOR_MODE": c.mode, "SKEIN_PUBLIC_URL": in.publicURL, "SKEIN_ISSUE": hostileID,
-			"SKEIN_TOKEN_FILE": tokenFile, "SKEIN_EXCLUDE_SESSION": in.excludeSession,
-			"SKEIN_CLIENT": "some-agent", "SKEIN_PLATFORM": monitorPlatformPOSIX,
-		}
+	common := map[string]string{
+		"SKEIN_PUBLIC_URL": in.publicURL, "SKEIN_ISSUE": hostileID, "SKEIN_TOKEN_FILE": tokenFile,
+		"SKEIN_EXCLUDE_SESSION": in.excludeSession,
+		"SKEIN_RUNNER_SHA256":   gmsTestRunnerSHA256, "SKEIN_LOADER_SHA256": gmsTestLoaderSHA256,
+	}
+	check := func(name string, env map[string]string, want map[string]string) {
+		t.Helper()
 		for k, v := range want {
 			if env[k] != v {
-				t.Fatalf("%s: %s = %q, want %q", c.name, k, env[k], v)
+				t.Fatalf("%s: %s = %q, want %q", name, k, env[k], v)
 			}
 		}
 	}
+
+	args, env = runWithFakePython(t, cmds.preflight)
+	if starter := path.Join(dir, "starter.py"); len(args) != 1 || args[0] != starter {
+		t.Fatalf("preflight handed python3 %q, want the starter file %q", args, starter)
+	}
+	check("preflight", env, common)
+	check("preflight", env, map[string]string{
+		"SKEIN_MONITOR_MODE": "preflight", "SKEIN_CLIENT": "some-agent", "SKEIN_PLATFORM": monitorPlatformPOSIX,
+	})
+
+	bootstrap := buildMonitorBootstrap(in.publicURL, hostileID, in.excludeSession, tokenFile,
+		gmsTestRunnerSHA256, gmsTestLoaderSHA256)
+	args, env = runWithFakePython(t, bootstrap)
+	if len(args) != 2 || args[0] != "-c" || args[1] != monitorStarter(false) {
+		t.Fatalf("bootstrap handed python3 %d arguments, want -c and the starter", len(args))
+	}
+	check("bootstrap", env, common)
+	check("bootstrap", env, map[string]string{
+		"SKEIN_MONITOR_MODE": "<unset>", "SKEIN_CLIENT": "<unset>", "SKEIN_PLATFORM": "<unset>",
+	})
+
 	if _, err := os.Stat(marker); err == nil {
 		t.Fatalf("marker %q exists: a value left its quotes", marker)
 	}
@@ -134,11 +149,13 @@ func TestClientTokenInstruction(t *testing.T) {
 	}
 }
 
-// TestClientUsage_ComposedFromTheRecord — US-13, US-2 (row #17): usage with
-// client puts the preflight step first, then the instruction of each of the
-// record's methods in the record's order, and carries the literal path of
-// the echo exclusion file and the record's warnings.
-func TestClientUsage_ComposedFromTheRecord(t *testing.T) {
+// TestClientUsage_OnlyCommonSteps — US-13, ИНВ-17, С2 (rows #17, #139):
+// usage with client carries only the steps common to every method — run
+// preflight, run its `command` as its `instruction` says, the literal path
+// of the echo exclusion file, the stop lines by their `action` — and none
+// of the record's method instructions or warnings, which the preflight line
+// prints for the chosen method.
+func TestClientUsage_OnlyCommonSteps(t *testing.T) {
 	reg, err := monitorregistry.Load([]byte(`{
   "schemaVersion": 1,
   "general": {"about": "general", "source": "unit fixture"},
@@ -163,7 +180,8 @@ func TestClientUsage_ComposedFromTheRecord(t *testing.T) {
 	usage, _ := body["usage"].(string)
 	tokenFile, _ := body["tokenFilePath"].(string)
 
-	order := []string{"`preflight`", "first-method-instruction-91c2", "second-method-instruction-4e7b"}
+	exclude := path.Join(path.Dir(tokenFile), "exclude_session")
+	order := []string{"`preflight`", "`command`", "`instruction`", exclude, "`action`"}
 	last := -1
 	for _, s := range order {
 		i := strings.Index(usage, s)
@@ -172,13 +190,10 @@ func TestClientUsage_ComposedFromTheRecord(t *testing.T) {
 		}
 		last = i
 	}
-	exclude := path.Join(path.Dir(tokenFile), "exclude_session")
-	if !strings.Contains(usage, exclude) {
-		t.Fatalf("usage lacks the literal exclusion path %q:\n%s", exclude, usage)
-	}
-	for _, w := range []string{"record-warning-one-5d10", "record-warning-two-a6f3"} {
-		if !strings.Contains(usage, w) {
-			t.Fatalf("usage lost the record's warning %q:\n%s", w, usage)
+	for _, s := range []string{"first-method-instruction-91c2", "second-method-instruction-4e7b",
+		"record-warning-one-5d10", "record-warning-two-a6f3"} {
+		if strings.Contains(usage, s) {
+			t.Fatalf("usage carries %q of the record, which the preflight line prints:\n%s", s, usage)
 		}
 	}
 }
