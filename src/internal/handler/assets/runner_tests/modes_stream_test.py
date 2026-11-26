@@ -218,6 +218,90 @@ class LimitsTest(unittest.TestCase):
         self.assertTrue(os.path.exists(box.token), "the token was not kept")
 
 
+class JournalDown(object):
+    """The journal of a box refusing its first `failures` writes."""
+
+    def __init__(self, box, failures):
+        self.left = failures
+        self.real_delivery = box.journal.delivery
+        self.real_lifecycle = box.journal.lifecycle
+        box.journal.delivery = self.delivery
+        box.journal.lifecycle = self.lifecycle
+
+    def _gate(self):
+        if self.left > 0:
+            self.left -= 1
+            raise RUNNER.JournalUnavailable("write_failed", "/journal")
+
+    def delivery(self, *args, **kwargs):
+        self._gate()
+        return self.real_delivery(*args, **kwargs)
+
+    def lifecycle(self, *args, **kwargs):
+        self._gate()
+        return self.real_lifecycle(*args, **kwargs)
+
+
+class JournalUnavailableTest(unittest.TestCase):
+    """Review finding C1 of wave 6: an event whose only carrier is the
+    journal has no outcome while the journal refuses it (US-10, the
+    journal_unavailable degraded line of "Runner stdout lines")."""
+
+    LONG = dict(event(9), actorSessionId="x" * 300)
+
+    def unfit_records(self, box, nid):
+        return [l for l in box.journal_lines() if l.get("notificationId") == nid and l.get("status") == "unfit"]
+
+    def test_a_journal_only_event_waits_for_the_journal_and_the_cursor_stays(self):
+        for method in ("stream", "exit-on-event"):
+            with self.subTest(method=method):
+                box = Box(self)
+                JournalDown(box, 1)
+                out = Out()
+                # 20 chars: neither the event nor its stand-in fit, the
+                # journal is its only carrier.
+                executor = FakeExecutor([page([9], 9), page([9], 9)])
+                executor.answers[0]["notifications"] = [self.LONG]
+                executor.answers[1]["notifications"] = [self.LONG]
+                limits = {"line": {"max": 60, "unit": "chars"}}
+                stop, _ = box.cycle(executor, box.output(limits, method, out=out), method)
+                # The first page did not move the cursor: the second poll asks
+                # from the same place (the first poll of a new token has none).
+                self.assertNotIn("since_id", executor.urls[1])
+                lines = out.lines()
+                self.assertEqual(lines[0], {"event": "degraded", "cause": "journal_unavailable"})
+                self.assertEqual(lines[1]["event"], "recovered")
+                self.assertEqual(len(self.unfit_records(box, 9)), 1)
+                if method == "stream":
+                    self.assertIn("since_id=9", executor.urls[2])
+                    self.assertEqual(stop.reason, "token_expired")
+                else:
+                    self.assertEqual(stop.reason, "delivered")
+                    self.assertEqual(RUNNER.load_cursor(box.token)["id"], 9)
+
+    def test_a_stand_in_is_printed_only_after_its_journal_record(self):
+        box = Box(self)
+        JournalDown(box, 1)
+        out = Out()
+        output = box.output({"line": {"max": 250, "unit": "chars"}}, "stream", out=out)
+        self.assertEqual(RUNNER.print_events(output, [self.LONG], False, None), [])
+        self.assertEqual([l["event"] for l in out.lines()], ["degraded"])
+        self.assertEqual(self.unfit_records(box, 9), [])
+        # The journal is back: the record, then the stand-in that points at it.
+        self.assertEqual(RUNNER.print_events(output, [self.LONG], False, None), [self.LONG])
+        self.assertEqual([l["event"] for l in out.lines()], ["degraded", "recovered", "notification_unfit"])
+        self.assertEqual(len(self.unfit_records(box, 9)), 1)
+
+    def test_a_printed_event_whose_copy_fails_is_delivered_once(self):
+        box = Box(self)
+        JournalDown(box, 1)
+        out = Out()
+        output = box.output({"line": {"max": 400, "unit": "chars"}}, "stream", out=out)
+        self.assertEqual(RUNNER.print_events(output, [event(1)], False, None), [event(1)])
+        events = [l["event"] for l in out.lines()]
+        self.assertEqual(events, ["notification", "degraded"])
+
+
 class ExitOnEventTest(unittest.TestCase):
     """Matrix row #41 (US-3 "the stdout guarantee", INV-11)."""
 

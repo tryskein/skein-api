@@ -463,7 +463,7 @@ def run_foreground(token_file, issue, env, settings):
             held.begin(token_file, env, settings, issue)
             limits = StreamLimits(held.doc.get("limits"))
             journal = Journal(token_file, issue, secrets=[held.token], env=env)
-            output = StreamOutput(limits, journal, held.doc.get("method"), held.doc.get("journal"))
+            output = StreamOutput(limits, journal, held.doc.get("method"), held.doc.get("journal"), issue=issue)
             output.lifecycle(held.line)
             run_stream_loop(executor, os.environ.get("SKEIN_PUBLIC_URL", ""), held.token, issue,
                             os.environ.get("SKEIN_EXCLUDE_SESSION", ""), token_file, held.doc, output)

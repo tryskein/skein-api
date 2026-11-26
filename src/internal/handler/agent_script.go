@@ -234,7 +234,12 @@ func wholeSecondsAtLeastOne(d time.Duration) int {
 // @Description  before any poll). `stream` and `exit-on-event` then run in
 // @Description  the foreground; `detached` and `journal` start a detached
 // @Description  process (a new session on POSIX) that gets this body on its
-// @Description  stdin. Every start takes, in this order: the one-runner lock
+// @Description  stdin. In `stream` and `exit-on-event` an event whose only
+// @Description  carrier is the journal (`unfit`: its line, or its stand-in
+// @Description  that points at the journal) waits while the journal refuses
+// @Description  its record (`degraded` `journal_unavailable` once, then
+// @Description  `recovered`); the cursor does not pass it. Every start takes,
+// @Description  in this order: the one-runner lock
 // @Description  (the stable file skein-monitor/locks/<key>.lock of the token
 // @Description  path), the token (opened, checked private, read, its
 // @Description  descriptor closed), state.lock, a second check of the result

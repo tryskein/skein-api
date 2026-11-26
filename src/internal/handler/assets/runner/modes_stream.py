@@ -11,7 +11,13 @@
 #     event whose minimal form does not fit is replaced by a stand-in line
 #     with its notification id that says to read the journal; when even that
 #     does not fit, the event is only in the journal. Both are the outcome
-#     "unfit", and the cursor passes the event.
+#     "unfit", and the cursor passes the event - once the journal holds it:
+#     the journal is its only carrier, so the unfit record is written before
+#     the stand-in is printed, and an event whose record cannot be written
+#     has no outcome yet. It waits, the cursor does not pass it, and the
+#     monitor says degraded journal_unavailable once (recovered when the
+#     journal takes a line again). A printed event is delivered by its line;
+#     its journal copy failing costs the copy, said by the same degraded.
 #   - A batch is one write of whole lines within the batch limit and the
 #     window's line limit; service lines count in both. Events that did not
 #     go into a batch go into the next one: the cursor of a page is saved
@@ -151,17 +157,19 @@ class Pacer(object):
 class StreamOutput(object):
     """The stdout of a stream or exit-on-event monitor within its limits."""
 
-    def __init__(self, limits, journal, method, journal_path, out=None, pacer=None):
+    def __init__(self, limits, journal, method, journal_path, out=None, pacer=None, issue=""):
         self.limits = limits
         self.journal = journal
         self.method = method
         self.journal_path = journal_path
+        self.issue = issue
         self.out = out
         self.pacer = pacer or Pacer(limits)
         # A line reserved in the batch just written (the stop line of an
         # exit-on-event cycle): it is written without a turn of its own.
         self.reserved = False
-        self._journal_failed = False
+        # When the journal stopped taking lines (the pacer's clock), or None.
+        self._journal_failed_at = None
 
     def _write(self, texts):
         out = self.out or sys.stdout
@@ -184,6 +192,9 @@ class StreamOutput(object):
         """A service line: to the journal, and to stdout as a batch of its
         own (or in the reserved place)."""
         self._journal_lifecycle(obj)
+        self._print_service(obj)
+
+    def _print_service(self, obj):
         text = self.line(obj)
         if text is None:
             return
@@ -216,12 +227,18 @@ class StreamOutput(object):
         return k
 
     def record(self, n, status):
-        """The outcome of an event in the journal. A journal that cannot be
-        written does not stop the stdout delivery: said once on stderr."""
+        """The outcome of an event in the journal; True when the journal
+        holds it. A journal that cannot be written is said once
+        (degraded journal_unavailable); the caller decides what the event
+        lost: its outcome (unfit, the journal is its only carrier) or a copy
+        (printed)."""
         try:
             self.journal.delivery(n, status, method=self.method, channel=CHANNEL_STDOUT)
         except JournalUnavailable as exc:
             self._journal_down(exc)
+            return False
+        self._journal_up()
+        return True
 
     def _journal_lifecycle(self, obj):
         fields = dict(obj)
@@ -230,11 +247,34 @@ class StreamOutput(object):
             self.journal.lifecycle(event, **fields)
         except JournalUnavailable as exc:
             self._journal_down(exc)
+            return
+        self._journal_up()
 
     def _journal_down(self, exc):
-        if not self._journal_failed:
-            log_stderr("monitor runner: the journal cannot be written (%s)" % exc.reason)
-        self._journal_failed = True
+        if self._journal_failed_at is not None:
+            return
+        self._journal_failed_at = self.pacer.clock()
+        log_stderr("monitor runner: the journal cannot be written (%s)" % exc.reason)
+        # stdout only: the journal is what failed.
+        self._print_service({
+            "event": "degraded", "cause": "journal_unavailable", "issue": self.issue,
+            "action": "The journal of the monitor for issue %s cannot be written, so notifications that "
+                      "only the journal can carry wait (they are not lost) and are delivered once it can "
+                      "be written again; the monitor keeps running and retries on its own, so do not "
+                      "restart it. If this does not clear, check the journal directory named in the "
+                      "preflight line." % self.issue})
+
+    def _journal_up(self):
+        if self._journal_failed_at is None:
+            return
+        failed_for = self.pacer.clock() - self._journal_failed_at
+        self._journal_failed_at = None
+        self.lifecycle({"event": "recovered", "cause": "journal_unavailable", "issue": self.issue,
+                        "failedForSec": int(failed_for)})
+
+    def journal_down(self):
+        """Whether the journal is failing (an event may be waiting for it)."""
+        return self._journal_failed_at is not None
 
     def stop_line(self, line):
         """finish() writes the stop line through here."""
@@ -245,15 +285,19 @@ def print_events(output, events, exit_on_event, delivered):
     """Print the events (each with its text from output.event_text) in
     batches. exit_on_event prints one batch, with room for the delivered
     stop line, and leaves the rest. Returns the events that got an outcome
-    (printed or unfit), in order."""
+    (printed or unfit), in order. An unfit event gets its outcome only when
+    the journal takes its record, before its stand-in is printed; one the
+    journal refuses has none and is neither printed nor returned (it waits
+    for the next poll of the same page)."""
     done = []
     pending = []
     for n in events:
         text, status = output.event_text(n)
         if text is None:
-            # Only the journal: the outcome is unfit, the cursor passes it.
-            output.record(n, STATUS_UNFIT)
-            done.append(n)
+            # Only the journal: the outcome is unfit once the journal has
+            # it; then the cursor passes it.
+            if output.record(n, STATUS_UNFIT):
+                done.append(n)
             continue
         pending.append((n, text, status))
     reserve = output.line(delivered) if exit_on_event else None
@@ -267,9 +311,16 @@ def print_events(output, events, exit_on_event, delivered):
             # the next one.
             k = max(output.take(texts), 1)
         chunk, pending = pending[:k], pending[k:]
+        # A stand-in points at the journal record of its event: that record
+        # first. Dropping lines from a batch keeps it within its limits.
+        chunk = [c for c in chunk if c[2] != STATUS_UNFIT or output.record(c[0], STATUS_UNFIT)]
+        if not chunk:
+            continue
         output.batch([t for _, t, _ in chunk], reserve=with_reserve)
         for n, _, status in chunk:
-            output.record(n, status)
+            if status == STATUS_PRINTED:
+                # Delivered by its line; a refused copy is said by degraded.
+                output.record(n, status)
             done.append(n)
         if exit_on_event:
             break
@@ -303,6 +354,12 @@ def run_stream_loop(executor, base, token, issue, exclude_session, token_file, d
                 if isinstance(n, dict) and n.get("id") is not None:
                     seen.add(n.get("id"))
             complete = len(done) == len(events)
+            if not complete and (not exit_on_event or not done):
+                # Events wait for the journal (stream prints the whole rest
+                # of a page, so nothing else is left): the same page again
+                # after a poll interval, the cursor stays.
+                time.sleep(jitter(float(POLL_INTERVAL_SEC)))
+                continue
             nxt = payload.get("cursor") if isinstance(payload.get("cursor"), dict) else cursor
             if complete:
                 if payload.get("rootClosed") is True:
@@ -322,7 +379,6 @@ def run_stream_loop(executor, base, token, issue, exclude_session, token_file, d
                                                   if isinstance(n, dict) and n.get("id") is not None))
                 _save_state(save_printed, token_file, cursor, ids)
                 raise Stop("delivered", detail=doc["preflightId"])
-            continue
         if status == 401:
             raise Stop("token_expired", status=401, delete_token=True)
         if status == 403:
