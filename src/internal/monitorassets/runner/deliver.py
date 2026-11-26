@@ -749,7 +749,11 @@ class DeliverySink(object):
         first channel of the preflight, after the addressee check, within
         the budget of INV-8 and the channel's limit of a text (short, its
         reason and issue only, when text is over it; neither fits: no
-        receipt). A failure leaves only the journal line."""
+        receipt). A failure leaves only the journal line. A monitor whose
+        ledger is off, or that writes only the journal (another addressee),
+        sends nothing outside: the journal line is the receipt."""
+        if self.ledger_off or self.journal_only:
+            return
         channel_id = self.channels[0]
         channel = self.registry.channel(channel_id) or {}
         limit, unit = _line_limit(channel)
