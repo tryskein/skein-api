@@ -21,6 +21,8 @@ except ImportError:  # not POSIX (Python on Windows): no OS file locks
 
 # Permission bits of group and other.
 _GROUP_OTHER = 0o077
+# Tries on a lock file renewed under us before the wait decides.
+_LOCK_RENEWED_TRIES = 3
 # Step of the wait for a lock held by another process.
 _LOCK_WAIT_STEP_SEC = 0.05
 
@@ -156,6 +158,7 @@ class PosixPlatform(object):
         if fcntl is None:
             raise PlatformRefusal("unsupported", path)
         deadline = time.monotonic() + max(wait_sec, 0)
+        renewed = 0
         while True:
             try:
                 fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | _O_NONBLOCK, 0o600)
@@ -189,6 +192,11 @@ class PosixPlatform(object):
                 if cur is None or (cur.st_dev, cur.st_ino) != (st.st_dev, st.st_ino):
                     os.close(fd)
                     fd = None
+                    # A path that keeps being renewed is not waited on past
+                    # the wait (and past a few tries when there is none).
+                    renewed += 1
+                    if renewed > _LOCK_RENEWED_TRIES and time.monotonic() >= deadline:
+                        raise LockBusy(path)
                     continue
                 lock, fd = RunnerLock(path, fd), None
                 return lock

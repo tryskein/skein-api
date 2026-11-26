@@ -274,6 +274,40 @@ class RunnerLockTest(unittest.TestCase):
         self.assertLess(clock.slept, 3)
         self.assertEqual(lock.path, holder.path)
 
+    def renewing_flock(self, times):
+        """fcntl.flock that, on its first `times` exclusive calls, replaces
+        the lock file by a new one before locking the descriptor it got:
+        the lock then holds a file the path no longer names."""
+        real = RUNNER.fcntl.flock
+        calls = [0]
+
+        def flock(fd, op):
+            if op & RUNNER.fcntl.LOCK_EX and calls[0] < times:
+                calls[0] += 1
+                path = os.readlink("/proc/self/fd/%d" % fd) if os.path.exists("/proc/self/fd") else None
+                if path is None:
+                    raise unittest.SkipTest("needs /proc/self/fd")
+                os.remove(path)
+                fd2 = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
+                os.close(fd2)
+            return real(fd, op)
+        return mock.patch.object(RUNNER.fcntl, "flock", flock)
+
+    def test_lock_on_a_renewed_file_is_taken_again(self):
+        with self.renewing_flock(times=1):
+            lock = self.acquire()
+        held = os.fstat(lock._fd)
+        now = os.lstat(lock.path)
+        self.assertEqual((held.st_dev, held.st_ino), (now.st_dev, now.st_ino))
+        # Another taker of the same path finds it locked.
+        with self.assertRaises(RUNNER.LockBusy):
+            PLATFORM.acquire_runner_lock(self.token, env=self.env)
+
+    def test_lock_file_renewed_without_end_gives_up(self):
+        with self.renewing_flock(times=1000):
+            with self.assertRaises(RUNNER.LockBusy):
+                PLATFORM.acquire_runner_lock(self.token, env=self.env)
+
     def test_two_tokens_do_not_share_a_lock(self):
         other_dir = os.path.join(self.root, "skein-mon-sk-2-4567")
         os.mkdir(other_dir, 0o700)
