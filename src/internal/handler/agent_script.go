@@ -267,10 +267,15 @@ func wholeSecondsAtLeastOne(d time.Duration) int {
 // @Description  a page to the chosen channel before its cursor moves: an
 // @Description  attempt is published in the shared ledger of the user
 // @Description  (skein-monitor/ledger/, one delivery per addressee and event,
-// @Description  10 s rate window per addressee), the addressee of the
-// @Description  preflight is checked, the record's program is run by its
-// @Description  argument list (never a shell; the text by stdin, a private
-// @Description  message file or one argument), and its answer gives one
+// @Description  10 s rate window per addressee from each delivery, 60 s
+// @Description  while a series of 30 deliveries of one session within 10 min
+// @Description  lasts; any refusal of the ledger turns external delivery off:
+// @Description  `degraded` `state_unavailable`, the journal only), the
+// @Description  addressee and the address of the preflight are checked, the
+// @Description  record's program is run by its argument list (never a shell;
+// @Description  the text by stdin, a private message file or one argument,
+// @Description  with every secret of the monitor replaced), and its answer
+// @Description  gives one
 // @Description  outcome by the record's closed table (anything else is
 // @Description  unknown). A refusal before send is retried after 5, 30 and
 // @Description  120 s (at most 4 calls within the idle window), then the
