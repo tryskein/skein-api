@@ -291,7 +291,7 @@ class FileFateTest(unittest.TestCase):
 
     def test_server_unreachable_names_the_working_command(self):
         box = Box(self)
-        rc, lines, _ = box.run(closed_url())
+        rc, lines, _ = box.run(server(self, status(503)).url())
         self.assertEqual(lines[0]["reason"], "server_unreachable")
         self.assertIn("working command", lines[0]["action"])
         self.assertIn("starter.py", box.files())
@@ -314,11 +314,13 @@ class FileFateTest(unittest.TestCase):
                 with open(os.path.join(site, "sitecustomize.py"), "w") as fh:
                     fh.write("import sys\nsys.version_info = %r\nsys.platform = %r\n"
                              % (tuple(version) + ("final", 0), platform))
-                rc, lines, _ = box.run(closed_url(), extra={"PYTHONPATH": site})
+                rc, lines, err = box.run(closed_url(), extra={"PYTHONPATH": site})
                 if refused:
-                    self.assertEqual((rc, lines[0]["reason"]), (1, "config_invalid"))
+                    self.assertEqual((rc, [l["reason"] for l in lines]), (1, ["config_invalid"]), err)
                 else:
-                    self.assertNotEqual(lines[0]["reason"], "config_invalid")
+                    # Past the version check: what follows (the download of
+                    # the loader from a closed port) is another refusal.
+                    self.assertNotIn("config_invalid", [l.get("reason") for l in lines], err)
                 self.assertEqual(box.snapshot(), before)
 
 
@@ -423,8 +425,10 @@ class NamedPathTest(unittest.TestCase):
     def test_a_kept_rest_then_403_on_the_first_poll_is_visibility_lost(self):
         token, command, env = self.started_monitor()
         self.pages.answers = [{"notifications": [note(1), note(2), note(3)], "cursor": NEXT}]
-        lines, err = self.run_cmd(["sh", "-c", command], env)
-        self.assertEqual(lines[-1]["reason"], "delivered", err)
+        first, err = self.run_cmd(["sh", "-c", command], env)
+        self.assertEqual(first[-1]["reason"], "delivered", err)
+        printed = [l for l in first if l.get("event") == "notification"]
+        self.assertLess(len(printed), 3, "the batch limit left no rest: %r" % first)
         # The restart: the runner downloads fine, its first poll is 403.
         self.pages.answers = [403]
         lines, err = self.run_cmd(["sh", "-c", command], env)
@@ -435,7 +439,7 @@ class NamedPathTest(unittest.TestCase):
             with open(path) as fh:
                 journal.extend(json.loads(l) for l in fh if l.strip())
         lost = [l for l in journal if l.get("event") == "delivery" and l.get("status") == "access-lost"]
-        self.assertTrue(lost, "the kept rest got no outcome")
+        self.assertTrue(lost, "the kept rest got no outcome; journal: %r" % journal)
         self.assertTrue(all("bodyPreview" not in l for l in lost))
 
 
@@ -466,7 +470,7 @@ class ReissueCommandTest(unittest.TestCase):
 
     def test_the_command_to_go_on_is_the_working_command(self):
         box = Box(self)
-        _, lines, _ = box.run(closed_url())
+        _, lines, _ = box.run(server(self, status(503)).url())
         self.assertNotIn("skein_get_monitor_script", lines[0]["action"])
         self.assertIn("working command", lines[0]["action"])
 
