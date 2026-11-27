@@ -623,7 +623,7 @@ func (v *validator) channel(path string, c *Channel) {
 	}
 	v.signs(path+".outcomes", rows)
 	v.criteriaOf(path+".outcomes", rows, c.Executor.Type, c.Executor.Detach)
-	v.noEnvRefs(path+".outcomes", rows)
+	v.noEnvRefs(path+".outcomes", rows, addressEnv(c.Address))
 
 	switch {
 	case len(c.Probes) > 0 && c.ProbeUndefined:
@@ -996,7 +996,7 @@ func (v *validator) blindCalls(path string, c *Channel) {
 		}
 		v.signs(path+".submit.outcomes", rows)
 		v.criteriaOf(path+".submit.outcomes", rows, s.Executor.Type, false)
-		v.noEnvRefs(path+".submit.outcomes", rows)
+		v.noEnvRefs(path+".submit.outcomes", rows, addressEnv(c.Address))
 	}
 }
 
@@ -1273,6 +1273,25 @@ func (v *validator) signs(path string, rows []Match) {
 		for j, k := range m.JSONAbsent {
 			v.jsonPath(fmt.Sprintf("%s.jsonAbsent[%d]", rpath, j), k)
 		}
+		for _, k := range slices.Sorted(maps.Keys(m.JSONPrefix)) {
+			v.jsonPath(rpath+".jsonPrefix", k)
+			prefix := m.JSONPrefix[k]
+			switch {
+			case prefix == "":
+				v.add(RuleInvalid, rpath+".jsonPrefix."+k, "the prefix is empty")
+			case isEnvRef(prefix):
+				v.add(RuleInvalid, rpath+".jsonPrefix."+k, "a prefix is a literal, not a variable")
+			}
+			if kind, typed := m.JSONType[k]; typed && kind != "string" {
+				v.add(RuleInvalid, rpath+".jsonPrefix."+k, "path %q holds a string, not a %s", k, kind)
+			}
+			if absentAt(m.JSONAbsent, k) {
+				v.add(RuleInvalid, rpath+".jsonPrefix."+k, "path %q is both prefixed and absent", k)
+			}
+			if want, both := m.JSON[k]; both && !isEnvRef(want) && !prefixHolds(prefix, want) {
+				v.add(RuleInvalid, rpath+".jsonPrefix."+k, "the value %q of the path does not go on past %q", want, prefix)
+			}
+		}
 		// A value at a path, or under it, cannot be read where the path
 		// is absent: such a row matches no answer.
 		for _, k := range slices.Sorted(maps.Keys(m.JSON)) {
@@ -1365,22 +1384,32 @@ func isEnvRef(value string) bool {
 
 // noEnvRefs refuses a variable in the rows of a delivery's outcome table:
 // only a check (a probe, the addressee command) compares an answer with a
-// variable of the agent process.
-func (v *validator) noEnvRefs(path string, rows []Match) {
+// variable of the agent process. The one exception is the variable of the
+// channel's address (address): a receipt names the very addressee the
+// delivery went to (the session of a synthetic message).
+func (v *validator) noEnvRefs(path string, rows []Match, address string) {
 	for i, m := range rows {
 		for _, k := range slices.Sorted(maps.Keys(m.JSON)) {
-			if isEnvRef(m.JSON[k]) {
+			if name, ok := envRef(m.JSON[k]); ok && (address == "" || name != address) {
 				v.add(RuleInvalid, fmt.Sprintf("%s[%d].match.json.%s", path, i, k),
-					"an outcome row compares no variable of the agent")
+					"an outcome row compares no variable of the agent but the address")
 			}
 		}
 	}
 }
 
+// addressEnv is the variable of a channel's address, or "".
+func addressEnv(a *AddressSpec) string {
+	if a == nil {
+		return ""
+	}
+	return a.Env
+}
+
 // empty reports whether the sign states no criterion.
 func (m Match) empty() bool {
 	return m.ExitCode == nil && m.HTTPStatus == nil && len(m.JSON) == 0 && len(m.JSONNot) == 0 && len(m.JSONAbsent) == 0 &&
-		len(m.JSONType) == 0 &&
+		len(m.JSONType) == 0 && len(m.JSONPrefix) == 0 &&
 		m.StderrEmpty == nil && len(m.StderrJSON) == 0 && m.StderrContains == nil && m.StillRunning == nil
 }
 
@@ -1491,7 +1520,32 @@ func (m Match) overlaps(o Match) bool {
 			return false
 		}
 	}
+	// A prefixed path holds a string that goes on past its prefix: two
+	// prefixes neither of which starts the other, a literal it does not
+	// start, another type or an absent path is apart.
+	for _, pair := range [][2]Match{{m, o}, {o, m}} {
+		a, b := pair[0], pair[1]
+		for k, prefix := range a.JSONPrefix {
+			if other, both := b.JSONPrefix[k]; both && !strings.HasPrefix(prefix, other) && !strings.HasPrefix(other, prefix) {
+				return false
+			}
+			if want, both := b.JSON[k]; both && !isEnvRef(want) && !prefixHolds(prefix, want) {
+				return false
+			}
+			if kind, both := b.JSONType[k]; both && kind != "string" {
+				return false
+			}
+			if absentAt(b.JSONAbsent, k) {
+				return false
+			}
+		}
+	}
 	return true
+}
+
+// prefixHolds reports whether value starts with prefix and goes on past it.
+func prefixHolds(prefix, value string) bool {
+	return len(value) > len(prefix) && strings.HasPrefix(value, prefix)
 }
 
 // phrasesApart reports whether no run of text holds both phrases as one

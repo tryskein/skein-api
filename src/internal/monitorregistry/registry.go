@@ -698,6 +698,11 @@ type Match struct {
 	// value it must hold: object, list, string, number or boolean (a null
 	// is none of them). A receipt names the fields it must carry.
 	JSONType map[string]string `json:"jsonType,omitempty"`
+	// JSONPrefix maps a dotted path of the JSON answer to a literal prefix:
+	// the path holds a string that starts with it and goes on past it (an
+	// id of the form its source gives: "msg_" and more). An empty string,
+	// the bare prefix or another value does not hold.
+	JSONPrefix map[string]string `json:"jsonPrefix,omitempty"`
 	// StderrJSON is JSON for the JSON document an argv program wrote to its
 	// stderr (a CLI that reports its errors there).
 	StderrJSON map[string]string `json:"stderrJson,omitempty"`

@@ -2222,7 +2222,7 @@
     {
       "id": "agent-deck",
       "about": "Agent Deck: its send queue delivers each event to the agent's own session when the session can take it.",
-      "source": "github.com/asheshgoplani/agent-deck fec4fcbc (1.16.40): cmd/agent-deck/session_send_cmd.go#handleSessionSend (--message-file - reads the text from stdin; --json without --wait, --stream, --draft, --defer-if-busy and --no-wait delivers through the queue: asyncJSON; --no-tag drops the [agent-deck from:<id>] envelope of a send from inside a session; an unknown session exits 2; every refusal of this path comes before the text is queued, nothing is typed); cmd/agent-deck/session_send_queue_cmd.go#queueSend and #queuedSendFields (exit 0 with {success: true, delivery: \"queued\", submitted: false} once the send is queued; a record that failed at once, or that could not be queued, exits 1 with success false — \"failed means nothing was typed\"); a muted trigger exits 0 with {success: true, muted: true} and no delivery: not delivered; cmd/agent-deck/cli_utils.go#ErrorWithData (an error under --json is {success: false, error, code} on stdout); internal/sendqueue/sendqueue.go#DefaultRetryBudget (the worker types when the target is idle, Claude also while busy, and gives up after 30 min); cmd/agent-deck/session_output_cmd.go#handleSessionCurrent (the session of the calling tmux session: exit 0 with its id, which must be the AGENTDECK_INSTANCE_ID the send addresses; outside an Agent Deck tmux session exit 1); .goreleaser.yml (linux and darwin builds; Windows only through WSL). Not used: the synchronous --defer-if-busy send, which holds the call up to --defer-timeout and types into the pane itself.",
+      "source": "github.com/asheshgoplani/agent-deck fec4fcbc (1.16.40): cmd/agent-deck/session_send_cmd.go#handleSessionSend (--message-file - reads the text from stdin; --json without --wait, --stream, --draft, --defer-if-busy and --no-wait delivers through the queue: asyncJSON; --no-tag drops the [agent-deck from:<id>] envelope of a send from inside a session; an unknown session exits 2; every refusal of this path comes before the text is queued, nothing is typed); cmd/agent-deck/session_send_queue_cmd.go#queueSend and #queuedSendFields (exit 0 with {success: true, delivery: \"queued\", submitted: false} once the send is queued; a record that failed at once, or that could not be queued, exits 1 with success false \u2014 \"failed means nothing was typed\"); a muted trigger exits 0 with {success: true, muted: true} and no delivery: not delivered; cmd/agent-deck/cli_utils.go#ErrorWithData (an error under --json is {success: false, error, code} on stdout); internal/sendqueue/sendqueue.go#DefaultRetryBudget (the worker types when the target is idle, Claude also while busy, and gives up after 30 min); cmd/agent-deck/session_output_cmd.go#handleSessionCurrent (the session of the calling tmux session: exit 0 with its id, which must be the AGENTDECK_INSTANCE_ID the send addresses; outside an Agent Deck tmux session exit 1); .goreleaser.yml (linux and darwin builds; Windows only through WSL). Not used: the synchronous --defer-if-busy send, which holds the call up to --defer-timeout and types into the pane itself.",
       "step": 5,
       "order": 3,
       "kind": "addressed",
@@ -2358,7 +2358,7 @@
     {
       "id": "agent-orchestrator",
       "about": "Agent Orchestrator: its daemon hands each event to the agent's own session (a TUI pane, or a Chat session).",
-      "source": "github.com/OrchestratorInc/agent-orchestrator 80c941f6 (0.10.0): backend/internal/cli/send.go#newSendCommand and #sendMessage (without --steer: POST sessions/<id>/send to the local daemon, retried while CHAT_INTERFACE_TRANSITION; with AO_SESSION_ID set the CLI prefixes \"[from <id>] \"; --steer is not used); backend/internal/session_manager/manager.go#Send and #sendWithConfirmationStop (a TUI pane gets paste and Enter and the call returns only once the user-prompt-submit hook marks the session active, else ErrDeliveryUnconfirmed; a session in an interface transition gets the message queued durably and the call returns at once; a Chat session gets it through the Chat relay; the guard refuses a session that is gone, terminated, exited or paused on a permission decision); backend/cmd/ao/main.go and backend/internal/cli/root.go#ExitCode (an error is a line of text on stderr: exit 2 for a usage error, which comes before the daemon is called, 1 for any other failure); backend/internal/cli/client.go#apiError.String (the daemon's error is printed \"<message> (<code>) [request <id>]\"); backend/internal/service/session/service.go (the codes of the send: SESSION_COMPOSER_BUSY for ErrComposerBusy, an unsent human draft, SESSION_AWAITING_DECISION for ErrAwaitingDecision, a permission dialog, SESSION_STARTUP_PENDING for ErrStartupPending, all refused by the guard before the paste — manager.go#sendWithConfirmationStop: \"The check runs under the guard's held input lease, immediately before the write\"; SESSION_DELIVERY_UNCONFIRMED after the write); backend/internal/cli/session.go (session get reads one session, sends nothing). Exit 0 does not tell a confirmed TUI turn from a queued or relayed message, so it proves the message queued only. backend/internal/cli/session.go#newSessionGetCommand and #getSession (session get <id> --json prints {session} of the local daemon, sessionDTO with id and isTerminated; sends nothing).",
+      "source": "github.com/OrchestratorInc/agent-orchestrator 80c941f6 (0.10.0): backend/internal/cli/send.go#newSendCommand and #sendMessage (without --steer: POST sessions/<id>/send to the local daemon, retried while CHAT_INTERFACE_TRANSITION; with AO_SESSION_ID set the CLI prefixes \"[from <id>] \"; --steer is not used); backend/internal/session_manager/manager.go#Send and #sendWithConfirmationStop (a TUI pane gets paste and Enter and the call returns only once the user-prompt-submit hook marks the session active, else ErrDeliveryUnconfirmed; a session in an interface transition gets the message queued durably and the call returns at once; a Chat session gets it through the Chat relay; the guard refuses a session that is gone, terminated, exited or paused on a permission decision); backend/cmd/ao/main.go and backend/internal/cli/root.go#ExitCode (an error is a line of text on stderr: exit 2 for a usage error, which comes before the daemon is called, 1 for any other failure); backend/internal/cli/client.go#apiError.String (the daemon's error is printed \"<message> (<code>) [request <id>]\"); backend/internal/service/session/service.go (the codes of the send: SESSION_COMPOSER_BUSY for ErrComposerBusy, an unsent human draft, SESSION_AWAITING_DECISION for ErrAwaitingDecision, a permission dialog, SESSION_STARTUP_PENDING for ErrStartupPending, all refused by the guard before the paste \u2014 manager.go#sendWithConfirmationStop: \"The check runs under the guard's held input lease, immediately before the write\"; SESSION_DELIVERY_UNCONFIRMED after the write); backend/internal/cli/session.go (session get reads one session, sends nothing). Exit 0 does not tell a confirmed TUI turn from a queued or relayed message, so it proves the message queued only. backend/internal/cli/session.go#newSessionGetCommand and #getSession (session get <id> --json prints {session} of the local daemon, sessionDTO with id and isTerminated; sends nothing).",
       "step": 5,
       "order": 4,
       "kind": "addressed",
@@ -2806,7 +2806,7 @@
     {
       "id": "conductor",
       "about": "Conductor: the cloud API of the workspace queues each event as a message to the agent's own session.",
-      "source": "Conductor (closed product), documentation read 2026-11-27: conductor.build/docs/api (endpoints under https://api.conductor.build/v0; \"Pass your API key as a bearer token: Authorization: Bearer <your API key>\"; the example of a cloud workspace calls \"$CONDUCTOR_API_URL/me\" with \"Bearer ${CONDUCTOR_API_KEY:-$CONDUCTOR_API_TOKEN}\"); conductor.build/docs/reference/environment-variables (CONDUCTOR_SESSION_ID: the current session in agent processes; CONDUCTOR_API_URL: set in every cloud workspace, not in local ones; CONDUCTOR_API_KEY: the user's own key, it takes precedence over the workspace token CONDUCTOR_API_TOKEN); api.conductor.build/v0/openapi.json (POST /v0/sessions/{sessionId}/messages, operation message.create: body {message} with message a non-empty string; 201 with messageId, state and deepLink required, state one of queued, sent; 400, 401, 404 and a default error otherwise; /me lies outside /v0, so CONDUCTOR_API_URL is the base without /v0 — the documentation does not say it). Every send is a new message. conductor.build/docs/api, Tips: \"Send a User-Agent header from custom clients.\" and \"The API sits behind a proxy that rejects some default client signatures — notably Python's urllib — with a 403.\"",
+      "source": "Conductor (closed product), documentation read 2026-11-27: conductor.build/docs/api (endpoints under https://api.conductor.build/v0; \"Pass your API key as a bearer token: Authorization: Bearer <your API key>\"; the example of a cloud workspace calls \"$CONDUCTOR_API_URL/me\" with \"Bearer ${CONDUCTOR_API_KEY:-$CONDUCTOR_API_TOKEN}\"); conductor.build/docs/reference/environment-variables (CONDUCTOR_SESSION_ID: the current session in agent processes; CONDUCTOR_API_URL: set in every cloud workspace, not in local ones; CONDUCTOR_API_KEY: the user's own key, it takes precedence over the workspace token CONDUCTOR_API_TOKEN); api.conductor.build/v0/openapi.json (POST /v0/sessions/{sessionId}/messages, operation message.create: body {message} with message a non-empty string; 201 with messageId, state and deepLink required, state one of queued, sent; 400, 401, 404 and a default error otherwise; /me lies outside /v0, so CONDUCTOR_API_URL is the base without /v0 \u2014 the documentation does not say it). Every send is a new message. conductor.build/docs/api, Tips: \"Send a User-Agent header from custom clients.\" and \"The API sits behind a proxy that rejects some default client signatures \u2014 notably Python's urllib \u2014 with a 403.\"",
       "step": 5,
       "order": 7,
       "kind": "addressed",
@@ -3542,7 +3542,7 @@
     {
       "id": "opencode-synthetic",
       "about": "OpenCode synthetic message: the own delivery of OpenCode, a message the model reads as user input put into the session by its id through the shared OpenCode service, found by the service's registration file; no CLI runs, so no service is started.",
-      "source": "github.com/anomalyco/opencode 2255b89 (2.4.1): packages/protocol/src/groups/session.ts (POST /api/session/:sessionID/synthetic, body text, description, delivery queue; starts the agent unless resume is false; its one success is 200 {data: Session.Inbox.Synthetic}, packages/schema/src/session-inbox.ts#Synthetic: an item of type synthetic with its id and the sessionID it went to; GET /api/session/:sessionID retrieves a session: 200 {data: Session.Info} whose id is that session, packages/schema/src/session.ts#Info), packages/protocol/src/errors.ts (SessionNotFoundError 404, ConflictError 409), packages/client/src/effect/service.ts#Info and #discover (the service publishes url, pid, version and an optional password in its registration file, mode 0600; discovery never starts the service) and packages/client/src/service-probe.ts#fallback ($XDG_STATE_HOME/opencode/service.json, else ~/.local/state/opencode/service.json), packages/cli/src/services/server-connection.ts (Basic user opencode; `opencode api` without --server starts the service, so it is not called), packages/core/src/tool/plugin/shell.ts (shell commands get OPENCODE_SESSION_ID). A TUI with --standalone or --server keeps its session on another server: the shared service does not find it, and the channel is unavailable.",
+      "source": "github.com/anomalyco/opencode 2255b89 (2.4.1): packages/protocol/src/groups/session.ts (POST /api/session/:sessionID/synthetic, body text, description, delivery queue; starts the agent unless resume is false; its one success is 200 {data: Session.Inbox.Synthetic}, packages/schema/src/session-inbox.ts#Synthetic: an item of type synthetic with its id (Session.Message.ID, starting msg_), the sessionID it went to, time.created (epoch milliseconds), the payload with its text and the delivery asked for; GET /api/session/:sessionID retrieves a session: 200 {data: Session.Info} whose id is that session (Session.ID, starting ses) with its projectID and time.created and time.updated (epoch milliseconds), packages/schema/src/session.ts#Info, session-id.ts), packages/protocol/src/errors.ts (SessionNotFoundError 404, ConflictError 409), packages/client/src/effect/service.ts#Info and #discover (the service publishes url, pid, version and an optional password in its registration file, mode 0600; discovery never starts the service) and packages/client/src/service-probe.ts#fallback ($XDG_STATE_HOME/opencode/service.json, else ~/.local/state/opencode/service.json), packages/cli/src/services/server-connection.ts (Basic user opencode; `opencode api` without --server starts the service, so it is not called), packages/core/src/tool/plugin/shell.ts (shell commands get OPENCODE_SESSION_ID). A TUI with --standalone or --server keeps its session on another server: the shared service does not find it, and the channel is unavailable.",
       "step": 3,
       "order": 3,
       "kind": "addressed",
@@ -3584,11 +3584,16 @@
           "match": {
             "httpStatus": 200,
             "json": {
-              "data.type": "synthetic"
+              "data.type": "synthetic",
+              "data.sessionID": "{env:OPENCODE_SESSION_ID}",
+              "data.delivery": "queue"
+            },
+            "jsonPrefix": {
+              "data.id": "msg_"
             },
             "jsonType": {
-              "data.id": "string",
-              "data.sessionID": "string"
+              "data.time.created": "number",
+              "data.payload.text": "string"
             }
           },
           "outcome": "queued"
@@ -3611,6 +3616,14 @@
                 "httpStatus": 200,
                 "json": {
                   "data.id": "{env:OPENCODE_SESSION_ID}"
+                },
+                "jsonPrefix": {
+                  "data.id": "ses"
+                },
+                "jsonType": {
+                  "data.projectID": "string",
+                  "data.time.created": "number",
+                  "data.time.updated": "number"
                 }
               },
               "result": "available"
@@ -3628,6 +3641,14 @@
                 "httpStatus": 200,
                 "json": {
                   "data.id": "{env:OPENCODE_SESSION_ID}"
+                },
+                "jsonPrefix": {
+                  "data.id": "ses"
+                },
+                "jsonType": {
+                  "data.projectID": "string",
+                  "data.time.created": "number",
+                  "data.time.updated": "number"
                 }
               },
               "result": "same"

@@ -404,7 +404,9 @@ class ArgvDriver(object):
             result = self.executor.call(spec, text, guard.call_timeout(), **extra)
         except ExecutorRefusal as exc:
             raise RefusedBeforeSend(exc.reason)
-        return classify_result(self.channel.get("outcomes"), result)
+        # A receipt names the address the call went to: the variables the
+        # executor ran with.
+        return classify_result(self.channel.get("outcomes"), result, env=getattr(self.executor, "env", None))
 
 
 class TwoStepDriver(object):

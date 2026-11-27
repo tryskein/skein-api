@@ -263,6 +263,13 @@ def outcome_sign_matches(match, exit_code=None, doc=None, http_status=None, stde
         found, value = json_path_lookup(doc, path) if doc is not None else (False, None)
         if not found or not _json_type_is(value, kind):
             return False
+    for path, prefix in (match.get("jsonPrefix") or {}).items():
+        # The path holds a string of the form its source gives: it starts
+        # with the prefix and goes on past it.
+        stated = True
+        found, value = json_path_lookup(doc, path) if doc is not None else (False, None)
+        if not found or not isinstance(value, str) or len(value) <= len(prefix) or not value.startswith(prefix):
+            return False
     for path in match.get("jsonAbsent") or []:
         # Absent from a JSON answer: an answer that is no JSON document
         # carries no sign of its fields.
@@ -1726,6 +1733,8 @@ class ChannelExecutor(object):
         self.secrets = MonitorSecrets(list(secrets) + http_key_secrets(registry, env)
                                       + endpoint_secrets(registry, env, channels))
         self.drop = tuple(http_key_names(registry))
+        # The variables of the agent process the calls run with.
+        self.env = env
         self.argv = ArgvExecutor(token_file, env, self.secrets, programs, self.drop)
         self.http = HTTPExecutor(env, self.secrets)
         self.programs = self.argv.programs

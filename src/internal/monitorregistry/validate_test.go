@@ -1616,3 +1616,84 @@ func TestValidate_ScriptSigns(t *testing.T) {
 		}
 	}
 }
+
+// TestValidate_APrefixedPath — jsonPrefix names a literal prefix a path's
+// string starts with and goes on past (an id of the form its source gives:
+// "msg_" and more; review round 2 of wave 14, K7). A prefix is a non-empty
+// literal, on a path that holds a string and is present; a literal of the
+// same row it does not start is refused. Two rows apart by their prefixes,
+// or by a literal one prefix does not start, do not overlap.
+func TestValidate_APrefixedPath(t *testing.T) {
+	r := validRegistry()
+	r.Channels[1].Outcomes[0].Match.JSONPrefix = map[string]string{"messageId": "msg_"}
+	r.Channels[1].Outcomes[0].Match.JSONType = map[string]string{"messageId": "string"}
+	if err := r.Validate(); err != nil {
+		t.Fatalf("a prefixed string path was refused: %v", err)
+	}
+	for name, m := range map[string]Match{
+		"an empty prefix":              {ExitCode: intp(9), JSONPrefix: map[string]string{"a": ""}},
+		"a variable prefix":            {ExitCode: intp(9), JSONPrefix: map[string]string{"a": "{env:HOST_ID}"}},
+		"a prefixed number":            {ExitCode: intp(9), JSONPrefix: map[string]string{"a": "msg_"}, JSONType: map[string]string{"a": "number"}},
+		"a prefixed absent path":       {ExitCode: intp(9), JSONPrefix: map[string]string{"a.b": "msg_"}, JSONAbsent: []string{"a"}},
+		"a literal it does not start":  {ExitCode: intp(9), JSONPrefix: map[string]string{"a": "msg_"}, JSON: map[string]string{"a": "ses_1"}},
+		"the bare prefix as a literal": {ExitCode: intp(9), JSONPrefix: map[string]string{"a": "msg_"}, JSON: map[string]string{"a": "msg_"}},
+	} {
+		r := validRegistry()
+		r.Channels[1].Outcomes = append(r.Channels[1].Outcomes, OutcomeRow{Match: m, Outcome: OutcomeUnknown})
+		err := r.Validate()
+		if err == nil {
+			t.Fatalf("%s was accepted", name)
+		}
+		for _, got := range rulesOf(t, err) {
+			if got != RuleInvalid {
+				t.Fatalf("%s: %v, want only %s", name, err, RuleInvalid)
+			}
+		}
+	}
+	msg := Match{HTTPStatus: intp(200), JSONPrefix: map[string]string{"id": "msg_"}}
+	for name, tc := range map[string]struct {
+		other   Match
+		overlap bool
+	}{
+		"another prefix":         {Match{HTTPStatus: intp(200), JSONPrefix: map[string]string{"id": "ses"}}, false},
+		"a longer prefix of it":  {Match{HTTPStatus: intp(200), JSONPrefix: map[string]string{"id": "msg_01"}}, true},
+		"a literal it starts":    {Match{HTTPStatus: intp(200), JSON: map[string]string{"id": "msg_7"}}, true},
+		"a literal it does not":  {Match{HTTPStatus: intp(200), JSON: map[string]string{"id": "ses_7"}}, false},
+		"the bare prefix":        {Match{HTTPStatus: intp(200), JSON: map[string]string{"id": "msg_"}}, false},
+		"a number there":         {Match{HTTPStatus: intp(200), JSONType: map[string]string{"id": "number"}}, false},
+		"the path absent":        {Match{HTTPStatus: intp(200), JSONAbsent: []string{"id"}}, false},
+		"a variable on the path": {Match{HTTPStatus: intp(200), JSON: map[string]string{"id": "{env:HOST_ID}"}}, true},
+	} {
+		if got := msg.overlaps(tc.other); got != tc.overlap {
+			t.Fatalf("%s: overlap %v, want %v", name, got, tc.overlap)
+		}
+		if got := tc.other.overlaps(msg); got != tc.overlap {
+			t.Fatalf("%s, the other way: overlap %v, want %v", name, got, tc.overlap)
+		}
+	}
+}
+
+// TestValidate_AnOutcomeRowComparesOnlyTheAddress — an outcome row may
+// compare a path with the variable of the channel's address (a receipt
+// names the session the delivery went to; review round 2 of wave 14, K7),
+// and with no other variable.
+func TestValidate_AnOutcomeRowComparesOnlyTheAddress(t *testing.T) {
+	r := validRegistry()
+	r.Channels[1].Address = &AddressSpec{Env: "HOST_ID"}
+	r.Channels[1].Outcomes[0].Match.JSON["session"] = "{env:HOST_ID}"
+	if err := r.Validate(); err != nil {
+		t.Fatalf("an outcome row comparing the address was refused: %v", err)
+	}
+	r = validRegistry()
+	r.Channels[1].Address = &AddressSpec{Env: "HOST_ID"}
+	r.Channels[1].Outcomes[0].Match.JSON["session"] = "{env:OTHER_ID}"
+	err := r.Validate()
+	if err == nil {
+		t.Fatal("an outcome row comparing another variable was accepted")
+	}
+	for _, got := range rulesOf(t, err) {
+		if got != RuleInvalid {
+			t.Fatalf("Validate reported %v, want only %s", err, RuleInvalid)
+		}
+	}
+}
