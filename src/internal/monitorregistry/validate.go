@@ -366,6 +366,7 @@ func (v *validator) conditions(path string, c Conditions, agentOptions bool) {
 		if !envNamePattern.MatchString(e.Name) {
 			v.add(RuleInvalid, epath+".name", "%q is not an environment variable name", e.Name)
 		}
+		v.envFold(epath, e)
 		if e.Pattern != "" {
 			if err := envPatternSubset(e.Pattern); err != nil {
 				v.add(RuleInvalid, epath+".pattern", "pattern is outside the subset Go and Python read alike: %v", err)
@@ -385,6 +386,7 @@ func (v *validator) conditions(path string, c Conditions, agentOptions bool) {
 		if e.Pattern != "" {
 			v.add(RuleInvalid, epath+".pattern", "a variable that must not carry a value is compared literally, without a pattern")
 		}
+		v.envFold(epath, e)
 		if e.Equals == nil || *e.Equals == "" {
 			v.add(RuleInvalid, epath+".equals", "the value the variable must not carry is missing")
 		}
@@ -402,6 +404,14 @@ func (v *validator) conditions(path string, c Conditions, agentOptions bool) {
 			v.add(RuleInvalid, fmt.Sprintf("%s.envAbsent[%d]", path, i), "%q is not an environment variable name", name)
 		}
 	}
+	if c.Platform != "" {
+		if c.Platform != PlatformPosix && c.Platform != PlatformWindows {
+			v.add(RuleInvalid, path+".platform", "platform %q is not one of posix, windows", c.Platform)
+		}
+		if !agentOptions {
+			v.add(RuleInvalid, path+".platform", "only a method of an agent record states a platform")
+		}
+	}
 	if len(c.AnyOf) > 0 && !agentOptions {
 		v.add(RuleInvalid, path+".anyOf", "only a method of an agent record states alternatives")
 	}
@@ -412,9 +422,9 @@ func (v *validator) conditions(path string, c Conditions, agentOptions bool) {
 		apath := fmt.Sprintf("%s.anyOf[%d]", path, i)
 		switch {
 		case len(alt.AnyOf) > 0 || len(alt.Records) > 0 || len(alt.RecordsAbsent) > 0 || len(alt.AgentOptionsAbsent) > 0:
-			v.add(RuleInvalid, apath, "an alternative states only env, envNot, envAbsent, settings, settingsNot or programs")
+			v.add(RuleInvalid, apath, "an alternative states only env, envNot, envAbsent, settings, settingsNot, platform or programs")
 		case len(alt.Env) == 0 && len(alt.EnvNot) == 0 && len(alt.EnvAbsent) == 0 && len(alt.Settings) == 0 &&
-			len(alt.SettingsNot) == 0 && len(alt.Programs) == 0:
+			len(alt.SettingsNot) == 0 && len(alt.Programs) == 0 && alt.Platform == "":
 			v.add(RuleInvalid, apath, "an empty alternative always holds")
 		}
 		v.conditions(apath, alt, agentOptions)
@@ -440,6 +450,7 @@ func (v *validator) settings(path string, list []SettingCondition) {
 	for i, s := range list {
 		spath := fmt.Sprintf("%s[%d]", path, i)
 		v.text(RuleInvalid, spath+".path", s.Path)
+		v.settingPath(spath+".path", s.Path)
 		v.text(RuleInvalid, spath+".key", s.Key)
 		if !settingFormats[s.Format] {
 			v.add(RuleInvalid, spath+".format", "format %q is not one of json, toml, yaml-scalar", s.Format)
@@ -447,8 +458,85 @@ func (v *validator) settings(path string, list []SettingCondition) {
 		if len(s.Equals) == 0 {
 			v.add(RuleInvalid, spath+".equals", "the expected value is missing")
 		}
+		if s.Fold != "" {
+			var want string
+			switch {
+			case s.Fold != FoldStripLower:
+				v.add(RuleInvalid, spath+".fold", "fold %q is not %s", s.Fold, FoldStripLower)
+			case json.Unmarshal(s.Equals, &want) != nil:
+				v.add(RuleInvalid, spath+".fold", "only a string value is folded: equals is no string")
+			case want != foldStripLower(want):
+				v.add(RuleInvalid, spath+".equals", "%q is not folded: a folded value is compared with %q", want, foldStripLower(want))
+			}
+		}
 	}
 }
+
+// foldStripLower is FoldStripLower in Go (strings.TrimSpace and
+// strings.ToLower stand for Python's strip and lower on the values a
+// record names).
+func foldStripLower(s string) string {
+	return strings.ToLower(strings.TrimSpace(s))
+}
+
+// envFold checks the fold of a variable condition: FoldStripLower only,
+// with a pattern or a string Equals to apply after it, Equals folded.
+func (v *validator) envFold(path string, e EnvCondition) {
+	if e.Fold == "" {
+		return
+	}
+	if e.Fold != FoldStripLower {
+		v.add(RuleInvalid, path+".fold", "fold %q is not %s", e.Fold, FoldStripLower)
+		return
+	}
+	if e.Pattern == "" && (e.Equals == nil || *e.Equals == "") {
+		v.add(RuleInvalid, path+".fold", "a fold goes with a pattern or a value to compare")
+	}
+	if e.Equals != nil && *e.Equals != foldStripLower(*e.Equals) {
+		v.add(RuleInvalid, path+".equals", "%q is not folded: a folded value is compared with %q", *e.Equals, foldStripLower(*e.Equals))
+	}
+}
+
+// settingPath checks the path of a setting: "~/", "{env:NAME}/" or "/"
+// first, then literal elements, where an element after the first may hold
+// "{env?:NAME}" placeholders and no other brace.
+func (v *validator) settingPath(path, s string) {
+	var rest string
+	switch {
+	case strings.HasPrefix(s, "~/"):
+		rest = strings.TrimPrefix(s, "~/")
+	case strings.HasPrefix(s, PlaceholderEnvPrefix):
+		head, tail, ok := strings.Cut(s, "/")
+		v.value(path, head, false)
+		if !ok {
+			return
+		}
+		rest = tail
+	case strings.HasPrefix(s, "/"):
+		rest = strings.TrimPrefix(s, "/")
+	default:
+		v.add(RuleInvalid, path, "%q starts with neither \"~/\", \"{env:NAME}/\" nor \"/\"", s)
+		return
+	}
+	if rest == "" {
+		v.add(RuleInvalid, path, "%q names no file", s)
+		return
+	}
+	stripped := optionalEnvPlaceholder.ReplaceAllStringFunc(rest, func(m string) string {
+		name := strings.TrimSuffix(strings.TrimPrefix(m, PlaceholderEnvOptionalPrefix), "}")
+		if !envNamePattern.MatchString(name) {
+			v.add(RuleInvalid, path, "%q is not an environment variable name", name)
+		}
+		return ""
+	})
+	if strings.ContainsAny(stripped, "{}") {
+		v.add(RuleInvalid, path, "%q holds a brace that is no {env?:NAME} placeholder", s)
+	}
+}
+
+// optionalEnvPlaceholder is one "{env?:NAME}" of a setting path (NAME is
+// checked apart).
+var optionalEnvPlaceholder = regexp.MustCompile(`\{env\?:[^{}]*\}`)
 
 func (v *validator) limits(path string, l *Limits) {
 	if l == nil {

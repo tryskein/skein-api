@@ -836,6 +836,75 @@ func TestValidate_AcceptsTheHermesReadings(t *testing.T) {
 	}
 }
 
+// TestValidate_AcceptsTheHermesPlaceAndFoldReadings — a folded variable
+// and setting, the platform of the runner and an optional variable in a
+// setting path (Hermes: its home by platform and data suffix, its modes read
+// stripped and lower-cased) pass.
+func TestValidate_AcceptsTheHermesPlaceAndFoldReadings(t *testing.T) {
+	r := validRegistry()
+	suffix := "{env?:ALPHA_SUFFIX}"
+	r.Agents[0].Methods[1].Conditions = Conditions{
+		AnyOf: []Conditions{
+			{Env: []EnvCondition{{Name: "ALPHA_MODE", Pattern: ".+", Fold: FoldStripLower}},
+				EnvNot: []EnvCondition{{Name: "ALPHA_MODE", Equals: strp("off"), Fold: FoldStripLower}}},
+			{EnvAbsent: []string{"ALPHA_MODE"}, Platform: PlatformPosix,
+				SettingsNot: []SettingCondition{{Path: "~/.alpha" + suffix + "/c.yaml", Format: SettingYAMLScalar,
+					Key: "display.mode", Equals: json.RawMessage(`"off"`), Fold: FoldStripLower}}},
+			{EnvAbsent: []string{"ALPHA_MODE"}, Platform: PlatformWindows, Env: []EnvCondition{{Name: "LOCALAPPDATA"}},
+				Settings: []SettingCondition{{Path: "{env:LOCALAPPDATA}/alpha" + suffix + "/c.yaml", Format: SettingYAMLScalar,
+					Key: "display.mode", Equals: json.RawMessage(`"queue"`), Fold: FoldStripLower}}},
+		},
+	}
+	if err := r.Validate(); err != nil {
+		t.Fatalf("a correct record with the place and fold readings was refused: %v", err)
+	}
+}
+
+// TestValidate_ThePlaceAndFoldReadingsRefuseTheirMisuse — each new reading
+// refuses what it does not read.
+func TestValidate_ThePlaceAndFoldReadingsRefuseTheirMisuse(t *testing.T) {
+	setting := func(path, equals, fold string) SettingCondition {
+		return SettingCondition{Path: path, Format: SettingYAMLScalar, Key: "display.mode",
+			Equals: json.RawMessage(equals), Fold: fold}
+	}
+	for name, conds := range map[string]Conditions{
+		"a fold of another kind":                 {Env: []EnvCondition{{Name: "A", Equals: strp("off"), Fold: "lower"}}},
+		"a fold with nothing to compare":         {Env: []EnvCondition{{Name: "A", Fold: FoldStripLower}}},
+		"a folded variable compared as Off":      {EnvNot: []EnvCondition{{Name: "A", Equals: strp("Off"), Fold: FoldStripLower}}},
+		"a folded variable compared with spaces": {Env: []EnvCondition{{Name: "A", Equals: strp(" queue"), Fold: FoldStripLower}}},
+		"a fold of a boolean setting":            {Settings: []SettingCondition{setting("~/.a/c.yaml", `false`, FoldStripLower)}},
+		"a folded setting compared as Off":       {SettingsNot: []SettingCondition{setting("~/.a/c.yaml", `"Off"`, FoldStripLower)}},
+		"a setting fold of another kind":         {Settings: []SettingCondition{setting("~/.a/c.yaml", `"off"`, "upper")}},
+		"a platform that is no platform":         {Platform: "linux"},
+		"an optional variable first":             {Settings: []SettingCondition{setting("{env?:A}/c.yaml", `"off"`, "")}},
+		"an optional variable of no name":        {Settings: []SettingCondition{setting("~/.a{env?:a b}/c.yaml", `"off"`, "")}},
+		"another placeholder in a path":          {Settings: []SettingCondition{setting("~/.a{env:A}/c.yaml", `"off"`, "")}},
+		"a relative setting path":                {Settings: []SettingCondition{setting("c.yaml", `"off"`, "")}},
+		"a home that names no file":              {Settings: []SettingCondition{setting("~/", `"off"`, "")}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := validRegistry()
+			r.Agents[0].Methods[1].Conditions = conds
+			err := r.Validate()
+			if err == nil {
+				t.Fatal("Validate accepted the violation")
+			}
+			for _, got := range rulesOf(t, err) {
+				if got != RuleInvalid {
+					t.Fatalf("Validate reported %v, want only %s", err, RuleInvalid)
+				}
+			}
+		})
+	}
+	t.Run("a platform in a channel's detection", func(t *testing.T) {
+		r := validRegistry()
+		r.Channels[0].Detect.Platform = PlatformPosix
+		if err := r.Validate(); err == nil {
+			t.Fatal("Validate accepted a platform in a detection")
+		}
+	})
+}
+
 // endpointChannel makes the second fixture channel an http channel whose
 // address and password come from an endpoint file, with an http-get probe
 // and a GET check (the OpenCode readings).

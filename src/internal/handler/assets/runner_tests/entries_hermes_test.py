@@ -12,7 +12,13 @@ The expected values come from Hermes Agent 24b14819, not from the record:
   false) (gateway/run_config_loaders.py);
 - the busy input mode is HERMES_GATEWAY_BUSY_INPUT_MODE, else
   display.busy_input_mode, interrupt by default (#_load_busy_input_mode);
-- config.yaml lies in HERMES_HOME, else ~/.hermes (hermes_constants.py);
+- config.yaml lies in HERMES_HOME, else in the platform default with the
+  literal suffix HERMES_DATA_DIR_SUFFIX: ~/.hermes<suffix> on POSIX,
+  %LOCALAPPDATA%\hermes<suffix> on Windows, ~/AppData/Local/hermes<suffix>
+  when LOCALAPPDATA is empty (hermes_constants.py#_platform_default_hermes_home);
+- a variable is read stripped, an empty one gives way to the file, and a
+  mode is compared lower-cased (run_config_loaders.py#_env_or_cfg_str,
+  #_load_busy_input_mode, background_process_notifications);
 - `hermes chat --resume ID --query-file - -Q` reads the text from stdin and
   holds its caller for the turn; 'Error: No session found matching' exits 1,
   'Error: Resume retains gateway session policy' 2, 'Your message was not
@@ -23,8 +29,11 @@ Standard library of Python 3.6 only.
 """
 
 import os
+import shutil
 import sys
+import tempfile
 import unittest
+import unittest.mock
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -104,6 +113,34 @@ class HermesPreflightTest(unittest.TestCase):
                 else:
                     self.assertEqual(line["channel"], channel, line)
 
+    def test_the_data_suffix_names_the_default_home(self):
+        resume = "display:\n  background_process_notifications: off\n  busy_input_mode: queue\n"
+        self.config(resume, home=os.path.join(self.box.root, ".hermes-work"))
+        self.assertEqual(self.line(HERMES_DATA_DIR_SUFFIX="-work")["channel"], "hermes-resume")
+        # Without the suffix that home is not Hermes's: the default applies.
+        self.assertEqual(self.line()["channel"], "stdout")
+        # With it, ~/.hermes is not read.
+        self.config(resume)
+        self.assertEqual(self.line(HERMES_DATA_DIR_SUFFIX="-other")["channel"], "stdout")
+
+    def test_switches_are_read_stripped_and_lower_cased(self):
+        for name, text, env, channel in (
+                ("the variable off in capitals and spaces", "display:\n  busy_input_mode: queue\n",
+                 {"HERMES_BACKGROUND_NOTIFICATIONS": " OFF "}, "hermes-resume"),
+                ("the variable of the mode with spaces and capitals",
+                 "display:\n  background_process_notifications: off\n",
+                 {"HERMES_GATEWAY_BUSY_INPUT_MODE": " Queue "}, "hermes-resume"),
+                ("the file's off with spaces in quotes",
+                 "display:\n  background_process_notifications: ' Off '\n  busy_input_mode: queue\n", {},
+                 "hermes-resume"),
+                ("the file's mode in capitals", "display:\n  background_process_notifications: off\n"
+                 "  busy_input_mode: \"QUEUE\"\n", {}, "hermes-resume"),
+                ("oFf is off", "display:\n  background_process_notifications: oFf\n  busy_input_mode: queue\n",
+                 {}, "hermes-resume")):
+            with self.subTest(case=name):
+                self.config(text)
+                self.assertEqual(self.line(**env)["channel"], channel)
+
     def test_the_config_of_hermes_home(self):
         home = os.path.join(self.box.root, "profile")
         self.config("display:\n  background_process_notifications: off\n  busy_input_mode: queue\n", home=home)
@@ -122,6 +159,41 @@ class HermesPreflightTest(unittest.TestCase):
             with self.subTest(env=env):
                 line = self.line(chain=chain, **env)
                 self.assertNotEqual(getattr(line, "get", lambda k: None)("channel"), "hermes-resume", line)
+
+
+class WindowsHomeTest(unittest.TestCase):
+    """The Windows default home (hermes_constants.py#_platform_default_hermes_home):
+    %LOCALAPPDATA%\\hermes<suffix>, ~/AppData/Local/hermes<suffix> when
+    LOCALAPPDATA is empty; read by the conditions of the resume method on a
+    runner of that platform."""
+
+    def setUp(self):
+        self.root = tempfile.mkdtemp(prefix="skein-hermes-win-")
+        self.addCleanup(shutil.rmtree, self.root, True)
+        self.method = [m for m in REG.agents["hermes"]["methods"] if m.get("channel") == "hermes-resume"][0]
+
+    def config(self, directory):
+        os.makedirs(directory, exist_ok=True)
+        with open(os.path.join(directory, "config.yaml"), "w") as fh:
+            fh.write("display:\n  background_process_notifications: off\n  busy_input_mode: queue\n")
+
+    def holds(self, env, platform):
+        env = dict({"HERMES_SESSION_ID": SESSION, "HOME": self.root}, **env)
+        with unittest.mock.patch.object(RUNNER, "runner_platform", lambda: platform):
+            return RUNNER.conditions_hold(self.method["conditions"], env)[0]
+
+    def test_the_local_app_data_home(self):
+        local = os.path.join(self.root, "Local")
+        self.config(os.path.join(local, "hermes-x"))
+        self.assertTrue(self.holds({"LOCALAPPDATA": local, "HERMES_DATA_DIR_SUFFIX": "-x"}, "windows"))
+        # On POSIX that directory is not Hermes's home.
+        self.assertFalse(self.holds({"LOCALAPPDATA": local, "HERMES_DATA_DIR_SUFFIX": "-x"}, "posix"))
+
+    def test_the_profile_home_without_local_app_data(self):
+        self.config(os.path.join(self.root, "AppData", "Local", "hermes"))
+        self.assertTrue(self.holds({}, "windows"))
+        # ~/.hermes is the POSIX home, not the Windows one.
+        self.assertFalse(self.holds({}, "posix"))
 
 
 class ResumeOutcomeTest(unittest.TestCase):

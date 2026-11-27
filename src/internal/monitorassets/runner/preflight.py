@@ -219,8 +219,19 @@ class Choice(object):
 
 # --- conditions --------------------------------------------------------------
 
+FOLD_STRIP_LOWER = "strip-lower"
+
+
+def fold_value(value, fold):
+    """value as a condition with fold reads it (registry.go#FoldStripLower:
+    str.strip().lower(), as the agent reads its switch)."""
+    if fold == FOLD_STRIP_LOWER and isinstance(value, str):
+        return value.strip().lower()
+    return value
+
+
 def env_holds(cond, env):
-    value = env.get(cond.get("name", ""), "")
+    value = fold_value(env.get(cond.get("name", ""), ""), cond.get("fold"))
     if not value:
         return False
     if cond.get("pattern") is not None and not re.fullmatch(cond["pattern"], value):
@@ -230,15 +241,33 @@ def env_holds(cond, env):
 
 def env_not_holds(cond, env):
     """registry.go#Conditions.EnvNot: the variable is unset, empty, or not
-    equal to `equals` exactly."""
-    return env.get(cond.get("name", ""), "") != cond.get("equals")
+    equal to `equals` exactly (both after the fold, when there is one)."""
+    value = fold_value(env.get(cond.get("name", ""), ""), cond.get("fold"))
+    return not value or value != cond.get("equals")
+
+
+def runner_platform():
+    """The platform of registry.go#Conditions.Platform this runner runs on."""
+    return "windows" if os.name == "nt" else "posix"
+
+
+def platform_holds(platform):
+    """registry.go#Conditions.Platform: the runner runs on that platform."""
+    return platform == runner_platform()
+
+
+# "{env?:NAME}" of a setting path: the value of NAME, or nothing.
+_OPTIONAL_ENV = re.compile(r"\{env\?:([A-Za-z_][A-Za-z0-9_]*)\}")
 
 
 def expand_path(path, env):
-    """A setting path: "~/" is the home directory, "{env:NAME}/" the value
-    of NAME. None when the variable it needs is not set."""
+    """A setting path: "~/" is the home directory (HOME, USERPROFILE on
+    Windows when HOME is unset), "{env:NAME}/" the value of NAME, and a
+    "{env?:NAME}" in a later element the value of NAME or nothing. None
+    when the variable or the home it needs is not set."""
+    path = _OPTIONAL_ENV.sub(lambda m: env.get(m.group(1), ""), path)
     if path.startswith("~/"):
-        home = env.get("HOME", "")
+        home = env.get("HOME", "") or (env.get("USERPROFILE", "") if os.name == "nt" else "")
         return os.path.join(home, path[2:]) if home else None
     if path.startswith("{env:"):
         name, _, rest = path[len("{env:"):].partition("}")
@@ -314,7 +343,8 @@ def _same_json_value(a, b):
 
 def setting_holds(cond, env):
     value = read_setting(cond, env)
-    return value is not _MISSING and value is not _ABSENT and _same_json_value(value, cond.get("equals"))
+    return (value is not _MISSING and value is not _ABSENT
+            and _same_json_value(fold_value(value, cond.get("fold")), cond.get("equals")))
 
 
 def setting_not_holds(cond, env):
@@ -324,7 +354,7 @@ def setting_not_holds(cond, env):
     value = read_setting(cond, env)
     if value is _ABSENT:
         return True
-    return value is not _MISSING and not _same_json_value(value, cond.get("equals"))
+    return value is not _MISSING and not _same_json_value(fold_value(value, cond.get("fold")), cond.get("equals"))
 
 
 def program_found(name, env):
@@ -529,6 +559,8 @@ def _plain_conditions_hold(conds, env):
         if not setting_not_holds(cond, env):
             return False, "setting %s of %s not read or %s" % (cond.get("key"), cond.get("path"),
                                                                json.dumps(cond.get("equals")))
+    if conds.get("platform") and not platform_holds(conds["platform"]):
+        return False, "the platform is not %s" % conds["platform"]
     for name in conds.get("programs") or []:
         if not program_found(name, env):
             return False, "program %s not found" % name

@@ -243,9 +243,13 @@ type Conditions struct {
 	SettingsNot []SettingCondition `json:"settingsNot,omitempty"`
 	// AnyOf are alternatives of which at least one must hold, besides every
 	// other condition here. An alternative states env, envNot, envAbsent,
-	// settings, settingsNot or programs, never anyOf, records or agent
-	// options. Only a method of an agent record states it.
+	// settings, settingsNot, platform or programs, never anyOf, records or
+	// agent options. Only a method of an agent record states it.
 	AnyOf []Conditions `json:"anyOf,omitempty"`
+	// Platform, when set, is the platform the runner must run on: "posix"
+	// or "windows" (an agent whose settings live in another place on each).
+	// Only a method of an agent record states it.
+	Platform string `json:"platform,omitempty"`
 	// Programs are executables that must be found.
 	Programs []string `json:"programs,omitempty"`
 	// AgentOptionsAbsent are long options the argument list of the agent
@@ -275,7 +279,16 @@ type EnvCondition struct {
 	Pattern string `json:"pattern,omitempty"`
 	// Equals, when set, must equal the variable's value exactly.
 	Equals *string `json:"equals,omitempty"`
+	// Fold, when set, is how the value is read before anything else:
+	// FoldStripLower trims white space at both ends and lowers the case
+	// (an agent that reads its switch so). The value is empty, and Pattern
+	// and Equals are applied, after the fold; Equals is given folded.
+	Fold string `json:"fold,omitempty"`
 }
+
+// FoldStripLower is the fold of a value read as Python's
+// str.strip().lower() reads it.
+const FoldStripLower = "strip-lower"
 
 // Setting file formats.
 const (
@@ -287,13 +300,28 @@ const (
 )
 
 // SettingCondition holds when the value at Key of the file at Path equals
-// Equals. Path may start with "~/" or "{env:NAME}/".
+// Equals. Path starts with "~/" (the home directory), "{env:NAME}/" (a
+// variable that must be set) or "/"; an element after the first may hold
+// "{env?:NAME}", the value of NAME or nothing when it is unset (a suffix
+// an agent appends to its directory).
 type SettingCondition struct {
 	Path   string          `json:"path"`
 	Format string          `json:"format"`
 	Key    string          `json:"key"`
 	Equals json.RawMessage `json:"equals"`
+	// Fold, for a string Equals, is how a string value is read before the
+	// comparison (FoldStripLower); a value of another type is compared as
+	// it is. Equals is given folded.
+	Fold string `json:"fold,omitempty"`
 }
+
+// PlaceholderEnvOptionalPrefix starts "{env?:NAME}" of a setting path: the
+// value of NAME, or nothing when it is unset.
+const PlaceholderEnvOptionalPrefix = "{env?:"
+
+// PlatformPosix is the other value of Conditions.Platform beside
+// PlatformWindows: Linux, macOS and every other POSIX system.
+const PlatformPosix = "posix"
 
 // Limit units, as the source of a record states them.
 const (
