@@ -201,6 +201,10 @@ class PrepareOutcomeTest(unittest.TestCase):
         self.assertNotEqual(code, 0)
         self.assertEqual([l["event"] for l in lines], ["prepare_failed"])
         self.assertEqual(lines[0]["reason"], reason)
+        # INV-17: the line names the cause, never a path of the chain.
+        for path in self.components()[1:]:
+            self.assertNotIn(path, lines[0]["action"])
+            self.assertNotIn(os.path.basename(path), lines[0]["action"])
         self.assertFalse(os.path.exists(os.path.join(self.token_dir, "starter.py")))
         self.assertFalse(os.path.exists(os.path.join(self.token_dir, "token")))
 
@@ -235,6 +239,12 @@ class PrepareOutcomeTest(unittest.TestCase):
         fake = fs.FakeSecurity(views={self.token_dir: fs.View(
             owner=fs.ME, dacl=fs.private_dacl(), final=os.path.join(self.root, "elsewhere"))})
         self.assert_refused(*self.run_prepare(fake)[:2], reason="token_dir_insecure")
+
+    def test_the_cause_names_the_component_by_its_role(self):
+        fake = fs.FakeSecurity(views={self.parent: fs.View(owner=fs.ME, dacl=[
+            (fs.ALLOW, 0, fs.FILE_DELETE_CHILD, fs.OTHER)] + fs.trusted_dacl())})
+        _, lines, _ = self.run_prepare(fake)
+        self.assertIn("the parent of the token directory", lines[0]["action"])
 
     def test_an_existing_token_directory_is_not_used(self):
         os.mkdir(self.token_dir, 0o700)

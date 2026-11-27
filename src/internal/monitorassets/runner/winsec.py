@@ -133,24 +133,35 @@ def path_components(path):
 # its rights or owner (WRITE_DAC, WRITE_OWNER); creating children
 # (FILE_ADD_*) replaces nothing. An empty DACL grants nothing; a NULL DACL
 # grants everything.
+# A cause names the component by its role, never by its path: the line
+# that carries it does not repeat the path (INV-17).
+def _component_role(i, last):
+    if i == last:
+        return "the token directory"
+    if i == last - 1:
+        return "the parent of the token directory"
+    return "component %d of the path from its root" % (i + 1)
+
+
 def chain_refusal(views, me):
     trusted = (me, SID_SYSTEM, SID_ADMINS, SID_TRUSTED_INSTALLER)
     last = len(views) - 1
     for i, (path, view) in enumerate(views):
+        role = _component_role(i, last)
         if view.reparse:
-            return "a reparse point on the path: " + path
+            return "a reparse point: " + role
         if _norm_path(view.final) != _norm_path(path):
-            return "the path resolves elsewhere: " + path
+            return "it resolves elsewhere: " + role
         if view.owner not in trusted:
-            return "owned by another account: " + path
+            return "owned by another account: " + role
         if view.dacl is None:
-            return "no DACL: " + path
+            return "no DACL: " + role
         others = set([SID_WORLD])
         for kind, flags, mask, sid in view.dacl:
             if flags & ACE_INHERIT_ONLY or sid in trusted:
                 continue
             if kind not in (ACE_ALLOW, ACE_DENY):
-                return "an access entry of an unknown type: " + path
+                return "an access entry of an unknown type: " + role
             others.add(sid)
         wanted = DELETE | WRITE_DAC | WRITE_OWNER
         if i < last:
@@ -158,7 +169,7 @@ def chain_refusal(views, me):
             wanted |= FILE_DELETE_CHILD
         for sid in sorted(others):
             if secdesc_effective(view.dacl, sid) & wanted:
-                return "another account may replace it: " + path
+                return "another account may replace it: " + role
     return None
 
 
