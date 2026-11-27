@@ -572,17 +572,17 @@ def channel_available(ctx, channel_id):
     binaries = (channel.get("binaries") or {}).get(_platform_key())
     if not binaries:
         return False, "channel %s has no program for this platform" % channel_id
+    programs = [channel_program(b, ctx.env, ctx.placement.agent) for b in binaries]
+    if not any(p is not None for p in programs):
+        return False, _missing_programs_cause(channel_id, binaries, ctx.env)
     found = checked_programs(ctx, channel)
     own = (spec.get("argv") or [""])[0]
-    if own not in found:
-        return False, _missing_programs_cause(channel_id, binaries, ctx.env)
-    programs = [found[own]]
     # The programs of its own check, wait and blind steps: one that is not
     # found leaves the channel unavailable here, not every attempt refused
     # by the working runner.
     for argv in _step_argvs(channel):
         name = argv[0] if argv else None
-        if name and name not in found:
+        if name and name != own and name not in found:
             return False, "channel %s: program %s of its check or wait is not found" % (channel_id, name)
     if any(is_batch_program(p) for p in programs if p is not None) and \
             (channel.get("executor") or {}).get("feed") == "file" and \
