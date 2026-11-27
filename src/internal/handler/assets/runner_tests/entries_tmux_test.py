@@ -333,7 +333,10 @@ if args[0] == "display-message":
     else:
         sys.stdout.write("%%d\n" %% config["pane_pid"])
 elif args[0] == "load-buffer":
-    buffers[opt("-b")] = sys.stdin.read()
+    if config.get("load_fails"):
+        code = 1
+    else:
+        buffers[opt("-b")] = sys.stdin.read()
 elif args[0] == "paste-buffer":
     if config.get("paste_fails"):
         code = 1
@@ -393,6 +396,41 @@ class TmuxBuffersTest(TmuxCase):
         mon.page([ft.note(1)])
         self.assertEqual(len(self.buffers()), 1)
         self.assertIn('"unstage": "failed"', json.dumps(mon.lines()))
+
+    def test_a_removal_that_fails_after_another_addressee_is_in_the_journal(self):
+        # Warning 1 of wave 13 round 2: every way out after a stage whose
+        # text was not taken removes it, and says so when it cannot - here
+        # the agent process changes while the text is staged.
+        self.fresh()
+        self.stateful(delete_fails=True)
+        mon = self.mon()
+        real = RUNNER.run_program
+
+        def watched(argv, *args, **kw):
+            result = real(argv, *args, **kw)
+            if "load-buffer" in argv:
+                self.source.procs[AGENT_PID].start = "another life"
+            return result
+        with mock.patch.object(RUNNER, "run_program", watched):
+            mon.page([ft.note(1)])
+        self.assertEqual(self.argvs("paste-buffer"), [])
+        self.assertEqual(len(self.argvs("delete-buffer")), 1)
+        left = [l for l in mon.lines() if l.get("event") == "staged_text_left"]
+        self.assertEqual([(l["channel"], l["cause"]) for l in left], [("tmux", "AddresseeChanged")])
+
+    def test_a_failed_stage_does_not_claim_a_buffer_left(self):
+        # The stage did not load the buffer: a failing delete-buffer proves
+        # nothing is left, so nothing says the text was left behind.
+        self.fresh()
+        self.stateful()
+        mon = self.mon()
+        self.stateful(load_fails=True, delete_fails=True)
+        mon.page([ft.note(1)])
+        self.assertEqual(self.buffers(), {})
+        text = json.dumps(mon.lines())
+        self.assertNotIn("not removed", text)
+        self.assertNotIn("staged_text_left", text)
+        self.assertNotIn('"unstage": "failed"', text)
 
 
 if __name__ == "__main__":

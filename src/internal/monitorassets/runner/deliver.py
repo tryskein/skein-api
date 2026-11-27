@@ -42,6 +42,7 @@
 # call already gave keeps its outcome in the state and the journal.
 
 import os
+import sys
 import time
 
 # INV-8: the pauses before the 2nd, 3rd and 4th call of a channel that
@@ -427,7 +428,22 @@ class TwoStepDriver(object):
     def send(self, text, guard):
         name = delivery_name()
         insert = with_delivery_name(self.insert["executor"], name)
-        taken = False
+        # ran: the stage was called (it may have left text behind); staged:
+        # it said it carried the text; taken: the insert took it.
+        state = {"ran": False, "staged": False, "taken": False, "sign": None}
+        try:
+            return self._send(text, guard, name, insert, state)
+        finally:
+            # Every way out after a stage whose text the insert did not take
+            # removes it: a refusal, another addressee, one's own echo, a lost
+            # attempt, a cancelled delivery, a stale poll or a stop alike.
+            if self.unstage and state["ran"] and not state["taken"] and not self._unstage(name) \
+                    and state["staged"]:
+                # Only a stage that carried the text can have left it: a
+                # failed unstage after a failed stage proves nothing.
+                self._left_behind(guard, state, sys.exc_info()[1])
+
+    def _send(self, text, guard, name, insert, state):
         if not self.stage:
             guard.before_send()
         else:
@@ -435,42 +451,33 @@ class TwoStepDriver(object):
             # into the pane; it may wait (its own timeout). So it goes
             # before the last check: check -> insert has no wait between.
             guard.prepare()
-        try:
-            if self.stage:
-                try:
-                    staged = self._call(with_delivery_name(self.stage, name), text, guard, own=True)
-                except ExecutorRefusal as exc:
-                    raise RefusedBeforeSend(exc.reason)
-                if staged.timed_out or staged.exit_code != 0 or getattr(staged, "tree_failure", None):
-                    # The insert never ran: nothing reached the pane.
-                    raise RefusedBeforeSend("the stage of the text failed (%s)" % (
-                        "timeout" if staged.timed_out else "exit code %s" % staged.exit_code))
-                # The stage carried the text: the insert takes what the
-                # stage left (the buffer of this transfer), no text. The
-                # last check and the access boundary come now, after the
-                # stage and right before the insert; a refusal removes the
-                # staged text.
-                text = ""
-                guard.final()
+        if self.stage:
+            state["ran"] = True
             try:
-                first = self.executor.call(insert, text, guard.call_timeout())
+                staged = self._call(with_delivery_name(self.stage, name), text, guard, own=True)
             except ExecutorRefusal as exc:
                 raise RefusedBeforeSend(exc.reason)
-            outcome, sign = classify_result(self.insert.get("outcomes"), first)
-            taken = outcome in (OUTCOME_INPUT_WRITTEN, OUTCOME_INPUT_NO_RECEIPT)
-            if not taken or not self.commit:
-                if self.unstage and not taken and not self._unstage(name):
-                    sign = dict(sign or {}, unstage="failed")
-                return outcome, sign
-        except RefusedBeforeSend as exc:
-            if self.unstage and not taken and not self._unstage(name):
-                # The journal says the staged text was left behind.
-                raise RefusedBeforeSend("%s; the staged text was not removed" % exc.reason)
-            raise
-        except BaseException:
-            if self.unstage and not taken:
-                self._unstage(name)
-            raise
+            if staged.timed_out or staged.exit_code != 0 or getattr(staged, "tree_failure", None):
+                # The insert never ran: nothing reached the pane.
+                raise RefusedBeforeSend("the stage of the text failed (%s)" % (
+                    "timeout" if staged.timed_out else "exit code %s" % staged.exit_code))
+            state["staged"] = True
+            # The stage carried the text: the insert takes what the stage
+            # left (the buffer of this transfer), no text. The last check
+            # and the access boundary come now, after the stage and right
+            # before the insert; a refusal removes the staged text.
+            text = ""
+            guard.final()
+        try:
+            first = self.executor.call(insert, text, guard.call_timeout())
+        except ExecutorRefusal as exc:
+            raise RefusedBeforeSend(exc.reason)
+        outcome, sign = classify_result(self.insert.get("outcomes"), first)
+        state["taken"] = outcome in (OUTCOME_INPUT_WRITTEN, OUTCOME_INPUT_NO_RECEIPT)
+        if not state["taken"] or not self.commit:
+            # The sign the journal keeps; a failed unstage marks it.
+            state["sign"] = dict(sign or {})
+            return outcome, state["sign"]
         if not guard.before_commit():
             return OUTCOME_UNKNOWN, {"commit": "withheld"}
         commit = with_delivery_name(self.commit["executor"], name)
@@ -479,6 +486,25 @@ class TwoStepDriver(object):
         except (ExecutorRefusal, RefusedBeforeSend):
             return OUTCOME_UNKNOWN, {"commit": "notStarted"}
         return classify_result(self.commit.get("outcomes"), second, written=True)
+
+    def _left_behind(self, guard, state, exc):
+        """The staged text of this transfer could not be removed: the sign
+        of the outcome, the reason of a refusal and, on any other way out,
+        a journal line say so."""
+        if exc is None:
+            if state["sign"] is not None:
+                state["sign"]["unstage"] = "failed"
+            return
+        if isinstance(exc, RefusedBeforeSend):
+            exc.reason = "%s; the staged text was not removed" % exc.reason
+            exc.args = (exc.reason,)
+            return
+        journal = getattr(getattr(guard, "pipeline", None), "journal", None)
+        if journal is not None:
+            try:
+                journal.lifecycle("staged_text_left", channel=self.channel.get("id"), cause=type(exc).__name__)
+            except JournalUnavailable:
+                pass
 
     def _unstage(self, name):
         """Remove what the stage left. True when the call says it did (exit
