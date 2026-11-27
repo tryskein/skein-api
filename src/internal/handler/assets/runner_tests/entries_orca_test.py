@@ -339,6 +339,21 @@ class OrcaRecordTest(unittest.TestCase):
                 self.assertEqual(mon.statuses(), [(1, "unknown")])
                 self.assertEqual(len([l for l in mon.lines() if l.get("cause") == "addressee_changed"]), 1)
 
+    def test_the_stop_receipt_checks_the_addressee_again_after_the_wait(self):
+        # Every transfer: the check, the idle wait, the check again; the
+        # agent of the PTY may change during the wait (INV-4).
+        mon = self.mon()
+        self.orca.respond(show_answers=[show(), show(incarnation="pty-1:4")])
+        mon.sink.receipt("The monitor of sk-86 stopped.")
+        self.assertEqual(len(self.orca.calls("wait")), 1)
+        self.assertEqual(self.orca.calls("send"), [])
+        # The same terminal after the wait: the receipt goes.
+        mon = self.mon("tok-same")
+        self.orca.respond()
+        mon.sink.receipt("The monitor of sk-86 stopped.")
+        self.assertEqual(len(self.orca.calls("send")), 1)
+        self.assertGreaterEqual(len(self.orca.calls("show")), 2)
+
     def test_an_agent_orca_does_not_identify_stays_unidentified(self):
         self.orca.respond(show_answers=[show(agent=None)])
         mon = self.mon()

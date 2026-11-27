@@ -261,8 +261,12 @@ class _ReceiptGuard(Guard):
         Guard.__init__(self, pipeline, channel, None, timeout)
 
     def before_send(self):
+        # The order of every transfer: the check, the wait, the check again
+        # (the agent of a PTY may change during the wait), then nothing that
+        # waits or goes to the network before the hand-over.
         self.pipeline.check_addressee(self.channel, self.remaining())
         self.pipeline.wait_idle(self.channel, self.remaining())
+        self.pipeline.check_addressee(self.channel, self.remaining())
         self.remaining()
 
     def before_commit(self):
