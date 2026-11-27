@@ -203,6 +203,38 @@ class OwnEchoDeliveryTest(unittest.TestCase):
 
 
 @unittest.skipUnless(os.name == "posix", "the POSIX pipeline")
+class FilteredByTheServerThenReturnedTest(unittest.TestCase):
+    """Review of wave 8, row 22, the two sequences of US-13 as the spec
+    words them: the server filtered the event of the mint's session on the
+    first poll (it never came), the exclusion then changed, and the server,
+    which had not passed it, returns it: it is delivered, and the agent
+    knows it by its actorSessionId."""
+
+    def first_poll_filtered(self, world, mon):
+        mon.page([], cursor=cursor(0))
+        world.write_exclusion(mon, NEW)
+        mon.exclusion.current()
+        world.clock.t += 60
+
+    def test_with_an_event_of_another_session_after_it(self):
+        world = EchoWorld(self, dt.two_channels())
+        mon = world.monitor()
+        self.first_poll_filtered(world, mon)
+        mon.page([dt.note(1, session=MINT), dt.note(2, session=OTHER)], cursor=cursor(1))
+        self.assertEqual(outcomes(mon), {1: "queued", 2: "queued"})
+        texts = [t for _, _, t in mon.spy.calls]
+        self.assertTrue(any("c1" in t for t in texts))
+
+    def test_alone(self):
+        world = EchoWorld(self, dt.two_channels())
+        mon = world.monitor()
+        self.first_poll_filtered(world, mon)
+        mon.page([dt.note(1, session=MINT)], cursor=cursor(1))
+        self.assertEqual(outcomes(mon), {1: "queued"})
+        self.assertEqual(len(world.prog("chan-a").calls()), 1)
+
+
+@unittest.skipUnless(os.name == "posix", "the POSIX pipeline")
 class SingleSessionBurstTest(unittest.TestCase):
     """Row #64: the guard against a loop of self-wakeups is a rate limit on
     a series of one session for one addressee."""
