@@ -617,7 +617,7 @@ class Ledger(object):
                     eid = str(ev["id"])
                     rec = entry["events"].get(eid)
                     if rec is not None and rec.get("delivering"):
-                        if not self._recover(rec, attempts, now):
+                        if not self._recover(rec, attempts, now, entry):
                             decision.pending.append(eid)
                             continue
                         decision.recovered.append(eid)
@@ -696,7 +696,7 @@ class Ledger(object):
     def _handed_over(attempt, owner, handed):
         return handed or (attempt is not None and bool(owner) and owner[-1] is attempt)
 
-    def _recover(self, rec, attempts, now):
+    def _recover(self, rec, attempts, now, entry=None):
         """A "delivering" record found under ledger.lock: True when its owner
         is dead and the record now holds an outcome (taken or turned into
         "unknown" here), False while the owner holds its attempt."""
@@ -715,7 +715,11 @@ class Ledger(object):
             rec["at"] = now
             if other is not None and _withdrawn(other):
                 # The owner withdrew it without a call but could not write
-                # that down: the event has no outcome and is delivered anew.
+                # that down: the event has no outcome and is delivered anew,
+                # and the window that attempt took is free again.
+                window = (entry or {}).get("window") or {}
+                if window.get("attempt") == d.get("attempt"):
+                    entry["window"] = {"until": window.get("prev", 0)}
                 return True
             rec["addressee"] = {"outcome": OUTCOME_UNKNOWN, "monitor": self.monitor,
                                 "channel": d.get("channel"), "at": now, "recovered": True}
