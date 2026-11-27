@@ -445,6 +445,9 @@ class DeliverySink(object):
                 raise AddresseeChanged()
             if mode == "foreground" and not info.foreground():
                 raise RefusedBeforeSend("the agent process is not in the foreground")
+        life = check.get("rootLife")
+        if life:
+            self._check_root_life(channel, life)
         command = check.get("command")
         if command:
             try:
@@ -466,6 +469,27 @@ class DeliverySink(object):
                 raise AddresseeGone()
             if verdict == "changed" or (verdict is None and channel.get("kind") == "terminal"):
                 raise AddresseeChanged()
+
+    def _check_root_life(self, channel, life):
+        """The root process of the addressee lives the life the preflight saw
+        (the qualifiers of its address): alive, with the same start and boot
+        id. Its start, as the host records it, is field 22 of
+        /proc/<pid>/stat with the boot id of the system, the form of the
+        start of the Linux platform layer. Another life, or one that cannot
+        be read, is a changed addressee."""
+        saved = {}
+        for a in self.identity.get("addresses") or []:
+            if a.get("channel") == channel.get("id"):
+                saved.update((q[0], q[1]) for q in a.get("qualifiers") or [] if len(q) == 2)
+        pid, start, boot = (saved.get(life.get(k), "") for k in ("pidEnv", "startEnv", "bootIdEnv"))
+        if not (pid.isdigit() and start and boot):
+            raise AddresseeChanged()
+        try:
+            info = current_platform().process_info(int(pid))
+        except PlatformRefusal:
+            info = None
+        if info is None or info.start != "%s:%s" % (boot, start):
+            raise AddresseeChanged()
 
     def _same_process(self, channel):
         """For a channel that checks the agent process: it is still the

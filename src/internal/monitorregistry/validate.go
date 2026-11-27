@@ -713,6 +713,19 @@ func (v *validator) addressee(path string, c *Channel) {
 			v.add(RuleInvalid, path+".process", "an addressed channel does not need the agent process")
 		}
 	}
+	if a.RootLife != nil {
+		var qualifiers []string
+		if c.Address != nil {
+			qualifiers = c.Address.Qualifiers
+		}
+		for _, f := range []struct{ name, env string }{
+			{"pidEnv", a.RootLife.PIDEnv}, {"startEnv", a.RootLife.StartEnv}, {"bootIdEnv", a.RootLife.BootIDEnv},
+		} {
+			if !envNamePattern.MatchString(f.env) || !slices.Contains(qualifiers, f.env) {
+				v.add(RuleInvalid, path+".rootLife."+f.name, "%q is not a qualifier of the address", f.env)
+			}
+		}
+	}
 	if a.Command != nil {
 		v.argv(path+".command.argv", a.Command.Argv, false)
 		if len(a.Command.Results) == 0 {

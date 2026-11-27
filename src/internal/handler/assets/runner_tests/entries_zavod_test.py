@@ -160,6 +160,31 @@ class RecreatedAddresseeTest(unittest.TestCase):
         self.assertEqual(mon.statuses(), [(1, "unknown")])
         self.assertTrue(mon.sink.journal_only)
 
+    def test_a_root_process_that_ended_is_another_life(self):
+        """Review finding (line 17) of wave 9: the life is the root process
+        itself, not the variables the run still has."""
+        root = ft.Sleeper(self)
+        world = ft.World(self)
+        world.progs["zavod"].respond([envelope(0, outcome="ok")])
+        mon = world.monitor("tok", "claude", "claude", SKEIN_MONITOR_CHANNEL="zavod",
+                            **world.zavod_env("claude", root_pid=root.pid))
+        root.end()
+        mon.page([ft.note(1)])
+        self.assertEqual(world.calls("zavod"), [])
+        self.assertEqual(mon.statuses(), [(1, "unknown")])
+        self.assertTrue(mon.sink.journal_only)
+
+    def test_a_root_pid_with_another_start_is_another_life(self):
+        world = ft.World(self)
+        world.progs["zavod"].respond([envelope(0, outcome="ok")])
+        env = world.zavod_env("claude")
+        # The pid lives, but not the life the variables name (a pid reused).
+        env["ZAVOD_AGENT_ROOT_START"] = str(int(env["ZAVOD_AGENT_ROOT_START"]) + 1)
+        mon = world.monitor("tok", "claude", "claude", SKEIN_MONITOR_CHANNEL="zavod", **env)
+        mon.page([ft.note(1)])
+        self.assertEqual(world.calls("zavod"), [])
+        self.assertEqual(mon.statuses(), [(1, "unknown")])
+
     def test_after_exit_0_the_letter_stands(self):
         world, mon = zavod_monitor(self, [envelope(0, outcome="ok")])
         mon.page([ft.note(1)])

@@ -535,9 +535,24 @@ type AddresseeCheck struct {
 	Process string `json:"process"`
 	// Command is the record's own check, if its source gives one.
 	Command *AddresseeCommand `json:"command,omitempty"`
+	// RootLife names the variables of the life of the root process of the
+	// addressee as the host recorded it: before each transfer that
+	// process is alive, with the same start and boot id ("Addressee and
+	// check", the same life). All three are qualifiers of the address, so
+	// the values the preflight saw are the ones compared.
+	RootLife *RootLife `json:"rootLife,omitempty"`
 	// Limitation states what the channel cannot tell apart (for example a
 	// session recreated under the same id).
 	Limitation string `json:"limitation,omitempty"`
+}
+
+// RootLife is the life of a root process as Linux /proc gives it: the pid,
+// field 22 of /proc/<pid>/stat (the start in clock ticks since boot) and
+// /proc/sys/kernel/random/boot_id.
+type RootLife struct {
+	PIDEnv    string `json:"pidEnv"`
+	StartEnv  string `json:"startEnv"`
+	BootIDEnv string `json:"bootIdEnv"`
 }
 
 // AddresseeCommand runs Argv; Results classify its answer, anything else is

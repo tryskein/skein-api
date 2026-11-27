@@ -62,6 +62,16 @@ PREVIEW = "allowed preview 5e6f"
 FORBIDDEN = (TOKEN, CHANNEL_KEY, FULL_BODY[:40])
 
 
+def root_life(pid):
+    """(boot id, start in clock ticks) of a live process from
+    /proc/sys/kernel/random/boot_id and field 22 of /proc/<pid>/stat."""
+    with open("/proc/sys/kernel/random/boot_id") as fh:
+        boot = fh.read().strip()
+    with open("/proc/%d/stat" % pid) as fh:
+        start = fh.read().rpartition(")")[2].split()[19]
+    return boot, start
+
+
 def start_of(pid):
     return RUNNER.current_platform().process_info(pid).start
 
@@ -139,9 +149,13 @@ class World(object):
                          "SKEIN_TEST_CHANNEL_KEY": CHANNEL_KEY}
 
     def zavod_env(self, engine, root_pid=None):
+        """The variables Zavod sets on its agent's process, with the life of
+        its root process (this test process by default) as Zavod records
+        it: field 22 of /proc/<pid>/stat and the boot id."""
+        pid = os.getpid() if root_pid is None else root_pid
+        boot, start = root_life(pid)
         return {"ZAVOD_ME": ZAVOD_UUID, "ZAVOD_AGENT_ID": ZAVOD_UUID, "ZAVOD_AGENT_ENGINE_ID": engine,
-                "ZAVOD_AGENT_ROOT_PID": str(os.getpid() if root_pid is None else root_pid),
-                "ZAVOD_AGENT_ROOT_START": "1", "ZAVOD_AGENT_ROOT_BOOT_ID": "boot-1"}
+                "ZAVOD_AGENT_ROOT_PID": str(pid), "ZAVOD_AGENT_ROOT_START": start, "ZAVOD_AGENT_ROOT_BOOT_ID": boot}
 
     def token(self, name):
         token_dir = os.path.join(self.root, "skein-mon-" + name)

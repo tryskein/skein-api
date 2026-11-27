@@ -302,6 +302,11 @@
       ],
       "addressee": {
         "process": "alive",
+        "rootLife": {
+          "pidEnv": "ZAVOD_AGENT_ROOT_PID",
+          "startEnv": "ZAVOD_AGENT_ROOT_START",
+          "bootIdEnv": "ZAVOD_AGENT_ROOT_BOOT_ID"
+        },
         "limitation": "After the letter is accepted (exit 0) Zavod rings the pane on its own: an agent recreated under the same address in that interval gets the letter."
       },
       "binaries": {
