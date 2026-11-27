@@ -1201,7 +1201,7 @@
     {
       "id": "agent-deck",
       "about": "Agent Deck: its send queue delivers each event to the agent's own session when the session can take it.",
-      "source": "github.com/asheshgoplani/agent-deck fec4fcbc (1.16.40): cmd/agent-deck/session_send_cmd.go#handleSessionSend (--message-file - reads the text from stdin; --json without --wait, --stream, --draft, --defer-if-busy and --no-wait delivers through the queue: asyncJSON; --no-tag drops the [agent-deck from:<id>] envelope of a send from inside a session; an unknown session exits 2; every refusal of this path comes before the text is queued, nothing is typed); cmd/agent-deck/session_send_queue_cmd.go#queueSend and #queuedSendFields (exit 0 with {success: true, delivery: \"queued\", submitted: false} once the send is queued; a record that failed at once, or that could not be queued, exits 1 with success false — \"failed means nothing was typed\"); a muted trigger exits 0 with {success: true, muted: true} and no delivery: not delivered; cmd/agent-deck/cli_utils.go#ErrorWithData (an error under --json is {success: false, error, code} on stdout); internal/sendqueue/sendqueue.go#DefaultRetryBudget (the worker types when the target is idle, Claude also while busy, and gives up after 30 min); cmd/agent-deck/session_output_cmd.go#handleSessionCurrent (the session of the calling tmux session: exit 0 with id; outside an Agent Deck tmux session exit 1); .goreleaser.yml (linux and darwin builds; Windows only through WSL). Not used: the synchronous --defer-if-busy send, which holds the call up to --defer-timeout and types into the pane itself.",
+      "source": "github.com/asheshgoplani/agent-deck fec4fcbc (1.16.40): cmd/agent-deck/session_send_cmd.go#handleSessionSend (--message-file - reads the text from stdin; --json without --wait, --stream, --draft, --defer-if-busy and --no-wait delivers through the queue: asyncJSON; --no-tag drops the [agent-deck from:<id>] envelope of a send from inside a session; an unknown session exits 2; every refusal of this path comes before the text is queued, nothing is typed); cmd/agent-deck/session_send_queue_cmd.go#queueSend and #queuedSendFields (exit 0 with {success: true, delivery: \"queued\", submitted: false} once the send is queued; a record that failed at once, or that could not be queued, exits 1 with success false — \"failed means nothing was typed\"); a muted trigger exits 0 with {success: true, muted: true} and no delivery: not delivered; cmd/agent-deck/cli_utils.go#ErrorWithData (an error under --json is {success: false, error, code} on stdout); internal/sendqueue/sendqueue.go#DefaultRetryBudget (the worker types when the target is idle, Claude also while busy, and gives up after 30 min); cmd/agent-deck/session_output_cmd.go#handleSessionCurrent (the session of the calling tmux session: exit 0 with its id, which must be the AGENTDECK_INSTANCE_ID the send addresses; outside an Agent Deck tmux session exit 1); .goreleaser.yml (linux and darwin builds; Windows only through WSL). Not used: the synchronous --defer-if-busy send, which holds the call up to --defer-timeout and types into the pane itself.",
       "step": 5,
       "order": 3,
       "kind": "addressed",
@@ -1274,7 +1274,10 @@
           "results": [
             {
               "match": {
-                "exitCode": 0
+                "exitCode": 0,
+                "json": {
+                  "id": "{env:AGENTDECK_INSTANCE_ID}"
+                }
               },
               "result": "available"
             }
@@ -1293,7 +1296,10 @@
           "results": [
             {
               "match": {
-                "exitCode": 0
+                "exitCode": 0,
+                "json": {
+                  "id": "{env:AGENTDECK_INSTANCE_ID}"
+                }
               },
               "result": "same"
             }

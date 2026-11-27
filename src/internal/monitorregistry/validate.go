@@ -416,6 +416,7 @@ func (v *validator) channel(path string, c *Channel) {
 	}
 	v.signs(path+".outcomes", rows)
 	v.criteriaOf(path+".outcomes", rows, c.Executor.Type)
+	v.noEnvRefs(path+".outcomes", rows)
 
 	switch {
 	case len(c.Probes) > 0 && c.ProbeUndefined:
@@ -679,6 +680,7 @@ func (v *validator) blindCalls(path string, c *Channel) {
 		}
 		v.signs(path+".submit.outcomes", rows)
 		v.criteriaOf(path+".submit.outcomes", rows, s.Executor.Type)
+		v.noEnvRefs(path+".submit.outcomes", rows)
 	}
 }
 
@@ -814,6 +816,9 @@ func (v *validator) signs(path string, rows []Match) {
 		}
 		for _, k := range slices.Sorted(maps.Keys(m.JSON)) {
 			v.jsonPath(rpath+".json", k)
+			if name, ok := envRef(m.JSON[k]); ok && !envNamePattern.MatchString(name) {
+				v.add(RuleInvalid, rpath+".json."+k, "%q is not an environment variable name", name)
+			}
 		}
 		for _, k := range slices.Sorted(maps.Keys(m.StderrJSON)) {
 			v.jsonPath(rpath+".stderrJson", k)
@@ -877,6 +882,35 @@ func (v *validator) jsonPath(path, p string) {
 	}
 }
 
+// envRef reports the variable of a JSON criterion "{env:NAME}": the value
+// of that variable of the agent process, so the answer of a check names the
+// very id the delivery addresses.
+func envRef(value string) (string, bool) {
+	if strings.HasPrefix(value, PlaceholderEnvPrefix) && strings.HasSuffix(value, "}") {
+		return strings.TrimSuffix(strings.TrimPrefix(value, PlaceholderEnvPrefix), "}"), true
+	}
+	return "", false
+}
+
+func isEnvRef(value string) bool {
+	_, ok := envRef(value)
+	return ok
+}
+
+// noEnvRefs refuses a variable in the rows of a delivery's outcome table:
+// only a check (a probe, the addressee command) compares an answer with a
+// variable of the agent process.
+func (v *validator) noEnvRefs(path string, rows []Match) {
+	for i, m := range rows {
+		for _, k := range slices.Sorted(maps.Keys(m.JSON)) {
+			if isEnvRef(m.JSON[k]) {
+				v.add(RuleInvalid, fmt.Sprintf("%s[%d].match.json.%s", path, i, k),
+					"an outcome row compares no variable of the agent")
+			}
+		}
+	}
+}
+
 // empty reports whether the sign states no criterion.
 func (m Match) empty() bool {
 	return m.ExitCode == nil && m.HTTPStatus == nil && len(m.JSON) == 0 && len(m.JSONAbsent) == 0 &&
@@ -912,7 +946,8 @@ func (m Match) overlaps(o Match) bool {
 		return false
 	}
 	for k, want := range m.JSON {
-		if got, both := o.JSON[k]; both && got != want {
+		// A variable's value may be any value: it disagrees with nothing.
+		if got, both := o.JSON[k]; both && got != want && !isEnvRef(got) && !isEnvRef(want) {
 			return false
 		}
 		if absentAt(o.JSONAbsent, k) {

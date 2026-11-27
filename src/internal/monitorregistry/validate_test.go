@@ -844,3 +844,44 @@ func TestValidate_RejectsAnEnvironmentOutOfShape(t *testing.T) {
 		})
 	}
 }
+
+// TestValidate_AVariableIsComparedOnlyByAChecks — a JSON criterion
+// "{env:NAME}" (the answer names the id the delivery addresses) is a sign
+// of a probe or of the addressee command, never of a delivery's outcome; it
+// may equal any value, so it overlaps a literal on the same path.
+func TestValidate_AVariableIsComparedOnlyByAChecks(t *testing.T) {
+	r := validRegistry()
+	r.Channels[1].Addressee.Command = &AddresseeCommand{Argv: []string{"host", "current"},
+		Results: []AddresseeResultRow{{Match: Match{ExitCode: intp(0), JSON: map[string]string{"id": "{env:HOST_ID}"}}, Result: AddresseeSame}}}
+	r.Channels[2].Probes[0].Results[0].Match.JSON = map[string]string{"pane": "{env:PANE}"}
+	if err := r.Validate(); err != nil {
+		t.Fatalf("a check comparing a variable was refused: %v", err)
+	}
+	for name, mutate := range map[string]func(r *Registry){
+		"in an outcome row": func(r *Registry) {
+			r.Channels[1].Outcomes[0].Match.JSON["session"] = "{env:HOST_ID}"
+		},
+		"of no variable name": func(r *Registry) {
+			r.Channels[2].Probes[0].Results[0].Match.JSON = map[string]string{"pane": "{env:pane id}"}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := validRegistry()
+			mutate(r)
+			err := r.Validate()
+			if err == nil {
+				t.Fatal("Validate accepted the violation")
+			}
+			for _, got := range rulesOf(t, err) {
+				if got != RuleInvalid {
+					t.Fatalf("Validate reported %v, want only %s", err, RuleInvalid)
+				}
+			}
+		})
+	}
+	a := Match{ExitCode: intp(0), JSON: map[string]string{"id": "{env:HOST_ID}"}}
+	b := Match{ExitCode: intp(0), JSON: map[string]string{"id": "other"}}
+	if !a.overlaps(b) || !b.overlaps(a) {
+		t.Fatal("a variable and a literal on one path do not overlap")
+	}
+}

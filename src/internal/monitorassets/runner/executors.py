@@ -178,10 +178,22 @@ def capture_value(doc, path):
     return {"json": json.dumps(value, sort_keys=True, separators=(",", ":"))}
 
 
-def outcome_sign_matches(match, exit_code=None, doc=None, http_status=None, stderr=None):
+def _wanted(want, env):
+    """The value a JSON criterion compares with: a literal as is, or for
+    "{env:NAME}" the value of that variable of the agent process (env); an
+    unset one, or no env, is a value no answer has (None)."""
+    if isinstance(want, str) and want.startswith("{env:") and want.endswith("}"):
+        value = (env or {}).get(want[len("{env:"):-1], "")
+        return value or None
+    return want
+
+
+def outcome_sign_matches(match, exit_code=None, doc=None, http_status=None, stderr=None, env=None):
     """Whether an answer carries the sign of a table row: every criterion
     the row states holds. A row without a criterion matches nothing. stderr
-    is what an argv program wrote there (bytes; None: no program ran)."""
+    is what an argv program wrote there (bytes; None: no program ran). A
+    JSON value "{env:NAME}" is the value of that variable in env: the
+    answer of a check names the very id the delivery addresses."""
     stated = False
     if match.get("stderrEmpty") is not None:
         stated = True
@@ -197,7 +209,8 @@ def outcome_sign_matches(match, exit_code=None, doc=None, http_status=None, stde
             return False
     for path, want in (match.get("json") or {}).items():
         stated = True
-        if doc is None or json_path_value(doc, path) != want:
+        want = _wanted(want, env)
+        if doc is None or want is None or json_path_value(doc, path) != want:
             return False
     if match.get("stderrContains"):
         # A literal phrase of a CLI that reports its errors as text.
@@ -1109,7 +1122,7 @@ class SystemProbeRunner(ProbeRunner):
             raise ProbeError("timed out after %d s" % timeout)
         for row in probe.get("results") or []:
             if outcome_sign_matches(row.get("match") or {}, exit_code=result.exit_code, doc=result.json,
-                                    stderr=result.sign_stderr):
+                                    stderr=result.sign_stderr, env=env):
                 return row.get("result")
         return PROBE_UNAVAILABLE
 
@@ -1132,7 +1145,7 @@ class SystemProbeRunner(ProbeRunner):
         verdict = None
         for row in command.get("results") or []:
             if outcome_sign_matches(row.get("match") or {}, exit_code=result.exit_code, doc=result.json,
-                                    stderr=result.sign_stderr):
+                                    stderr=result.sign_stderr, env=env):
                 verdict = row.get("result")
                 break
         if verdict != "same":

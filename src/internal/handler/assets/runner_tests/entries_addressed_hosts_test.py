@@ -233,6 +233,21 @@ class AgentDeckRecordTest(HostCase):
         self.assertEqual(mon.doc["identity"]["captures"]["agent-deck"], [["id", DECK_ID]])
         self.assertTrue(all(c["argv"] == ["session", "current", "--json"] for c in self.cli.calls("session current")))
 
+    def test_the_check_is_the_session_the_send_addresses(self):
+        # The send addresses AGENTDECK_INSTANCE_ID; session current must
+        # name that very session, at the preflight and before each send.
+        self.fresh()
+        self.cli.respond(session_current=[deck_current(session_id="deck-other")])
+        line = self.mon().line
+        self.assertEqual((line["method"], line["channel"]), ("journal", None))
+        self.assertIn("agent-deck", line["reason"])
+        self.fresh()
+        mon = self.mon()
+        self.cli.respond(session_current=[deck_current(session_id="deck-other")])
+        mon.page([ft.note(1)])
+        self.assertEqual(self.cli.calls("session send"), [])
+        self.assertEqual(mon.statuses(), [(1, "refused-before-send")])
+
     def test_a_session_recreated_under_the_same_id_gets_the_event(self):
         # SC-002: the channel does not tell the new session apart; it stays
         # in use and the event is delivered.
