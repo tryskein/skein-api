@@ -212,31 +212,48 @@ class YamlSettingTest(unittest.TestCase):
             with self.subTest(case=name):
                 self.assert_not_read(text, key)
 
-    def test_a_value_left_open_on_a_neighbour_s_line_gives_no_value(self):
-        # Review round 2 of wave 14, row 15: the lines after a flow
-        # collection or a quoted scalar left open on another entry's line of
-        # a mapping the path goes through belong to that value, not to the
-        # mapping; the reader cannot tell them apart and reads nothing. A
-        # value closed on its line, or a block scalar, is skipped.
+    def test_a_neighbour_s_value_is_followed_to_its_end_as_yaml_ends_it(self):
+        # Review round 2 of wave 14, row 15, and round 3, rows 3, 15 and 16:
+        # the value on another entry's line of a mapping the path goes
+        # through ends where YAML ends it. A quote inside a plain scalar of
+        # a flow is a character, brackets close their own kind, "#" after
+        # white space is a comment inside a flow too, and a flow or a quoted
+        # scalar may run on over lines deeper than its key. Each form gives
+        # the value of busy_input_mode a YAML reader gives, or no value.
         key = "display.busy_input_mode"
-        for name, text in (
-                ("an open flow sequence before the section", "stray: [\ndisplay:\n  busy_input_mode: queue\n"),
-                ("an open flow mapping beside the key", "display:\n  stray: {a: 1\n  busy_input_mode: queue\n"),
-                ("a flow closed one bracket short", "display:\n  stray: [[a]\n  busy_input_mode: queue\n"),
-                ("an open single quote beside the key", "display:\n  stray: 'open\n  busy_input_mode: queue\n"),
-                ("an open double quote beside the key", "display:\n  stray: \"open\n  busy_input_mode: queue\n"),
-                ("text after a closed flow", "display:\n  stray: [a] b\n  busy_input_mode: queue\n"),
-                ("a block scalar header of no form", "display:\n  stray: |x\n  busy_input_mode: queue\n")):
+        tail = "display:\n  busy_input_mode: queue\n"
+        for name, text, expected in (
+                # Read: valid YAML.
+                ("a quote inside a flow sequence", "other: [don't]\n" + tail, "queue"),
+                ("a quote after a flow entry", "toolsets: [web, it's]\n" + tail, "queue"),
+                ("a double quote inside a flow plain scalar", "aliases: {q: say \"hi}\n" + tail, "queue"),
+                ("a quoted bracket inside a flow", "other: [\"]\", '}']\n" + tail, "queue"),
+                ("a hash inside a quoted scalar", "other: \"a # b\"\n" + tail, "queue"),
+                ("a hash glued to a plain scalar in a flow", "other: [a#b]\n" + tail, "queue"),
+                ("a comment after a closed flow", "other: {a: 1} # note\n" + tail, "queue"),
+                ("a flow over deeper lines", "toolsets: [web,\n  cli]\n" + tail, "queue"),
+                ("a flow with a comment over deeper lines", "toolsets: [web, # first\n  cli]\n" + tail, "queue"),
+                ("a quoted scalar over deeper lines", "note: \"a\n\n  # b\"\n" + tail, "queue"),
+                ("an anchored closed flow", "other: &x [1]\n" + tail, "queue"),
+                ("a block scalar of a neighbour", "other: >-\n  text [\n" + tail, "queue"),
+                ("a neighbour beside the key", "display:\n  other: [a, {b: c}]\n  busy_input_mode: queue\n", "queue"),
+                # Not read: no YAML, or a value that runs on into the mapping.
+                ("a bracket closed by the other kind", "other: [x}\n" + tail, None),
+                ("brackets crossed", "other: {a: [1}]\n" + tail, None),
+                ("a comment that hides the closing bracket", "stray: {a: 1 # note}\n" + tail, None),
+                ("an open flow at the key's indentation", "stray: [\n" + tail, None),
+                ("an open flow beside the key", "display:\n  stray: {a: 1\n  busy_input_mode: queue\n", None),
+                ("an open single quote at the key's indentation", "stray: 'open\n" + tail, None),
+                ("an open double quote beside the key", "display:\n  stray: \"open\n  busy_input_mode: queue\n",
+                 None),
+                ("text after a closed flow", "display:\n  stray: [a] b\n  busy_input_mode: queue\n", None),
+                ("text after a quoted scalar", "stray: 'a' b\n" + tail, None),
+                ("a block scalar header of no form", "display:\n  stray: |x\n  busy_input_mode: queue\n", None)):
             with self.subTest(case=name):
-                self.assert_not_read(text, key)
-        for name, text in (
-                ("a closed flow sequence before the section", "stray: [a, b]\ndisplay:\n  busy_input_mode: queue\n"),
-                ("a bracket inside quotes of a closed flow", "display:\n  other: {a: '}'}\n  busy_input_mode: queue\n"),
-                ("an escape in a closed double quote", "display:\n  other: \"a \\n b\" # c\n  busy_input_mode: queue\n"),
-                ("an anchored closed flow", "display:\n  other: &x [1]\n  busy_input_mode: queue\n"),
-                ("a block scalar of a neighbour", "display:\n  other: >-\n    text [\n  busy_input_mode: queue\n")):
-            with self.subTest(case=name):
-                self.assert_read(text, key, "queue")
+                if expected is None:
+                    self.assert_not_read(text, key)
+                else:
+                    self.assert_read(text, key, expected)
 
     def test_a_plain_scalar_yaml_1_1_reads_as_another_type_gives_no_value(self):
         # Booleans by y/n, octal, hexadecimal, sexagesimal, floats, dates.

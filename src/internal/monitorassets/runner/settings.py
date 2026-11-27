@@ -24,10 +24,10 @@
 # indentation: whatever they hold is deeper than their key, as YAML requires
 # of a block mapping's values (a sequence may also start at the key's own
 # indentation, `key:` then `- item` lines). The value on the line of such an
-# entry must still end on its line, or start a block scalar: a flow
-# collection or a quoted scalar left open there runs on past its line, so
-# the lines after it cannot be told apart by indentation, and the document is
-# not read.
+# entry is followed to its end as YAML finds it (_ValueScan): a flow
+# collection or a quoted scalar ends on its line or on lines deeper than its
+# key; one that runs on at the key's indentation, a bracket closed by the
+# other kind, or text after the value, leaves the document not read.
 
 import re
 
@@ -67,22 +67,25 @@ def read_yaml_scalar(text, keys):
     if not keys:
         return SETTING_NOT_READ
     try:
-        lines = _significant_lines(text)
+        lines, raws = _significant_lines(text)
         if not lines:
             return SETTING_ABSENT
-        return _read(lines, 0, len(lines), lines[0][0], list(keys))
+        return _read(lines, 0, len(lines), lines[0][0], list(keys), raws)
     except _NotRead:
         return SETTING_NOT_READ
 
 
 def _significant_lines(text):
-    """(indent, content) of every line that is not blank or a comment."""
+    """(indent, content, index among the lines) of every line that is not
+    blank or a comment, and every line of text (its CR dropped)."""
     if text.startswith("\ufeff"):
         text = text[1:]
     out = []
+    raws = []
     for raw in text.split("\n"):
         if raw.endswith("\r"):
             raw = raw[:-1]
+        raws.append(raw)
         if any(b in raw for b in _OTHER_BREAKS):
             raise _NotRead()
         content = raw.lstrip(" ")
@@ -93,21 +96,22 @@ def _significant_lines(text):
             raise _NotRead()
         if not content or content.startswith("#"):
             continue
-        out.append((indent, content))
-    return out
+        out.append((indent, content, len(raws) - 1))
+    return out, raws
 
 
 def _is_sequence_item(content):
     return content == "-" or content.startswith("- ")
 
 
-def _entries(lines, start, end, indent):
+def _entries(lines, start, end, indent, raws):
     """{key: (rest, first child line, end of its lines)} of the block mapping
-    whose entries are the lines start..end at indent."""
+    whose entries are the lines start..end at indent (raws: every line of
+    the document)."""
     entries = {}
     current = None  # [key, rest, line]
     for i in range(start, end):
-        line_indent, content = lines[i]
+        line_indent, content, _ = lines[i]
         if line_indent < indent:
             raise _NotRead()
         if line_indent > indent:
@@ -134,7 +138,7 @@ def _entries(lines, start, end, indent):
             if not rest or rest.startswith("#"):
                 rest = None
             else:
-                _ends_on_its_line(rest)
+                _value_ends(rest, lines[i][2], indent, raws)
         if current is not None:
             entries[current[0]] = (current[1], current[2] + 1, i)
         current = [key, rest, i]
@@ -148,12 +152,16 @@ def _entries(lines, start, end, indent):
 _BLOCK_HEADER = re.compile(r"[|>][-+1-9]{0,2}(?: +#.*)?\Z")
 # An anchor or a tag before a value.
 _PROPERTY = re.compile(r"[&!][^ ]* +")
+# The bracket that closes each opening one.
+_CLOSING = {"[": "]", "{": "}"}
 
 
-def _ends_on_its_line(rest):
-    """Raise _NotRead unless the value on an entry's line ends on that line
-    (or is the header of a block scalar, whose lines are deeper): a flow
-    collection with its brackets closed, a quoted scalar with its quote."""
+def _value_ends(rest, line, indent, raws):
+    """Raise _NotRead unless the value on the entry's line (rest; line: its
+    index among raws, the entry at indent) ends where YAML ends it: on its
+    line, or - a flow collection or a quoted scalar that runs on - on lines
+    deeper than the entry, which the mapping skips as the entry's own. A
+    block scalar's header is checked; its lines are deeper anyway."""
     while True:
         prop = _PROPERTY.match(rest)
         if not prop:
@@ -165,45 +173,101 @@ def _ends_on_its_line(rest):
         return
     if rest[:1] not in "[{'\"":
         return
-    depth = 0
-    quote = None
-    i = 0
-    while i < len(rest):
-        ch = rest[i]
-        if quote == "'":
-            if ch == "'":
-                if rest[i + 1:i + 2] == "'":
-                    i += 2
-                    continue
-                quote = None
-        elif quote == '"':
-            if ch == "\\":
-                i += 2
-                continue
-            if ch == '"':
-                quote = None
-        elif ch in "'\"":
-            quote = ch
-        elif ch in "[{":
-            depth += 1
-        elif ch in "]}":
-            depth -= 1
-            if depth < 0:
-                raise _NotRead()
-        elif ch == "#" and i > 0 and rest[i - 1] == " " and depth == 0:
-            break
-        i += 1
-        if depth == 0 and quote is None:
-            # The value ended: only spaces and a comment may follow it.
-            tail = rest[i:].lstrip(" ")
-            if tail and not tail.startswith("#"):
-                raise _NotRead()
+    scan = _ValueScan()
+    if scan.feed(rest):
+        return
+    for raw in raws[line + 1:]:
+        content = raw.lstrip(" ")
+        if not content.strip():
+            # A blank line inside the value (a fold of a quoted scalar).
+            continue
+        if len(raw) - len(content) <= indent:
+            # The value runs on at the entry's own indentation or out of the
+            # mapping: no YAML the lines after it can be read by.
+            raise _NotRead()
+        if scan.feed(content):
             return
     raise _NotRead()
 
 
-def _read(lines, start, end, indent, keys):
-    entries = _entries(lines, start, end, indent)
+class _ValueScan(object):
+    """The end of a flow collection or a quoted scalar as YAML finds it,
+    fed line by line: a quote starts a quoted scalar only where a node
+    starts (at the value's start, after an opening bracket, a comma or the
+    colon of a flow entry), inside a plain scalar it is a character; each
+    closing bracket must close the bracket it pairs with; "#" after white
+    space starts a comment outside quotes, inside a flow collection too; and
+    after the value only white space and a comment may follow."""
+
+    def __init__(self):
+        self.stack = []
+        self.quote = None
+        self.node_start = True
+        self.done = False
+
+    def _closed(self):
+        self.node_start = False
+        if not self.stack:
+            self.done = True
+
+    def feed(self, text):
+        """Scan one line; whether the value ended."""
+        i = 0
+        n = len(text)
+        # The start of a line counts as white space before a "#".
+        space = True
+        while i < n:
+            ch = text[i]
+            if self.quote == "'":
+                if ch == "'":
+                    if text[i + 1:i + 2] == "'":
+                        i += 2
+                        continue
+                    self.quote = None
+                    self._closed()
+                i += 1
+                continue
+            if self.quote == '"':
+                if ch == "\\":
+                    i += 2
+                    continue
+                if ch == '"':
+                    self.quote = None
+                    self._closed()
+                i += 1
+                continue
+            if ch in " \t":
+                space = True
+                i += 1
+                continue
+            if ch == "#" and space:
+                break
+            if self.done:
+                raise _NotRead()
+            space = False
+            if ch in "'\"" and self.node_start:
+                self.quote = ch
+                self.node_start = False
+            elif ch in "[{":
+                self.stack.append(ch)
+                self.node_start = True
+            elif ch in "]}":
+                if not self.stack or _CLOSING[self.stack[-1]] != ch:
+                    raise _NotRead()
+                self.stack.pop()
+                self._closed()
+            elif ch == "," and self.stack:
+                self.node_start = True
+            elif ch == ":" and self.stack and (i + 1 == n or text[i + 1] in " \t,[]{}"):
+                self.node_start = True
+            else:
+                self.node_start = False
+            i += 1
+        return self.done
+
+
+def _read(lines, start, end, indent, keys, raws):
+    entries = _entries(lines, start, end, indent, raws)
     entry = entries.get(keys[0])
     if entry is None:
         return SETTING_ABSENT
@@ -224,7 +288,7 @@ def _read(lines, start, end, indent, keys):
             return SETTING_ABSENT
         if _is_sequence_item(lines[child_start][1]):
             return SETTING_NOT_READ
-        return _read(lines, child_start, child_end, lines[child_start][0], keys[1:])
+        return _read(lines, child_start, child_end, lines[child_start][0], keys[1:], raws)
     if rest is None:
         # A collection is no scalar; nothing at all is null.
         return SETTING_NOT_READ if has_children else None
