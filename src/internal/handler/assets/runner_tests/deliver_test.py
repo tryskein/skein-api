@@ -503,6 +503,47 @@ class TwoStepCancelTest(unittest.TestCase):
 
 
 @unittest.skipUnless(os.name == "posix", "the POSIX pipeline")
+class AccessLostAfterInsertTest(unittest.TestCase):
+    """Review round 3 of wave 7, row 21: a stop answer after the insert
+    stays the stop by lost access when the state refuses the outcome, and
+    no receipt goes outside once access is known to be lost."""
+
+    def test_a_state_that_refuses_keeps_the_access_stop(self):
+        world = World(self, two_channels())
+        fake_channel.two_step(world.bin)
+        r = world.runner
+        step = {"executor": {"type": "argv", "argv": ["insert"], "feed": "stdin", "timeoutSec": 2},
+                "outcomes": [{"match": {"exitCode": 0}, "outcome": "input-written"}]}
+        commit = {"executor": {"type": "argv", "argv": ["enter"], "feed": "stdin", "timeoutSec": 2},
+                  "outcomes": [{"match": {"exitCode": 0}, "outcome": "turn-started"}]}
+        cancel = FlagCancel()
+        mon = world.monitor(cancel=cancel)
+        mon.sink.drivers["A"] = r.TwoStepDriver(world.reg.channel("A"), mon.spy, step, commit)
+        real = r.save_page_outcomes
+
+        def after(program):
+            if program == "insert":
+                cancel.stop = "token_expired"
+                r.save_page_outcomes = refuse
+        mon.spy.after = after
+
+        def refuse(*args, **kw):
+            raise OSError(28, "No space left on device")
+        self.addCleanup(setattr, r, "save_page_outcomes", real)
+        with self.assertRaises(r.Stop) as caught:
+            mon.page([note(1)])
+        self.assertEqual(caught.exception.reason, "token_expired")
+
+    def test_no_receipt_after_access_is_known_lost(self):
+        world = World(self, two_channels())
+        cancel = FlagCancel()
+        mon = world.monitor(cancel=cancel)
+        cancel.stop = "visibility_lost"
+        mon.sink.receipt("receipt text", "short")
+        self.assertEqual(world.prog("chan-a").calls(), [])
+
+
+@unittest.skipUnless(os.name == "posix", "the POSIX pipeline")
 class AccessBoundaryAtHandOverTest(unittest.TestCase):
     """Review finding C1 of wave 7 (US-12, the access boundary: a send is
     allowed only when the last successful poll is at most two poll

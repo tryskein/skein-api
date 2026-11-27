@@ -744,12 +744,19 @@ class DeliverySink(object):
                 # minimal form; refused again, the budget goes on (INV-8).
                 self._shorten.update(str(n["id"]) for n in batch)
             return
-        self._close_batch(cursor, outcomes, journaled, batch, outcome, channel_id, sign,
-                          with_preview=not guard.access_lost)
         if guard.cancel_reason is not None:
             # A stop answer withheld the final step: it wins over the rest of
-            # the page (US-12), once this batch has its outcome.
+            # the page (US-12), once this batch has its outcome - as far as
+            # the state and the journal take it: a refusal of either does
+            # not turn the stop by lost access into another stop.
+            try:
+                self._close_batch(cursor, outcomes, journaled, batch, outcome, channel_id, sign,
+                                  with_preview=False)
+            except (OSError, PlatformRefusal, JournalUnavailable):
+                pass
             raise DeliveryCancelled(guard.cancel_reason)
+        self._close_batch(cursor, outcomes, journaled, batch, outcome, channel_id, sign,
+                          with_preview=not guard.access_lost)
         if outcome == OUTCOME_ADDRESSEE_GONE or guard.gone:
             # The stop follows when the page loop returns (page()).
             self.gone = True
@@ -782,6 +789,11 @@ class DeliverySink(object):
         ledger is off, or that writes only the journal (another addressee),
         sends nothing outside: the journal line is the receipt."""
         if self.ledger_off or self.journal_only:
+            return
+        known = getattr(self.cancel, "known", None)
+        if known is not None and known() is not None:
+            # Access is known to be lost: a stop for another reason (a
+            # signal, an error) after it sends nothing outside.
             return
         channel_id = self.channels[0]
         channel = self.registry.channel(channel_id) or {}
