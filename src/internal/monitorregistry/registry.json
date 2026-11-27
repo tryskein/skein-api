@@ -233,7 +233,10 @@
       "outcomes": [
         {
           "match": {
-            "exitCode": 0
+            "exitCode": 0,
+            "json": {
+              "exit_code": "0"
+            }
           },
           "outcome": "queued"
         },
@@ -258,7 +261,10 @@
         },
         {
           "match": {
-            "exitCode": 12
+            "exitCode": 12,
+            "json": {
+              "exit_code": "12"
+            }
           },
           "outcome": "refused-before-send"
         },

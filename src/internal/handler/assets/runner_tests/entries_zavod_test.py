@@ -102,6 +102,13 @@ class SendTest(unittest.TestCase):
                  ("14", [envelope(14, "protocol_error")], "unknown", 1),
                  ("11 with another code", [envelope(11, "letter_rejected")], "unknown", 1),
                  ("11 with a corrupt envelope", [{"exit": 11, "stdout": "{not json"}], "unknown", 1),
+                 # A receipt that is not the envelope of the code is no proof
+                 # of acceptance or of a refusal: "unknown" (damaged receipt).
+                 ("0 with an empty stdout", [{"exit": 0, "stdout": ""}], "unknown", 1),
+                 ("0 with a cut envelope", [{"exit": 0, "stdout": '{"zavod":1,"command":"send","exit_code":'}],
+                  "unknown", 1),
+                 ("0 with the envelope of a refusal", [dict(envelope(11, "letter_rejected"), exit=0)], "unknown", 1),
+                 ("12 with a corrupt envelope", [{"exit": 12, "stdout": "{not json"}], "unknown", 1),
                  # INV-8: a delivery takes at most three calls.
                  ("12", [envelope(12, "no_connection")], "refused-before-send", 3)]
         for name, answers, status, calls in cases:
