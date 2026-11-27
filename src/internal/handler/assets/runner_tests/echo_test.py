@@ -144,8 +144,8 @@ class OwnEchoDeliveryTest(unittest.TestCase):
         mon.page([dt.note(1, session=NEW), anonymous, dt.note(3, session=OTHER)])
         self.assertEqual(outcomes(mon), {1: "own-echo", 2: "queued", 3: "queued"})
         texts = [t for _, _, t in mon.spy.calls]
-        self.assertFalse(any("c1" in t for t in texts))
-        self.assertTrue(any("c3" in t for t in texts))
+        self.assertFalse(any('notification=\"1\"' in t for t in texts))
+        self.assertTrue(any('notification=\"3\"' in t for t in texts))
 
     def test_an_exclusion_written_during_the_checks_holds_back_the_text(self):
         # Review of wave 8, row 12: the file is written after the page loop
@@ -165,8 +165,8 @@ class OwnEchoDeliveryTest(unittest.TestCase):
         mon.page([dt.note(1, session=NEW), dt.note(2, session=OTHER)])
         self.assertEqual(outcomes(mon), {1: "own-echo", 2: "queued"})
         texts = [t for _, _, t in mon.spy.calls]
-        self.assertFalse(any("c1" in t for t in texts))
-        self.assertTrue(any("c2" in t for t in texts))
+        self.assertFalse(any('notification=\"1\"' in t for t in texts))
+        self.assertTrue(any('notification=\"2\"' in t for t in texts))
 
     def test_after_the_last_check_the_exclusion_is_only_read(self):
         # Warning 7 of wave 13 round 2: between the last check of the
@@ -253,7 +253,7 @@ class FilteredByTheServerThenReturnedTest(unittest.TestCase):
         mon.page([dt.note(1, session=MINT), dt.note(2, session=OTHER)], cursor=cursor(1))
         self.assertEqual(outcomes(mon), {1: "queued", 2: "queued"})
         texts = [t for _, _, t in mon.spy.calls]
-        self.assertTrue(any("c1" in t for t in texts))
+        self.assertTrue(any('notification=\"1\"' in t for t in texts))
 
     def test_alone(self):
         world = EchoWorld(self, dt.two_channels())
@@ -350,7 +350,7 @@ class SingleSessionBurstTest(unittest.TestCase):
         result = outcomes(mon)
         self.assertEqual((result[2], result[3], result[4]), ("own-echo", "own-echo", "queued"))
         texts = [t for _, _, t in mon.spy.calls]
-        self.assertFalse(any("c2" in t or "c3" in t for t in texts))
+        self.assertFalse(any('notification=\"2\"' in t or 'notification=\"3\"' in t for t in texts))
 
 
 if __name__ == "__main__":
