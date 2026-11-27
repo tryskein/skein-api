@@ -176,9 +176,15 @@ match. A test that starts the runner (or the loader) as a subprocess runs it as
 as survived. Read a survivor on a line only subprocess tests reach as not
 measured, not as a gap of the suite. The test files that run the runner, the
 loader, the starter or prepare only as subprocesses are left out of mutmut's
-collection (`--ignore` in the `[mutmut]` section of `src/setup.cfg`).
-Its stats step runs the whole collection in one process: give it
-`--memory-mib 6144` or more, and `--split` for every part.
+collection (`--ignore` in the `[mutmut]` section of `src/setup.cfg`); in the
+other files such a test carries `harness.subprocess_runner`, and a test that
+measures the size of the parts' text carries `harness.source_size`: both skip
+it under mutmut only (`harness.py#UNDER_MUTMUT`), and the pyunit kinds run it.
+Its stats step runs the whole collection in one process (the profile gives the
+kind 16 GiB: 6 GiB is killed by OOM), and each part repeats the stats and the
+clean run before its first mutant, so a part runs for hours (the profile
+raises its timeout over the default 2 h). Name every part as a target and
+split the run: `progon api pymutation --split 4 'internal.monitorassets.runner.<part>.*' …`.
 Zero measured is not a green result.
 
 ### Project specifics

@@ -1,6 +1,10 @@
 schema = 1
 root = ".."
 
+# A part of pymutation needs more than the default 2 h (kind.pymutation).
+[limits]
+max_timeout_seconds = 14400
+
 [defaults]
 adapter = "go"
 image = "golang:1.27"
@@ -129,7 +133,11 @@ pattern = "*_py36_test.py"
 [kind.pymutation]
 adapter = "mutmut"
 image = "python:3.13.18-slim-bookworm"
-timeout_seconds = 7200
+# Before its first mutant a part runs the stats and the clean run over the
+# whole collection, so a part outlasts the default 2 h.
+cpu = 8
+memory_mib = 16384
+timeout_seconds = 14400
 [kind.pymutation.options]
 install = "python3 -m pip install --user mutmut==3.8.1"
 
