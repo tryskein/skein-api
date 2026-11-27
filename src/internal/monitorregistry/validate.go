@@ -1398,17 +1398,20 @@ func isEnvRef(value string) bool {
 	return ok
 }
 
-// noEnvRefs refuses a variable in the rows of a delivery's outcome table:
+// noEnvRefs refuses a variable (in json or jsonNot) in the rows of a
+// delivery's outcome table:
 // only a check (a probe, the addressee command) compares an answer with a
 // variable of the agent process. The one exception is the variable of the
 // channel's address (address): a receipt names the very addressee the
 // delivery went to (the session of a synthetic message).
 func (v *validator) noEnvRefs(path string, rows []Match, address string) {
 	for i, m := range rows {
-		for _, k := range slices.Sorted(maps.Keys(m.JSON)) {
-			if name, ok := envRef(m.JSON[k]); ok && (address == "" || name != address) {
-				v.add(RuleInvalid, fmt.Sprintf("%s[%d].match.json.%s", path, i, k),
-					"an outcome row compares no variable of the agent but the address")
+		for field, values := range map[string]map[string]string{"json": m.JSON, "jsonNot": m.JSONNot} {
+			for _, k := range slices.Sorted(maps.Keys(values)) {
+				if name, ok := envRef(values[k]); ok && (address == "" || name != address) {
+					v.add(RuleInvalid, fmt.Sprintf("%s[%d].match.%s.%s", path, i, field, k),
+						"an outcome row compares no variable of the agent but the address")
+				}
 			}
 		}
 	}

@@ -1701,17 +1701,29 @@ func TestValidate_AnOutcomeRowComparesOnlyTheAddress(t *testing.T) {
 	if err := r.Validate(); err != nil {
 		t.Fatalf("an outcome row comparing the address was refused: %v", err)
 	}
+	// Review round 3 of wave 14, row 17: the rule holds for jsonNot too.
+	for name, mutate := range map[string]func(m *Match){
+		"another variable in json":    func(m *Match) { m.JSON["session"] = "{env:OTHER_ID}" },
+		"another variable in jsonNot": func(m *Match) { m.JSONNot = map[string]string{"session": "{env:OTHER_ID}"} },
+	} {
+		r := validRegistry()
+		r.Channels[1].Address = &AddressSpec{Env: "HOST_ID"}
+		mutate(&r.Channels[1].Outcomes[0].Match)
+		err := r.Validate()
+		if err == nil {
+			t.Fatalf("%s: an outcome row comparing another variable was accepted", name)
+		}
+		for _, got := range rulesOf(t, err) {
+			if got != RuleInvalid {
+				t.Fatalf("%s: Validate reported %v, want only %s", name, err, RuleInvalid)
+			}
+		}
+	}
 	r = validRegistry()
 	r.Channels[1].Address = &AddressSpec{Env: "HOST_ID"}
-	r.Channels[1].Outcomes[0].Match.JSON["session"] = "{env:OTHER_ID}"
-	err := r.Validate()
-	if err == nil {
-		t.Fatal("an outcome row comparing another variable was accepted")
-	}
-	for _, got := range rulesOf(t, err) {
-		if got != RuleInvalid {
-			t.Fatalf("Validate reported %v, want only %s", err, RuleInvalid)
-		}
+	r.Channels[1].Outcomes[0].Match.JSONNot = map[string]string{"session": "{env:HOST_ID}"}
+	if err := r.Validate(); err != nil {
+		t.Fatalf("an outcome row comparing the address in jsonNot was refused: %v", err)
 	}
 }
 
