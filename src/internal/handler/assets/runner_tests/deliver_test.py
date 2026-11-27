@@ -391,6 +391,25 @@ class SharedDeadlineTest(unittest.TestCase):
         attempt = self.Attempt(pipeline, confirm_takes, change)
         return runner, pipeline, runner.Guard(pipeline, channel, attempt, timeout)
 
+    def test_a_stage_done_is_not_kept_again_for_the_call(self):
+        # Warning 4 of wave 13 round 2: after the stage, the time kept for
+        # the insert and Enter is theirs alone. A slow stage within its own
+        # timeout leaves the attempt enough for them: the call goes on.
+        staged = {"id": "S", "blind": True, "executor": {"type": "argv", "argv": ["m", "paste"], "feed": "stdin",
+                                                           "timeoutSec": 5},
+                  "stage": {"type": "argv", "argv": ["m", "load"], "feed": "stdin", "timeoutSec": 20},
+                  "submit": {"executor": {"type": "argv", "argv": ["m", "enter"], "feed": "stdin", "timeoutSec": 5}},
+                  "idle": {"type": "none"}}
+        runner, pipeline, guard = self.guard(channel=staged, check_takes=5)
+        guard.prepare()
+        # Each check takes 5 s; the stage took 18 of its 20 s.
+        pipeline.clock.t += 18
+        left = guard.remaining()
+        self.assertLess(left, runner._reserve_seconds(staged, 0))
+        guard.stage_done = True
+        self.assertGreaterEqual(left, guard.reserve())
+        guard.final()
+
     def test_the_call_keeps_its_timeout_after_a_long_wait(self):
         runner, pipeline, guard = self.guard(wait_takes=70)
         guard.before_send()

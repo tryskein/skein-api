@@ -199,6 +199,9 @@ class Guard(object):
         # The stop answer before_commit saw: the monitor stops on it once
         # the outcome of the batch is written.
         self.cancel_reason = None
+        # Set by a two-step driver once its stage is done: the time kept for
+        # the call no longer holds the stage's.
+        self.stage_done = False
         # The endpoint file of the channel as this attempt read it, once:
         # its checks and its request go to that end (executors.py
         # #read_endpoint); None until the first check reads it.
@@ -228,8 +231,12 @@ class Guard(object):
 
     def reserve(self):
         """The time kept for the call: its own timeouts and the slack of the
-        transport (_reserve_seconds)."""
-        return _reserve_seconds(self.channel, 0)
+        transport (_reserve_seconds), without the stage's once it is done
+        (stage_done): its time is spent, not to come."""
+        reserve = _reserve_seconds(self.channel, 0)
+        if self.stage_done:
+            reserve -= (self.channel.get("stage") or {}).get("timeoutSec") or 0
+        return reserve
 
     def check(self):
         """One check of the addressee, within its own time."""
@@ -462,6 +469,7 @@ class TwoStepDriver(object):
                 raise RefusedBeforeSend("the stage of the text failed (%s)" % (
                     "timeout" if staged.timed_out else "exit code %s" % staged.exit_code))
             state["staged"] = True
+            guard.stage_done = True
             # The stage carried the text: the insert takes what the stage
             # left (the buffer of this transfer), no text. The last check
             # and the access boundary come now, after the stage and right
