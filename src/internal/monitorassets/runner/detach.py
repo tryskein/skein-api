@@ -481,12 +481,23 @@ def delivery_sink(journal, token_file, doc, env, base, issue, token, executor, e
 def run_detached_child():
     """The detached child: start in the lock order, hand the receipt, then
     poll into the journal until a stop. Returns the exit code."""
-    global _stopping
     if hasattr(signal, "pthread_sigmask"):
         signal.pthread_sigmask(signal.SIG_UNBLOCK, _START_SIGNALS)
     issue = os.environ.get("SKEIN_ISSUE", "")
     token_file = os.environ.get("SKEIN_TOKEN_FILE", "")
     held = WorkingStart()
+    try:
+        return _run_detached_child(held, issue, token_file)
+    finally:
+        # Last on every way out (a handover, a stop, an error past the
+        # handlers), after every receipt: the programs of detached calls do
+        # not outlive the monitor, and the lock goes after them.
+        DETACHED_CALLS.close()
+        held.release()
+
+
+def _run_detached_child(held, issue, token_file):
+    global _stopping
     executor = Executor()
     sink = None
     journal = None
@@ -542,18 +553,16 @@ def run_detached_child():
         outcome = Stop("internal_error")
     finally:
         executor.stop()
-        # The programs of detached calls do not outlive the monitor.
-        DETACHED_CALLS.end_all()
+        # The stop has begun: no detached call is left running from now on
+        # (a receipt that needs one is kept to its window).
+        DETACHED_CALLS.closing = True
     held.failed(outcome, journal)
-    try:
-        # Before the receipt this is the receipt; after it, stdout is null.
-        if held.lock is None:
-            return finish(outcome, issue, token_file)
-        # P-12 under the one-runner lock, released last.
-        return finish_client(outcome, issue, token_file, sink=sink,
-                             preflight=(held.doc or {}).get("preflightId"))
-    finally:
-        held.release()
+    # Before the receipt this is the receipt; after it, stdout is null.
+    if held.lock is None:
+        return finish(outcome, issue, token_file)
+    # P-12 under the one-runner lock, released last.
+    return finish_client(outcome, issue, token_file, sink=sink,
+                         preflight=(held.doc or {}).get("preflightId"))
 
 
 def run_client():
@@ -611,8 +620,19 @@ def run_foreground(token_file, issue, env, settings, doc=None):
     """stream and exit-on-event: the same lock order in this process, then
     the poll loop on stdout within the limits of the record's method (the
     modes_stream part). Returns the exit code."""
-    global _stopping
     held = WorkingStart()
+    try:
+        return _run_foreground(held, token_file, issue, env, settings, doc)
+    finally:
+        # Last on every way out, after every line of the stop: the programs
+        # of detached calls do not outlive the monitor, and the lock goes
+        # after them.
+        DETACHED_CALLS.close()
+        held.release()
+
+
+def _run_foreground(held, token_file, issue, env, settings, doc):
+    global _stopping
     executor = Executor()
     outcome = None
     output = None
@@ -645,17 +665,14 @@ def run_foreground(token_file, issue, env, settings, doc=None):
         outcome = Stop("internal_error")
     finally:
         executor.stop()
-        # The programs of detached calls do not outlive the monitor.
-        DETACHED_CALLS.end_all()
+        # The stop has begun: no detached call is left running from now on.
+        DETACHED_CALLS.closing = True
     held.failed(outcome, journal)
-    try:
-        # Before its output exists (a refused begin) the stop line keeps to
-        # the line limit of the result the synchronous check read.
-        write = output.stop_line if output is not None else limited_write(held.doc or doc)
-        if held.lock is None:
-            return finish(outcome, issue, token_file, write=write)
-        # P-12 under the one-runner lock, released last.
-        return finish_client(outcome, issue, token_file, write=write,
-                             preflight=(held.doc or {}).get("preflightId"))
-    finally:
-        held.release()
+    # Before its output exists (a refused begin) the stop line keeps to
+    # the line limit of the result the synchronous check read.
+    write = output.stop_line if output is not None else limited_write(held.doc or doc)
+    if held.lock is None:
+        return finish(outcome, issue, token_file, write=write)
+    # P-12 under the one-runner lock, released last.
+    return finish_client(outcome, issue, token_file, write=write,
+                         preflight=(held.doc or {}).get("preflightId"))

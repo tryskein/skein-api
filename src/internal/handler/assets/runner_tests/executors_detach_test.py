@@ -16,8 +16,10 @@ import os
 import shutil
 import sys
 import tempfile
+import threading
 import time
 import unittest
+from unittest import mock
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -174,6 +176,45 @@ class DetachedCallTest(unittest.TestCase):
         # Another channel is not held by it.
         self.assertTrue(self.detached("slow", calls, key="other").still_running)
         self.assertEqual(calls.running(), ["channel", "other"])
+
+    def test_no_second_call_of_a_channel_while_its_old_tree_is_being_killed(self):
+        # Review round 2 of wave 14, row 5: the record of a channel leaves
+        # the table only once its tree is killed, under the lock a new call
+        # is admitted under.
+        now = [1000.0]
+        calls = RUNNER.DetachedCalls(clock=lambda: now[0])
+        self.addCleanup(calls.end_all)
+        self.assertTrue(self.detached("tree", calls).still_running)
+        end_tree = RUNNER._end_tree
+        killing, killed = threading.Event(), threading.Event()
+        order = []
+
+        def slow_end_tree(proc, tree):
+            killing.set()
+            killed.wait(30)
+            end_tree(proc, tree)
+            order.append("old tree killed")
+
+        def second_call():
+            try:
+                calls.admit("channel")
+                order.append("second call admitted")
+            except RUNNER.ExecutorRefusal:
+                order.append("second call refused")
+        with mock.patch.object(RUNNER, "_end_tree", slow_end_tree):
+            now[0] = 1000.0 + 0.2 + RUNNER.DETACHED_GRACE_SEC
+            reaper = threading.Thread(target=calls.reap)
+            reaper.start()
+            self.assertTrue(killing.wait(30), "the deadline did not kill the tree")
+            second = threading.Thread(target=second_call)
+            second.start()
+            # A second call let in now would be admitted while the old tree
+            # lives: it is given the time to get through before the kill.
+            second.join(0.5)
+            killed.set()
+            reaper.join(30)
+            second.join(30)
+        self.assertEqual(order, ["old tree killed", "second call admitted"])
 
     def test_a_program_left_to_run_is_reaped_once_it_ends(self):
         calls = RUNNER.DetachedCalls(clock=lambda: 0.0)

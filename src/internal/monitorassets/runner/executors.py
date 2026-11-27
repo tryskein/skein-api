@@ -558,32 +558,43 @@ class DetachedCalls(object):
     """The programs of detached calls that outlived their window
     (registry.go#Executor.Detach), by channel: at most one lives per
     channel. Each is reaped as it ends, killed with its tree at its hard
-    deadline (the window plus DETACHED_GRACE_SEC) and at the end of the
-    monitor (end_all). clock gives the monotonic time the deadlines are
-    kept by."""
+    deadline (the window plus DETACHED_GRACE_SEC) and when the monitor
+    stops (close). A record leaves the table only once its tree is killed
+    and its program reaped, under the same lock a new call of the channel
+    is admitted under: no second call of a channel starts while the first
+    tree lives. Once the monitor stops (closing), no call is left to run on
+    its own: a call still running at the end of its window is killed and
+    is unknown. clock gives the monotonic time the deadlines are kept by."""
 
     def __init__(self, clock=time.monotonic):
         self.clock = clock
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
         # {channel key: (proc, tree, deadline)}
         self._calls = {}
+        # Set when the monitor stops: no call is left running from then on.
+        self.closing = False
 
     def admit(self, key):
         """Raise ExecutorRefusal when a call of this channel still runs: a
         refusal before send, retried by the delivery's budget."""
-        self.reap()
         with self._lock:
+            self.reap()
             if key in self._calls:
                 raise ExecutorRefusal("a detached call of this channel is still running")
 
     def leave(self, key, proc, tree, deadline):
         """Leave proc running until deadline; a watcher reaps it as it ends
-        and kills it at its deadline."""
+        and kills it at its deadline. A monitor that is closing leaves
+        nothing: proc is killed now (False)."""
         with self._lock:
+            if self.closing:
+                _end_tree(proc, tree)
+                return False
             self._calls[key] = (proc, tree, deadline)
         watcher = threading.Thread(target=self._watch, args=(key, proc))
         watcher.daemon = True
         watcher.start()
+        return True
 
     def _watch(self, key, proc):
         # It only looks: the program is reaped by reap(), after its group
@@ -603,21 +614,27 @@ class DetachedCalls(object):
     def reap(self):
         """Reap the programs that ended and kill the trees of those past
         their deadline; the others run on."""
-        now = self.clock()
         with self._lock:
-            ended = [(k, c) for k, c in self._calls.items()
-                     if _ended_unreaped(c[0]) or now >= c[2]]
-            for key, _ in ended:
-                del self._calls[key]
-        for _, (proc, tree, _) in ended:
-            _end_tree(proc, tree)
+            now = self.clock()
+            for key, (proc, tree, deadline) in list(self._calls.items()):
+                if _ended_unreaped(proc) or now >= deadline:
+                    _end_tree(proc, tree)
+                    del self._calls[key]
+
+    def close(self):
+        """The monitor stops: no call is left running from now on, and every
+        program left running is killed and reaped. Called last, after every
+        line and receipt of the stop."""
+        with self._lock:
+            self.closing = True
+            self.end_all()
 
     def end_all(self):
-        """Kill and reap every program left running: the monitor stops."""
+        """Kill and reap every program left running."""
         with self._lock:
-            calls, self._calls = list(self._calls.values()), {}
-        for proc, tree, _ in calls:
-            _end_tree(proc, tree)
+            for key, (proc, tree, _) in list(self._calls.items()):
+                _end_tree(proc, tree)
+                del self._calls[key]
 
 
 # How often a watcher of a detached call looks at its program and its
@@ -684,8 +701,9 @@ def run_detached(argv, env, stdin_data, wait_sec, secrets=(), key=None, calls=No
         try:
             exit_code = proc.wait(timeout=max(wait_sec, 0))
         except subprocess.TimeoutExpired:
-            calls.leave(key, proc, tree, started + max(wait_sec, 0) + DETACHED_GRACE_SEC)
-            left = True
+            # A closing monitor leaves no call running: it is killed now,
+            # and the call is unknown all the same.
+            left = calls.leave(key, proc, tree, started + max(wait_sec, 0) + DETACHED_GRACE_SEC)
             return CallResult(None, b"", b"", False, still_running=True)
         stdout, cut = _read_capped(out)
         stderr, err_cut = _read_capped(err)

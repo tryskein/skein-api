@@ -21,7 +21,7 @@ sys.path.insert(0, HERE)
 
 import fake_channel  # noqa: E402
 import harness  # noqa: E402
-from deliver_test import CURSOR, ISSUE, QUEUED, REFUSE, TABLE, TOKEN, World, chan, note  # noqa: E402
+from deliver_test import ADDRESS, CURSOR, ISSUE, QUEUED, REFUSE, TABLE, TOKEN, World, chan, note  # noqa: E402
 
 GONE_TABLE = TABLE + [{"match": {"exitCode": 6}, "outcome": "addressee-gone"}]
 
@@ -660,6 +660,72 @@ class BoundaryPollTest(unittest.TestCase):
         clock.t += 10
         cancel.check()
         self.assertEqual(cancel.next_poll, clock.t + 10)
+
+
+@unittest.skipUnless(sys.platform.startswith("linux"), "the POSIX detached child, /proc")
+class StopReceiptByDetachedCallTest(unittest.TestCase):
+    """Review round 2 of wave 14, K6 (US-12, the stop table: no program of
+    the monitor outlives it): a stop that keeps access (root_closed,
+    stopped, internal_error) sends its receipt by the first channel; a
+    channel whose call holds its caller for a turn (Hermes resume,
+    registry.go#Executor.Detach) is waited on for its window only. The stop
+    has begun, so such a call is not left to run: once the detached child
+    returns, no program of the receipt is left."""
+
+    # The table of the record of Hermes resume: a call still running is
+    # unknown.
+    ROWS = TABLE + [{"match": {"stillRunning": True}, "outcome": "unknown"}]
+
+    def child_stop(self, end):
+        """Run the detached child of a fresh world until end(runner), what
+        its poll raises; returns the world and its detached calls."""
+        rec = chan("A", "chan-a", table=self.ROWS)
+        rec["executor"].update({"timeoutSec": 1, "detach": True})
+        world = World(self, [rec])
+        world.prog("chan-a").respond([{"hang": True}])
+        r = world.runner
+        mon = world.monitor(fallbacks=())
+        doc = {"method": "detached", "channel": "A", "fallbacks": [], "identity": ADDRESS, "preflightId": 1,
+               "announced": True}
+        calls = r.DetachedCalls()
+
+        def work(*args, **kw):
+            raise end(r)
+        environ = {"SKEIN_ISSUE": ISSUE, "SKEIN_TOKEN_FILE": mon.token, "SKEIN_PUBLIC_URL": "http://127.0.0.1:9",
+                   "PATH": os.environ.get("PATH", os.defpath)}
+        with mock.patch.dict(os.environ, environ, clear=True), \
+                mock.patch.object(r, "DETACHED_CALLS", calls), \
+                mock.patch.object(r, "agent_env", lambda environ, registry: dict(world.env)), \
+                mock.patch.object(r, "read_settings", lambda env, registry: {}), \
+                mock.patch.object(r, "check_result", lambda token_file, env, settings: dict(doc)), \
+                mock.patch.object(r, "delivery_sink", lambda *args: mon.sink), \
+                mock.patch.object(r, "_send_receipt", lambda line: None), \
+                mock.patch.object(r, "work", work), \
+                mock.patch.object(r, "emit", lambda line: None), \
+                mock.patch.object(r, "log_stderr", lambda text: None):
+            r.run_detached_child()
+        return world, calls
+
+    def test_no_program_of_the_receipt_outlives_the_monitor(self):
+        for reason, end in (("root_closed", lambda r: r.Stop("root_closed")),
+                            ("stopped", lambda r: r.StopSignal()),
+                            ("internal_error", lambda r: RuntimeError("a defect of the runner"))):
+            with self.subTest(reason=reason):
+                world, calls = self.child_stop(end)
+                receipt, = world.prog("chan-a").calls()
+                self.assertIn("reason=" + reason, receipt["stdin"])
+                self.assertEqual(calls.running(), [])
+                self.assertFalse(alive(receipt["pid"]), "the program of the receipt outlived the monitor")
+
+
+def alive(pid):
+    """Whether pid runs (a zombie or a gone process does not)."""
+    try:
+        with open("/proc/%d/stat" % pid) as fh:
+            state = fh.read().rsplit(")", 1)[1].split()[0]
+    except (OSError, IndexError):
+        return False
+    return state not in ("Z", "X")
 
 
 if __name__ == "__main__":

@@ -331,7 +331,10 @@ class AliasEntriesTest(unittest.TestCase):
             env = [a for a in args if isinstance(a, dict) and "SKEIN_PUBLIC_URL" in a]
             raise _Captured(env[0])
         environ = dict(self.BASE, **variables)
-        with mock.patch.dict(os.environ, environ, clear=True), mock.patch.object(RUNNER, step, capture):
+        # An entry that ends stops the detached calls of its process: a table
+        # of its own keeps them from the other tests.
+        with mock.patch.dict(os.environ, environ, clear=True), mock.patch.object(RUNNER, step, capture), \
+                mock.patch.object(RUNNER, "DETACHED_CALLS", RUNNER.DetachedCalls()):
             with self.assertRaises(_Captured) as caught:
                 getattr(RUNNER, entry)()
         return caught.exception.env
