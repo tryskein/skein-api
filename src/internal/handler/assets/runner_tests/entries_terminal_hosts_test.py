@@ -118,7 +118,8 @@ class AgentOrchestratorRecordTest(ah.HostCase):
 
     def test_the_check_before_each_send_is_the_session_get(self):
         # session get must name the very session the send addresses; a
-        # terminated session has ended (addressee_gone).
+        # terminated session is a refusal before send ("Addressee and
+        # check", item 4; correction of K5), not the end of the monitor.
         self.fresh()
         mon = self.mon()
         self.cli.respond(session_get=[out(stdout={"session": {"id": "ao-other", "isTerminated": False}})])
@@ -128,10 +129,9 @@ class AgentOrchestratorRecordTest(ah.HostCase):
         self.fresh()
         mon = self.mon()
         self.cli.respond(session_get=[out(stdout={"session": {"id": AO_SESSION, "isTerminated": True}})])
-        with self.assertRaises(RUNNER.Stop) as caught:
-            mon.page([ft.note(1)], cursor={"ts": "t", "id": 2})
-        self.assertEqual(caught.exception.reason, "addressee_gone")
+        mon.page([ft.note(1)], cursor={"ts": "t", "id": 2})
         self.assertEqual(self.cli.calls("send"), [])
+        self.assertEqual(mon.statuses(), [(1, "refused-before-send")])
 
     def test_the_probe_is_the_session(self):
         self.fresh()

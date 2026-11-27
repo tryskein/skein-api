@@ -105,8 +105,11 @@ var (
 	probeTypes    = set(ProbeArgv, ProbeDirWritable, ProbeSocketConnect, ProbeTCPReach)
 	outcomes      = set(OutcomeRefused, OutcomeQueued, OutcomeInputWritten, OutcomeInputNoReceipt,
 		OutcomeTurnStarted, OutcomeUnknown, OutcomeAddresseeChanged, OutcomeAddresseeGone)
-	probeResults     = set(ProbeAvailable, ProbeUnavailable)
-	addresseeResults = set(AddresseeSame, AddresseeChanged, AddresseeGone)
+	probeResults = set(ProbeAvailable, ProbeUnavailable)
+	// A check proves the same addressee or another; that the addressee
+	// ended stops the monitor only where the outcome table of a delivery
+	// says so ("Addressee and check", item 4), never by a check.
+	addresseeResults = set(AddresseeSame, AddresseeChanged)
 	processChecks    = set(ProcessAlive, ProcessForeground, ProcessNone)
 	jsonTypes        = set("object", "list", "string", "number", "boolean")
 	idleTypes        = set(IdleNone, IdleBuiltin, IdleArgv)
@@ -1187,7 +1190,7 @@ func (v *validator) addressee(path string, c *Channel) {
 		for i, r := range a.Command.Results {
 			rows[i] = r.Match
 			if !addresseeResults[r.Result] {
-				v.add(RuleUnknownOutcome, fmt.Sprintf("%s.command.results[%d].result", path, i), "%q is not same, changed or gone", r.Result)
+				v.add(RuleUnknownOutcome, fmt.Sprintf("%s.command.results[%d].result", path, i), "%q is not same or changed: a check ends no addressee", r.Result)
 			}
 		}
 		v.signs(path+".command.results", rows)

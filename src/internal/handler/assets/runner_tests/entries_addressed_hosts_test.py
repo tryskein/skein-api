@@ -409,7 +409,8 @@ class SculptorRecordTest(HostCase):
 
     def test_the_check_before_each_send_is_the_agent_status(self):
         # agent status must name the very agent the send addresses; an
-        # agent that is not there has ended (addressee_gone).
+        # agent that is not there is a refusal before send ("Addressee and
+        # check", item 4; correction of K5), not the end of the monitor.
         self.fresh()
         mon = self.mon()
         self.cli.respond(agent_status=[out(stdout={"id": "agent-other"})])
@@ -419,10 +420,9 @@ class SculptorRecordTest(HostCase):
         self.fresh()
         mon = self.mon()
         self.cli.respond(agent_status=[sculpt_error("Agent not found: %s" % SCULPT_ID)])
-        with self.assertRaises(RUNNER.Stop) as caught:
-            mon.page([ft.note(1)], cursor={"ts": "t", "id": 2})
-        self.assertEqual(caught.exception.reason, "addressee_gone")
+        mon.page([ft.note(1)], cursor={"ts": "t", "id": 2})
         self.assertEqual(self.cli.calls("agent send"), [])
+        self.assertEqual(mon.statuses(), [(1, "refused-before-send")])
 
     def test_the_probe_is_the_agent_status(self):
         self.fresh()

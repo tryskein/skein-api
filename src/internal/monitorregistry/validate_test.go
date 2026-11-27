@@ -179,9 +179,13 @@ func TestValidate_RejectsEachRule(t *testing.T) {
 		}, RuleInvalid},
 		{"a capture without a row that answers same", func(r *Registry) {
 			r.Channels[1].Addressee.Command = &AddresseeCommand{Argv: []string{"host", "show"},
-				Results: []AddresseeResultRow{{Match: Match{ExitCode: intp(1)}, Result: AddresseeGone}},
+				Results: []AddresseeResultRow{{Match: Match{ExitCode: intp(1)}, Result: AddresseeChanged}},
 				Capture: []string{"id"}}
 		}, RuleInvalid},
+		{"a check that ends the addressee", func(r *Registry) {
+			r.Channels[1].Addressee.Command = &AddresseeCommand{Argv: []string{"host", "show"},
+				Results: []AddresseeResultRow{{Match: Match{ExitCode: intp(1)}, Result: AddresseeGone}}}
+		}, RuleUnknownOutcome},
 		{"a path element that is not printable", func(r *Registry) {
 			r.Channels[1].Outcomes[0].Match.JSON = map[string]string{"stages.\u0007": "turn_started"}
 		}, RuleInvalid},

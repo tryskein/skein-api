@@ -593,12 +593,12 @@ class DeliverySink(object):
                         verdict = row.get("result")
                         break
             # Only "same" hands over (INV-4): "changed" is another
-            # addressee, "gone" an addressee that ended (a stop); a timeout,
-            # a failed check or an answer the table does not know proves
-            # neither, and nothing was sent: a refusal before send, within
-            # the budget of INV-8.
-            if verdict == "gone":
-                raise AddresseeGone()
+            # addressee; anything else - a session the channel does not find
+            # among them, a timeout, a failed check, an answer the table does
+            # not know - is a refusal before send within the budget of INV-8,
+            # then the next channel or the journal ("Addressee and check",
+            # item 4). Only an outcome of a delivery (Zavod's
+            # caller_not_in_roster) ends the addressee.
             if verdict == "changed":
                 raise AddresseeChanged()
             if verdict != "same":

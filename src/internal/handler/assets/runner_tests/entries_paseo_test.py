@@ -198,19 +198,22 @@ class PaseoRecordTest(unittest.TestCase):
                 self.assertEqual(mon.statuses(), [(i + 1, outcome)])
                 self.assertEqual(len(self.paseo.calls("send")), 1)
 
-    def test_only_the_same_agent_gets_the_event(self):
-        # INV-4, the check before each transfer: an archived agent and one
-        # the daemon does not know have ended (the stop addressee_gone, as
-        # Zavod's caller_not_in_roster); nothing is sent to them.
+    def test_an_agent_the_daemon_does_not_find_is_a_refusal_before_send(self):
+        # "Addressee and check", item 4: an addressed channel whose session
+        # is not found before its receipt refuses before send - the call
+        # again within the budget of INV-8, then the next channel or the
+        # journal; only Zavod's caller_not_in_roster ends the monitor
+        # (correction of K5). An archived agent and one the daemon does not
+        # know get nothing, and the monitor goes on.
         for name, answer in (("archived", inspected(archived=True)), ("not found", error("AGENT_NOT_FOUND"))):
             with self.subTest(case=name):
                 self.fresh()
                 mon = self.mon()
+                self.assertEqual(mon.doc["fallbacks"], [])
                 self.paseo.respond(inspect=[answer])
-                with self.assertRaises(RUNNER.Stop) as caught:
-                    mon.page([ft.note(1)])
-                self.assertEqual(caught.exception.reason, "addressee_gone")
+                mon.page([ft.note(1)])
                 self.assertEqual(self.paseo.calls("send"), [])
+                self.assertEqual(mon.statuses(), [(1, "refused-before-send")])
 
     def test_a_check_that_proves_nothing_is_a_refusal_before_send(self):
         # A check that fails, times out or answers outside its table proves
