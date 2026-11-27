@@ -221,6 +221,12 @@ def stop_action(reason, issue, detail=None, preflight=None):
     whose working command resumes a client-mode monitor: the action names
     it, never repeats the command (INV-17)."""
     mint = mint_call(issue)
+    if LOADER_MODE == "client" and os.environ.get("SKEIN_MONITOR_MODE") == "preflight" and \
+            reason in ("stopped", "internal_error"):
+        # The preflight stopped before its line: it is what runs again (no
+        # working command of it exists yet).
+        return ("The preflight of the monitor for issue %s %s. Run the same preflight command again." % (
+            issue, "was stopped by a signal" if reason == "stopped" else "hit an unexpected error"))
     if preflight is not None and reason in ("stopped", "internal_error"):
         return ("The monitor for issue %s %s. Run the working command of preflight %s again to resume "
                 "it." % (issue, "was stopped by a signal" if reason == "stopped" else "hit an unexpected error",

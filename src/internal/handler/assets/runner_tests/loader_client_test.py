@@ -39,6 +39,7 @@ import tempfile
 import threading
 import time
 import unittest
+import unittest.mock
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -437,6 +438,27 @@ class FileFateTest(unittest.TestCase):
         self.assertEqual(lines[0]["reason"], "server_unreachable")
         self.assertIn("working command", lines[0]["action"])
         self.assertIn("starter.py", box.files())
+
+    def test_a_preflight_that_could_not_download_names_itself(self):
+        # Warning 8 of wave 15: before the line of a preflight there is no
+        # working command of it; the command that runs again is the
+        # preflight's own.
+        box = Box(self)
+        rc, lines, _ = box.run(server(self, status(503)).url(), extra={"SKEIN_MONITOR_MODE": "preflight"})
+        self.assertEqual((lines[0]["event"], lines[0]["reason"]), ("paused", "server_unreachable"))
+        self.assertIn("preflight command", lines[0]["action"])
+        self.assertNotIn("working command", lines[0]["action"])
+
+    def test_a_preflight_stopped_by_a_signal_names_itself(self):
+        # The same for a stop of the runner during a preflight (stopped,
+        # internal_error): the preflight command runs again.
+        runner = harness.load_runner()
+        with unittest.mock.patch.object(runner, "LOADER_MODE", "client"), \
+                unittest.mock.patch.dict(os.environ, {"SKEIN_MONITOR_MODE": "preflight"}):
+            for reason in ("stopped", "internal_error"):
+                action = runner.stop_action(reason, ISSUE)
+                self.assertIn("preflight command", action)
+                self.assertNotIn("working command", action)
 
     def test_the_journal_outlives_the_token(self):
         box = Box(self)

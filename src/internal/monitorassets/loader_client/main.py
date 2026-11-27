@@ -267,8 +267,14 @@ def loader_client_action(reason, issue):
         return ("The runner downloaded for the monitor of issue %s differs from the one its start command "
                 "names (the server was updated, or the download was altered), so it was not run. "
                 "Mint a new monitor with %s." % (issue, mint_call(issue)))
-    last = load_preflight(os.environ.get("SKEIN_TOKEN_FILE", "")) if os.environ.get("SKEIN_TOKEN_FILE") else None
-    command = ("the working command of preflight %d" % last["preflightId"]) if last else "the same working command"
+    if os.environ.get("SKEIN_MONITOR_MODE") == "preflight":
+        # The preflight stopped before its line: no working command of it
+        # exists yet, and an earlier result is the one it replaces.
+        command = "the same preflight command"
+    else:
+        last = load_preflight(os.environ.get("SKEIN_TOKEN_FILE", "")) if os.environ.get("SKEIN_TOKEN_FILE") else None
+        command = ("the working command of preflight %d" % last["preflightId"]) if last \
+            else "the same working command"
     return ("The monitor for issue %s could not download its runner: the Skein server is unreachable or "
             "refused the download. Run %s again later; the token and the state are kept." % (issue, command))
 
