@@ -231,3 +231,24 @@ func TestClientCommands_MintParameters(t *testing.T) {
 		})
 	}
 }
+
+// TestClientUsage_ExclusionFileOfAWindowsToken — row #16 (review of the gate
+// T051): the usage names the echo exclusion file next to the token (US-13);
+// for a Windows token that is the token's own directory, by backslashes.
+func TestClientUsage_ExclusionFileOfAWindowsToken(t *testing.T) {
+	dir := `C:\Users\me\AppData\Local`
+	res := newGMSUnit(gmsUnitRegistry(t)).call(t, map[string]any{"id": "sk-42", "client": "unit-agent",
+		"platform": "windows", "tokenDir": dir})
+	if res.IsError {
+		t.Fatalf("call refused: %v", extractToolJSON(t, res))
+	}
+	body := extractToolJSON(t, res)
+	tokenFile, _ := body["tokenFilePath"].(string)
+	if !strings.HasPrefix(tokenFile, dir+`\`) || !strings.HasSuffix(tokenFile, `\token`) {
+		t.Fatalf("tokenFilePath = %q", tokenFile)
+	}
+	want := strings.TrimSuffix(tokenFile, "token") + "exclude_session"
+	if usage, _ := body["usage"].(string); !strings.Contains(usage, want) {
+		t.Fatalf("usage does not name %q:\n%s", want, usage)
+	}
+}
