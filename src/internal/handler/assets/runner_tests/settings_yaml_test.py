@@ -212,6 +212,32 @@ class YamlSettingTest(unittest.TestCase):
             with self.subTest(case=name):
                 self.assert_not_read(text, key)
 
+    def test_a_value_left_open_on_a_neighbour_s_line_gives_no_value(self):
+        # Review round 2 of wave 14, row 15: the lines after a flow
+        # collection or a quoted scalar left open on another entry's line of
+        # a mapping the path goes through belong to that value, not to the
+        # mapping; the reader cannot tell them apart and reads nothing. A
+        # value closed on its line, or a block scalar, is skipped.
+        key = "display.busy_input_mode"
+        for name, text in (
+                ("an open flow sequence before the section", "stray: [\ndisplay:\n  busy_input_mode: queue\n"),
+                ("an open flow mapping beside the key", "display:\n  stray: {a: 1\n  busy_input_mode: queue\n"),
+                ("a flow closed one bracket short", "display:\n  stray: [[a]\n  busy_input_mode: queue\n"),
+                ("an open single quote beside the key", "display:\n  stray: 'open\n  busy_input_mode: queue\n"),
+                ("an open double quote beside the key", "display:\n  stray: \"open\n  busy_input_mode: queue\n"),
+                ("text after a closed flow", "display:\n  stray: [a] b\n  busy_input_mode: queue\n"),
+                ("a block scalar header of no form", "display:\n  stray: |x\n  busy_input_mode: queue\n")):
+            with self.subTest(case=name):
+                self.assert_not_read(text, key)
+        for name, text in (
+                ("a closed flow sequence before the section", "stray: [a, b]\ndisplay:\n  busy_input_mode: queue\n"),
+                ("a bracket inside quotes of a closed flow", "display:\n  other: {a: '}'}\n  busy_input_mode: queue\n"),
+                ("an escape in a closed double quote", "display:\n  other: \"a \\n b\" # c\n  busy_input_mode: queue\n"),
+                ("an anchored closed flow", "display:\n  other: &x [1]\n  busy_input_mode: queue\n"),
+                ("a block scalar of a neighbour", "display:\n  other: >-\n    text [\n  busy_input_mode: queue\n")):
+            with self.subTest(case=name):
+                self.assert_read(text, key, "queue")
+
     def test_a_plain_scalar_yaml_1_1_reads_as_another_type_gives_no_value(self):
         # Booleans by y/n, octal, hexadecimal, sexagesimal, floats, dates.
         for word in ("y", "N", "010", "0x1A", "1:30", "1.5", ".inf", "2026-11-27", "+1.0e3"):

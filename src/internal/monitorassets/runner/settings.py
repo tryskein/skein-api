@@ -23,7 +23,11 @@
 # by y/n. The entries the path does not go through are skipped by their
 # indentation: whatever they hold is deeper than their key, as YAML requires
 # of a block mapping's values (a sequence may also start at the key's own
-# indentation, `key:` then `- item` lines).
+# indentation, `key:` then `- item` lines). The value on the line of such an
+# entry must still end on its line, or start a block scalar: a flow
+# collection or a quoted scalar left open there runs on past its line, so
+# the lines after it cannot be told apart by indentation, and the document is
+# not read.
 
 import re
 
@@ -129,6 +133,8 @@ def _entries(lines, start, end, indent):
             rest = rest.strip(" ")
             if not rest or rest.startswith("#"):
                 rest = None
+            else:
+                _ends_on_its_line(rest)
         if current is not None:
             entries[current[0]] = (current[1], current[2] + 1, i)
         current = [key, rest, i]
@@ -136,6 +142,64 @@ def _entries(lines, start, end, indent):
     if current is not None:
         entries[current[0]] = (current[1], current[2] + 1, end)
     return entries
+
+
+# The header of a block scalar: | or >, its indicators, an optional comment.
+_BLOCK_HEADER = re.compile(r"[|>][-+1-9]{0,2}(?: +#.*)?\Z")
+# An anchor or a tag before a value.
+_PROPERTY = re.compile(r"[&!][^ ]* +")
+
+
+def _ends_on_its_line(rest):
+    """Raise _NotRead unless the value on an entry's line ends on that line
+    (or is the header of a block scalar, whose lines are deeper): a flow
+    collection with its brackets closed, a quoted scalar with its quote."""
+    while True:
+        prop = _PROPERTY.match(rest)
+        if not prop:
+            break
+        rest = rest[prop.end():]
+    if rest[:1] in "|>":
+        if not _BLOCK_HEADER.match(rest):
+            raise _NotRead()
+        return
+    if rest[:1] not in "[{'\"":
+        return
+    depth = 0
+    quote = None
+    i = 0
+    while i < len(rest):
+        ch = rest[i]
+        if quote == "'":
+            if ch == "'":
+                if rest[i + 1:i + 2] == "'":
+                    i += 2
+                    continue
+                quote = None
+        elif quote == '"':
+            if ch == "\\":
+                i += 2
+                continue
+            if ch == '"':
+                quote = None
+        elif ch in "'\"":
+            quote = ch
+        elif ch in "[{":
+            depth += 1
+        elif ch in "]}":
+            depth -= 1
+            if depth < 0:
+                raise _NotRead()
+        elif ch == "#" and i > 0 and rest[i - 1] == " " and depth == 0:
+            break
+        i += 1
+        if depth == 0 and quote is None:
+            # The value ended: only spaces and a comment may follow it.
+            tail = rest[i:].lstrip(" ")
+            if tail and not tail.startswith("#"):
+                raise _NotRead()
+            return
+    raise _NotRead()
 
 
 def _read(lines, start, end, indent, keys):
