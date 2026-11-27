@@ -278,6 +278,16 @@ def program_found(name, env):
     return shutil.which(name, path=env.get("PATH", os.defpath)) is not None
 
 
+def home_path(name, env):
+    """name with a leading "~/" expanded from HOME (USERPROFILE on Windows
+    when HOME is unset); name itself without one; None when it needs a home
+    and none is set."""
+    if not name.startswith("~/"):
+        return name
+    home = env.get("HOME", "") or (env.get("USERPROFILE", "") if os.name == "nt" else "")
+    return os.path.join(home, name[2:]) if home else None
+
+
 def channel_program(name, env, agent):
     """What the program of a channel named name runs as, or None when it is
     not found: the executable of the agent process when its base name is
@@ -286,6 +296,9 @@ def channel_program(name, env, agent):
     execs a native program outside every PATH (bin/codex.js), and the login
     shell of the agent's commands rebuilds its PATH without the wrapper's
     directory, while the program is the build that owns the agent's thread."""
+    if name.startswith("~/"):
+        path = home_path(name, env)
+        return path if path is not None and program_found(path, env) else None
     executable = agent.executable if agent is not None else None
     if (not os.path.isabs(name) and executable and _program_name(executable) == name
             and os.path.isfile(executable) and os.access(executable, os.X_OK)):
@@ -308,15 +321,30 @@ def _program_name(path):
 
 
 def channel_programs(channel, env, agent):
-    """The programs of the channel on this platform that run from a path of
-    the agent process rather than by their name: {name: path}. The working
-    runner runs them by that path (preflight.json "programs")."""
-    programs = {}
+    """The program the executor of the channel names (its first argument),
+    when it runs from a path other than that name: {name: path}, the path of
+    the first of the channel's programs of this platform that is found (the
+    executable of the agent process, a path under the home directory, the
+    PATH). The working runner and the probes run it by that path
+    (preflight.json "programs")."""
+    argv = (channel.get("executor") or {}).get("argv") or []
     for name in (channel.get("binaries") or {}).get(_platform_key()) or []:
         path = channel_program(name, env, agent)
-        if path is not None and path != name:
-            programs[name] = path
-    return programs
+        if path is None:
+            continue
+        key = argv[0] if argv else name
+        return {key: path} if path != key else {}
+    return {}
+
+
+def _missing_programs_cause(channel_id, binaries, env):
+    """Why no program of the channel was found, naming a path under the
+    home directory that HOME does not give."""
+    unexpanded = [b for b in binaries if b.startswith("~/") and home_path(b, env) is None]
+    cause = "no program of channel %s found" % channel_id
+    if unexpanded:
+        cause += " (%s: HOME is not set)" % ", ".join(unexpanded)
+    return cause
 
 
 def agent_options_absent(options, agent):
@@ -380,7 +408,7 @@ def channel_available(ctx, channel_id):
         return False, "channel %s has no program for this platform" % channel_id
     programs = [channel_program(b, ctx.env, ctx.placement.agent) for b in binaries]
     if not any(p is not None for p in programs):
-        return False, "no program of channel %s found" % channel_id
+        return False, _missing_programs_cause(channel_id, binaries, ctx.env)
     if any(is_batch_program(p) for p in programs if p is not None) and \
             (channel.get("executor") or {}).get("feed") == "file" and \
             ctx.token_file is not None and batch_message_dir(ctx.token_file, ctx.env) is None:
@@ -434,8 +462,11 @@ def choose(ctx):
         # A forced host is still this agent's only (US-5, "Addressee and
         # check" pp. 2, 6): the checks of the detection hold for it too.
         if channel and channel.get("step") in (5, 6) and not ctx.detector.addressee_holds(ctx, channel):
+            # The more precise cause when the channel itself cannot run here
+            # (no program: a path under a home that HOME does not give).
+            ok, cause = channel_available(ctx, forced)
             return Choice(METHOD_JOURNAL, None,
-                          ["forced %s unavailable: its addressee is not this agent" % forced])
+                          ["forced %s unavailable: %s" % (forced, cause if not ok else "its addressee is not this agent")])
         if ctx.registry.is_blind(forced) and forced not in ctx.detector.blind_reachable(ctx):
             return Choice(METHOD_JOURNAL, None,
                           ["forced %s unavailable: its text would not reach this agent's pane" % forced])

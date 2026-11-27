@@ -317,10 +317,12 @@
       },
       "binaries": {
         "linux": [
-          "zavod"
+          "zavod",
+          "~/.local/bin/zavod"
         ],
         "macos": [
-          "zavod"
+          "zavod",
+          "~/.local/bin/zavod"
         ]
       },
       "limits": {

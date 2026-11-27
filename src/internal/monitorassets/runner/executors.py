@@ -781,6 +781,11 @@ class SystemProbeRunner(ProbeRunner):
         timeout = min((channel.get("executor") or {}).get("timeoutSec") or PROBE_TIMEOUT_SEC, PROBE_TIMEOUT_SEC)
         clean = child_env(env, self.secrets)
         argv = expand_argv(probe.get("argv") or [], clean)
+        # The program of the channel by the path it is found at (a path under
+        # the home directory among them), as the working runner runs it.
+        programs = channel_programs(channel, env, None)
+        if argv and argv[0] in programs:
+            argv[0] = programs[argv[0]]
         result = run_program(argv, clean, None, timeout, self.secrets)
         if result.timed_out:
             raise ProbeError("timed out after %d s" % timeout)

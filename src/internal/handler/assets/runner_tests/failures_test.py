@@ -189,7 +189,9 @@ class World(object):
         journal = runner.Journal(token, ISSUE, secrets=[TOKEN], env=env)
         ledger = runner.Ledger(SERVER, name, runner.identity_from_doc(doc["identity"]), env=env,
                                clock=self.clock.now)
-        spy = dt.Spy(runner.ArgvExecutor(token, env, [TOKEN]), self.clock)
+        # As the detached runner builds it: the programs of the preflight
+        # result run by their path (detach.py#delivery_sink).
+        spy = dt.Spy(runner.ArgvExecutor(token, env, [TOKEN], doc.get("programs")), self.clock)
         sink = runner.DeliverySink(journal, token, doc, registry, env, ledger, spy, ISSUE,
                                    cancel=cancel or dt.FakeCancel(), clock=self.clock, exclusion=exclusion)
         mon = Monitor(self, name, sink, journal, doc, spy)

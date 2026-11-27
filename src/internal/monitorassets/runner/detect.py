@@ -113,7 +113,7 @@ class RegistryDetector(Detector):
         if not ZAVOD_UUID.fullmatch(me) or me != ctx.env.get(ZAVOD_AGENT_ID_VAR, ""):
             return False
         binaries = (channel.get("binaries") or {}).get(_platform_key()) or []
-        if not any(program_found(b, ctx.env) for b in binaries):
+        if not any(channel_program(b, ctx.env, ctx.placement.agent) is not None for b in binaries):
             return False
         return self.engine_matches(ctx)
 

@@ -159,6 +159,26 @@ class SendTest(unittest.TestCase):
         text, _ = RUNNER.plain_text(deleted, "", minimal=True)
         self.assertIn("commentDeleted=true", text)
 
+    def test_the_cli_in_the_home_bin_directory(self):
+        """Review finding (line 15) of wave 9, A.2: the CLI is found in PATH
+        or at ~/.local/bin/zavod, ~ being HOME; without HOME that path is
+        not expanded, and the cause says so."""
+        world = ft.World(self)
+        world.progs["zavod"].respond([envelope(0, outcome="ok")])
+        home_bin = os.path.join(world.root, ".local", "bin")
+        os.makedirs(home_bin)
+        os.rename(os.path.join(world.bin, "zavod"), os.path.join(home_bin, "zavod"))
+        mon = world.monitor("tok", "claude", "claude", SKEIN_MONITOR_CHANNEL="zavod", **world.zavod_env("claude"))
+        self.assertEqual(mon.doc["channel"], "zavod")
+        self.assertEqual(mon.doc["programs"], {"zavod": os.path.join(home_bin, "zavod")})
+        mon.page([ft.note(1)])
+        self.assertEqual(len(world.calls("zavod")), 1)
+        self.assertEqual(mon.statuses(), [(1, "queued")])
+        line, _ = world.preflight("tok-nohome", "claude", "claude", SKEIN_MONITOR_CHANNEL="zavod", HOME="",
+                                  **world.zavod_env("claude"))
+        self.assertEqual(line["method"], "journal")
+        self.assertIn("~/.local/bin/zavod: HOME is not set", line["reason"])
+
     def test_a_minimal_form_refused_too_stays_in_the_budget(self):
         """Row #78: the minimal form refused as too long as well: the
         delivery takes at most the three calls of INV-8, no letter is
