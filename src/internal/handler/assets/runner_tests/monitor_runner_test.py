@@ -1045,7 +1045,7 @@ class StopLineTest(StopLineAssertions, unittest.TestCase):
 
 # ---------------------------------------------------------------------------
 # Rows 49 and 50 (US-3, SC-004, SC-005, INV-3, INV-4): the bootstrap loader
-# asset run as `python3 -c`, alone (load phase) and with the real runner
+# asset run from a file (python3 <file>), alone (load phase) and with the real runner
 # after exec (handover of the stop protocol and of the token file).
 # ---------------------------------------------------------------------------
 
@@ -1060,8 +1060,8 @@ def closed_port_url():
 
 def run_loader(url, token="skm_" + "d" * 43, token_as_dir=False, no_url=False,
                site_env=None, signal_when=None, sig=None, extra_env=None, runner=None, **placement):
-    """Run the served loader (harness.served_loader) as `python3 -c`, the
-    way the starter of a bootstrap without client runs it; returns
+    """Run the served loader (harness.served_loader) from a file, as the
+    starter of a bootstrap without client executes its downloaded bytes; returns
     (rc, lines, stderr, token path).
     signal_when: a threading.Event set once the process may be signalled.
     runner: the body whose digest the bootstrap names (SKEIN_RUNNER_SHA256);

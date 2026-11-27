@@ -27,7 +27,7 @@ PARTS_MANIFEST = os.path.join(RUNNER_DIR, "parts.txt")
 # The core part; tracebacks of an in-process runner name this file.
 RUNNER_SRC = os.path.join(RUNNER_DIR, "core.py")
 # The module name a mutation tool derives from the path of the core part
-# (src/internal/handler/assets/runner/core.py). The in-process runner is
+# (src/internal/monitorassets/runner/core.py). The in-process runner is
 # loaded under this name so the tool attributes the runner's functions to
 # the file it mutated.
 RUNNER_MODULE = "internal.monitorassets.runner.core"
