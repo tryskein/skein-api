@@ -263,7 +263,7 @@
     {
       "id": "hermes",
       "about": "Hermes Agent: the runner runs as a background terminal process whose new output comes to the agent on each heartbeat tick; with background notifications off, the monitor resumes the session through hermes chat when its busy input mode is queue.",
-      "source": "github.com/NousResearch/hermes-agent 24b14819: tools/terminal_tool.py#terminal_tool (background, heartbeat, persist_on_release: a background process without it is killed when the agent's lifecycle ends a session, e.g. on context compression or /new), tools/process_registry.py#HEARTBEAT_MIN_SECONDS (60) and #HEARTBEAT_TICK_SECONDS (5: a tick comes up to ~65 s after the last one), #_emit_heartbeat (a tick carries the output since the previous one; quiet ticks are skipped; each tick wakes an idle agent), tools/process_registry_notifications.py#HEARTBEAT_OUTPUT_CHARS (2000: only the last 2000 characters of a tick's output are kept, the rest counted in omitted; two undelivered ticks merge under the same cap); notify=[pattern] is not used (at most one per 15 s and 8 for the life of the process); pyproject.toml [project.scripts] hermes (a Python console script). Notifications off: gateway/run_config_loaders.py (HERMES_BACKGROUND_NOTIFICATIONS before display.background_process_notifications; False or \"off\", lower-cased, is off); busy input mode: run_config_loaders.py#_load_busy_input_mode (HERMES_GATEWAY_BUSY_INPUT_MODE before display.busy_input_mode, interrupt by default); config.yaml in HERMES_HOME, else the platform default with the literal suffix HERMES_DATA_DIR_SUFFIX: ~/.hermes<suffix> on POSIX, %LOCALAPPDATA%\\hermes<suffix> on Windows, ~/AppData/Local/hermes<suffix> when LOCALAPPDATA is empty (hermes_constants.py#get_process_hermes_home, #_platform_default_hermes_home); a variable is read stripped, an empty one gives way to the file, and a mode compares lower-cased (gateway/run_config_loaders.py#_env_or_cfg_str, #_load_busy_input_mode).",
+      "source": "github.com/NousResearch/hermes-agent 24b14819: tools/terminal_tool.py#terminal_tool (background, heartbeat, persist_on_release: a background process without it is killed when the agent's lifecycle ends a session, e.g. on context compression or /new), tools/process_registry.py#HEARTBEAT_MIN_SECONDS (60) and #HEARTBEAT_TICK_SECONDS (5: a tick comes up to ~65 s after the last one), #_emit_heartbeat (a tick carries the output since the previous one; quiet ticks are skipped; each tick wakes an idle agent), tools/process_registry_notifications.py#HEARTBEAT_OUTPUT_CHARS (2000: only the last 2000 characters of a tick's output are kept, the rest counted in omitted; two undelivered ticks merge under the same cap); notify=[pattern] is not used (at most one per 15 s and 8 for the life of the process); pyproject.toml [project.scripts] hermes (a Python console script). Notifications off: gateway/run_config_loaders.py (HERMES_BACKGROUND_NOTIFICATIONS before display.background_process_notifications; False or \"off\", lower-cased, is off); busy input mode: run_config_loaders.py#_load_busy_input_mode (HERMES_GATEWAY_BUSY_INPUT_MODE before display.busy_input_mode, interrupt by default); config.yaml in HERMES_HOME, else the platform default with the literal suffix HERMES_DATA_DIR_SUFFIX: ~/.hermes<suffix> on POSIX, %LOCALAPPDATA%\\hermes<suffix> on Windows, ~/AppData/Local/hermes<suffix> when LOCALAPPDATA is empty (hermes_constants.py#get_process_hermes_home, #_platform_default_hermes_home); HERMES_HOME is read stripped and expanded, os.path.expandvars then os.path.expanduser (#_expand_hermes_home), LOCALAPPDATA only stripped, the suffix taken as it is, the home that of Path.home (USERPROFILE on Windows); a variable is read stripped, an empty one gives way to the file, and a mode compares lower-cased (gateway/run_config_loaders.py#_env_or_cfg_str, #_load_busy_input_mode).",
       "process": {
         "executables": [
           "hermes",
@@ -309,13 +309,15 @@
                     "format": "yaml-scalar",
                     "key": "display.background_process_notifications",
                     "equals": "off",
-                    "fold": "strip-lower"
+                    "fold": "strip-lower",
+                    "expand": true
                   },
                   {
                     "path": "{env:HERMES_HOME}/config.yaml",
                     "format": "yaml-scalar",
                     "key": "display.background_process_notifications",
-                    "equals": false
+                    "equals": false,
+                    "expand": true
                   }
                 ]
               },
@@ -443,7 +445,8 @@
                     "format": "yaml-scalar",
                     "key": "display.busy_input_mode",
                     "equals": "queue",
-                    "fold": "strip-lower"
+                    "fold": "strip-lower",
+                    "expand": true
                   }
                 ]
               },

@@ -316,6 +316,13 @@ type SettingCondition struct {
 	// comparison (FoldStripLower); a value of another type is compared as
 	// it is. Equals is given folded.
 	Fold string `json:"fold,omitempty"`
+	// Expand, set only on a Path that starts with "{env:NAME}/", expands the
+	// variable's value (read stripped, as every "{env:NAME}" of a path is)
+	// as the agent's source does: Python's os.path.expandvars, then
+	// os.path.expanduser, with the agent's variables ($NAME, ${NAME}, and
+	// %NAME% on Windows; "~" the home directory). Without it the value is
+	// taken as it is.
+	Expand bool `json:"expand,omitempty"`
 }
 
 // PlaceholderEnvOptionalPrefix starts "{env?:NAME}" of a setting path: the

@@ -452,6 +452,9 @@ func (v *validator) settings(path string, list []SettingCondition) {
 		spath := fmt.Sprintf("%s[%d]", path, i)
 		v.text(RuleInvalid, spath+".path", s.Path)
 		v.settingPath(spath+".path", s.Path)
+		if s.Expand && !strings.HasPrefix(s.Path, PlaceholderEnvPrefix) {
+			v.add(RuleInvalid, spath+".expand", "only the value of a variable that starts the path is expanded: %q starts with none", s.Path)
+		}
 		v.text(RuleInvalid, spath+".key", s.Key)
 		if !settingFormats[s.Format] {
 			v.add(RuleInvalid, spath+".format", "format %q is not one of json, toml, yaml-scalar", s.Format)

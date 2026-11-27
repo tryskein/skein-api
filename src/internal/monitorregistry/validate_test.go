@@ -886,6 +886,18 @@ func TestValidate_ThePlaceAndFoldReadingsRefuseTheirMisuse(t *testing.T) {
 		"a fold of a null setting":      {Settings: []SettingCondition{setting("~/.a/c.yaml", `null`, FoldStripLower)}},
 		"a variable that names no file": {Settings: []SettingCondition{setting("{env:A_HOME}", `"off"`, "")}},
 		"a variable and a slash only":   {Settings: []SettingCondition{setting("{env:A_HOME}/", `"off"`, "")}},
+		// Review round 2 of wave 14, row 17: only the value of a variable
+		// that starts the path is expanded.
+		"an expanded home path": {Settings: []SettingCondition{func() SettingCondition {
+			c := setting("~/.a/c.yaml", `"off"`, "")
+			c.Expand = true
+			return c
+		}()}},
+		"an expanded absolute path": {Settings: []SettingCondition{func() SettingCondition {
+			c := setting("/etc/a/c.yaml", `"off"`, "")
+			c.Expand = true
+			return c
+		}()}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			r := validRegistry()

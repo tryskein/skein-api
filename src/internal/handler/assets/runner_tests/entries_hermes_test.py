@@ -168,6 +168,19 @@ class HermesPreflightTest(unittest.TestCase):
         self.config("display:\n  background_process_notifications: off\n  busy_input_mode: queue\n")
         self.assertEqual(self.line(HERMES_HOME=os.path.join(self.box.root, "empty"))["channel"], "stdout")
 
+    def test_hermes_home_is_read_as_hermes_reads_it(self):
+        # Review round 2 of wave 14, row 17 (hermes_constants.py
+        # #get_process_hermes_home, #_expand_hermes_home): HERMES_HOME is
+        # read stripped, then expanded - variables, then "~".
+        home = os.path.join(self.box.root, "profile")
+        self.config("display:\n  background_process_notifications: off\n  busy_input_mode: queue\n", home=home)
+        for name, env in (("padded with white space", {"HERMES_HOME": "  %s \t" % home}),
+                          ("under ~", {"HERMES_HOME": "~/profile"}),
+                          ("by a variable", {"HERMES_HOME": "$BASE/profile", "BASE": self.box.root}),
+                          ("by a braced variable", {"HERMES_HOME": "${BASE}/profile", "BASE": self.box.root})):
+            with self.subTest(case=name):
+                self.assertEqual(self.line(**env)["channel"], "hermes-resume")
+
     def test_a_delegated_hermes_does_not_resume_its_parent(self):
         # A delegated child keeps its parent's HERMES_SESSION_ID: a nested
         # agent ("Addressee and check", item 2) gets no delivery to it, also
@@ -208,11 +221,72 @@ class WindowsHomeTest(unittest.TestCase):
         # On POSIX that directory is not Hermes's home.
         self.assertFalse(self.holds({"LOCALAPPDATA": local, "HERMES_DATA_DIR_SUFFIX": "-x"}, "posix"))
 
+    def test_local_app_data_is_read_stripped(self):
+        # Review round 2 of wave 14, row 17: LOCALAPPDATA is read stripped
+        # (#_platform_default_hermes_home), one of white space only is empty.
+        local = os.path.join(self.root, "Local")
+        self.config(os.path.join(local, "hermes"))
+        self.assertTrue(self.holds({"LOCALAPPDATA": "  %s  " % local}, "windows"))
+        self.config(os.path.join(self.root, "AppData", "Local", "hermes"))
+        self.assertTrue(self.holds({"LOCALAPPDATA": "   "}, "windows"))
+
     def test_the_profile_home_without_local_app_data(self):
         self.config(os.path.join(self.root, "AppData", "Local", "hermes"))
         self.assertTrue(self.holds({}, "windows"))
         # ~/.hermes is the POSIX home, not the Windows one.
         self.assertFalse(self.holds({}, "posix"))
+
+
+class PathExpansionTest(unittest.TestCase):
+    """Review round 2 of wave 14, row 17 and info row 23: the expansion of a
+    setting path is Python's (os.path.expandvars, os.path.expanduser,
+    Path.home of CPython 3.8 and later) with the variables of the agent
+    process, on POSIX and on Windows."""
+
+    def nt(self):
+        return unittest.mock.patch.object(RUNNER.os, "name", "nt")
+
+    def test_variables_on_posix(self):
+        env = {"A": "a", "B": "b"}
+        self.assertEqual(RUNNER.expand_vars("$A/${B}/$C/${D}/x", env), "a/b/$C/${D}/x")
+        self.assertEqual(RUNNER.expand_vars("no variable", env), "no variable")
+
+    def test_variables_on_windows(self):
+        env = {"LocalAppData": "C:\\L", "A": "a"}
+        with self.nt():
+            # %NAME%, ${NAME}, $NAME; names of any case; an unknown one, a
+            # quoted part, %% and $$ stay.
+            self.assertEqual(RUNNER.expand_vars("%LOCALAPPDATA%\\h", env), "C:\\L\\h")
+            self.assertEqual(RUNNER.expand_vars("${a}/$A/%Z%/'%A%'/%%/$$", env), "a/a/%Z%/'%A%'/%/$")
+            # A hyphen is part of a $NAME there.
+            self.assertEqual(RUNNER.expand_vars("$A-x", env), "$A-x")
+
+    def test_the_home_on_posix(self):
+        env = {"HOME": "/home/u", "USERPROFILE": "/elsewhere"}
+        self.assertEqual(RUNNER.expand_user("~/h", env), "/home/u/h")
+        self.assertEqual(RUNNER.expand_user("~", env), "/home/u")
+        self.assertEqual(RUNNER.expand_user("/abs/h", env), "/abs/h")
+        # The home of another account is no setting of this agent.
+        self.assertIsNone(RUNNER.expand_user("~other/h", env))
+        self.assertIsNone(RUNNER.expand_user("~/h", {}))
+
+    def test_the_home_on_windows(self):
+        with self.nt():
+            # USERPROFILE first, HOME not read (Python 3.8 and later).
+            self.assertEqual(RUNNER.user_home({"HOME": "C:\\h", "USERPROFILE": "C:\\Users\\u"}),
+                             "C:\\Users\\u")
+            self.assertEqual(RUNNER.user_home({"HOMEDRIVE": "D:", "HOMEPATH": "\\Users\\v"}), "D:\\Users\\v")
+            self.assertIsNone(RUNNER.user_home({"HOME": "C:\\h"}))
+            self.assertEqual(RUNNER.expand_user("~\\h", {"USERPROFILE": "C:\\U"}), "C:\\U\\h")
+            self.assertEqual(RUNNER.expand_path("~/AppData/x", {"HOME": "C:\\h", "USERPROFILE": "C:\\U"}),
+                             RUNNER.os.path.join("C:\\U", "AppData/x"))
+
+    def test_a_variable_of_white_space_only_is_not_set(self):
+        env = {"V": "  ", "S": " -x "}
+        self.assertIsNone(RUNNER.expand_path("{env:V}/c.yaml", env))
+        self.assertEqual(RUNNER.expand_path("/a/h{env?:V}/c.yaml", env), "/a/h/c.yaml")
+        # A value that is not white space only is taken as it is.
+        self.assertEqual(RUNNER.expand_path("/a/h{env?:S}/c.yaml", env), "/a/h -x /c.yaml")
 
 
 class ResumeOutcomeTest(unittest.TestCase):

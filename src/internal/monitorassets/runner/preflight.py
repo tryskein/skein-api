@@ -48,6 +48,7 @@ import os
 import random
 import re
 import shutil
+import string
 import sys
 
 # The result of the last preflight, next to the token.
@@ -265,22 +266,184 @@ def platform_holds(platform):
 _OPTIONAL_ENV = re.compile(r"\{env\?:([A-Za-z_][A-Za-z0-9_]*)\}")
 
 
-def expand_path(path, env):
-    """A setting path: "~/" is the home directory (HOME, USERPROFILE on
-    Windows when HOME is unset), "{env:NAME}/" the value of NAME, and a
-    "{env?:NAME}" in a later element the value of NAME or nothing. None
-    when the variable or the home it needs is not set."""
-    path = _OPTIONAL_ENV.sub(lambda m: env.get(m.group(1), ""), path)
+def expand_path(path, env, expand=False):
+    """A setting path: "~/" is the home directory (user_home), "{env:NAME}/"
+    the value of NAME, and a "{env?:NAME}" in a later element the value of
+    NAME or nothing. A variable is read as its source reads it: the value of
+    a "{env:NAME}" head stripped, one of white space only not set, like an
+    unset "{env?:NAME}". With expand (registry.go#SettingCondition.Expand)
+    the head's value is expanded as its source expands it, by
+    expand_vars and then expand_user. None when the variable or the home it
+    needs is not set, or the expansion leaves a home it cannot name."""
+    path = _OPTIONAL_ENV.sub(lambda m: _optional_value(env, m.group(1)), path)
     if path.startswith("~/"):
-        home = env.get("HOME", "") or (env.get("USERPROFILE", "") if os.name == "nt" else "")
+        home = user_home(env)
         return os.path.join(home, path[2:]) if home else None
     if path.startswith("{env:"):
         name, _, rest = path[len("{env:"):].partition("}")
-        value = env.get(name, "")
+        value = env.get(name, "").strip()
         if not value:
             return None
+        if expand:
+            value = expand_user(expand_vars(value, env), env)
+            if value is None:
+                return None
         return os.path.join(value, rest.lstrip("/")) if rest else value
     return path
+
+
+def _optional_value(env, name):
+    """The value of an optional placeholder: as it is, nothing when unset or
+    of white space only."""
+    value = env.get(name, "")
+    return value if value.strip() else ""
+
+
+def user_home(env):
+    """The home directory of the agent process as Python's Path.home finds
+    it: USERPROFILE on Windows (Python 3.8 and later read no HOME there),
+    else HOMEDRIVE and HOMEPATH; HOME elsewhere. None when not set."""
+    if os.name == "nt":
+        profile = _env_get(env, "USERPROFILE")
+        if profile:
+            return profile
+        homepath = _env_get(env, "HOMEPATH")
+        if not homepath:
+            return None
+        return ntpath.join(_env_get(env, "HOMEDRIVE") or "", homepath)
+    return env.get("HOME", "") or None
+
+
+def _env_get(env, name):
+    """The variable name of env, its case ignored on Windows, as the
+    environment of a Windows process is; None when unset."""
+    if os.name != "nt":
+        return env.get(name)
+    upper = name.upper()
+    for key, value in env.items():
+        if key.upper() == upper:
+            return value
+    return None
+
+
+def expand_user(path, env):
+    """os.path.expanduser of path with the home of env (user_home): "~" and
+    "~/..." (and "~\\..." on Windows) become the home; a path that does
+    not start with "~" stays as it is. A "~user" form is not read (None):
+    the home of another account is no setting of this agent."""
+    if not path.startswith("~"):
+        return path
+    seps = "/\\" if os.name == "nt" else "/"
+    i = 1
+    while i < len(path) and path[i] not in seps:
+        i += 1
+    if i != 1:
+        return None
+    home = user_home(env)
+    if home is None:
+        return None
+    if os.name != "nt":
+        home = home.rstrip("/") or "/"
+        return (home + path[1:]) if path[1:] else home
+    return home + path[1:]
+
+
+_POSIX_VAR = re.compile(r"\$(\w+|\{[^}]*\})", re.ASCII)
+_NT_VARCHARS = frozenset(string.ascii_letters + string.digits + "_-")
+
+
+def expand_vars(path, env):
+    """os.path.expandvars of path with the variables of env: $NAME and
+    ${NAME} (and %NAME% on Windows); an unknown variable stays as it is
+    (posixpath and ntpath of CPython 3.12)."""
+    if os.name == "nt":
+        return _expand_vars_nt(path, env)
+    if "$" not in path:
+        return path
+    i = 0
+    while True:
+        m = _POSIX_VAR.search(path, i)
+        if not m:
+            return path
+        i, j = m.span(0)
+        name = m.group(1)
+        if name.startswith("{") and name.endswith("}"):
+            name = name[1:-1]
+        if name in env:
+            tail = path[j:]
+            path = path[:i] + env[name]
+            i = len(path)
+            path += tail
+        else:
+            i = j
+
+
+def _expand_vars_nt(path, env):
+    if "$" not in path and "%" not in path:
+        return path
+    res = ""
+    index = 0
+    pathlen = len(path)
+    while index < pathlen:
+        c = path[index:index + 1]
+        if c == "'":
+            # No expansion within single quotes.
+            path = path[index + 1:]
+            pathlen = len(path)
+            try:
+                index = path.index(c)
+                res += c + path[:index + 1]
+            except ValueError:
+                res += c + path
+                index = pathlen - 1
+        elif c == "%":
+            if path[index + 1:index + 2] == "%":
+                res += c
+                index += 1
+            else:
+                path = path[index + 1:]
+                pathlen = len(path)
+                try:
+                    index = path.index("%")
+                except ValueError:
+                    res += "%" + path
+                    index = pathlen - 1
+                else:
+                    var = path[:index]
+                    value = _env_get(env, var)
+                    res += value if value is not None else "%" + var + "%"
+        elif c == "$":
+            if path[index + 1:index + 2] == "$":
+                res += c
+                index += 1
+            elif path[index + 1:index + 2] == "{":
+                path = path[index + 2:]
+                pathlen = len(path)
+                try:
+                    index = path.index("}")
+                except ValueError:
+                    res += "${" + path
+                    index = pathlen - 1
+                else:
+                    var = path[:index]
+                    value = _env_get(env, var)
+                    res += value if value is not None else "${" + var + "}"
+            else:
+                var = ""
+                index += 1
+                c = path[index:index + 1]
+                while c and c in _NT_VARCHARS:
+                    var += c
+                    index += 1
+                    c = path[index:index + 1]
+                value = _env_get(env, var)
+                res += value if value is not None else "$" + var
+                if c:
+                    index -= 1
+        else:
+            res += c
+        index += 1
+    return res
 
 
 _MISSING = object()
@@ -292,7 +455,7 @@ def read_setting(cond, env):
     """The value at the dotted key of the setting file; _ABSENT when the
     file or the key does not exist; _MISSING when the file, its format or
     the value cannot be read."""
-    path = expand_path(cond.get("path", ""), env)
+    path = expand_path(cond.get("path", ""), env, expand=bool(cond.get("expand")))
     if path is None:
         return _MISSING
     try:
