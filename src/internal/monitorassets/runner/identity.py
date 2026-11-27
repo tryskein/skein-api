@@ -177,11 +177,20 @@ def _record_executables(agent_proc, registry):
     return set((registry.agents[agent_id].get("process") or {}).get("executables") or [])
 
 
+# The interpreter of a record's npm wrapper, by the base name of its first
+# argument.
+_NODE_NAMES = ("node", "node.exe")
+
+
 def _wrapper_of(proc, executables):
-    """Whether proc runs a script named as one of the record's executables
-    through an interpreter (its first argument: .../codex.js for codex)."""
+    """Whether proc is the Node interpreter running a script named as one
+    of the record's executables (node .../bin/codex.js for codex): any other
+    program, an editor or a shell with such a file among them, is not."""
     argv = proc.argv or []
     if len(argv) < 2 or not executables:
+        return False
+    interpreter = os.path.basename(argv[0].replace("\\", "/"))
+    if (interpreter.lower() if os.name == "nt" else interpreter) not in _NODE_NAMES:
         return False
     script = os.path.basename(argv[1].replace("\\", "/"))
     stem, ext = os.path.splitext(script)

@@ -325,6 +325,13 @@ class AgentUnderPaseoTest(unittest.TestCase):
         other = ("node", ["node", "/opt/tool/server.js"], None)
         line = self.line("codex", [("bash", None, None), ("codex", ["codex"], self.agent.pid), other, DAEMON], **env)
         self.assertEqual(line["channel"], "codex-queue")
+        # A script named like the record's executable run by anything but
+        # the Node interpreter is no wrapper of the agent.
+        for name, proc in (("an editor", ("editor", ["editor", "/tmp/codex.js"], None)),
+                           ("a shell", ("bash", ["bash", "/workspace/codex.js"], None))):
+            with self.subTest(case=name):
+                procs = [("bash", None, None), ("codex", ["codex"], self.agent.pid), proc, DAEMON]
+                self.assertEqual(self.line("codex", procs, **env)["channel"], "codex-queue")
 
     def test_kimi_tui_against_kimi_in_paseo(self):
         line = self.line("kimi", in_terminal("kimi-code"), PASEO_AGENT_ID=AGENT_ID)
