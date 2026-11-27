@@ -179,6 +179,9 @@ func TestValidate_RejectsEachRule(t *testing.T) {
 				Results: []AddresseeResultRow{{Match: Match{ExitCode: intp(1)}, Result: AddresseeGone}},
 				Capture: []string{"id"}}
 		}, RuleInvalid},
+		{"a list index outside ASCII digits", func(r *Registry) {
+			r.Channels[1].Outcomes[0].Match.JSON = map[string]string{"stages.\u00b2": "turn_started"}
+		}, RuleInvalid},
 		{"http channel that names programs", func(r *Registry) {
 			httpHost(r)
 			r.Channels[1].Binaries = map[string][]string{PlatformLinux: {"host"}}

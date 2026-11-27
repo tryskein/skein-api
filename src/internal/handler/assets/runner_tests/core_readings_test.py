@@ -157,6 +157,13 @@ class ListAndAbsenceSignTest(unittest.TestCase):
                 self.assertEqual(self.outcome(doc), "unknown")
         self.assertEqual(self.outcome(receipt(["input_accepted"]), exit_code=1), "unknown")
 
+    def test_only_ascii_digits_index_a_list(self):
+        doc = {"stages": ["input_accepted", "turn_started"]}
+        self.assertEqual(RUNNER.json_path_lookup(doc, "stages.1"), (True, "turn_started"))
+        for element in ("\u00b2", "\u0661", "+1", " 1"):
+            with self.subTest(element=element):
+                self.assertEqual(RUNNER.json_path_lookup(doc, "stages." + element), (False, None))
+
     def test_a_digit_in_an_object_is_a_key(self):
         doc = {"result": {"prompt": {"stages": {"0": "input_accepted"}}}}
         self.assertEqual(self.outcome(doc), "input-written")

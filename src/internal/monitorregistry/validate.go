@@ -738,10 +738,19 @@ func (v *validator) criteriaOf(path string, rows []Match, executor string) {
 	}
 }
 
-// jsonPath checks a dotted path of a JSON answer: non-empty elements.
+// jsonPath checks a dotted path of a JSON answer: non-empty elements, each
+// of printable ASCII, so an element that indexes a list is ASCII digits the
+// runner reads alike ("²" is no index).
 func (v *validator) jsonPath(path, p string) {
 	if p == "" || slices.Contains(strings.Split(p, "."), "") {
 		v.add(RuleInvalid, path, "%q is not a dotted path of non-empty elements", p)
+		return
+	}
+	for _, r := range p {
+		if r < 0x21 || r > 0x7e {
+			v.add(RuleInvalid, path, "%q holds a character outside printable ASCII", p)
+			return
+		}
 	}
 }
 

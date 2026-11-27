@@ -131,6 +131,11 @@ def parse_json_object(raw):
     return doc if isinstance(doc, dict) else None
 
 
+# An element of a dotted path that indexes a list: ASCII digits only (str
+# isdigit takes "²", which int() refuses).
+_ASCII_INDEX = re.compile(r"\A[0-9]+\Z")
+
+
 def json_path_lookup(doc, path):
     """(True, value) at the dotted path of a JSON document, else (False,
     None). An element that is a decimal number indexes a list ("stages.1":
@@ -138,7 +143,7 @@ def json_path_lookup(doc, path):
     for part in path.split("."):
         if isinstance(doc, dict) and part in doc:
             doc = doc[part]
-        elif isinstance(doc, list) and part.isdigit() and int(part) < len(doc):
+        elif isinstance(doc, list) and _ASCII_INDEX.match(part) and int(part) < len(doc):
             doc = doc[int(part)]
         else:
             return False, None
