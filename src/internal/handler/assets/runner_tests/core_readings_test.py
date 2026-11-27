@@ -212,11 +212,13 @@ class CaptureAtPreflightTest(unittest.TestCase):
         self.assertEqual(RUNNER.SystemProbeRunner().capture(self.chan, self.env), CAPTURED)
         self.assertEqual([c["argv"] for c in self.show.calls()], [["agent-1"]])
 
-    def test_no_value_or_no_same_is_no_capture(self):
+    def test_a_path_the_answer_does_not_hold_is_captured_absent(self):
+        self.show.respond([{"exit": 0, "stdout": {"result": {"terminal": {"incarnationId": "inc-1"}}}}])
+        self.assertEqual(RUNNER.SystemProbeRunner().capture(self.chan, self.env),
+                         [["result.terminal.incarnationId", "inc-1"], ["result.terminal.agentIdentity", None]])
+
+    def test_no_same_or_no_json_is_no_capture(self):
         cases = {
-            "a path without a value": {"exit": 0, "stdout": {"result": {"terminal": {"incarnationId": "inc-1"}}}},
-            "an object at a path": {"exit": 0, "stdout": {"result": {"terminal": {"incarnationId": {"id": 1},
-                                                                                   "agentIdentity": "codex"}}}},
             "no same": {"exit": 1, "stdout": SHOW_ANSWER},
             "no JSON": {"exit": 0, "stdout": "not json"},
         }
@@ -295,6 +297,7 @@ class CaptureBeforeTransferTest(unittest.TestCase):
             "another incarnation": ({"A": [["inc", "inc-1"]]}, {"exit": 0, "stdout": {"inc": "inc-2"}}),
             "no value in the answer": ({"A": [["inc", "inc-1"]]}, {"exit": 0, "stdout": {"other": "inc-1"}}),
             "no value saved by the preflight": (None, {"exit": 0, "stdout": {"inc": "inc-1"}}),
+            "a value where the preflight saw none": ({"A": [["inc", None]]}, {"exit": 0, "stdout": {"inc": "inc-1"}}),
         }
         for name, (captures, answer) in cases.items():
             with self.subTest(case=name):
@@ -306,6 +309,13 @@ class CaptureBeforeTransferTest(unittest.TestCase):
                 self.assertEqual(world.prog("chan-b").calls(), [])
                 self.assertEqual([d[:2] for d in mon.deliveries()], [(1, "unknown")])
                 self.assertEqual(len(mon.degraded("addressee_changed")), 1)
+
+    def test_a_path_absent_again_lets_the_transfer_go(self):
+        world = self.world()
+        fake_channel.FakeProgram(world.bin, "show").respond([{"exit": 0, "stdout": {"other": "x"}}])
+        mon = world.monitor(identity=self.identity({"A": [["inc", None]]}))
+        mon.page([delivery.note(1)])
+        self.assertEqual([d[:3] for d in mon.deliveries()], [(1, "queued", "A")])
 
     def test_the_check_and_the_idle_wait_run_the_programs_of_the_preflight(self):
         world = self.world(show="show", idle="idle")

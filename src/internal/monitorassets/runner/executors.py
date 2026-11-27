@@ -817,8 +817,9 @@ class SystemProbeRunner(ProbeRunner):
 
     def capture(self, channel, env):
         """The values the addressee command of the channel gives at its
-        capture paths, [[path, value], ...]: the command answers "same" and
-        holds a value at every path, else ProbeError."""
+        capture paths, [[path, value], ...], None for a path its answer does
+        not hold (it must stay absent): the command answers "same" with a
+        JSON document, else ProbeError."""
         command = (channel.get("addressee") or {}).get("command") or {}
         timeout = min((channel.get("executor") or {}).get("timeoutSec") or PROBE_TIMEOUT_SEC, PROBE_TIMEOUT_SEC)
         clean = child_env(env, self.secrets)
@@ -840,13 +841,9 @@ class SystemProbeRunner(ProbeRunner):
                 break
         if verdict != "same":
             raise ProbeError("the addressee check does not answer same")
-        values = []
-        for path in command.get("capture") or []:
-            value = json_path_value(result.json, path) if result.json is not None else None
-            if value is None:
-                raise ProbeError("the addressee check gives no value at %s" % path)
-            values.append([path, value])
-        return values
+        if result.json is None:
+            raise ProbeError("the addressee check gives no JSON answer")
+        return [[path, json_path_value(result.json, path)] for path in command.get("capture") or []]
 
     @staticmethod
     def _socket(path):

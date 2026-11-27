@@ -589,11 +589,12 @@ type AddresseeCommand struct {
 	Argv    []string             `json:"argv"`
 	Results []AddresseeResultRow `json:"results"`
 	// Capture are dotted paths (as in Match.JSON) of the command's JSON
-	// answer whose values the preflight saves (it runs the command once;
-	// an answer that is not "same" or lacks a path makes the channel
-	// unavailable); before each transfer every path must hold the saved
-	// value again, else the addressee changed (the process incarnation of
-	// a terminal).
+	// answer whose values the preflight saves (it runs the command once; an
+	// answer that is not "same" or not JSON makes the channel unavailable;
+	// a path the answer does not hold is saved as absent); before each
+	// transfer every path must hold the saved value again, or be absent
+	// again, else the addressee changed (the process incarnation of a
+	// terminal).
 	Capture []string `json:"capture,omitempty"`
 }
 

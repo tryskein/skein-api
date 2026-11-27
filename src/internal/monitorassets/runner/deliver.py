@@ -470,8 +470,9 @@ class DeliverySink(object):
                 raise AddresseeGone()
             if verdict == "changed" or (verdict is None and channel.get("kind") == "terminal"):
                 raise AddresseeChanged()
-            # The values the preflight saw (its process incarnation): any
-            # other value, or none, is another addressee.
+            # The values the preflight saw (its process incarnation), a path
+            # it saw absent absent again: anything else, or no saved value,
+            # is another addressee.
             saved = dict((p, v) for p, v in ((self.identity.get("captures") or {}).get(channel.get("id")) or []))
             for path in command.get("capture") or []:
                 if path not in saved or result.timed_out or result.json is None or \
