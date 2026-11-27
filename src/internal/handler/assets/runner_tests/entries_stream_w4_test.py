@@ -139,8 +139,10 @@ class InstructionTest(unittest.TestCase):
         self.assertIn('"notify": "^\\\\{\\"event\\""', instruction)
         self.assertIn('"timeout": 0', instruction)
         # After a stopped notice: cancel that job, then the same command.
+        # The restart and already_running are the common instruction's and
+        # the stop line's (INV-17): the record does not repeat them.
         self.assertIn("proc://<job id>/kill", instruction)
-        self.assertIn("already_running", instruction)
+        self.assertEqual(instruction.count("already_running"), 0)
         self.assertEqual(REG.agents["omp"]["windowsShell"], "git-bash")
 
     def test_xum_runs_bash_with_a_monitor_and_reads_with_task_await(self):

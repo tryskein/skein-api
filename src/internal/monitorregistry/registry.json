@@ -162,7 +162,7 @@
         {
           "kind": "stream",
           "conditions": {},
-          "instruction": "Run `command` with the bash tool as {\"command\": <command>, \"notify\": \"^\\\\{\\\"event\\\"\", \"timeout\": 0}: it runs as a background job and every stdout line of the monitor comes to you in a notice. If a notice says the job matched too often and notify is off for it, cancel that job (write empty content to proc://<job id>/kill, the id the notice names), then run `command` the same way again; events printed after that notice are in the monitor's journal. If the new run stops with already_running, cancel the earlier job the same way and run `command` again.",
+          "instruction": "Run `command` with the bash tool as {\"command\": <command>, \"notify\": \"^\\\\{\\\"event\\\"\", \"timeout\": 0}: it runs as a background job and every stdout line of the monitor comes to you in a notice. If a notice says the job matched too often and notify is off for it, cancel that job (write empty content to proc://<job id>/kill, the id the notice names) and run `command` again; events printed after that notice are in the monitor's journal.",
           "limits": {
             "line": {
               "max": 400,
