@@ -622,9 +622,12 @@ class DeliverySink(object):
                     self._deliver(cursor, outcomes, journaled, attempt, channel_id, channel,
                                   [byid[e] for e in decision.published], step)
                 except LedgerUnavailable:
-                    # Refused before any call (a counted call): nothing was
-                    # handed over, the events go to the journal only.
-                    self._ledger_step(attempt.abandon)
+                    # The ledger refused a step. Before the hand-over
+                    # nothing reached the channel: the attempt is withdrawn.
+                    # After it the text may have: the record stays
+                    # "delivering" and its recovery gives "unknown" (INV-9).
+                    if not attempt.handed:
+                        self._ledger_step(attempt.abandon)
                     self._ledger_down()
                 pending = [n for n in pending if str(n["id"]) not in outcomes]
             except BaseException:
