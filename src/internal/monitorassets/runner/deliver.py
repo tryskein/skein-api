@@ -232,7 +232,12 @@ class Guard(object):
 
     def check(self):
         """One check of the addressee, within its own time."""
-        self.pipeline.check_addressee(self.channel, min(_CHECK_SEC, self.remaining()), guard=self)
+        timeout = min(_CHECK_SEC, self.remaining())
+        if ((self.channel.get("executor") or {}).get("http") or {}).get("endpointFile"):
+            # The endpoint snapshot of this attempt is kept on the guard.
+            self.pipeline.check_addressee(self.channel, timeout, guard=self)
+        else:
+            self.pipeline.check_addressee(self.channel, timeout)
 
     def wait_and_keep_the_call(self):
         """The idle wait within its own timeout and never into the time kept

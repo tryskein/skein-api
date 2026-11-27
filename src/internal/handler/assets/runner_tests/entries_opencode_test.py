@@ -231,7 +231,8 @@ class OpenCodeTest(unittest.TestCase):
         guard = mock.Mock()
         guard.endpoint = None
         guard.call_timeout.return_value = 10
-        self.service.respond([{"status": 200, "json": {"data": {"id": SESSION}}}, {"status": 200, "json": RECEIPT}])
+        self.service.respond([{"status": 200, "json": {"data": {"id": SESSION}}},
+                              {"status": 200, "json": {"data": {"id": SESSION}}}, {"status": 200, "json": RECEIPT}])
         RUNNER.DeliverySink.check_addressee(self.sink(), channel, guard=guard)
         other = fake_channel.FakeHTTPChannel()
         self.addCleanup(other.close)
