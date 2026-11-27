@@ -79,6 +79,9 @@ count = os.path.join(HERE, NAME + "." + sub + ".count")
 n = int(open(count).read()) if os.path.exists(count) else 0
 open(count, "w").write(str(n + 1))
 a = answers[min(n, len(answers) - 1)]
+if a.get("sleep"):
+    import time
+    time.sleep(a["sleep"])
 out = a.get("stdout", "")
 sys.stdout.write(out if isinstance(out, str) else json.dumps(out, indent=2))
 sys.exit(a.get("exit", 0))
@@ -387,6 +390,26 @@ class OrcaRecordTest(unittest.TestCase):
                 self.assertEqual(self.orca.calls("send"), [])
                 self.assertEqual(mon.statuses(), [(1, "unknown")])
                 self.assertEqual(len([l for l in mon.lines() if l.get("cause") == "addressee_changed"]), 1)
+
+    def test_a_check_outside_its_table_is_a_refusal_before_send(self):
+        # K5 for a terminal channel: an answer of terminal show that proves
+        # neither this terminal nor another (a failure, no JSON, no answer in
+        # time) hands nothing over and is called again within the budget of
+        # INV-8, then the send goes once the check holds.
+        cases = [("ok false", failed("runtime_unavailable")),
+                 ("no JSON", {"exit": 0, "stdout": "terminal term_7f2c41\n"}),
+                 ("no answer in time", dict(show(), sleep=5))]
+        for name, answer in cases:
+            with self.subTest(case=name):
+                self.fresh()
+                mon = self.mon()
+                self.orca.respond(show_answers=[answer, show()])
+                with mock.patch.object(RUNNER, "_CHECK_SEC", 1):
+                    mon.page([ft.note(1)])
+                self.assertEqual(mon.statuses(), [(1, "turn-started")])
+                self.assertEqual(len(self.orca.calls("send")), 1)
+                self.assertGreaterEqual(len(self.orca.calls("show")), 2)
+                self.assertEqual([l for l in mon.lines() if l.get("cause") == "addressee_changed"], [])
 
     def test_the_stop_receipt_checks_the_addressee_again_after_the_wait(self):
         # Every transfer: the check, the idle wait, the check again; the
