@@ -297,6 +297,61 @@ func TestValidate_RejectsEachRule(t *testing.T) {
 			r.Channels[0].Outcomes = append(r.Channels[0].Outcomes,
 				OutcomeRow{Match: Match{StillRunning: boolp(false)}, Outcome: OutcomeUnknown})
 		}, RuleInvalid},
+		{"an endpoint file beside a key", func(r *Registry) {
+			endpointChannel(r)
+			r.Channels[1].Executor.HTTP.KeyEnv = []string{"HOST_KEY"}
+		}, RuleInvalid},
+		{"an endpoint file without a path", func(r *Registry) {
+			endpointChannel(r)
+			r.Channels[1].Executor.HTTP.EndpointFile.Paths = nil
+		}, RuleInvalid},
+		{"an endpoint file whose request does not start with the endpoint", func(r *Registry) {
+			endpointChannel(r)
+			r.Channels[1].Executor.HTTP.URL = "{env:HOST_URL}/api/send"
+		}, RuleInvalid},
+		{"the endpoint without an endpoint file", func(r *Registry) {
+			endpointChannel(r)
+			r.Channels[1].Executor.HTTP.EndpointFile = nil
+		}, RuleInvalid},
+		{"a password field without its user", func(r *Registry) {
+			endpointChannel(r)
+			r.Channels[1].Executor.HTTP.EndpointFile.User = ""
+		}, RuleInvalid},
+		{"a fixed body field with a placeholder", func(r *Registry) {
+			endpointChannel(r)
+			r.Channels[1].Executor.HTTP.BodyFixed = map[string]string{"description": "{env:HOST_ID}"}
+		}, RuleInvalid},
+		{"a fixed body field that is the field of the text", func(r *Registry) {
+			endpointChannel(r)
+			r.Channels[1].Executor.HTTP.BodyFixed = map[string]string{"text": "fixed"}
+		}, RuleInvalid},
+		{"an http-get probe of an argv channel", func(r *Registry) {
+			r.Channels[0].Probes = []Probe{{Type: ProbeHTTPGet, Source: "fixture", URL: "https://host.test/x",
+				Results: []ProbeResultRow{{Match: Match{HTTPStatus: intp(200)}, Result: ProbeAvailable}}}}
+		}, RuleInvalid},
+		{"an http-get probe without its table", func(r *Registry) {
+			endpointChannel(r)
+			r.Channels[1].Probes[0].Results = nil
+		}, RuleInvalid},
+		{"a URL on an argv probe", func(r *Registry) {
+			r.Channels[0].Probes[0].URL = "https://host.test/x"
+		}, RuleInvalid},
+		{"a GET check of an argv channel", func(r *Registry) {
+			r.Channels[0].Addressee.Command = &AddresseeCommand{HTTPGet: "https://host.test/x",
+				Results: []AddresseeResultRow{{Match: Match{HTTPStatus: intp(200)}, Result: AddresseeSame}}}
+		}, RuleInvalid},
+		{"a GET check that is also a command", func(r *Registry) {
+			endpointChannel(r)
+			r.Channels[1].Addressee.Command.Argv = []string{"host", "check"}
+		}, RuleInvalid},
+		{"a GET check that captures", func(r *Registry) {
+			endpointChannel(r)
+			r.Channels[1].Addressee.Command.Capture = []string{"data.id"}
+		}, RuleInvalid},
+		{"a GET check read by an exit code", func(r *Registry) {
+			endpointChannel(r)
+			r.Channels[1].Addressee.Command.Results[0].Match = Match{ExitCode: intp(0)}
+		}, RuleInvalid},
 		{"two rows of a call still running", func(r *Registry) {
 			r.Channels[0].Executor.Detach = true
 			r.Channels[0].Outcomes = append(r.Channels[0].Outcomes,
@@ -686,6 +741,40 @@ func TestValidate_AcceptsTheHermesReadings(t *testing.T) {
 	}
 	if err := r.Validate(); err != nil {
 		t.Fatalf("a correct record with the Hermes readings was refused: %v", err)
+	}
+}
+
+// endpointChannel makes the second fixture channel an http channel whose
+// address and password come from an endpoint file, with an http-get probe
+// and a GET check (the OpenCode readings).
+func endpointChannel(r *Registry) {
+	url := "{endpoint}/api/session/{env:HOST_ID}"
+	r.Channels[1].Executor = Executor{Type: ExecutorHTTP, TimeoutSec: 15, HTTP: &HTTPRequest{
+		Method: "POST", URL: url + "/synthetic", BodyField: "text",
+		BodyFixed: map[string]string{"delivery": "queue"},
+		EndpointFile: &EndpointFile{Paths: []string{"{env:XDG_STATE_HOME}/host/service.json", "~/.local/state/host/service.json"},
+			URLField: "url", PasswordField: "password", User: "host"},
+	}}
+	r.Channels[1].Binaries = nil
+	r.Channels[1].Outcomes = []OutcomeRow{
+		{Match: Match{HTTPStatus: intp(200)}, Outcome: OutcomeQueued},
+		{Match: Match{HTTPStatus: intp(404)}, Outcome: OutcomeRefused},
+	}
+	r.Channels[1].ProbeUndefined = false
+	r.Channels[1].Probes = []Probe{{Type: ProbeHTTPGet, Source: "fixture", URL: url,
+		Results: []ProbeResultRow{{Match: Match{HTTPStatus: intp(200)}, Result: ProbeAvailable}}}}
+	r.Channels[1].Addressee.Command = &AddresseeCommand{HTTPGet: url,
+		Results: []AddresseeResultRow{{Match: Match{HTTPStatus: intp(200)}, Result: AddresseeSame}}}
+}
+
+// TestValidate_AcceptsTheOpenCodeReadings — an http channel with an endpoint
+// file, fixed body fields, an http-get probe and a GET check passes in a
+// correct record.
+func TestValidate_AcceptsTheOpenCodeReadings(t *testing.T) {
+	r := validRegistry()
+	endpointChannel(r)
+	if err := r.Validate(); err != nil {
+		t.Fatalf("a correct record with the OpenCode readings was refused: %v", err)
 	}
 }
 

@@ -102,7 +102,7 @@ var (
 	methodKinds   = set(MethodStream, MethodDelivery, MethodExitOnEvent)
 	executorTypes = set(ExecutorArgv, ExecutorHTTP)
 	feeds         = set(FeedStdin, FeedFile, FeedArg)
-	probeTypes    = set(ProbeArgv, ProbeDirWritable, ProbeSocketConnect, ProbeTCPReach)
+	probeTypes    = set(ProbeArgv, ProbeDirWritable, ProbeSocketConnect, ProbeTCPReach, ProbeHTTPGet)
 	outcomes      = set(OutcomeRefused, OutcomeQueued, OutcomeInputWritten, OutcomeInputNoReceipt,
 		OutcomeTurnStarted, OutcomeUnknown, OutcomeAddresseeChanged, OutcomeAddresseeGone)
 	probeResults = set(ProbeAvailable, ProbeUnavailable)
@@ -502,7 +502,11 @@ func (v *validator) channel(path string, c *Channel) {
 		v.add(RuleProbeChoice, path+".probes", "give probes or declare probeUndefined")
 	}
 	for i := range c.Probes {
-		v.probe(fmt.Sprintf("%s.probes[%d]", path, i), &c.Probes[i])
+		ppath := fmt.Sprintf("%s.probes[%d]", path, i)
+		v.probe(ppath, &c.Probes[i])
+		if c.Probes[i].Type == ProbeHTTPGet {
+			v.httpGetURL(ppath+".url", c.Probes[i].URL, c.Executor)
+		}
 	}
 
 	v.addressee(path+".addressee", c)
@@ -642,7 +646,34 @@ func (v *validator) executor(path string, e Executor) {
 		if !httpMethods[e.HTTP.Method] {
 			v.add(RuleInvalid, path+".http.method", "method %q is not one of POST, PUT", e.HTTP.Method)
 		}
-		v.url(path+".http.url", e.HTTP.URL)
+		if f := e.HTTP.EndpointFile; f != nil {
+			fpath := path + ".http.endpointFile"
+			if len(e.HTTP.KeyEnv) > 0 {
+				v.add(RuleInvalid, path+".http.keyEnv", "a request with an endpoint file authenticates by its password, not by a key")
+			}
+			if len(f.Paths) == 0 {
+				v.add(RuleInvalid, fpath+".paths", "the endpoint file has no path")
+			}
+			for i, p := range f.Paths {
+				v.pathValue(fmt.Sprintf("%s.paths[%d]", fpath, i), p)
+			}
+			v.text(RuleInvalid, fpath+".urlField", f.URLField)
+			if (f.PasswordField == "") != (f.User == "") {
+				v.add(RuleInvalid, fpath, "a password field and its Basic user go together")
+			}
+			v.endpointURL(path+".http.url", e.HTTP.URL)
+		} else {
+			v.url(path+".http.url", e.HTTP.URL)
+		}
+		for _, k := range slices.Sorted(maps.Keys(e.HTTP.BodyFixed)) {
+			val := e.HTTP.BodyFixed[k]
+			switch {
+			case k == "" || k == e.HTTP.BodyField:
+				v.add(RuleInvalid, path+".http.bodyFixed", "field %q is empty or the field of the text", k)
+			case strings.ContainsAny(k+val, "{}"):
+				v.add(RuleInvalid, path+".http.bodyFixed."+k, "%q is no literal: a fixed field takes no placeholder", val)
+			}
+		}
 		for i, name := range e.HTTP.KeyEnv {
 			if !envNamePattern.MatchString(name) {
 				v.add(RuleInvalid, fmt.Sprintf("%s.http.keyEnv[%d]", path, i), "%q is not an environment variable name", name)
@@ -813,6 +844,35 @@ func (v *validator) value(path, s string, allowText bool) {
 // placeholder starts with "https://", or with "http://" for localhost or
 // 127.0.0.1 (the runner checks the scheme of a placeholder base when it
 // expands it).
+// endpointURL checks the URL template of a request whose base comes from its
+// endpoint file: {endpoint}, then a path checked as that of a literal base.
+func (v *validator) endpointURL(path, s string) {
+	rest, ok := strings.CutPrefix(s, PlaceholderEndpoint)
+	if !ok {
+		v.add(RuleInvalid, path, "%q: a request with an endpoint file starts with %s", s, PlaceholderEndpoint)
+		return
+	}
+	if rest != "" && !strings.HasPrefix(rest, "/") {
+		v.add(RuleInvalid, path, "%q: the endpoint is followed by its path", s)
+		return
+	}
+	v.url(path, "https://endpoint.invalid"+rest)
+}
+
+// httpGetURL checks the URL of a GET a probe or a check sends with the
+// address and authentication of the channel's http executor.
+func (v *validator) httpGetURL(path, s string, e Executor) {
+	if e.Type != ExecutorHTTP || e.HTTP == nil {
+		v.add(RuleInvalid, path, "a GET goes with the address of an http executor")
+		return
+	}
+	if e.HTTP.EndpointFile != nil {
+		v.endpointURL(path, s)
+		return
+	}
+	v.url(path, s)
+}
+
 func (v *validator) url(path, s string) {
 	if s == "" {
 		v.add(RuleInvalid, path, "value is empty")
@@ -1163,11 +1223,30 @@ func absentAt(absent []string, k string) bool {
 
 func (v *validator) probe(path string, p *Probe) {
 	if !probeTypes[p.Type] {
-		v.add(RuleUnknownProbe, path+".type", "probe %q is not one of argv, dir-writable, socket-connect, tcp-reach", p.Type)
+		v.add(RuleUnknownProbe, path+".type", "probe %q is not one of argv, dir-writable, socket-connect, tcp-reach, http-get", p.Type)
 		return
 	}
 	v.text(RuleMissingSource, path+".source", p.Source)
+	if p.URL != "" && p.Type != ProbeHTTPGet {
+		v.add(RuleInvalid, path+".url", "only an http-get probe has a URL")
+	}
 	switch p.Type {
+	case ProbeHTTPGet:
+		if len(p.Argv) > 0 || p.Path != "" || len(p.Paths) > 0 || p.Address != "" {
+			v.add(RuleInvalid, path, "an http-get probe has a URL only")
+		}
+		if len(p.Results) == 0 {
+			v.add(RuleInvalid, path+".results", "an http-get probe needs its result table")
+		}
+		rows := make([]Match, len(p.Results))
+		for i, r := range p.Results {
+			rows[i] = r.Match
+			if !probeResults[r.Result] {
+				v.add(RuleUnknownOutcome, fmt.Sprintf("%s.results[%d].result", path, i), "%q is not available or unavailable", r.Result)
+			}
+		}
+		v.signs(path+".results", rows)
+		v.criteriaOf(path+".results", rows, ExecutorHTTP, false)
 	case ProbeArgv:
 		v.argv(path+".argv", p.Argv, false)
 		if p.Path != "" || len(p.Paths) > 0 || p.Address != "" {
@@ -1251,8 +1330,18 @@ func (v *validator) addressee(path string, c *Channel) {
 			}
 		}
 	}
-	if a.Command != nil {
+	if a.Command != nil && a.Command.HTTPGet != "" {
+		if len(a.Command.Argv) > 0 {
+			v.add(RuleInvalid, path+".command", "a check is a command or a GET, not both")
+		}
+		if len(a.Command.Capture) > 0 {
+			v.add(RuleInvalid, path+".command.capture", "a GET check captures nothing")
+		}
+		v.httpGetURL(path+".command.httpGet", a.Command.HTTPGet, c.Executor)
+	} else if a.Command != nil {
 		v.argv(path+".command.argv", a.Command.Argv, false)
+	}
+	if a.Command != nil {
 		if len(a.Command.Results) == 0 {
 			v.add(RuleInvalid, path+".command.results", "the addressee command needs its result table")
 		}
@@ -1264,7 +1353,11 @@ func (v *validator) addressee(path string, c *Channel) {
 			}
 		}
 		v.signs(path+".command.results", rows)
-		v.criteriaOf(path+".command.results", rows, ExecutorArgv, false)
+		kind := ExecutorArgv
+		if a.Command.HTTPGet != "" {
+			kind = ExecutorHTTP
+		}
+		v.criteriaOf(path+".command.results", rows, kind, false)
 		if len(a.Command.Capture) > 0 && !slices.ContainsFunc(a.Command.Results, func(r AddresseeResultRow) bool {
 			return r.Result == AddresseeSame
 		}) {

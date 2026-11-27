@@ -490,7 +490,25 @@ const (
 	// PlaceholderDelivery is a name unique to one transfer, the same in
 	// every call of it; only the calls of a blind channel name it.
 	PlaceholderDelivery = "{delivery}"
+	// PlaceholderEndpoint starts the URL template of an http request whose
+	// base comes from its EndpointFile.
+	PlaceholderEndpoint = "{endpoint}"
 )
+
+// EndpointFile is the registration file of a local server: the first of
+// Paths whose variable is set (a "~/" path always resolves), read only when
+// it is a regular file of this user that no one else may read and no link;
+// URLField holds the base URL (checked as a template's base: https, or http
+// of localhost or 127.0.0.1), PasswordField the password of the Basic user
+// User when present. The password is a secret of the monitor whatever its
+// length: never in a journal, a text, stdout, an argument list or the
+// environment of a program.
+type EndpointFile struct {
+	Paths         []string `json:"paths"`
+	URLField      string   `json:"urlField"`
+	PasswordField string   `json:"passwordField,omitempty"`
+	User          string   `json:"user,omitempty"`
+}
 
 // Executor is the transport of a channel.
 type Executor struct {
@@ -538,6 +556,14 @@ type HTTPRequest struct {
 	// own (a proxy that rejects the default one of urllib); empty: the
 	// default of the runner's HTTP library.
 	UserAgent string `json:"userAgent,omitempty"`
+	// EndpointFile, when given, names the JSON file a local server of the
+	// agent publishes itself by: the URL template then starts with
+	// {endpoint}, the base URL read from the file, and the request carries
+	// Basic authentication with the password read from it. Exclusive with
+	// KeyEnv.
+	EndpointFile *EndpointFile `json:"endpointFile,omitempty"`
+	// BodyFixed are literal string fields of the JSON body beside BodyField.
+	BodyFixed map[string]string `json:"bodyFixed,omitempty"`
 }
 
 // Idle wait types.
@@ -630,6 +656,9 @@ const (
 	ProbeSocketConnect = "socket-connect"
 	// ProbeTCPReach opens a TCP connection to Address and closes it.
 	ProbeTCPReach = "tcp-reach"
+	// ProbeHTTPGet sends a GET of URL with the address and authentication
+	// of the channel's http executor; Results classify its status.
+	ProbeHTTPGet = "http-get"
 )
 
 // Probe results.
@@ -659,6 +688,9 @@ type Probe struct {
 	// Address is the host:port of a tcp-reach probe, a literal or a
 	// "{env:NAME}" placeholder.
 	Address string `json:"address,omitempty"`
+	// URL is the URL template of an http-get probe, sent with the address
+	// and authentication of the channel's http executor.
+	URL string `json:"url,omitempty"`
 	// Results is the closed table of an argv probe; an answer outside it
 	// is "unavailable".
 	Results []ProbeResultRow `json:"results,omitempty"`
@@ -718,7 +750,11 @@ type RootLife struct {
 // AddresseeCommand runs Argv; Results classify its answer, anything else is
 // "changed" for a terminal channel and not proven for an addressed one.
 type AddresseeCommand struct {
-	Argv    []string             `json:"argv"`
+	Argv []string `json:"argv,omitempty"`
+	// HTTPGet replaces Argv for a channel with an http executor: the URL
+	// template of a GET sent with the executor's address and
+	// authentication; Results classify its status. It captures nothing.
+	HTTPGet string               `json:"httpGet,omitempty"`
 	Results []AddresseeResultRow `json:"results"`
 	// Capture are dotted paths (as in Match.JSON) of the command's JSON
 	// answer whose values the preflight saves (it runs the command once; an

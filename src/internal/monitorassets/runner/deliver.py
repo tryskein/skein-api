@@ -578,18 +578,27 @@ class DeliverySink(object):
             self._check_root_life(channel, life)
         command = check.get("command")
         if command:
+            limit = _CHECK_SEC if timeout is None else min(_CHECK_SEC, timeout)
             try:
-                env = child_env(self.env, self.executor.secrets, getattr(self.executor, "drop", ()))
-                argv = self._program(expand_argv(command.get("argv") or [], env))
-                result = run_program(argv, env, None, _CHECK_SEC if timeout is None else min(_CHECK_SEC, timeout),
-                                     self.executor.secrets)
+                if command.get("httpGet"):
+                    # A GET with the address and authentication of the
+                    # channel's http executor; no program runs.
+                    http = (channel.get("executor") or {}).get("http") or {}
+                    result = HTTPExecutor(self.env, self.executor.secrets).get(http, command["httpGet"], limit)
+                    if getattr(result, "error", None) is not None:
+                        raise RefusedBeforeSend("the addressee check failed (%s)" % result.error)
+                else:
+                    env = child_env(self.env, self.executor.secrets, getattr(self.executor, "drop", ()))
+                    argv = self._program(expand_argv(command.get("argv") or [], env))
+                    result = run_program(argv, env, None, limit, self.executor.secrets)
             except ExecutorRefusal as exc:
                 raise RefusedBeforeSend(exc.reason)
             verdict = None
             if not result.timed_out:
                 for row in command.get("results") or []:
-                    if outcome_sign_matches(row.get("match") or {}, exit_code=result.exit_code, doc=result.json,
-                                            stderr=result.sign_stderr, env=self.env):
+                    if outcome_sign_matches(row.get("match") or {}, exit_code=getattr(result, "exit_code", None),
+                                            doc=result.json, http_status=getattr(result, "http_status", None),
+                                            stderr=getattr(result, "sign_stderr", None), env=self.env):
                         verdict = row.get("result")
                         break
             # Only "same" hands over (INV-4): "changed" is another

@@ -54,6 +54,7 @@
 # (open a TCP connection and close it). A probe confirms that the boundary
 # is reachable from the sandbox, not that a message would be accepted.
 
+import base64
 import json
 import os
 import re
@@ -984,19 +985,26 @@ class HTTPResult(object):
         self.json = None if truncated or body is None else parse_json_object(body)
 
 
-def expand_url(template, env):
+def expand_url(template, env, endpoint=None):
     """The URL of an http executor. A leading placeholder is the base
-    (scheme, host, maybe a path, taken as is); every later one is one
+    (scheme, host, maybe a path, taken as is): {env:NAME}, or {endpoint},
+    the base read from the executor's endpoint file; every later one is one
     element of the path, escaped. ExecutorRefusal when a variable is not
     set, the URL cannot be parsed, the base carries a query or a fragment,
     the authority has user information or a port that is no number, or the
     URL is neither https of a host nor http of a local host."""
     out = []
     base = None
+    if template.startswith(ENDPOINT_PLACEHOLDER):
+        if not endpoint:
+            raise ExecutorRefusal("the URL needs the base of an endpoint file")
+        base = endpoint.rstrip("/")
+        out.append(base)
+        template = template[len(ENDPOINT_PLACEHOLDER):]
     for i, part in enumerate(_URL_PLACEHOLDER.split(template)):
         if i % 2 == 0:
             out.append(part)
-        elif i == 1 and out == [""]:
+        elif i == 1 and out == [""] and base is None:
             base = env_value(part, env)
             out.append(base)
         else:
@@ -1020,6 +1028,67 @@ def expand_url(template, env):
     if parts.scheme == "http" and parts.hostname in _LOCAL_HTTP_HOSTS:
         return url
     raise ExecutorRefusal("the URL of the channel is neither https nor http of localhost")
+
+
+# The placeholder of the base an endpoint file gives
+# (registry.go#PlaceholderEndpoint).
+ENDPOINT_PLACEHOLDER = "{endpoint}"
+
+
+def _endpoint_private(file_st, dir_st):
+    """An endpoint file is read only when no one else may read it (0600):
+    it holds the password of the server."""
+    return not file_st.st_mode & 0o077
+
+
+def read_endpoint(http, env):
+    """(base URL, Basic user, password) from the endpoint file of an http
+    request (registry.go#EndpointFile): the first path whose variable is
+    set, read only as a regular file of this user that no one else may read
+    and no link. ExecutorRefusal names why the file gives no endpoint."""
+    spec = http.get("endpointFile") or {}
+    path = None
+    for candidate in spec.get("paths") or []:
+        path = expand_path(candidate, env)
+        if path is not None:
+            break
+    if path is None:
+        raise ExecutorRefusal("no path of the endpoint file resolves")
+    try:
+        raw = current_platform().read_checked(path, _endpoint_private)
+    except PlatformRefusal as exc:
+        raise ExecutorRefusal("the endpoint file is refused (%s)" % exc.reason)
+    doc = parse_json_object(raw)
+    if doc is None:
+        raise ExecutorRefusal("the endpoint file is no JSON object")
+    base = doc.get(spec.get("urlField") or "")
+    if not isinstance(base, str) or not base:
+        raise ExecutorRefusal("the endpoint file names no URL")
+    password = None
+    if spec.get("passwordField"):
+        password = doc.get(spec["passwordField"])
+        if password is not None and (not isinstance(password, str) or "\r" in password or "\n" in password):
+            raise ExecutorRefusal("the password of the endpoint file is no single line")
+    # The base passes the checks of a template's base.
+    expand_url(ENDPOINT_PLACEHOLDER, env, endpoint=base)
+    return base, spec.get("user") or None, password or None
+
+
+def endpoint_secrets(registry, env):
+    """The passwords the endpoint files of the http channels hold now:
+    secrets of the monitor whatever their length (a password is no word of
+    a text)."""
+    out = []
+    for channel in (registry.channels.values() if registry is not None else []):
+        http = (channel.get("executor") or {}).get("http") or {}
+        if http.get("endpointFile"):
+            try:
+                password = read_endpoint(http, env or {})[2]
+            except ExecutorRefusal:
+                continue
+            if password and password not in out:
+                out.append(password)
+    return out
 
 
 def http_key(http, env):
@@ -1069,7 +1138,7 @@ def monitor_secrets(token, env, registry):
     """The secrets of the monitor, the one list every mode redacts its
     journal and its stdout by (INV-6): the token and the keys of the http
     channels (http_key_secrets)."""
-    return [s for s in [token] + http_key_secrets(registry, env) if s]
+    return [s for s in [token] + http_key_secrets(registry, env) + endpoint_secrets(registry, env) if s]
 
 
 # The name of the thread of one http request.
@@ -1107,22 +1176,42 @@ class HTTPExecutor(object):
         """Send the request. Returns an HTTPResult; raises ExecutorRefusal
         when nothing was handed over."""
         http = executor.get("http") or {}
-        url = expand_url(http.get("url") or "", self.env)
+        return self.request(http, http.get("url") or "", http.get("method") or "POST", text, timeout_sec)
+
+    def get(self, http, url_template, timeout_sec):
+        """A GET of url_template with the address and the authentication
+        of http (an http-get probe, an http check): an HTTPResult;
+        ExecutorRefusal when nothing was sent."""
+        return self.request(http, url_template, "GET", None, timeout_sec)
+
+    def request(self, http, url_template, method, text, timeout_sec):
+        endpoint = user = password = None
+        if http.get("endpointFile"):
+            endpoint, user, password = read_endpoint(http, self.env)
+        url = expand_url(url_template, self.env, endpoint=endpoint)
         key = http_key(http, self.env)
         if http.get("keyEnv") and key is None:
             raise ExecutorRefusal("no key variable is set: %s" % ", ".join(http["keyEnv"]))
-        secrets = self.secrets + ([key] if key else [])
+        secrets = self.secrets + ([key] if key else []) + ([password] if password else [])
         if key and ("\r" in key or "\n" in key):
             raise ExecutorRefusal("the key is not one header line")
-        body = json.dumps({http.get("bodyField") or "text": redact_text(text or "", secrets)}).encode("utf-8")
-        headers = {"Content-Type": "application/json", "Accept": "application/json"}
+        headers = {"Accept": "application/json"}
+        body = None
+        if method != "GET":
+            fields = dict(http.get("bodyFixed") or {})
+            fields[http.get("bodyField") or "text"] = redact_text(text or "", secrets)
+            body = json.dumps(fields).encode("utf-8")
+            headers["Content-Type"] = "application/json"
         if key:
             headers["Authorization"] = "Bearer " + key
+        elif password and user:
+            token = base64.b64encode(("%s:%s" % (user, password)).encode("utf-8")).decode("ascii")
+            headers["Authorization"] = "Basic " + token
         if http.get("userAgent"):
             # The client's own signature: a proxy in front of some APIs
             # rejects the default one of urllib.
             headers["User-Agent"] = http["userAgent"]
-        request = urllib.request.Request(url, data=body, headers=headers, method=http.get("method") or "POST")
+        request = urllib.request.Request(url, data=body, headers=headers, method=method)
         handlers = [_NoRedirect]
         if urllib.parse.urlsplit(url).scheme == "http":
             # A local server: no proxy sees the key in the clear.
@@ -1191,7 +1280,8 @@ class ChannelExecutor(object):
     channel program sees a key."""
 
     def __init__(self, token_file, env, secrets, programs=None, registry=None):
-        self.secrets = [s for s in list(secrets) + http_key_secrets(registry, env) if s]
+        self.secrets = [s for s in list(secrets) + http_key_secrets(registry, env) + endpoint_secrets(registry, env)
+                        if s]
         self.drop = tuple(http_key_names(registry))
         self.argv = ArgvExecutor(token_file, env, self.secrets, programs, self.drop)
         self.http = HTTPExecutor(env, self.secrets)
@@ -1258,9 +1348,24 @@ class SystemProbeRunner(ProbeRunner):
                 return self._socket(probe_path(probe, env))
             if kind == "tcp-reach":
                 return self._tcp(env_value(probe.get("address", ""), env))
+            if kind == "http-get":
+                return self._http_get(channel, probe, env)
         except ExecutorRefusal as exc:
             raise ProbeError(exc.reason)
         raise ProbeError("unknown probe type %s" % kind)
+
+    def _http_get(self, channel, probe, env):
+        """A GET of the probe's URL with the address and authentication of
+        the channel's http executor; its status by the probe's table."""
+        executor = channel.get("executor") or {}
+        timeout = min(executor.get("timeoutSec") or PROBE_TIMEOUT_SEC, PROBE_TIMEOUT_SEC)
+        result = HTTPExecutor(env, self.secrets).get(executor.get("http") or {}, probe.get("url") or "", timeout)
+        if result.timed_out:
+            raise ProbeError("timed out after %d s" % timeout)
+        for row in probe.get("results") or []:
+            if outcome_sign_matches(row.get("match") or {}, doc=result.json, http_status=result.http_status, env=env):
+                return row.get("result")
+        return PROBE_UNAVAILABLE
 
     def _argv(self, channel, probe, env):
         timeout = min((channel.get("executor") or {}).get("timeoutSec") or PROBE_TIMEOUT_SEC, PROBE_TIMEOUT_SEC)

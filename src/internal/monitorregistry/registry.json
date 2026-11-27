@@ -662,7 +662,7 @@
     },
     {
       "id": "opencode",
-      "about": "OpenCode: the runner exits after a batch of events, and the end of the background shell command wakes the session.",
+      "about": "OpenCode: the monitor puts each event into the session as a synthetic message through the shared OpenCode service when that service holds the session; otherwise the runner exits after a batch and the end of the background shell command wakes the session.",
       "source": "github.com/anomalyco/opencode 2255b89 (2.4.1): packages/core/src/tool/plugin/shell.ts#Input (background: true returns at once; a background command without timeout runs without a deadline, a timeout stops it), #notify (the exit of a background command adds a synthetic message with its output), packages/core/src/session/synthetic.ts#make (a synthetic message wakes the session unless resume is false); shell commands get OPENCODE_SESSION_ID; packages/cli/package.json bin opencode (bin/opencode.cjs).",
       "process": {
         "executables": [
@@ -675,6 +675,18 @@
         ]
       },
       "methods": [
+        {
+          "kind": "delivery",
+          "channel": "opencode-synthetic",
+          "conditions": {
+            "env": [
+              {
+                "name": "OPENCODE_SESSION_ID"
+              }
+            ]
+          },
+          "instruction": "Run `command` once in a shell: it returns after the line {\"event\":\"monitor_started\",...}, and the monitor puts each event into this session as a synthetic message through the OpenCode service on its own; a message starts a turn when the session is idle."
+        },
         {
           "kind": "exit-on-event",
           "conditions": {},
@@ -3337,6 +3349,94 @@
       },
       "address": {
         "env": "HERMES_SESSION_ID"
+      }
+    },
+    {
+      "id": "opencode-synthetic",
+      "about": "OpenCode synthetic message: the own delivery of OpenCode, a message the model reads as user input put into the session by its id through the shared OpenCode service, found by the service's registration file; no CLI runs, so no service is started.",
+      "source": "github.com/anomalyco/opencode 2255b89 (2.4.1): packages/protocol/src/groups/session.ts (POST /api/session/:sessionID/synthetic, body text, description, delivery queue; starts the agent unless resume is false; GET /api/session/:sessionID retrieves a session), packages/protocol/src/errors.ts (SessionNotFoundError 404, ConflictError 409), packages/client/src/effect/service.ts#Info and #discover (the service publishes url, pid, version and an optional password in its registration file, mode 0600; discovery never starts the service) and packages/client/src/service-probe.ts#fallback ($XDG_STATE_HOME/opencode/service.json, else ~/.local/state/opencode/service.json), packages/cli/src/services/server-connection.ts (Basic user opencode; `opencode api` without --server starts the service, so it is not called), packages/core/src/tool/plugin/shell.ts (shell commands get OPENCODE_SESSION_ID). A TUI with --standalone or --server keeps its session on another server: the shared service does not find it, and the channel is unavailable.",
+      "step": 3,
+      "order": 3,
+      "kind": "addressed",
+      "blind": false,
+      "detect": {
+        "env": [
+          {
+            "name": "OPENCODE_SESSION_ID"
+          }
+        ]
+      },
+      "executor": {
+        "type": "http",
+        "http": {
+          "method": "POST",
+          "url": "{endpoint}/api/session/{env:OPENCODE_SESSION_ID}/synthetic",
+          "bodyField": "text",
+          "endpointFile": {
+            "paths": [
+              "{env:XDG_STATE_HOME}/opencode/service.json",
+              "~/.local/state/opencode/service.json"
+            ],
+            "urlField": "url",
+            "passwordField": "password",
+            "user": "opencode"
+          },
+          "bodyFixed": {
+            "description": "Skein notification",
+            "delivery": "queue"
+          }
+        },
+        "timeoutSec": 15
+      },
+      "idle": {
+        "type": "none"
+      },
+      "outcomes": [
+        {
+          "match": {
+            "httpStatus": 200
+          },
+          "outcome": "queued"
+        },
+        {
+          "match": {
+            "httpStatus": 404
+          },
+          "outcome": "refused-before-send"
+        }
+      ],
+      "probes": [
+        {
+          "type": "http-get",
+          "source": "packages/protocol/src/groups/session.ts (GET /api/session/:sessionID: the shared service holds the session of this TUI)",
+          "url": "{endpoint}/api/session/{env:OPENCODE_SESSION_ID}",
+          "results": [
+            {
+              "match": {
+                "httpStatus": 200
+              },
+              "result": "available"
+            }
+          ]
+        }
+      ],
+      "addressee": {
+        "process": "none",
+        "command": {
+          "httpGet": "{endpoint}/api/session/{env:OPENCODE_SESSION_ID}",
+          "results": [
+            {
+              "match": {
+                "httpStatus": 200
+              },
+              "result": "same"
+            }
+          ]
+        },
+        "limitation": "A session id is the service's; whether a session recreated under the same id is told apart is not said."
+      },
+      "address": {
+        "env": "OPENCODE_SESSION_ID"
       }
     }
   ],
