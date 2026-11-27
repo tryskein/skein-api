@@ -35,18 +35,16 @@ def answer_sign(exit_code=None, doc=None, http_status=None, timed_out=False, sti
 
 
 def classify(rows, exit_code=None, doc=None, http_status=None, timed_out=False,
-             written=False, earlier_refused=True, stderr=None, still_running=False, env=None):
+             written=False, earlier_refused=True, stderr=None, still_running=False):
     """(outcome, sign) of one answer by the closed table rows. written: the
     text was handed to the channel in this attempt (a step that may have
     written it ran); earlier_refused: every earlier attempt of this
-    delivery was refused before send. env: the environment of the call, for
-    a row whose JSON value names "{env:NAME}" (a receipt names the session
-    the call went to); without it such a row matches nothing."""
+    delivery was refused before send."""
     if timed_out:
         return OUTCOME_UNKNOWN, answer_sign(timed_out=True)
     matched = [r for r in rows or [] if outcome_sign_matches(r.get("match") or {}, exit_code=exit_code,
                                                       doc=doc, http_status=http_status, stderr=stderr,
-                                                      still_running=still_running, env=env)]
+                                                      still_running=still_running)]
     if len(matched) != 1:
         return OUTCOME_UNKNOWN, answer_sign(exit_code, doc, http_status, still_running=still_running)
     outcome = matched[0].get("outcome")
@@ -57,7 +55,7 @@ def classify(rows, exit_code=None, doc=None, http_status=None, timed_out=False,
     return outcome, matched[0].get("match")
 
 
-def classify_result(rows, result, written=False, earlier_refused=True, env=None):
+def classify_result(rows, result, written=False, earlier_refused=True):
     """classify for a CallResult of the argv executor or an HTTPResult of
     the http executor; a request that failed without a status is
     "unknown"."""
@@ -72,4 +70,4 @@ def classify_result(rows, result, written=False, earlier_refused=True, env=None)
     return classify(rows, exit_code=result.exit_code, doc=result.json, timed_out=result.timed_out,
                     http_status=getattr(result, "http_status", None), stderr=getattr(result, "sign_stderr", None),
                     written=written, earlier_refused=earlier_refused,
-                    still_running=getattr(result, "still_running", False), env=env)
+                    still_running=getattr(result, "still_running", False))

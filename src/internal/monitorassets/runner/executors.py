@@ -1629,9 +1629,6 @@ class ChannelExecutor(object):
         self.secrets = [s for s in list(secrets) + http_key_secrets(registry, env)
                         + endpoint_secrets(registry, env, channels) if s]
         self.drop = tuple(http_key_names(registry))
-        # The environment the calls expand their variables from; a row of an
-        # outcome table that names "{env:NAME}" reads it there too.
-        self.env = env
         self.argv = ArgvExecutor(token_file, env, self.secrets, programs, self.drop)
         self.http = HTTPExecutor(env, self.secrets)
         self.programs = self.argv.programs

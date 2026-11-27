@@ -116,22 +116,25 @@ class OpenCodeTest(unittest.TestCase):
         self.assertEqual((body["text"], body["delivery"]), (text, "queue"))
         self.assertEqual(request["headers"]["Authorization"],
                          "Basic " + base64.b64encode(("opencode:" + PASSWORD).encode()).decode())
-        self.assertEqual(RUNNER.classify_result(REG.channel("opencode-synthetic")["outcomes"], result,
-                                                env=self.env)[0], "queued")
+        self.assertEqual(RUNNER.classify_result(REG.channel("opencode-synthetic")["outcomes"], result)[0], "queued")
 
     def test_each_sign_gives_one_outcome(self):
-        # Only the success the source declares, a 200 with the receipt of
-        # this session's synthetic message, is queued; a 200 whose body is
-        # empty, broken or another item's is a damaged receipt: unknown.
+        # Only the success the source declares, a 200 with the receipt of a
+        # synthetic message (its id and session), is queued; a 200 whose
+        # body is empty, broken or another item's is a damaged receipt:
+        # unknown. That the session is the addressed one is the check's: the
+        # GET before the POST compares its id.
         # Statuses the source does not declare (201, 202, 204) are unknown.
         rows = REG.channel("opencode-synthetic")["outcomes"]
-        other = {"data": dict(RECEIPT["data"], sessionID="ses_01JD0000000000000000000099")}
         for name, status, doc, outcome in (
                 ("the receipt", 200, RECEIPT, "queued"),
+                ("no session in the item", 200, {"data": dict((k, v) for k, v in RECEIPT["data"].items()
+                                                             if k != "sessionID")}, "unknown"),
+                ("no id of the item", 200, {"data": dict((k, v) for k, v in RECEIPT["data"].items()
+                                                        if k != "id")}, "unknown"),
                 ("an empty body", 200, None, "unknown"),
                 ("an empty object", 200, {}, "unknown"),
                 ("no data", 200, {"ok": True}, "unknown"),
-                ("another session's item", 200, other, "unknown"),
                 ("a user item", 200, {"data": dict(RECEIPT["data"], type="user")}, "unknown"),
                 ("a session instead of an item", 200, {"data": {"id": SESSION}}, "unknown"),
                 ("201", 201, RECEIPT, "unknown"),
@@ -142,19 +145,17 @@ class OpenCodeTest(unittest.TestCase):
                 ("server error", 500, {}, "unknown"),
                 ("unauthorized", 401, {}, "unknown")):
             with self.subTest(case=name):
-                self.assertEqual(RUNNER.classify(rows, http_status=status, doc=doc, env=self.env)[0], outcome)
+                self.assertEqual(RUNNER.classify(rows, http_status=status, doc=doc)[0], outcome)
 
-    def test_the_driver_of_a_delivery_reads_the_receipt_of_its_session(self):
-        # The outcome of a transfer is classified with the environment of
-        # the call: the receipt names the session it went to.
+    def test_the_driver_of_a_delivery_reads_the_receipt(self):
         self.register()
         channel = REG.channel("opencode-synthetic")
         driver = RUNNER.ArgvDriver(channel, RUNNER.ChannelExecutor(self.box.token, self.env, [pm.TOKEN],
                                                                    None, REG))
         guard = mock.Mock()
+        guard.endpoint = None
         guard.call_timeout.return_value = 10
-        other = {"data": dict(RECEIPT["data"], sessionID="ses_01JD0000000000000000000099")}
-        for answer, outcome in ((RECEIPT, "queued"), (other, "unknown"), ({}, "unknown")):
+        for answer, outcome in ((RECEIPT, "queued"), ({"data": {"id": SESSION}}, "unknown"), ({}, "unknown")):
             with self.subTest(outcome=outcome, answer=answer):
                 self.service.respond([{"status": 200, "json": answer}])
                 self.assertEqual(driver.send("event", guard)[0], outcome)
@@ -169,7 +170,7 @@ class OpenCodeTest(unittest.TestCase):
             with self.subTest(case=name):
                 self.service.respond([{"status": 200, "raw": raw}])
                 result = RUNNER.HTTPExecutor(self.env, []).call(spec, "event", 10)
-                self.assertEqual(RUNNER.classify_result(rows, result, env=self.env)[0], "unknown")
+                self.assertEqual(RUNNER.classify_result(rows, result)[0], "unknown")
 
     def test_the_check_before_a_send_finds_the_session(self):
         self.register()
