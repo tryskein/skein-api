@@ -151,6 +151,19 @@ def json_path_value(doc, path):
     return json.dumps(doc)
 
 
+def capture_value(doc, path):
+    """The value at path of a JSON document as an addressee capture keeps
+    it, each kind apart: a string as itself, any other value (null, a
+    number, a boolean, an object, a list) as {"json": its canonical JSON},
+    None only for a path the document does not hold."""
+    found, value = json_path_lookup(doc, path)
+    if not found:
+        return None
+    if isinstance(value, str):
+        return value
+    return {"json": json.dumps(value, sort_keys=True, separators=(",", ":"))}
+
+
 def outcome_sign_matches(match, exit_code=None, doc=None, http_status=None, stderr=None):
     """Whether an answer carries the sign of a table row: every criterion
     the row states holds. A row without a criterion matches nothing. stderr
@@ -1060,7 +1073,7 @@ class SystemProbeRunner(ProbeRunner):
             raise ProbeError("the addressee check does not answer same")
         if result.json is None:
             raise ProbeError("the addressee check gives no JSON answer")
-        return [[path, json_path_value(result.json, path)] for path in command.get("capture") or []]
+        return [[path, capture_value(result.json, path)] for path in command.get("capture") or []]
 
     @staticmethod
     def _socket(path):

@@ -493,7 +493,7 @@ class DeliverySink(object):
             saved = dict((p, v) for p, v in ((self.identity.get("captures") or {}).get(channel.get("id")) or []))
             for path in command.get("capture") or []:
                 if path not in saved or result.timed_out or result.json is None or \
-                        json_path_value(result.json, path) != saved[path]:
+                        capture_value(result.json, path) != saved[path]:
                     raise AddresseeChanged()
 
     def _program(self, argv):

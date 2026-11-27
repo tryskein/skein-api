@@ -339,6 +339,14 @@ class CaptureBeforeTransferTest(unittest.TestCase):
             "no value in the answer": ({"A": [["inc", "inc-1"]]}, {"exit": 0, "stdout": {"other": "inc-1"}}),
             "no value saved by the preflight": (None, {"exit": 0, "stdout": {"inc": "inc-1"}}),
             "a value where the preflight saw none": ({"A": [["inc", None]]}, {"exit": 0, "stdout": {"inc": "inc-1"}}),
+            # Each kind apart: an object or a list is no absence, null is not
+            # the string "null", another object is another value.
+            "an object where the preflight saw none": ({"A": [["inc", None]]},
+                                                       {"exit": 0, "stdout": {"inc": {"pty": 1}}}),
+            "a list where the preflight saw none": ({"A": [["inc", None]]}, {"exit": 0, "stdout": {"inc": [1]}}),
+            "null where the preflight saw the string null": ({"A": [["inc", "null"]]},
+                                                             {"exit": 0, "stdout": {"inc": None}}),
+            "another object": ({"A": [["inc", {"json": '{"pty":1}'}]]}, {"exit": 0, "stdout": {"inc": {"pty": 2}}}),
         }
         for name, (captures, answer) in cases.items():
             with self.subTest(case=name):
@@ -357,6 +365,20 @@ class CaptureBeforeTransferTest(unittest.TestCase):
         mon = world.monitor(identity=self.identity({"A": [["inc", None]]}))
         mon.page([delivery.note(1)])
         self.assertEqual([d[:3] for d in mon.deliveries()], [(1, "queued", "A")])
+
+    def test_the_same_object_again_lets_the_transfer_go(self):
+        world = self.world()
+        fake_channel.FakeProgram(world.bin, "show").respond([{"exit": 0, "stdout": {"inc": {"pty": 1, "gen": 2}}}])
+        mon = world.monitor(identity=self.identity({"A": [["inc", {"json": '{"gen":2,"pty":1}'}]]}))
+        mon.page([delivery.note(1)])
+        self.assertEqual([d[:3] for d in mon.deliveries()], [(1, "queued", "A")])
+
+    def test_the_capture_keeps_each_kind_apart(self):
+        values = {"s": "x", "n": None, "t": "null", "o": {"a": 1}, "l": [1], "b": False}
+        doc = {"v": values}
+        self.assertEqual([RUNNER.capture_value(doc, "v." + k) for k in ("s", "n", "t", "o", "l", "b", "gone")],
+                         ["x", {"json": "null"}, "null", {"json": '{"a":1}'}, {"json": "[1]"}, {"json": "false"},
+                          None])
 
     def test_the_check_and_the_idle_wait_run_the_programs_of_the_preflight(self):
         world = self.world(show="show", idle="idle")
