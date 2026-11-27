@@ -92,6 +92,7 @@ class BlindCase(unittest.TestCase):
 
     def preflight(self, above=IN_PANE, agent="aider", client="aider", forced=None, **extra):
         source = chain(agent, above)
+        self.source = source
         patch = mock.patch.object(RUNNER.PosixPlatform, "process_info", staticmethod(source.info))
         patch.start()
         self.addCleanup(patch.stop)
@@ -105,31 +106,34 @@ class BlindCase(unittest.TestCase):
                                 prober=et.Probe(), placement=pl)
 
     def mon(self, channel, program, env, foreground=True):
-        """The monitor of the working runner over a result that names
-        channel (built here: a channel without a pane PID is never chosen,
-        but its record's commands are the subject), the agent in its pane."""
-        source = chain("aider", IN_PANE)
+        """The monitor of a record the working preflight chooses (kitty: its
+        window's PID is known): its result and live binding come from a
+        preflight of the agent in its pane. Out of the foreground, the agent
+        leaves it after the preflight. A record the preflight never chooses
+        (no source of its pane PID) is driven by its own driver alone
+        (direct): no result of a working preflight names it."""
+        if channel != "kitty":
+            return self.direct(channel, program, env)
+        line = self.preflight(above=[(et.PANE_PID, "bash")], **env)
+        self.assertEqual(line["channel"], channel, line)
         if not foreground:
-            source.procs[et.AGENT_PID].tpgid = et.PANE_PID
-        patch = mock.patch.object(RUNNER.PosixPlatform, "process_info", staticmethod(source.info))
-        patch.start()
-        self.addCleanup(patch.stop)
-        env = dict(self.world.env("tok", "aider", **env))
-        token = env["SKEIN_TOKEN_FILE"]
-        rec = REG.channel(channel)
-        address = rec["address"]
-        identity = {"process": [et.AGENT_PID, "s%d" % et.AGENT_PID], "inherited": [], "terminal": None,
-                    "addresses": [{"channel": channel, "value": env[address["env"]], "env": address["env"],
-                                   "qualifiers": [[q, env[q]] for q in address.get("qualifiers") or []]}]}
-        doc = {"method": "detached", "channel": channel, "fallbacks": [], "identity": identity, "preflightId": 1,
-               "programs": {program: self.cli[program].path}}
+            self.source.procs[et.AGENT_PID].tpgid = et.PANE_PID
+        token = self.world.token("tok")
+        env = dict((k, v) for k, v in self.world.env("tok", "aider", **dict(NO_TMUX, **env)).items() if v is not None)
+        doc = RUNNER.load_preflight(token)
+        identity = doc["identity"]
         journal = RUNNER.Journal(token, ft.ISSUE, secrets=[ft.TOKEN], env=env)
         ledger = RUNNER.Ledger(ft.SERVER, "tok", RUNNER.identity_from_doc(identity), env=env,
                                clock=self.world.clock.now)
-        spy = dt.Spy(RUNNER.ArgvExecutor(token, env, [ft.TOKEN], doc["programs"]), self.world.clock)
+        spy = dt.Spy(RUNNER.ArgvExecutor(token, env, [ft.TOKEN], doc.get("programs")), self.world.clock)
         sink = RUNNER.DeliverySink(journal, token, doc, REG, env, ledger, spy, ft.ISSUE, cancel=dt.FakeCancel(),
                                    clock=self.world.clock)
         return ft.Monitor(self.world, "tok", sink, journal, doc, spy)
+
+    def direct(self, channel, program, env):
+        env = dict(self.world.env("tok", "aider", **env))
+        executor = RUNNER.ArgvExecutor(env["SKEIN_TOKEN_FILE"], env, [ft.TOKEN], {program: self.cli[program].path})
+        return DirectChannel(REG.channel(channel), executor)
 
     def calls(self, program, prefix=None):
         calls = self.cli[program].calls() if prefix is None else self.cli[program].calls(prefix)
@@ -145,7 +149,45 @@ class BlindCase(unittest.TestCase):
                 self.cli[program].respond(**answers)
                 mon.page([ft.note(i + 1)], cursor={"ts": "t", "id": i + 1})
                 self.assertEqual(mon.statuses(), [(i + 1, outcome)])
-                self.assertEqual([" ".join(c[:2]) for c in self.calls(program)], called)
+                # The calls of the delivery (the preflight's ls of kitty aside).
+                self.assertEqual([" ".join(c[:2]) for c in self.calls(program) if c[:2] != ["@", "ls"]], called)
+
+
+class OpenGuard(object):
+    """The guard of a driver driven alone: every check holds."""
+
+    def before_send(self):
+        pass
+
+    prepare = final = before_send
+
+    def before_commit(self):
+        return True
+
+    def remaining(self):
+        return 30.0
+
+    def call_timeout(self):
+        return 10.0
+
+
+class DirectChannel(object):
+    """A record's driver driven alone: each event's text through its steps
+    and tables, (event id, outcome) per event."""
+
+    def __init__(self, channel, executor):
+        self.channel = channel
+        self.executor = executor
+        self.out = []
+
+    def page(self, notes, cursor=None):
+        for n in notes:
+            text = RUNNER.plain_text(n, "")
+            outcome, _ = RUNNER.channel_driver(self.channel, self.executor).send(text, OpenGuard())
+            self.out.append((n["id"], outcome))
+
+    def statuses(self):
+        return list(self.out)
 
 
 class ZellijRecordTest(BlindCase):
@@ -217,7 +259,7 @@ class KittyRecordTest(BlindCase):
         self.fresh()
         line = self.preflight(above=[(et.PANE_PID, "bash")], **KITTY)
         self.assertEqual(line["channel"], "kitty")
-        self.assertIn(["@", "ls", "--match", "state:self"], self.calls("kitten"))
+        self.assertIn(["@", "ls", "--match", "id:3"], self.calls("kitten"))
         self.fresh()
         self.cli["kitten"].respond(**{"@ ls": [kitty_ls(77)]})
         line = self.preflight(above=[(et.PANE_PID, "bash")], **KITTY)
@@ -227,10 +269,13 @@ class KittyRecordTest(BlindCase):
         self.fresh()
         mon = self.mon("kitty", "kitten", KITTY)
         mon.page([ft.note(1)])
-        text, enter = self.cli["kitten"].calls()
-        self.assertEqual(text["argv"], ["@", "send-text", "--match", "state:self", "--bracketed-paste", "auto", "--stdin"])
+        text, enter = [c for c in self.cli["kitten"].calls() if c["argv"][:2] != ["@", "ls"]]
+        # K4 of wave 13 round 1: send-key has no window of its own and
+        # would take the focused one (kitty/rc/base.py#windows_for_payload):
+        # the text and Enter name the same window, the agent's.
+        self.assertEqual(text["argv"], ["@", "send-text", "--match", "id:3", "--bracketed-paste", "auto", "--stdin"])
         self.assertIn('notification="1"', text["stdin"])
-        self.assertEqual(enter["argv"], ["@", "send-key", "--match", "state:self", "enter"])
+        self.assertEqual(enter["argv"], ["@", "send-key", "--match", "id:3", "enter"])
         self.outcomes("kitty", "kitten", KITTY, [
             ("sent, entered", {}, "input-without-receipt", ["@ send-text", "@ send-key"]),
             ("the text failed", {"@ send-text": [out(1)]}, "unknown", ["@ send-text"]),
@@ -241,7 +286,7 @@ class KittyRecordTest(BlindCase):
         self.fresh()
         mon = self.mon("kitty", "kitten", KITTY, foreground=False)
         mon.page([ft.note(1)])
-        self.assertEqual(self.calls("kitten"), [])
+        self.assertEqual([c for c in self.calls("kitten") if c[:2] != ["@", "ls"]], [])
         self.assertEqual(mon.statuses(), [(1, "refused-before-send")])
 
 

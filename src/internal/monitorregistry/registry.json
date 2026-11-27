@@ -3071,7 +3071,7 @@
     {
       "id": "kitty",
       "about": "kitty (allow_remote_control): the event is sent to the agent's window, then Enter; blind, and kitty reports no errors of either: input without a receipt.",
-      "source": "github.com/kovidgoyal/kitty 121ef18 (0.51.1): kitty/rc/send_text.py (send-text --stdin reads the text from stdin, --bracketed-paste auto wraps it when the program asked for it; \"errors are not reported, for technical reasons\"), kitty/rc/send_key.py (send-key enter), kitty/rc/base.py (--match state:self is the window the command runs in) and tools/cmd/at/main.go#send_rc_command (the client names that window by KITTY_WINDOW_ID), kitty/rc/ls.py with kitty/boss.py#list_os_windows and kitty/window.py#WindowDict (ls --match state:self: a JSON list of OS windows, tabs and windows; the pid of the window's process; sends nothing). KITTY_WINDOW_ID is the window, KITTY_LISTEN_ON the socket remote control listens on; remote control needs allow_remote_control. Linux and macOS.",
+      "source": "github.com/kovidgoyal/kitty 121ef18 (0.51.1): kitty/rc/send_text.py (send-text --stdin reads the text from stdin, --bracketed-paste auto wraps it when the program asked for it; \"errors are not reported, for technical reasons\"), kitty/rc/send_key.py (send-key enter), kitty/rc/base.py#windows_for_payload (a command with no window of its own - send-key passes None - takes boss.active_window, so state:self there is the focused window, not the agent's: every call names the agent's window explicitly, --match id:<KITTY_WINDOW_ID>), kitty/rc/ls.py with kitty/boss.py#list_os_windows and kitty/window.py#WindowDict (ls --match state:self: a JSON list of OS windows, tabs and windows; the pid of the window's process; sends nothing). KITTY_WINDOW_ID is the window, KITTY_LISTEN_ON the socket remote control listens on; remote control needs allow_remote_control. Linux and macOS.",
       "step": 7,
       "order": 4,
       "kind": "terminal",
@@ -3093,7 +3093,7 @@
           "@",
           "send-text",
           "--match",
-          "state:self",
+          "id:{env:KITTY_WINDOW_ID}",
           "--bracketed-paste",
           "auto",
           "--stdin"
@@ -3109,7 +3109,7 @@
             "@",
             "send-key",
             "--match",
-            "state:self",
+            "id:{env:KITTY_WINDOW_ID}",
             "enter"
           ],
           "feed": "stdin",
@@ -3166,7 +3166,7 @@
           "@",
           "ls",
           "--match",
-          "state:self"
+          "id:{env:KITTY_WINDOW_ID}"
         ],
         "jsonField": "0.tabs.0.windows.0.pid"
       },

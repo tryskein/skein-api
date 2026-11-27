@@ -479,8 +479,10 @@ const (
 	FeedArg = "arg"
 )
 
-// Argument-list placeholders. An element of an argument list is either a
-// literal without braces or exactly one placeholder.
+// Argument-list placeholders. An element of an argument list is a literal
+// without braces, exactly one placeholder, or a literal prefix of
+// [A-Za-z0-9_.:=-] followed by one "{env:NAME}" (a selector such as
+// "id:{env:KITTY_WINDOW_ID}" that the program reads as one argument).
 const (
 	PlaceholderText     = "{text}"
 	PlaceholderTextFile = "{textFile}"

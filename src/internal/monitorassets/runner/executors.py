@@ -265,9 +265,18 @@ def outcome_sign_matches(match, exit_code=None, doc=None, http_status=None, stde
     return stated
 
 
+# A literal prefix and one variable in one element (registry.go, argument
+# list placeholders): "id:{env:KITTY_WINDOW_ID}".
+_PREFIXED_ENV = re.compile(r"\A([A-Za-z0-9_.:=-]+)\{env:([A-Za-z_][A-Za-z0-9_]*)\}\Z")
+
+
 def env_value(element, env):
-    """The value of a "{env:NAME}" element; ExecutorRefusal when NAME is not
-    set. A literal is returned as is."""
+    """The value of a "{env:NAME}" element, or of a literal prefix and one
+    such variable; ExecutorRefusal when NAME is not set. A literal is
+    returned as is."""
+    prefixed = _PREFIXED_ENV.match(element)
+    if prefixed:
+        return prefixed.group(1) + env_value("{env:%s}" % prefixed.group(2), env)
     if element.startswith("{env:") and element.endswith("}"):
         name = element[len("{env:"):-1]
         value = env.get(name, "")

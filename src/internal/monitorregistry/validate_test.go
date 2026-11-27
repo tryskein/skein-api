@@ -352,6 +352,19 @@ func TestValidate_RejectsEachRule(t *testing.T) {
 			endpointChannel(r)
 			r.Channels[1].Addressee.Command.Results[0].Match = Match{ExitCode: intp(0)}
 		}, RuleInvalid},
+		{"a prefix before the text", func(r *Registry) {
+			r.Channels[0].Executor.Argv = []string{"alpha", "queue", "--msg={text}"}
+			r.Channels[0].Executor.Feed = FeedArg
+		}, RuleInvalid},
+		{"two variables in one element", func(r *Registry) {
+			r.Channels[0].Executor.Argv = []string{"alpha", "queue", "{env:A}{env:B}"}
+		}, RuleInvalid},
+		{"a prefix with a space before a variable", func(r *Registry) {
+			r.Channels[0].Executor.Argv = []string{"alpha", "queue", "id :{env:A}"}
+		}, RuleInvalid},
+		{"a suffix after a variable", func(r *Registry) {
+			r.Channels[0].Executor.Argv = []string{"alpha", "queue", "{env:A}:x"}
+		}, RuleInvalid},
 		{"two rows of a call still running", func(r *Registry) {
 			r.Channels[0].Executor.Detach = true
 			r.Channels[0].Outcomes = append(r.Channels[0].Outcomes,
@@ -775,6 +788,16 @@ func TestValidate_AcceptsTheOpenCodeReadings(t *testing.T) {
 	endpointChannel(r)
 	if err := r.Validate(); err != nil {
 		t.Fatalf("a correct record with the OpenCode readings was refused: %v", err)
+	}
+}
+
+// TestValidate_AcceptsAPrefixedVariable — a selector of a literal prefix and
+// one variable in one element (kitty's --match id:<window>) passes.
+func TestValidate_AcceptsAPrefixedVariable(t *testing.T) {
+	r := validRegistry()
+	r.Channels[0].Executor.Argv = []string{"alpha", "queue", "--match", "id:{env:ALPHA_THREAD}"}
+	if err := r.Validate(); err != nil {
+		t.Fatalf("a prefixed variable was refused: %v", err)
 	}
 }
 

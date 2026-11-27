@@ -815,8 +815,12 @@ func (v *validator) argv(path string, argv []string, allowText bool) {
 	}
 }
 
+// prefixedEnvPattern is a value of a literal prefix and one variable.
+var prefixedEnvPattern = regexp.MustCompile(`^[A-Za-z0-9_.:=-]+\{env:[A-Za-z_][A-Za-z0-9_]*\}$`)
+
 // value checks one templated value: a literal without braces, "{env:NAME}",
-// or, where allowText, "{text}" / "{textFile}".
+// a literal prefix followed by one "{env:NAME}", or, where allowText,
+// "{text}" / "{textFile}".
 func (v *validator) value(path, s string, allowText bool) {
 	switch {
 	case s == PlaceholderText || s == PlaceholderTextFile:
@@ -828,6 +832,9 @@ func (v *validator) value(path, s string, allowText bool) {
 		if !envNamePattern.MatchString(name) {
 			v.add(RuleInvalid, path, "%q is not an environment variable name", name)
 		}
+	case prefixedEnvPattern.MatchString(s):
+		// A literal prefix then one variable ("id:{env:KITTY_WINDOW_ID}"):
+		// a selector whose field the program needs in the same argument.
 	case s == PlaceholderDelivery:
 		if !v.delivery {
 			v.add(RuleInvalid, path, "only the calls of a blind channel name %s", s)
