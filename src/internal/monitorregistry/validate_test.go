@@ -365,6 +365,19 @@ func TestValidate_RejectsEachRule(t *testing.T) {
 		{"a suffix after a variable", func(r *Registry) {
 			r.Channels[0].Executor.Argv = []string{"alpha", "queue", "{env:A}:x"}
 		}, RuleInvalid},
+		{"a pane PID field that is no path", func(r *Registry) {
+			r.Channels[2].PanePID.JSONField = "0..pid"
+		}, RuleInvalid},
+		{"a pane PID field with an empty element at its end", func(r *Registry) {
+			r.Channels[2].PanePID.JSONField = "0.tabs."
+		}, RuleInvalid},
+		{"the insert of a blind channel by http", func(r *Registry) {
+			c := &r.Channels[2]
+			c.Executor = Executor{Type: ExecutorHTTP, TimeoutSec: 10,
+				HTTP: &HTTPRequest{Method: "POST", URL: "https://mux.test/send", BodyField: "text"}}
+			c.Binaries = nil
+			c.Outcomes = []OutcomeRow{{Match: Match{HTTPStatus: intp(200)}, Outcome: OutcomeInputWritten}}
+		}, RuleInvalid},
 		{"two rows of a call still running", func(r *Registry) {
 			r.Channels[0].Executor.Detach = true
 			r.Channels[0].Outcomes = append(r.Channels[0].Outcomes,

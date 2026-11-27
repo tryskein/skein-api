@@ -542,6 +542,12 @@ func (v *validator) channel(path string, c *Channel) {
 	}
 	if c.PanePID != nil {
 		v.formatArgv(path+".panePid.argv", c.PanePID.Argv)
+		if c.PanePID.JSONField != "" {
+			v.jsonPath(path+".panePid.jsonField", c.PanePID.JSONField)
+		}
+	}
+	if c.Blind && c.Executor.Type != ExecutorArgv {
+		v.add(RuleInvalid, path+".executor.type", "the insert of a blind channel is an argv program")
 	}
 	v.blindCalls(path, c)
 
