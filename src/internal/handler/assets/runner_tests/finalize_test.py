@@ -339,7 +339,10 @@ class EndUnderLockTest(unittest.TestCase):
         # budget, all calls within the idle window of the token).
         world = World(self, [chan("A", "chan-a")])
         world.prog("chan-a").respond([REFUSE])
-        mon = world.monitor(idle=1.5)
+        # A window that holds the call (its own 2 s and the slack of the
+        # transport) but not the second call after 5 s: one call, within the
+        # window.
+        mon = world.monitor(idle=4)
         timeouts = []
         inner = mon.sink.executor
 
@@ -352,7 +355,7 @@ class EndUnderLockTest(unittest.TestCase):
         mon.sink.executor = Recording()
         mon.sink.receipt("receipt text")
         self.assertEqual(len(timeouts), 1)
-        self.assertLessEqual(timeouts[0], 1.5)
+        self.assertLessEqual(timeouts[0], 4)
 
     def test_a_receipt_keeps_to_the_text_limit_of_the_channel(self):
         # Review finding 33 of wave 7 (US-10: a text never goes over the

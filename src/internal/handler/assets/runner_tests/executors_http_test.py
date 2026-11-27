@@ -286,17 +286,17 @@ class BudgetTest(unittest.TestCase):
         threading.Thread(target=ended, daemon=True).start()
         self.assertTrue(done.wait(1 + 2), "the thread of the request outlived its deadline")
 
-    def test_the_idle_window_bounds_a_longer_timeout(self):
+    def test_a_window_shorter_than_the_call_sends_nothing(self):
         # The channel's own timeout (30 s) is longer than the idle window
-        # (1 s): the request ends with the window, unknown.
+        # (1 s): the call would get less than its own time, so nothing is
+        # sent (round 2 of the wave 11 review: a refusal before send, no
+        # call).
         world = World(self, [http_channel(timeout=30)])
-        world.server.respond([{"hang": True}])
         mon = world.monitor(idle=1)
-        page = threading.Thread(target=mon.page, args=([note(1)],), daemon=True)
-        page.start()
-        page.join(1 + 2)
-        self.assertFalse(page.is_alive(), "the request outlived the idle window")
-        self.assertEqual([d[:3] for d in mon.deliveries()], [(1, "unknown", "H")])
+        mon.page([note(1)])
+        self.assertEqual(mon.spy.calls, [])
+        self.assertEqual(world.server.requests(), [])
+        self.assertEqual([d[:2] for d in mon.deliveries()], [(1, "refused-before-send")])
 
     def test_a_closed_port_is_refused_before_send_within_the_budget(self):
         world = World(self, [http_channel(), http_channel_b()])

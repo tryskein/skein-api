@@ -21,6 +21,7 @@ Run on its own: python3 internal/handler/assets/runner_tests/core_readings_test.
 Standard library of Python 3.6 only.
 """
 
+import atexit
 import base64
 import json
 import os
@@ -83,6 +84,14 @@ REGISTRY = {
 RUNNER = harness.load_runner(registry=base64.b64encode(json.dumps(REGISTRY).encode("utf-8")).decode("ascii"))
 REG = RUNNER.load_registry()
 RUNNER_PROC = ("python3", ["python3", "-c", "_SKEIN_LOADER_MODE = 'client'"])
+# The program of launch's own check: the preflight takes a channel only when
+# it finds it (round 2 of the wave 11 review, line 9).
+SHOW_BIN = tempfile.mkdtemp(prefix="skein-readings-show-")
+atexit.register(shutil.rmtree, SHOW_BIN, True)
+with open(os.path.join(SHOW_BIN, "show"), "w") as _fh:
+    _fh.write("#!/bin/sh\nexit 0\n")
+os.chmod(os.path.join(SHOW_BIN, "show"), 0o700)
+PATH_WITH_SHOW = SHOW_BIN + os.pathsep + os.environ.get("PATH", os.defpath)
 SHOW_ANSWER = {"result": {"terminal": {"incarnationId": "inc-1", "agentIdentity": "codex"}}}
 CAPTURED = [["result.terminal.incarnationId", "inc-1"], ["result.terminal.agentIdentity", "codex"]]
 
@@ -293,7 +302,7 @@ class CaptureAtPreflightTest(unittest.TestCase):
                     RUNNER.SystemProbeRunner().capture(self.chan, self.env)
 
     def test_a_failed_capture_makes_the_channel_unavailable(self):
-        env = {"PATH": os.environ.get("PATH", os.defpath), "HOST_AGENT_ID": "agent-1"}
+        env = {"PATH": PATH_WITH_SHOW, "HOST_AGENT_ID": "agent-1"}
         ctx = context(["bash", "gamma", "host-daemon"], "gamma", env,
                       FakeProbe(RUNNER.ProbeError("the addressee check does not answer same")))
         ok, cause = RUNNER.channel_available(ctx, "launch")
@@ -423,7 +432,7 @@ class LauncherTest(unittest.TestCase):
     not launched by it: a nested agent, the variables without the host's
     process."""
 
-    ENV = {"PATH": os.environ.get("PATH", os.defpath), "HOST_AGENT_ID": "agent-1", "FIRST_ID": "first-1",
+    ENV = {"PATH": PATH_WITH_SHOW, "HOST_AGENT_ID": "agent-1", "FIRST_ID": "first-1",
            "BETA_THREAD": "thread-1"}
 
     def test_an_agent_launched_by_the_host_skips_its_own_delivery(self):
