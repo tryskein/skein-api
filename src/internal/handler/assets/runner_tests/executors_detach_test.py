@@ -45,6 +45,12 @@ if mode == "tree":
     with open(os.environ["MARK"] + ".pids", "w") as fh:
         fh.write("%d %d" % (os.getpid(), child.pid))
     time.sleep(600)
+if mode == "noisy":
+    # More output than the cap, on both streams.
+    size = int(os.environ["NOISE"])
+    sys.stdout.write("o" * size)
+    sys.stderr.write("e" * size)
+    sys.exit(0)
 if mode == "slow":
     while not os.path.exists(os.environ["MARK"] + ".go"):
         time.sleep(0.05)
@@ -217,6 +223,19 @@ class DetachedCallTest(unittest.TestCase):
             reaper.join(30)
             second.join(30)
         self.assertEqual(order, ["old tree killed", "second call admitted"])
+
+    def test_the_output_kept_of_a_call_is_capped(self):
+        # Review round 2 of wave 14, row 16: the output of a detached call
+        # is kept to the cap on both streams, the rest is read and dropped.
+        self.env["NOISE"] = str(RUNNER.OUTPUT_CAP_BYTES + 4096)
+        calls = RUNNER.DetachedCalls(clock=lambda: 0.0)
+        self.addCleanup(calls.end_all)
+        result = RUNNER.run_detached([sys.executable, self.script, "noisy"], self.env, b"", 30, key="channel",
+                                     calls=calls)
+        self.assertEqual(result.exit_code, 0)
+        self.assertEqual((len(result.stdout), result.truncated), (RUNNER.OUTPUT_CAP_BYTES, True))
+        self.assertEqual((len(result.stderr), result.stderr_truncated), (RUNNER.OUTPUT_CAP_BYTES, True))
+        self.assertIsNone(result.json)
 
     def failing_kill(self):
         """The tree kill of the platform kills the group but reports a

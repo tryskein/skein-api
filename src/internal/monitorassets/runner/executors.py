@@ -65,7 +65,6 @@ import socket
 import ssl
 import subprocess
 import sys
-import tempfile
 import threading
 import time
 import urllib.parse
@@ -667,12 +666,6 @@ def _end_tree(proc, tree):
 DETACHED_CALLS = DetachedCalls()
 
 
-def _read_capped(fh):
-    fh.seek(0)
-    data = fh.read(OUTPUT_CAP_BYTES + 1)
-    return data[:OUTPUT_CAP_BYTES], len(data) > OUTPUT_CAP_BYTES
-
-
 def run_detached(argv, env, stdin_data, wait_sec, secrets=(), key=None, calls=None):
     """Run argv (no shell) as run_program does, as one tree of processes
     (_ProcessTree: its own session on POSIX, a job object on Windows, with
@@ -691,19 +684,25 @@ def run_detached(argv, env, stdin_data, wait_sec, secrets=(), key=None, calls=No
     calls = DETACHED_CALLS if calls is None else calls
     key = tuple(argv) if key is None else key
     calls.admit(key)
-    out, err = tempfile.TemporaryFile(), tempfile.TemporaryFile()
     proc = None
     tree = None
     left = False
+    readers = []
     try:
         try:
             proc = subprocess.Popen(argv, stdin=subprocess.PIPE if stdin_data is not None else subprocess.DEVNULL,
-                                    stdout=out, stderr=err, env=env, close_fds=True,
+                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env, close_fds=True,
                                     **current_platform().tree_popen_options())
         except OSError as exc:
             raise ExecutorRefusal("the program cannot be started (%s)" % (exc.strerror or exc))
         started = calls.clock()
         tree = _ProcessTree(proc)
+        # The output is read through pipes and kept to OUTPUT_CAP_BYTES for
+        # the whole life of the program, a program left running past its
+        # window too: the rest is read and dropped, nothing piles up.
+        readers = [_Reader(proc.stdout), _Reader(proc.stderr)]
+        for r in readers:
+            r.start()
         tree.start()
         if stdin_data is not None:
             # A writer of its own: a program that reads its stdin late never
@@ -715,10 +714,9 @@ def run_detached(argv, env, stdin_data, wait_sec, secrets=(), key=None, calls=No
             # a kill that could not end it leaves the call unknown.
             tree.kill()
             exit_code = _reap(proc)
-            stdout, cut = _read_capped(out)
-            stderr, err_cut = _read_capped(err)
-            return CallResult(exit_code, stdout, stderr, False, truncated=cut, tree_failure=tree.failure,
-                              stderr_truncated=err_cut)
+            _join_readers(readers, proc)
+            return CallResult(exit_code, readers[0].data(), readers[1].data(), False, truncated=readers[0].cut,
+                              tree_failure=tree.failure, stderr_truncated=readers[1].cut)
         # A closing monitor leaves no call running: it is killed now, and
         # the call is unknown all the same, with the failure of that kill.
         left = calls.leave(key, proc, tree, started + max(wait_sec, 0) + DETACHED_GRACE_SEC)
@@ -732,8 +730,22 @@ def run_detached(argv, env, stdin_data, wait_sec, secrets=(), key=None, calls=No
             else:
                 _kill_quietly(proc)
             _reap(proc)
-        out.close()
-        err.close()
+            _join_readers(readers, proc)
+
+
+def _join_readers(readers, proc):
+    """Give the readers of a call whose tree is gone one grace to reach the
+    end of its pipes, and close the pipes they reached the end of (a pipe
+    a reader still blocks on is left to it)."""
+    deadline = time.monotonic() + _READER_GRACE_SEC
+    for r in readers:
+        r.join(max(deadline - time.monotonic(), 0))
+    for r, pipe in zip(readers, (proc.stdout, proc.stderr)):
+        if not r.is_alive():
+            try:
+                pipe.close()
+            except OSError:
+                pass
 
 
 def _wait_unreaped(proc, timeout_sec):
