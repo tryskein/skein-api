@@ -303,6 +303,13 @@ class OhMyPiAfterStoppedTest(unittest.TestCase):
         self.assertEqual(sorted(l.get("notificationId") for l in journal), [1, 2, 3])
 
 
+# The longest a new start waits for a live holder of the lock, from the spec
+# ("Limits of a batch and a rate": "waits for its end no longer than 30 s,
+# only then answers already_running"; US-12, the takeover), not from the
+# runner.
+HOLDER_WAIT_SPEC_SEC = 30
+
+
 class StepClock(object):
     """A managed clock of the holder wait (takeover.py#HOLDER_WAIT_CLOCK):
     sleep() moves the time on and runs the actions due by then."""
@@ -354,8 +361,9 @@ class RearmWithALiveHolderTest(unittest.TestCase):
     def test_a_holder_that_stays_gets_one_already_running(self):
         code, lines, waited = self.start_with_holder(None)
         self.assertEqual([l.get("reason") for l in lines], ["already_running"], lines)
-        self.assertGreaterEqual(waited, RUNNER.TAKEOVER_WAIT_SEC)
-        self.assertLess(waited, RUNNER.TAKEOVER_WAIT_SEC + 2 * RUNNER.HOLDER_WAIT_STEP_SEC)
+        # Review round 2 of wave 14, row 18: the wait the spec promises.
+        self.assertGreaterEqual(waited, HOLDER_WAIT_SPEC_SEC)
+        self.assertLess(waited, HOLDER_WAIT_SPEC_SEC + 2 * RUNNER.HOLDER_WAIT_STEP_SEC)
 
 
 class StoppingExecutor(ms.FakeExecutor):
