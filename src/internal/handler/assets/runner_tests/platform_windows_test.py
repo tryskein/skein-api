@@ -89,12 +89,29 @@ class WindowsWorld(object):
     def active(self, ns):
         """Patches that make ns run its Windows layer on the fake."""
         stack = [mock.patch.object(os, "name", "nt"),
-                 mock.patch.dict(ns, {"_WIN_SECURITY": [(self.fake, ME)]})]
+                 mock.patch.object(os, "O_BINARY", 0, create=True),
+                 mock.patch.dict(ns, {"_WIN_SECURITY": [(self.fake, ME)], "msvcrt": FakeMsvcrt()})]
         return _Stack(stack)
 
     def reads(self):
         """The handles opened to read data (a refused file is not read)."""
         return [h for h in self.fake.opened if h.path == self.token]
+
+
+class FakeMsvcrt(object):
+    """The CRT of the layer on a POSIX test system: a handle of the fake
+    security source becomes a real descriptor of its path."""
+
+    def __init__(self):
+        self.handles = {}
+
+    def open_osfhandle(self, handle, flags):
+        fd = os.open(handle.path, os.O_RDONLY)
+        self.handles[fd] = handle
+        return fd
+
+    def get_osfhandle(self, fd):
+        return self.handles[fd]
 
 
 class _Stack(object):
@@ -181,6 +198,40 @@ class PrivateCriterionTest(unittest.TestCase):
             with self.assertRaises(LOADER["Stop"]) as ctx:
                 LOADER["loader_client_read_token"](world.token)
         self.assertEqual(ctx.exception.reason, "token_file_insecure")
+
+
+class RunnerRereadsByTheCriterionTest(unittest.TestCase):
+    """US-11, P-9 (a): the working runner reads the token and its own files
+    again through a handle the platform layer checked; the loader's check
+    of an earlier open does not cover a file replaced or opened to others
+    since."""
+
+    def test_the_runner_refuses_a_token_opened_to_others_after_the_loader(self):
+        world = WindowsWorld(self)
+        with world.active(LOADER):
+            self.assertEqual(LOADER["loader_client_read_token"](world.token), "skm_" + "A" * 43)
+        world.fake.views[world.token] = private_file_view([FOREIGN_READ])
+        with world.active(RUNNER.__dict__):
+            with self.assertRaises(RUNNER.Stop) as ctx:
+                RUNNER.read_token_once(world.token)
+        self.assertEqual(ctx.exception.reason, "token_file_insecure")
+
+    def test_the_runner_reads_a_private_token(self):
+        world = WindowsWorld(self)
+        with world.active(RUNNER.__dict__):
+            self.assertEqual(RUNNER.read_token_once(world.token), "skm_" + "A" * 43)
+        self.assertEqual(len(world.reads()), 1)
+
+    def test_the_takeover_request_is_read_by_the_criterion(self):
+        world = WindowsWorld(self)
+        path = RUNNER.takeover_file_path(world.token)
+        with open(path, "w") as fh:
+            fh.write('{"preflightId": 3, "id": "t-1"}')
+        with world.active(RUNNER.__dict__), mock.patch.dict(RUNNER.__dict__, {"LOADER_MODE": "client"}):
+            world.fake.views[path] = private_file_view()
+            self.assertEqual(RUNNER.load_takeover(world.token), {"preflightId": 3, "id": "t-1"})
+            world.fake.views[path] = private_file_view([FOREIGN_READ])
+            self.assertIsNone(RUNNER.load_takeover(world.token))
 
 
 class BatchProgramTest(unittest.TestCase):

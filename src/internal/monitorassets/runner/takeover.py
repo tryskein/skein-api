@@ -57,7 +57,8 @@ def takeover_file_path(token_file):
 def load_takeover(token_file):
     """The takeover request, or None."""
     try:
-        if os.name == "posix":
+        if _state_checked():
+            # On Windows with client by criterion (a), as the state (P-9).
             raw = current_platform().read_checked(takeover_file_path(token_file), _state_private)
         else:
             with open(takeover_file_path(token_file), "rb") as fh:

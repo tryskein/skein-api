@@ -272,10 +272,32 @@ def sweep_stale_locks(env, keep):
         platform.remove_stale_lock(path, STALE_LOCK_AGE_SEC)
 
 
+def _read_token_windows(path):
+    try:
+        raw = current_platform().read_token(path)
+    except PlatformRefusal as exc:
+        if exc.reason == "not_found":
+            raise Stop("token_file_missing", delete_token=True)
+        if exc.reason in ("open_to_others", "symlink"):
+            raise Stop("token_file_insecure")
+        raise Stop("token_file_missing")
+    try:
+        token = raw.decode("utf-8").strip()
+    except UnicodeDecodeError:
+        raise Stop("token_file_missing")
+    if not token:
+        raise Stop("token_file_missing", delete_token=True)
+    return token
+
+
 def read_token_once(path):
     """Open the token file, check it, read it and close the descriptor (the
     one-runner lock of client mode is locks/<key>.lock, not the token file).
-    Raises Stop like open_token."""
+    Raises Stop like open_token. On Windows the platform layer reads it
+    through the one handle it checked by criterion (a) (P-9, US-11): the
+    loader's check of an earlier open does not cover this one."""
+    if os.name != "posix":
+        return _read_token_windows(path)
     fd = open_token_checked(path)
     try:
         chunks = []

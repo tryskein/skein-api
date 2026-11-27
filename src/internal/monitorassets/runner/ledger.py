@@ -987,8 +987,10 @@ def _append_to_journal(path, lines, env):
         raise JournalUnavailable(exc.reason, exc.path)
     fd = journal._open()
     try:
-        with open(path, "rb") as fh:
-            data = fh.read()
+        try:
+            data = _read_journal_file(path)
+        except PlatformRefusal as exc:
+            raise JournalUnavailable(exc.reason, exc.path)
         if data and not data.endswith(b"\n"):
             # A line cut by a crash: drop it, its full form follows.
             keep = data.rfind(b"\n") + 1
@@ -1027,11 +1029,20 @@ def _read_rotated(path):
     out = []
     for i in range(1, JOURNAL_KEEP_FILES):
         try:
-            with open("%s.%d" % (path, i), "rb") as fh:
-                out.append(fh.read())
-        except OSError:
+            out.append(_read_journal_file("%s.%d" % (path, i)))
+        except (OSError, PlatformRefusal):
             continue
     return b"\n".join(out)
+
+
+def _read_journal_file(path):
+    """The content of a journal file of the monitor: on Windows through the
+    handle the platform layer checked by criterion (a) (P-9), not a second
+    plain open."""
+    if os.name != "posix":
+        return current_platform().read_own_file(path)
+    with open(path, "rb") as fh:
+        return fh.read()
 
 
 def _sweep_attempts(attempts):
