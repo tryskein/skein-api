@@ -2200,6 +2200,15 @@
                 }
               },
               "result": "same"
+            },
+            {
+              "match": {
+                "exitCode": 0,
+                "jsonNot": {
+                  "id": "{env:AGENTDECK_INSTANCE_ID}"
+                }
+              },
+              "result": "changed"
             }
           ],
           "capture": [
@@ -2331,6 +2340,15 @@
                 }
               },
               "result": "same"
+            },
+            {
+              "match": {
+                "exitCode": 0,
+                "jsonNot": {
+                  "session.id": "{env:AO_SESSION_ID}"
+                }
+              },
+              "result": "changed"
             }
           ]
         }
@@ -2356,7 +2374,7 @@
     {
       "id": "t3code",
       "about": "T3 Code: the thread of the agent gets each event as its next turn; a busy thread queues it.",
-      "source": "github.com/pingdotgg/t3code 45a3880c (0.1.12): apps/server/src/cli/thread.ts#threadSendCommand (\"A busy thread gets it as its next turn; nothing is interrupted\"; the message argument - reads stdin; it calls the t3_thread_send tool with mode queue and with --json prints its result); packages/contracts/src/orchestratorMcp.ts#OrchestratorMcpThreadSendResult (delivery one of started, queued, steered, restarted); thread.ts#withThreadTools and #reportThreadErrors (every failure, the server not running among them, is a plain line on stderr and a non-zero exit, so none proves that the message was not sent); apps/server/src/preview/PortScanner.ts#AGENT_THREAD_ENV and packages/provider-acp/src/server/adapter.ts (T3CODE_THREAD_ID in every agent process of a thread); apps/server/package.json (the CLI is the npm bin t3, t3.cmd on Windows); docs/user/outside-agents.md (t3 thread show prints a thread, it sends nothing). thread.ts#threadShowCommand (thread show <id> --json prints {thread, messages, error}, thread.threadId the thread; --messages bounds the messages it reads; sends nothing).",
+      "source": "github.com/pingdotgg/t3code 45a3880c (0.1.12): apps/server/src/cli/thread.ts#threadSendCommand (\"A busy thread gets it as its next turn; nothing is interrupted\"; the message argument - reads stdin; it calls the t3_thread_send tool with mode queue and with --json prints its result); packages/contracts/src/orchestratorMcp.ts#OrchestratorMcpThreadSendResult (delivery one of started, queued, steered, restarted); thread.ts#withThreadTools and #reportThreadErrors (every failure, the server not running among them, is a plain line on stderr and a non-zero exit, so none proves that the message was not sent); apps/server/src/preview/PortScanner.ts#AGENT_THREAD_ENV and packages/provider-acp/src/server/adapter.ts (T3CODE_THREAD_ID in every agent process of a thread); apps/server/package.json (the CLI is the npm bin t3, t3.cmd on Windows); docs/user/outside-agents.md (t3 thread show prints a thread, it sends nothing). thread.ts#threadShowCommand (thread show <id> --json prints {thread, messages, error}, thread.threadId the thread; --messages bounds the messages it prints, and with 0 #readLatestMessages returns none, so #readFullText reads no message; sends nothing).",
       "step": 5,
       "order": 5,
       "kind": "addressed",
@@ -2425,14 +2443,14 @@
       "probes": [
         {
           "type": "argv",
-          "source": "github.com/pingdotgg/t3code 45a3880c: apps/server/src/cli/thread.ts#threadShowCommand (reads the thread from the running server, sends nothing).",
+          "source": "github.com/pingdotgg/t3code 45a3880c: apps/server/src/cli/thread.ts#threadShowCommand (reads the thread from the running server, sends nothing). With --messages 0 readLatestMessages returns no message (messages.slice of its length), so no text of a message is read in full or printed.",
           "argv": [
             "t3",
             "thread",
             "show",
             "{env:T3CODE_THREAD_ID}",
             "--messages",
-            "1",
+            "0",
             "--json"
           ],
           "results": [
@@ -2455,7 +2473,7 @@
             "show",
             "{env:T3CODE_THREAD_ID}",
             "--messages",
-            "1",
+            "0",
             "--json"
           ],
           "results": [
@@ -2467,6 +2485,15 @@
                 }
               },
               "result": "same"
+            },
+            {
+              "match": {
+                "exitCode": 0,
+                "jsonNot": {
+                  "thread.threadId": "{env:T3CODE_THREAD_ID}"
+                }
+              },
+              "result": "changed"
             }
           ]
         }
@@ -2619,6 +2646,15 @@
                 }
               },
               "result": "same"
+            },
+            {
+              "match": {
+                "exitCode": 0,
+                "jsonNot": {
+                  "id": "{env:SCULPT_AGENT_ID}"
+                }
+              },
+              "result": "changed"
             }
           ]
         }

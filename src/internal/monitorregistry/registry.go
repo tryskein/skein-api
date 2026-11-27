@@ -619,6 +619,12 @@ type Match struct {
 	// element of a path that is a decimal number indexes a list
 	// ("stages.1": the second element).
 	JSON map[string]string `json:"json,omitempty"`
+	// JSONNot maps a dotted path of the JSON answer to a value the path
+	// must hold something other than: a string, a number, a boolean or
+	// null (compared as in JSON) unlike it - not absent, not an object or a
+	// list. "{env:NAME}" is that variable's value; with the variable unset
+	// the row matches nothing. A check names another addressee by it.
+	JSONNot map[string]string `json:"jsonNot,omitempty"`
 	// JSONAbsent are dotted paths (as in JSON) that must be absent from the
 	// document: a list shorter than the index, an object without the key.
 	JSONAbsent []string `json:"jsonAbsent,omitempty"`

@@ -238,6 +238,14 @@ def outcome_sign_matches(match, exit_code=None, doc=None, http_status=None, stde
         want = _wanted(want, env)
         if doc is None or want is None or json_path_value(doc, path) != want:
             return False
+    for path, unwanted in (match.get("jsonNot") or {}).items():
+        # The path holds a value compared as text, and another one (a check
+        # names another addressee).
+        stated = True
+        unwanted = _wanted(unwanted, env)
+        value = json_path_value(doc, path) if doc is not None else None
+        if value is None or unwanted is None or value == unwanted:
+            return False
     if match.get("stderrContains"):
         # A literal phrase of a CLI that reports its errors as text.
         stated = True

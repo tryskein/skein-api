@@ -1061,6 +1061,18 @@ func (v *validator) signs(path string, rows []Match) {
 				v.add(RuleInvalid, rpath+".json."+k, "%q is not an environment variable name", name)
 			}
 		}
+		for _, k := range slices.Sorted(maps.Keys(m.JSONNot)) {
+			v.jsonPath(rpath+".jsonNot", k)
+			if name, ok := envRef(m.JSONNot[k]); ok && !envNamePattern.MatchString(name) {
+				v.add(RuleInvalid, rpath+".jsonNot."+k, "%q is not an environment variable name", name)
+			}
+			if want, both := m.JSON[k]; both && want == m.JSONNot[k] {
+				v.add(RuleInvalid, rpath+".jsonNot."+k, "the path cannot hold %q and something else", want)
+			}
+			if kind := m.JSONType[k]; absentAt(m.JSONAbsent, k) || kind == "object" || kind == "list" {
+				v.add(RuleInvalid, rpath+".jsonNot."+k, "the path must hold a value compared as text")
+			}
+		}
 		for _, k := range slices.Sorted(maps.Keys(m.StderrJSON)) {
 			v.jsonPath(rpath+".stderrJson", k)
 			// The runner compares stderrJson literally: a variable there
@@ -1185,7 +1197,8 @@ func (v *validator) noEnvRefs(path string, rows []Match) {
 
 // empty reports whether the sign states no criterion.
 func (m Match) empty() bool {
-	return m.ExitCode == nil && m.HTTPStatus == nil && len(m.JSON) == 0 && len(m.JSONAbsent) == 0 && len(m.JSONType) == 0 &&
+	return m.ExitCode == nil && m.HTTPStatus == nil && len(m.JSON) == 0 && len(m.JSONNot) == 0 && len(m.JSONAbsent) == 0 &&
+		len(m.JSONType) == 0 &&
 		m.StderrEmpty == nil && len(m.StderrJSON) == 0 && m.StderrContains == nil && m.StillRunning == nil
 }
 
@@ -1256,6 +1269,22 @@ func (m Match) overlaps(o Match) bool {
 		}
 		if absentAt(o.JSONAbsent, k) {
 			return false
+		}
+	}
+	// One path cannot hold a value and something other than it; a path
+	// that must hold something is not absent, nor an object or a list.
+	for _, pair := range [][2]Match{{m, o}, {o, m}} {
+		a, b := pair[0], pair[1]
+		for k, unwanted := range a.JSONNot {
+			if want, both := b.JSON[k]; both && want == unwanted {
+				return false
+			}
+			if absentAt(b.JSONAbsent, k) {
+				return false
+			}
+			if kind := b.JSONType[k]; kind == "object" || kind == "list" {
+				return false
+			}
 		}
 	}
 	// A literal (or a variable's value) on a typed path of the other row:

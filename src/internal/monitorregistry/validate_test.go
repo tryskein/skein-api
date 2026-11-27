@@ -429,6 +429,16 @@ func TestValidate_RejectsEachRule(t *testing.T) {
 			r.Channels[0].Address = &AddressSpec{Env: "ALPHA_THREAD", Qualifiers: []string{"ALPHA_HOME"},
 				QualifierPaths: map[string]string{"ALPHA_HOME": ".alpha"}}
 		}, RuleInvalid},
+		{"a path that holds a value and something else", func(r *Registry) {
+			r.Channels[1].Outcomes[0].Match.JSONNot = map[string]string{"status": "queued"}
+		}, RuleInvalid},
+		{"something else on an absent path", func(r *Registry) {
+			m := &r.Channels[1].Outcomes[0].Match
+			m.JSONNot, m.JSONAbsent = map[string]string{"id": "x"}, []string{"id"}
+		}, RuleInvalid},
+		{"something else than a variable of no name", func(r *Registry) {
+			r.Channels[1].Outcomes[0].Match.JSONNot = map[string]string{"id": "{env:1X}"}
+		}, RuleInvalid},
 		{"one path both required and absent", func(r *Registry) {
 			r.Channels[1].Outcomes[0].Match.JSONAbsent = []string{"status"}
 		}, RuleInvalid},
@@ -1336,6 +1346,31 @@ func TestValidate_ATypeAndALiteralOnOnePath(t *testing.T) {
 		err := r.Validate()
 		if got := err != nil && slices.Contains(rulesOf(t, err), RuleAmbiguousSign); got != tc.ambiguous {
 			t.Fatalf("%s and %q: ambiguous %v, want %v (%v)", tc.kind, tc.literal, got, tc.ambiguous, err)
+		}
+	}
+}
+
+// TestValidate_AnotherValueIsApartFromTheValue — a row of the id a check
+// expects and a row of any other id cannot match one answer; two rows of
+// "something else" can.
+func TestValidate_AnotherValueIsApartFromTheValue(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		other     Match
+		ambiguous bool
+	}{
+		{"another id", Match{ExitCode: intp(0), JSONNot: map[string]string{"status": "queued"}}, false},
+		{"another id than another literal", Match{ExitCode: intp(0), JSONNot: map[string]string{"status": "sent"}}, true},
+		{"another id on another path", Match{ExitCode: intp(0), JSONNot: map[string]string{"id": "x"}}, true},
+	} {
+		r := validRegistry()
+		r.Channels[1].Outcomes = []OutcomeRow{
+			{Match: Match{ExitCode: intp(0), JSON: map[string]string{"status": "queued"}}, Outcome: OutcomeQueued},
+			{Match: tc.other, Outcome: OutcomeUnknown},
+		}
+		err := r.Validate()
+		if got := err != nil && slices.Contains(rulesOf(t, err), RuleAmbiguousSign); got != tc.ambiguous {
+			t.Fatalf("%s: ambiguous %v, want %v (%v)", tc.name, got, tc.ambiguous, err)
 		}
 	}
 }
