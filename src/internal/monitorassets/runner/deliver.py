@@ -656,7 +656,7 @@ class DeliverySink(object):
             channel = self.registry.channel(channel_id) or {}
             group = [n for n in pending if step[str(n["id"])] == index]
             limit, unit = _line_limit(channel)
-            text, count, _ = plain_batch(group, self.exclude_file, limit, unit, channel.get("textNotes"))
+            text, count = self._text(channel, group, limit, unit, False)
             if text is None:
                 step[str(head["id"])] = index + 1
                 if index + 1 >= len(self.channels):
@@ -732,6 +732,17 @@ class DeliverySink(object):
         self._close_batch(cursor, outcomes, journaled, own, OUTCOME_OWN_ECHO, None, None)
         return [n for n in pending if str(n["id"]) not in outcomes]
 
+    def _text(self, channel, batch, limit, unit, minimal):
+        """(text, count) of a batch by the one formatter the channel takes:
+        the reservation of an attempt and its text are sized by the same
+        one. A batch program of Windows gets no untrusted text (US-11): the
+        id-only form, or no text at all (a refusal before send)."""
+        if channel_takes_ids_only(channel, self.doc.get("programs"), self.env):
+            text, count, _ = ids_only_batch(batch, limit, unit)
+        else:
+            text, count, _ = plain_batch(batch, self.exclude_file, limit, unit, channel.get("textNotes"), minimal)
+        return text, count
+
     def _deliver(self, cursor, outcomes, journaled, attempt, channel_id, channel, batch, step):
         now = self.clock.now()
         deadline = (attempt.first_call if attempt.first_call is not None else now) + self.idle_window
@@ -758,15 +769,17 @@ class DeliverySink(object):
         # A channel that refused an event as too long gets it, and the
         # events that join it in a batch, in the minimal form.
         minimal = any((str(n["id"]), channel_id) in self._shorten for n in batch)
-        if channel_takes_ids_only(channel, self.doc.get("programs"), self.env):
-            # A batch program of Windows gets no untrusted text (US-11): the
-            # id-only form, or no text at all (a refusal before send).
-            text, _, _ = ids_only_batch(batch, limit, unit)
-        else:
-            text, _, _ = plain_batch(batch, self.exclude_file, limit, unit, channel.get("textNotes"), minimal)
+        text, count = self._text(channel, batch, limit, unit, minimal)
+        if text is not None and count < len(batch):
+            # The text must carry every event the attempt holds, or a
+            # delivered outcome would be written for events it never
+            # carried (INV-1): nothing is handed over.
+            text = None
         guard = Guard(self, channel, attempt, timeout, batch)
         driver = self.drivers.get(channel_id) or ArgvDriver(channel, self.executor)
         try:
+            if text is None:
+                raise RefusedBeforeSend("no text of this channel carries the batch")
             outcome, sign = driver.send(text, guard)
         except PollStale:
             self._ledger_step(attempt.abandon)

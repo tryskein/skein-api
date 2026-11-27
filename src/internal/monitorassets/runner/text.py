@@ -137,6 +137,9 @@ def ids_only_batch(notifications, limit=None, unit=UNIT_CHARS):
         fields = [("type", n.get("type")), ("notification", n.get("id")), ("issue", _issue_id(n))]
         if "commentId" in n:
             fields.append(("commentId", n["commentId"]))
+        if any(v is None for _, v in fields):
+            # An event without one of its ids has no id-only form.
+            break
         values = ["%s" % v for _, v in fields]
         if not all(_ID_VALUE.match(v) for v in values):
             break

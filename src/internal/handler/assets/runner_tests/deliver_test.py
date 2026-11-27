@@ -294,6 +294,30 @@ class ClassificationAndBudgetTest(unittest.TestCase):
 
 
 @unittest.skipUnless(os.name == "posix", "the POSIX pipeline")
+class IdOnlyBatchTest(unittest.TestCase):
+    """The id-only form (a Windows batch program, US-11) sizes the batch it
+    carries: an event without one of its ids ends the form, so the attempt
+    holds and the outcome closes exactly the events in the text (INV-1);
+    the rest wait for their own delivery."""
+
+    def test_the_outcome_covers_only_the_events_in_the_text(self):
+        world = World(self, two_channels())
+        mon = world.monitor(fallbacks=())
+        no_issue = dict(note(2), entity=None)
+        with mock.patch.object(world.runner, "channel_takes_ids_only", lambda channel, programs, env: True):
+            mon.page([note(1), no_issue, note(3)])
+        texts = [t for p, _, t in mon.spy.calls if p == "chan-a"]
+        self.assertTrue(texts)
+        self.assertIn("notification=1", texts[0])
+        self.assertNotIn("notification=2", texts[0])
+        self.assertNotIn("notification=3", texts[0])
+        self.assertFalse(any("notification=2" in t or "notification=None" in t for t in texts))
+        statuses = dict((d[0], d[1]) for d in mon.deliveries())
+        self.assertEqual(statuses[1], "queued")
+        self.assertEqual(statuses[3], "queued")
+        self.assertNotEqual(statuses.get(2), "queued")
+
+
 class UnknownTest(unittest.TestCase):
     """Row #52: unknown is not repeated and does not move to another
     channel; degraded delivery_unknown; a second monitor of the addressee
