@@ -626,6 +626,9 @@ func (v *validator) signs(path string, rows []Match) {
 		for _, k := range slices.Sorted(maps.Keys(m.JSON)) {
 			v.jsonPath(rpath+".json", k)
 		}
+		for _, k := range slices.Sorted(maps.Keys(m.StderrJSON)) {
+			v.jsonPath(rpath+".stderrJson", k)
+		}
 		for j, k := range m.JSONAbsent {
 			v.jsonPath(fmt.Sprintf("%s.jsonAbsent[%d]", rpath, j), k)
 			if _, both := m.JSON[k]; both {
@@ -655,6 +658,8 @@ func (v *validator) criteriaOf(path string, rows []Match, executor string) {
 			v.add(RuleInvalid, rpath+".exitCode", "an http answer has no exit code")
 		case executor == ExecutorHTTP && m.StderrEmpty != nil:
 			v.add(RuleInvalid, rpath+".stderrEmpty", "an http answer has no stderr")
+		case executor == ExecutorHTTP && len(m.StderrJSON) > 0:
+			v.add(RuleInvalid, rpath+".stderrJson", "an http answer has no stderr")
 		}
 	}
 }
@@ -669,7 +674,7 @@ func (v *validator) jsonPath(path, p string) {
 // empty reports whether the sign states no criterion.
 func (m Match) empty() bool {
 	return m.ExitCode == nil && m.HTTPStatus == nil && len(m.JSON) == 0 && len(m.JSONAbsent) == 0 &&
-		m.StderrEmpty == nil
+		m.StderrEmpty == nil && len(m.StderrJSON) == 0
 }
 
 // overlaps reports whether one answer can satisfy both signs: every
@@ -698,6 +703,11 @@ func (m Match) overlaps(o Match) bool {
 	}
 	for k := range o.JSON {
 		if slices.Contains(m.JSONAbsent, k) {
+			return false
+		}
+	}
+	for k, want := range m.StderrJSON {
+		if got, both := o.StderrJSON[k]; both && got != want {
 			return false
 		}
 	}

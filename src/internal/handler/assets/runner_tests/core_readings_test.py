@@ -157,6 +157,32 @@ class ListAndAbsenceSignTest(unittest.TestCase):
         self.assertEqual(RUNNER.classify(rows, exit_code=0, doc=None)[0], "unknown")
 
 
+class StderrJsonSignTest(unittest.TestCase):
+    """The JSON document a program wrote to its stderr as a sign (a CLI that
+    reports its errors there): only that document carries it, not stdout."""
+
+    ROWS = [{"match": {"exitCode": 1, "stderrJson": {"error.code": "DAEMON_UNREACHABLE"}},
+             "outcome": "refused-before-send"}]
+
+    def outcome(self, stdout_doc, stderr):
+        return RUNNER.classify(self.ROWS, exit_code=1, doc=stdout_doc, stderr=stderr)[0]
+
+    def test_the_code_on_stderr_is_the_sign(self):
+        err = json.dumps({"error": {"code": "DAEMON_UNREACHABLE", "message": "x"}}, indent=2).encode()
+        self.assertEqual(self.outcome(None, err), "refused-before-send")
+
+    def test_other_answers_are_unknown(self):
+        cases = {
+            "another code": (None, json.dumps({"error": {"code": "SEND_FAILED"}}).encode()),
+            "the code on stdout only": ({"error": {"code": "DAEMON_UNREACHABLE"}}, b""),
+            "no JSON on stderr": (None, b"Error: Cannot connect to daemon"),
+            "no stderr read": (None, None),
+        }
+        for name, (doc, err) in cases.items():
+            with self.subTest(case=name):
+                self.assertEqual(self.outcome(doc, err), "unknown")
+
+
 class ProgramFromVariableTest(unittest.TestCase):
     """A program of a channel named by a variable: the program it names
     when set (a path or a name PATH finds), none when unset."""

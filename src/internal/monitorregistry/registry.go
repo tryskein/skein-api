@@ -479,6 +479,9 @@ type Match struct {
 	// JSONAbsent are dotted paths (as in JSON) that must be absent from the
 	// document: a list shorter than the index, an object without the key.
 	JSONAbsent []string `json:"jsonAbsent,omitempty"`
+	// StderrJSON is JSON for the JSON document an argv program wrote to its
+	// stderr (a CLI that reports its errors there).
+	StderrJSON map[string]string `json:"stderrJson,omitempty"`
 	// HTTPStatus is the status of an http response.
 	HTTPStatus *int `json:"httpStatus,omitempty"`
 	// StderrEmpty, when set, is whether the argv program wrote nothing to

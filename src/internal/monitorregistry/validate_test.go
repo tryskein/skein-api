@@ -242,6 +242,16 @@ func TestValidate_RejectsEachRule(t *testing.T) {
 			r.Channels[1].Launcher = &Launcher{Process: ProcessSign{Executables: []string{"host-daemon"}},
 				Keeps: map[string][]string{"alpha": {"poll"}}}
 		}, RuleUnknownMethod},
+		{"stderr JSON in the table of an http channel", func(r *Registry) {
+			r.Channels[1].Executor = Executor{Type: ExecutorHTTP, TimeoutSec: 30,
+				HTTP: &HTTPRequest{Method: "POST", URL: "{env:HOST_URL}", BodyField: "text"}}
+			r.Channels[1].Outcomes = []OutcomeRow{{Match: Match{HTTPStatus: intp(200), StderrJSON: map[string]string{"error.code": "x"}}, Outcome: OutcomeQueued}}
+		}, RuleInvalid},
+		{"two rows of one stderr code", func(r *Registry) {
+			r.Channels[1].Outcomes = append(r.Channels[1].Outcomes,
+				OutcomeRow{Match: Match{ExitCode: intp(1), StderrJSON: map[string]string{"error.code": "busy"}}, Outcome: OutcomeRefused},
+				OutcomeRow{Match: Match{ExitCode: intp(1), StderrJSON: map[string]string{"error.code": "busy"}}, Outcome: OutcomeUnknown})
+		}, RuleAmbiguousSign},
 		{"rows on different criteria that one answer can match", func(r *Registry) {
 			r.Channels[1].Outcomes = []OutcomeRow{
 				{Match: Match{JSON: map[string]string{"status": "queued"}}, Outcome: OutcomeQueued},
@@ -527,6 +537,9 @@ func TestValidate_AcceptsTheOrcaAndPaseoReadings(t *testing.T) {
 		Results: []AddresseeResultRow{{Match: Match{ExitCode: intp(0)}, Result: AddresseeSame}},
 		Capture: []string{"result.terminal.incarnationId", "result.terminal.agentIdentity"}}
 	r.Channels[1].Binaries[PlatformLinux] = []string{"host", "{env:HOST_CLI}"}
+	r.Channels[1].Outcomes = append(r.Channels[1].Outcomes,
+		OutcomeRow{Match: Match{ExitCode: intp(1), StderrJSON: map[string]string{"error.code": "DAEMON_UNREACHABLE"}}, Outcome: OutcomeRefused},
+		OutcomeRow{Match: Match{ExitCode: intp(1), StderrJSON: map[string]string{"error.code": "AUTH_REQUIRED"}}, Outcome: OutcomeRefused})
 	r.Channels[1].Address = &AddressSpec{Env: "HOST_ID"}
 	r.Channels[1].Launcher = &Launcher{Process: ProcessSign{Argv: []string{"/opt/host/daemon.js"}},
 		Keeps: map[string][]string{"alpha": {MethodStream}}}

@@ -150,6 +150,13 @@ def outcome_sign_matches(match, exit_code=None, doc=None, http_status=None, stde
         stated = True
         if doc is None or json_path_value(doc, path) != want:
             return False
+    if match.get("stderrJson"):
+        # The JSON document of stderr (a CLI that reports its errors there).
+        stated = True
+        err_doc = parse_json_object(stderr) if stderr is not None else None
+        for path, want in match["stderrJson"].items():
+            if err_doc is None or json_path_value(err_doc, path) != want:
+                return False
     for path in match.get("jsonAbsent") or []:
         # Absent from a JSON answer: an answer that is no JSON document
         # carries no sign of its fields.
