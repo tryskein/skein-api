@@ -264,9 +264,36 @@ func TestMonitorNamedPath_WithoutClientIgnoresTheEnvironment(t *testing.T) {
 // script whose own process (its name is the program's) stays alive after
 // script ends and stands for the agent process; it exports its pid as the
 // root process of the Zavod agent.
+// journalQueued reports whether a journal of the monitors under home
+// holds the line that closes the delivery of notification id as queued.
+func journalQueued(home string, id int) bool {
+	files, _ := filepath.Glob(filepath.Join(home, "state", "skein-monitor", "journal", "*"))
+	for _, f := range files {
+		data, err := os.ReadFile(f)
+		if err != nil {
+			continue
+		}
+		for _, line := range strings.Split(string(data), "\n") {
+			var rec map[string]any
+			if json.Unmarshal([]byte(line), &rec) != nil {
+				continue
+			}
+			if rec["event"] == "delivery" && rec["status"] == "queued" && rec["notificationId"] == float64(id) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func startAgent(t *testing.T, bin *namedPathBin, name, script string, env []string) {
 	t.Helper()
-	wrapper := "#!/bin/sh\nZAVOD_AGENT_ROOT_PID=$$\nexport ZAVOD_AGENT_ROOT_PID\n/bin/sh \"$1\"\nexec sleep 300\n"
+	// The life of the root process as Zavod records it: its pid, field 22
+	// of /proc/<pid>/stat and the boot id.
+	wrapper := "#!/bin/sh\nZAVOD_AGENT_ROOT_PID=$$\n" +
+		"ZAVOD_AGENT_ROOT_START=$(cut -d' ' -f22 /proc/$$/stat)\n" +
+		"ZAVOD_AGENT_ROOT_BOOT_ID=$(cat /proc/sys/kernel/random/boot_id)\n" +
+		"export ZAVOD_AGENT_ROOT_PID ZAVOD_AGENT_ROOT_START ZAVOD_AGENT_ROOT_BOOT_ID\n/bin/sh \"$1\"\nexec sleep 300\n"
 	path := filepath.Join(bin.dir, name)
 	if err := os.WriteFile(path, []byte(wrapper), 0o700); err != nil {
 		t.Fatal(err)
@@ -313,7 +340,7 @@ func lastLine(path string) map[string]any {
 // --text-file -`. Control of the order: client=claude with the same Zavod
 // (engine claude) and its stream available takes stdout and never sends.
 func TestMonitorNamedPath_ZavodRecordFromResponseToChannel(t *testing.T) {
-	run := func(t *testing.T, client, engine string) (*namedPathWorld, *namedPathBin, string) {
+	run := func(t *testing.T, client, engine string) (*namedPathWorld, *namedPathBin, string, string) {
 		w := newNamedPathWorld(t)
 		body := w.handler(t, map[string]any{"id": "sk-42", "client": client})
 		if body["client"] != client {
@@ -324,8 +351,7 @@ func TestMonitorNamedPath_ZavodRecordFromResponseToChannel(t *testing.T) {
 		home := t.TempDir()
 		env := cleanEnv("PATH="+bin.dir+string(os.PathListSeparator)+os.Getenv("PATH"), "HOME="+home,
 			"XDG_STATE_HOME="+filepath.Join(home, "state"),
-			"ZAVOD_ME="+namedPathZavodUUID, "ZAVOD_AGENT_ID="+namedPathZavodUUID, "ZAVOD_AGENT_ENGINE_ID="+engine,
-			"ZAVOD_AGENT_ROOT_START=1", "ZAVOD_AGENT_ROOT_BOOT_ID=boot-127")
+			"ZAVOD_ME="+namedPathZavodUUID, "ZAVOD_AGENT_ID="+namedPathZavodUUID, "ZAVOD_AGENT_ENGINE_ID="+engine)
 		prepareToken(t, body, env)
 		preflight, _ := body["preflight"].(string)
 		pre := filepath.Join(bin.log, "preflight.out")
@@ -339,11 +365,11 @@ func TestMonitorNamedPath_ZavodRecordFromResponseToChannel(t *testing.T) {
 			l := lastLine(pre)
 			return l != nil && (l["event"] == "preflight" || l["reason"] != nil)
 		})
-		return w, bin, started
+		return w, bin, started, home
 	}
 
 	t.Run("codex woken by zavod", func(t *testing.T) {
-		w, bin, started := run(t, "codex", "codex")
+		w, bin, started, home := run(t, "codex", "codex")
 		pre := lastLine(filepath.Join(bin.log, "preflight.out"))
 		if pre["event"] != "preflight" || pre["client"] != "codex" || pre["method"] != "detached" || pre["channel"] != "zavod" {
 			t.Fatalf("preflight line = %v, want record codex detached on zavod", pre)
@@ -358,8 +384,9 @@ func TestMonitorNamedPath_ZavodRecordFromResponseToChannel(t *testing.T) {
 			t.Fatalf("the detached runner never polled")
 		}
 		id := w.srv.push()
-		waitFor(t, "the zavod call", func() bool { return bin.read("zavod.args") != "" })
-		time.Sleep(time.Second)
+		// A second call of the same delivery could only come before its
+		// outcome is final: wait for the journal line that closes it.
+		waitFor(t, "the queued line of the event", func() bool { return journalQueued(home, id) })
 		args := strings.Split(strings.TrimSpace(bin.read("zavod.args")), "\n")
 		if len(args) != 1 || args[0] != "--json send "+namedPathZavodUUID+" --text-file -" {
 			t.Fatalf("zavod calls = %q, want one `--json send %s --text-file -`", args, namedPathZavodUUID)
@@ -371,7 +398,7 @@ func TestMonitorNamedPath_ZavodRecordFromResponseToChannel(t *testing.T) {
 	})
 
 	t.Run("claude keeps its stream before zavod", func(t *testing.T) {
-		_, bin, _ := run(t, "claude", "claude")
+		_, bin, _, _ := run(t, "claude", "claude")
 		pre := lastLine(filepath.Join(bin.log, "preflight.out"))
 		if pre["event"] != "preflight" || pre["method"] != "stream" || pre["channel"] != "stdout" {
 			t.Fatalf("preflight line = %v, want stream on stdout", pre)

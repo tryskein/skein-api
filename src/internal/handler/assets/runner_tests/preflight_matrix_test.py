@@ -22,6 +22,7 @@ import json
 import os
 import shutil
 import signal
+import subprocess
 import sys
 import tempfile
 import threading
@@ -528,6 +529,15 @@ class PreflightResultsTest(unittest.TestCase):
         state = RUNNER.StateLock(box.token)
         runner_lock = RUNNER.PosixPlatform.acquire_runner_lock(box.token, 0, env)
         got = {}
+        waiting = threading.Event()
+        real_state_lock = RUNNER.StateLock
+
+        class WatchedStateLock(real_state_lock):
+            # The start reaches the wait for state.lock: it found the runner
+            # lock busy and now waits out the preflight's instant.
+            def __init__(self, *args, **kwargs):
+                waiting.set()
+                real_state_lock.__init__(self, *args, **kwargs)
 
         def start():
             try:
@@ -535,9 +545,13 @@ class PreflightResultsTest(unittest.TestCase):
             except Exception as exc:  # noqa: BLE001 - the outcome is what the test reads
                 got["error"] = exc
 
+        patch = mock.patch.dict(RUNNER.__dict__, {"StateLock": WatchedStateLock})
+        patch.start()
+        self.addCleanup(patch.stop)
         t = threading.Thread(target=start)
         t.start()
-        time.sleep(0.3)
+        self.assertTrue(waiting.wait(10), "the start never reached the wait for state.lock")
+        # state.lock is held here: the start cannot have taken the lock.
         self.assertNotIn("error", got)
         self.assertNotIn("lock", got)
         runner_lock.release()
@@ -553,15 +567,37 @@ class PreflightResultsTest(unittest.TestCase):
         box = Box(self)
         server = page_server(self, [{"notifications": [event(1)], "cursor": {"ts": "t1", "id": 1}},
                                     {"notifications": [event(2)], "cursor": {"ts": "t2", "id": 2}}])
-        line = box.preflight(box.env("kimi"), ["kimi-code"])
+        line = box.preflight(box.env("kimi", SKEIN_PUBLIC_URL=server.url()), ["kimi-code"])
         self.assertEqual(line["method"], "exit-on-event")
-        env = self.start_env(box, line, SKEIN_PUBLIC_URL=server.url())
+        # The variables the command itself gives, over a session that still
+        # holds others: a forced channel, the blind ban and the preflight
+        # mode of an earlier command.
+        left = box.env("kimi", SKEIN_PUBLIC_URL=server.url(), SKEIN_MONITOR_CHANNEL="zavod",
+                       SKEIN_MONITOR_BLIND="off", SKEIN_MONITOR_MODE="preflight")
+        env = command_env(self, line["command"], left)
+        self.assertEqual(env["SKEIN_MONITOR_MODE"], "run")
         for _ in range(2):
             code, lines = box.run(env)
             self.assertEqual(code, 0, lines)
             self.assertEqual(lines[-1]["reason"], "delivered", lines)
         notes = [l["notification"]["id"] for l in lines if l.get("event") == "notification"]
         self.assertEqual(notes, [2])
+
+
+def command_env(test, command, env):
+    """The environment the working command hands python3 when a POSIX
+    shell with env runs it: a fake python3 prints it."""
+    bin_dir = tempfile.mkdtemp(prefix="skein-cmd-")
+    test.addCleanup(shutil.rmtree, bin_dir, True)
+    fake = os.path.join(bin_dir, "python3")
+    with open(fake, "w") as fh:
+        fh.write("#!%s\nimport json, os\nprint(json.dumps(dict(os.environ)))\n" % sys.executable)
+    os.chmod(fake, 0o700)
+    out = subprocess.run(["sh", "-c", command], env=dict(env, PATH=bin_dir + os.pathsep + env.get("PATH", "")),
+                         stdout=subprocess.PIPE, check=True).stdout
+    got = json.loads(out.decode("utf-8"))
+    got.pop("PATH", None)
+    return dict(got, PATH=env.get("PATH", ""))
 
 
 @unittest.skipUnless(sys.platform.startswith("linux"), "the POSIX preflight")
