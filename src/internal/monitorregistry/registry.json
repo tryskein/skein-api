@@ -259,6 +259,41 @@
           "instruction": "Run `command` with the run_shell_command tool, is_background: true. It ends after a batch of events with a stop line, and its end wakes you; handle the events, then follow the action of that line."
         }
       ]
+    },
+    {
+      "id": "hermes",
+      "about": "Hermes Agent: the runner runs as a background terminal process whose new output comes to the agent on each heartbeat tick.",
+      "source": "github.com/NousResearch/hermes-agent 24b14819: tools/terminal_tool.py#terminal_tool (background, heartbeat, persist_on_release: a background process without it is killed when the agent's lifecycle ends a session, e.g. on context compression or /new), tools/process_registry.py#HEARTBEAT_MIN_SECONDS (60) and #HEARTBEAT_TICK_SECONDS (5: a tick comes up to ~65 s after the last one), #_emit_heartbeat (a tick carries the output since the previous one; quiet ticks are skipped; each tick wakes an idle agent), tools/process_registry_notifications.py#HEARTBEAT_OUTPUT_CHARS (2000: only the last 2000 characters of a tick's output are kept, the rest counted in omitted; two undelivered ticks merge under the same cap); notify=[pattern] is not used (at most one per 15 s and 8 for the life of the process); pyproject.toml [project.scripts] hermes (a Python console script).",
+      "process": {
+        "executables": [
+          "hermes",
+          "hermes.exe"
+        ],
+        "argvBaseNames": [
+          "hermes"
+        ]
+      },
+      "methods": [
+        {
+          "kind": "stream",
+          "conditions": {},
+          "instruction": "Run `command` with the terminal tool: background=true, heartbeat=60, persist_on_release=true, and no notify. Each heartbeat brings the new output of the monitor: each line is an event. If a tick reports omitted output, read the events of the monitor's journal. If the process ends, run `command` the same way again: the cursor is kept, no event is lost.",
+          "limits": {
+            "line": {
+              "max": 2000,
+              "unit": "chars"
+            },
+            "batch": {
+              "max": 2000,
+              "unit": "chars"
+            },
+            "rate": {
+              "burst": 1,
+              "intervalSec": 70
+            }
+          }
+        }
+      ]
     }
   ],
   "channels": [
