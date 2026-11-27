@@ -42,6 +42,7 @@
 # defaults.
 
 import json
+import ntpath
 import os
 import random
 import re
@@ -636,22 +637,83 @@ def shell_quote(s):
     return "'" + s.replace("'", "'\\''") + "'"
 
 
+# The Windows shells the commands of a start are built for (US-11): the
+# shell a record names, Windows PowerShell for a record without one and for
+# the general record.
+SHELL_GIT_BASH = "git-bash"
+SHELL_PWSH = "pwsh"
+SHELL_POWERSHELL = "powershell"
+
+# PowerShell takes the typographic single quotes as quotes of a
+# single-quoted string too (about_Quoting_Rules); inside one, each of them is
+# written twice to stand for itself.
+_PS_QUOTES = u"'\u2018\u2019\u201a\u201b"
+
+# Git Bash converts arguments and variables that look like POSIX paths
+# before it runs a Windows program; these variables turn that off, so the
+# literal paths reach Python unchanged.
+_MSYS_NO_CONVERSION = "MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*' "
+
+# The Python of a Windows start: the launcher of the python.org installer
+# and of the Python install manager.
+_WINDOWS_PYTHON = "py -3"
+
+
+# Variables whose values are a word or a number of the runner's own; a
+# POSIX shell gets them without quotes.
+_BARE_VALUES = ("SKEIN_MONITOR_MODE", "SKEIN_MONITOR_PREFLIGHT")
+
+
+def powershell_quote(s):
+    return "'" + "".join(c + c if c in _PS_QUOTES else c for c in s) + "'"
+
+
+def command_shell(settings):
+    """The shell the commands of this start are written for: None on POSIX,
+    else one of the SHELL_* names."""
+    if settings.platform != "windows":
+        return None
+    shell = ((settings.record.agent if settings.record is not None else None) or {}).get("windowsShell")
+    return shell if shell in (SHELL_GIT_BASH, SHELL_PWSH) else SHELL_POWERSHELL
+
+
+def render_command(pairs, script, shell):
+    """A command that sets every variable of pairs ((name, value) in order)
+    and runs the Python file script, in the syntax of shell (None: POSIX).
+    A value in _BARE_VALUES goes unquoted to a POSIX shell. PowerShell
+    keeps a variable it sets for the rest of the session, so each command
+    sets all of its own."""
+    if shell in (SHELL_PWSH, SHELL_POWERSHELL):
+        sets = "".join("$env:%s=%s; " % (name, powershell_quote(value)) for name, value in pairs)
+        return sets + _WINDOWS_PYTHON + " " + powershell_quote(script)
+    assigns = " ".join(name + "=" + (value if name in _BARE_VALUES else shell_quote(value))
+                       for name, value in pairs)
+    if shell == SHELL_GIT_BASH:
+        return _MSYS_NO_CONVERSION + assigns + " " + _WINDOWS_PYTHON + " " + shell_quote(script)
+    return assigns + " python3 " + shell_quote(script)
+
+
 def working_command(env, token_file, preflight_id, settings):
     """The working command: the variables of the preflight command, the
     starter path and both digests with SKEIN_MONITOR_MODE=run, the number of
     the result and the overrides. Every SKEIN_* variable the runner reads is
-    set, an override that was not given to an empty value."""
-    parts = ["SKEIN_MONITOR_MODE=run", "SKEIN_MONITOR_PREFLIGHT=%d" % preflight_id,
-             "SKEIN_MONITOR_CHANNEL=" + shell_quote(settings.channel or ""),
-             "SKEIN_MONITOR_BLIND=" + shell_quote(BLIND_OFF if settings.blind_off else "")]
-    parts.extend(name + "=" + shell_quote(env.get(name, "")) for name in BOOTSTRAP_VARS)
+    set, an override that was not given to an empty value. On Windows it is
+    written for the shell of the record."""
+    pairs = [("SKEIN_MONITOR_MODE", "run"), ("SKEIN_MONITOR_PREFLIGHT", "%d" % preflight_id),
+             ("SKEIN_MONITOR_CHANNEL", settings.channel or ""),
+             ("SKEIN_MONITOR_BLIND", BLIND_OFF if settings.blind_off else "")]
+    pairs.extend((name, env.get(name, "")) for name in BOOTSTRAP_VARS)
     # The parameters of the mint, empty for its default: set either way, so
     # the environment the command runs in does not change what the reissue
     # command of an action repeats (US-12).
-    parts.extend(name + "=" + shell_quote(env.get(name, "")) for name in MINT_PARAM_VARS)
-    starter = os.path.join(os.path.dirname(os.path.abspath(token_file)), CLIENT_STARTER_FILE)
-    parts.append("python3 " + shell_quote(starter))
-    return " ".join(parts)
+    pairs.extend((name, env.get(name, "")) for name in MINT_PARAM_VARS)
+    shell = command_shell(settings)
+    if shell is None:
+        starter = os.path.join(os.path.dirname(os.path.abspath(token_file)), CLIENT_STARTER_FILE)
+    else:
+        # The path as the mint built it: a drive path whose separator is "\".
+        starter = ntpath.join(ntpath.dirname(token_file), CLIENT_STARTER_FILE)
+    return render_command(pairs, starter, shell)
 
 
 def instruction(registry, record, choice):

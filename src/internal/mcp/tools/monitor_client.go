@@ -227,11 +227,21 @@ func buildClientCommands(in clientCommandInput) clientCommands {
 }
 
 // mintParamVars are the start variables of the mint's parameters, each with
-// a leading space: SKEIN_SUBTREE is 1 for subtree=true, SKEIN_EVENT_TYPES the
-// comma-separated event types when they are not defaultMonitorEventTypes.
-// Both are always set - empty for the default - so the command, not the
-// environment it runs in, decides them.
+// a leading space and shell-single-quoted (mintParamPairs).
 func mintParamVars(subtree bool, eventTypes []string) string {
+	var b strings.Builder
+	for _, v := range mintParamPairs(subtree, eventTypes) {
+		b.WriteString(" " + v.name + "=" + shellSingleQuote(v.value))
+	}
+	return b.String()
+}
+
+// mintParamPairs are the start variables of the mint's parameters:
+// SKEIN_SUBTREE is 1 for subtree=true, SKEIN_EVENT_TYPES the comma-separated
+// event types when they are not defaultMonitorEventTypes. Both are always
+// set - empty for the default - so the command, not the environment it runs
+// in, decides them.
+func mintParamPairs(subtree bool, eventTypes []string) []startVar {
 	sub, types := "", ""
 	if subtree {
 		sub = "1"
@@ -239,7 +249,115 @@ func mintParamVars(subtree bool, eventTypes []string) string {
 	if len(eventTypes) > 0 && !slices.Equal(eventTypes, defaultMonitorEventTypes) {
 		types = strings.Join(eventTypes, ",")
 	}
-	return " SKEIN_SUBTREE=" + shellSingleQuote(sub) + " SKEIN_EVENT_TYPES=" + shellSingleQuote(types)
+	return []startVar{{"SKEIN_SUBTREE", sub}, {"SKEIN_EVENT_TYPES", types}}
+}
+
+// startVar is one variable a start command sets.
+type startVar struct{ name, value string }
+
+// windowsPython is the Python of a Windows start in every shell: the
+// launcher that the python.org installer and the Python install manager
+// both provide (docs.python.org, "Using Python on Windows"); a python3
+// command there is only an alias that the documentation does not recommend.
+const windowsPython = "py -3"
+
+// msysNoConversion turns off the conversion Git Bash applies to arguments
+// and variables that look like POSIX paths before it runs a Windows
+// program: the literal paths reach Python unchanged.
+const msysNoConversion = "MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*' "
+
+// windowsCommandShell is the shell the Windows commands of a record are
+// written for: Git Bash or pwsh when the record names it, Windows PowerShell
+// for a record that names none and for the general record (US-11).
+func windowsCommandShell(shell string) string {
+	switch shell {
+	case monitorregistry.WindowsShellGitBash, monitorregistry.WindowsShellPwsh:
+		return shell
+	default:
+		return monitorregistry.WindowsShellPowerShell
+	}
+}
+
+// powerShellSingleQuote quotes s as a PowerShell single-quoted string:
+// PowerShell takes the typographic single quotes U+2018-U+201B as quotes
+// of such a string too (about_Quoting_Rules), and inside it each of them,
+// like the apostrophe, is written twice to stand for itself. Nothing else
+// is expanded in a single-quoted string.
+func powerShellSingleQuote(s string) string {
+	var b strings.Builder
+	b.WriteByte('\'')
+	for _, r := range s {
+		b.WriteRune(r)
+		if r == '\'' || (r >= '\u2018' && r <= '\u201b') {
+			b.WriteRune(r)
+		}
+	}
+	b.WriteByte('\'')
+	return b.String()
+}
+
+// windowsAssignments sets every variable of vars in the syntax of shell:
+// "$env:NAME='v'; " each for PowerShell, which keeps a variable for the rest
+// of its session (so each command sets all of its own), and NAME='v' each
+// with a trailing space, after the MSYS switches, for Git Bash.
+func windowsAssignments(shell string, vars []startVar) string {
+	var b strings.Builder
+	if shell == monitorregistry.WindowsShellGitBash {
+		b.WriteString(msysNoConversion)
+		for _, v := range vars {
+			b.WriteString(v.name + "=" + shellSingleQuote(v.value) + " ")
+		}
+		return b.String()
+	}
+	for _, v := range vars {
+		b.WriteString("$env:" + v.name + "=" + powerShellSingleQuote(v.value) + "; ")
+	}
+	return b.String()
+}
+
+// windowsTokenDir is the directory of a Windows token path.
+func windowsTokenDir(tokenFilePath string) string {
+	return tokenFilePath[:strings.LastIndex(tokenFilePath, `\`)]
+}
+
+// buildWindowsClientCommands builds prepare and preflight of a call with
+// `client` on Windows, in the shell of the record (windowsCommandShell).
+// prepare runs monitor_prepare.py with SKEIN_TOKEN_DIR: in Git Bash as an
+// argument of -c; in PowerShell on the standard input of Python, because
+// Windows PowerShell 5.1 drops the double quotes inside an argument it
+// passes to a native program, while it pipes the ASCII text unchanged.
+// preflight runs starter.py of the token directory with the same variables
+// as on POSIX. Every value is quoted for the shell, so a path with spaces,
+// Unicode or an apostrophe reaches Python literally; the token is in none
+// of them.
+func buildWindowsClientCommands(in clientCommandInput, recordShell string) clientCommands {
+	shell := windowsCommandShell(recordShell)
+	dir := windowsTokenDir(in.tokenFilePath)
+	starter := dir + `\` + clientStarterFile
+	vars := []startVar{
+		{"SKEIN_MONITOR_MODE", "preflight"},
+		{"SKEIN_PUBLIC_URL", in.publicURL},
+		{"SKEIN_ISSUE", in.issueID},
+		{"SKEIN_TOKEN_FILE", in.tokenFilePath},
+		{"SKEIN_EXCLUDE_SESSION", in.excludeSession},
+		{"SKEIN_RUNNER_SHA256", in.runnerSHA256},
+		{"SKEIN_LOADER_SHA256", in.loaderSHA256},
+		{"SKEIN_CLIENT", in.client},
+		{"SKEIN_PLATFORM", in.platform},
+	}
+	vars = append(vars, mintParamPairs(in.subtree, in.eventTypes)...)
+	prepareVars := []startVar{{"SKEIN_TOKEN_DIR", dir}}
+	if shell == monitorregistry.WindowsShellGitBash {
+		return clientCommands{
+			prepare:   windowsAssignments(shell, prepareVars) + windowsPython + " -c " + shellSingleQuote(monitorPrepareScript),
+			preflight: windowsAssignments(shell, vars) + windowsPython + " " + shellSingleQuote(starter),
+		}
+	}
+	return clientCommands{
+		prepare: windowsAssignments(shell, prepareVars) + powerShellSingleQuote(monitorPrepareScript) +
+			" | " + windowsPython + " -",
+		preflight: windowsAssignments(shell, vars) + windowsPython + " " + powerShellSingleQuote(starter),
+	}
 }
 
 // clientStarterFile is the name of the starter file prepare writes into the
@@ -284,7 +402,7 @@ func monitorClientUsage(r monitorregistry.Resolution, reg *monitorregistry.Regis
 		"session id to " + excludePath + " and do not reply to it; after an MCP reconnect write " +
 		"the new one.\n")
 	b.WriteString("Every stop prints one final JSON line {event, reason, action}: follow its `action`. " +
-		"If python3 cannot open starter.py, mint a new monitor with the same parameters. " +
+		"If Python cannot open starter.py, mint a new monitor with the same parameters. " +
 		"Reply to comments with skein_comment as usual.")
 	return b.String()
 }

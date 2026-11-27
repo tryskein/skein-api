@@ -612,9 +612,30 @@ func measureMonitorRealRegistry(m *respMeasurer, pool *pgxpool.Pool, ctx context
 	onReal := &respMeasurer{t: t, ctx: ctx, c: c}
 	largest := onReal.call("skein_get_monitor_script.client_general_real_posix",
 		"skein_get_monitor_script", map[string]any{"id": issueID, "client": "measure-unknown-agent"})
+	// The windows - posix growth of each record's response, by the shell its
+	// Windows commands are written for (SC-009).
+	growth := map[string][2]int{}
+	measureWindows := func(label, client, shell, posix string) {
+		resp := onReal.call("skein_get_monitor_script.client_"+label+"_windows", "skein_get_monitor_script",
+			map[string]any{"id": issueID, "client": client, "platform": "windows", "tokenDir": measureMonitorTokenDir})
+		d := [2]int{len(resp) - len(posix), utf8.RuneCountInString(resp) - utf8.RuneCountInString(posix)}
+		if old, ok := growth[shell]; !ok || d[0] > old[0] {
+			growth[shell] = d
+		}
+	}
+	// The general record runs Windows PowerShell; pwsh takes the same
+	// commands, so it stands for pwsh as well (no record of the registry
+	// may name pwsh yet).
+	measureWindows("general_real", "measure-unknown-agent", monitorregistry.WindowsShellPowerShell, largest)
+	measureWindows("general_real_pwsh", "measure-unknown-agent", monitorregistry.WindowsShellPwsh, largest)
 	for _, id := range reg.AgentIDs() {
 		resp := onReal.call("skein_get_monitor_script.client_"+id+"_posix",
 			"skein_get_monitor_script", map[string]any{"id": issueID, "client": id})
+		shell := reg.Resolve(id).WindowsShell()
+		if shell == "" {
+			shell = monitorregistry.WindowsShellPowerShell
+		}
+		measureWindows(id, id, shell, resp)
 		if len(resp) > len(largest) {
 			largest = resp
 		}
@@ -622,7 +643,23 @@ func measureMonitorRealRegistry(m *respMeasurer, pool *pgxpool.Pool, ctx context
 	m.totalBytes += onReal.totalBytes
 	m.rows += onReal.rows
 	m.part("skein_get_monitor_script.client_posix_max", largest)
+	for _, sh := range []struct{ shell, label string }{
+		{monitorregistry.WindowsShellGitBash, "gitbash"},
+		{monitorregistry.WindowsShellPwsh, "pwsh"},
+		{monitorregistry.WindowsShellPowerShell, "powershell"},
+	} {
+		d, ok := growth[sh.shell]
+		if !ok {
+			t.Fatalf("no record of the real registry or general record runs %s", sh.shell)
+		}
+		m.figure("skein_get_monitor_script.windows_"+sh.label+"_delta_max", d[0], d[1])
+	}
 }
+
+// measureMonitorTokenDir is the tokenDir of the Windows rows: one fixed
+// literal for every record, so the growth over POSIX compares like with
+// like (SC-009, "Единицы и точки замера").
+const measureMonitorTokenDir = `C:\Users\measure\AppData\Local`
 
 // respMeasurer calls a tool and reports the size of its response.
 type respMeasurer struct {
@@ -662,6 +699,14 @@ func (m *respMeasurer) callCtx(ctx context.Context, label, tool string, args map
 	}
 	m.emit("MEASURE_RESP", label, txt.Text)
 	return txt.Text
+}
+
+// figure reports a figure that is not one payload (a difference of two
+// responses) as a MEASURE_PART row of bytes and runes.
+func (m *respMeasurer) figure(label string, bytes, runes int) {
+	m.t.Helper()
+	fmt.Printf("%s %d %d %s\n", "MEASURE_PART", bytes, runes, label)
+	m.rows++
 }
 
 // part reports a sub-object of a response (one list row, one edge).

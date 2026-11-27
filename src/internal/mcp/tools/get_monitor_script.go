@@ -339,17 +339,19 @@ func handleGetMonitorScript(issues monitorIssueResolver, watcher monitorWatcher,
 			resp.Platform = clientArgs.Platform
 			// One start command with `client`: no bootstrap key (R-10, INV-17).
 			resp.Bootstrap = ""
-			if clientArgs.Platform == monitorPlatformPOSIX {
-				cmds := buildClientCommands(clientCommandInput{
-					publicURL: agentPublicURL, issueID: issueID, excludeSession: sess,
-					tokenFilePath: tokenFilePath, runnerSHA256: runnerSHA256, loaderSHA256: loaderSHA256,
-					client: clientArgs.Client, platform: clientArgs.Platform,
-					subtree: subtree, eventTypes: eventTypes,
-				})
-				resp.Prepare = cmds.prepare
-				resp.Preflight = cmds.preflight
-				resp.TokenInstruction = clientTokenInstruction
+			in := clientCommandInput{
+				publicURL: agentPublicURL, issueID: issueID, excludeSession: sess,
+				tokenFilePath: tokenFilePath, runnerSHA256: runnerSHA256, loaderSHA256: loaderSHA256,
+				client: clientArgs.Client, platform: clientArgs.Platform,
+				subtree: subtree, eventTypes: eventTypes,
 			}
+			cmds := buildClientCommands(in)
+			if clientArgs.Platform == monitorPlatformWindows {
+				cmds = buildWindowsClientCommands(in, clientArgs.Resolution.WindowsShell())
+			}
+			resp.Prepare = cmds.prepare
+			resp.Preflight = cmds.preflight
+			resp.TokenInstruction = clientTokenInstruction
 			resp.Usage = monitorClientUsage(clientArgs.Resolution, registry, clientExcludeSessionPath(tokenFilePath))
 		}
 		return skmcp.ToolJSON(resp)

@@ -1,6 +1,7 @@
-# Skein monitor `prepare` for a call with `client` on POSIX. Run as
-# `python3 -c`; SKEIN_TOKEN_DIR names the token directory. It checks the
-# Python version first (before anything is created), creates the directory
+# Skein monitor `prepare` for a call with `client`. Run as `python3 -c` on
+# POSIX (in Git Bash `py -3 -c`, in PowerShell on the standard input);
+# SKEIN_TOKEN_DIR names the token directory. It checks the Python version
+# first (before anything is created), creates the directory
 # new with mode 0700 (an existing one is refused, so nobody else's directory
 # is adopted), checks that it is owned by the caller and private, writes the
 # starter into it atomically (a temporary file renamed to starter.py) and
@@ -28,9 +29,15 @@ def _refuse(reason, action):
     sys.exit(1)
 
 
+# The lowest Python of a monitor with `client` (R-9): 3.12.4 on Windows,
+# 3.6 elsewhere.
+_MIN = (3, 12, 4) if sys.platform == "win32" else (3, 6)
+
+
 def main():
-    if sys.version_info < (3, 6):
-        _refuse("config_invalid", "Python 3.6 or newer is needed. Install it, then run `prepare` again.")
+    if sys.version_info < _MIN:
+        _refuse("config_invalid", "Python %s or newer is needed. Install it, then run `prepare` again."
+                % ".".join(map(str, _MIN)))
     token_dir = os.environ.get("SKEIN_TOKEN_DIR", "")
     if not os.path.isabs(token_dir):
         _refuse("misconfigured", "The prepare command is broken (no absolute token directory)." + _MINT)

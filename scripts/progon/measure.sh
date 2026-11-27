@@ -29,7 +29,12 @@
 #                the first start by a preflight result and of a restart by
 #                the same working command, on the behavioural fixture),
 #                delivered (the stop line of an exit-on-event cycle on that
-#                fixture)
+#                fixture), windows_gitbash_delta_max,
+#                windows_pwsh_delta_max and windows_powershell_delta_max (the
+#                largest windows - posix growth of one record's response with
+#                client, over every record whose commands are written for
+#                that shell and the general record, which stands for pwsh as
+#                well: both PowerShell shells take the same commands)
 # Rows of SC-009 and SC-012 their owner tasks have not filled yet are listed
 # as skipped TAP points "awaiting <task>" (see `pending` below): the run
 # names them, and a green run does not read as covering them. A task that
@@ -56,7 +61,8 @@ rows="$(printf '%s\n' "$resp" | grep -E '^MEASURE_(RESP|PART) ' || true)"
 for point in RESP:no_client RESP:client_general_posix RESP:client_fixture3_posix \
 	RESP:client_general_real_posix PART:starter PART:prepare_ready PART:working_command \
 	PART:client_posix_max PART:first_start_monitor_started PART:restart_monitor_started \
-	PART:delivered; do
+	PART:delivered PART:windows_gitbash_delta_max PART:windows_pwsh_delta_max \
+	PART:windows_powershell_delta_max; do
 	kind="MEASURE_${point%%:*}"
 	label="$tool.${point#*:}"
 	if ! printf '%s\n' "$rows" | awk -v k="$kind" -v l="$label" '$1 == k && $NF == l { found = 1 } END { exit found ? 0 : 1 }'; then
@@ -66,12 +72,8 @@ for point in RESP:no_client RESP:client_general_posix RESP:client_fixture3_posix
 	fi
 done
 
-# Named rows not measured yet, with the task that fills each:
-#   windows_<shell>_delta_max: the largest windows - posix growth of one
-#     record's response with client, over every record the shell applies
-#     to and the general record (SC-009).
-pending="PART:windows_gitbash_delta_max:T031 PART:windows_pwsh_delta_max:T031
-PART:windows_powershell_delta_max:T031"
+# Named rows not measured yet, with the task that fills each (none now).
+pending=""
 skipped=""
 for point in $pending; do
 	kind="MEASURE_${point%%:*}"
