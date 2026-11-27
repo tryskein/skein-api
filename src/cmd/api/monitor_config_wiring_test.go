@@ -118,7 +118,7 @@ func newWiringStackWith(t *testing.T, publicURL string, registryDoc []byte) *wir
 		t.Fatalf("search.NewService: %v", err)
 	}
 	build := func(doc []byte) (chi.Router, func()) {
-		return buildRouterWithRegistry(doc,
+		return buildRouterWithRegistry(doc, nil,
 			pool, cfg,
 			nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, // REST handlers authH…dashboardH
 			nil,                                         // usersStore

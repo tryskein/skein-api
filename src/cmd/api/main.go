@@ -828,8 +828,8 @@ func main() {
 	// The monitor registry is loaded and validated before the router is
 	// built: an invalid registry stops the process before any route exists
 	// or any listener opens.
-	router, drainMCPStreams, err := buildServingRouter(monitorregistry.Embedded(), func(_ *monitorregistry.Registry, doc []byte) (chi.Router, func()) {
-		return buildRouterWithRegistry(doc, pool, cfg, authHandler, projectsHandler, componentsHandler, issuesHandler, depsHandler, readyHandler, searchH, notificationsHandler, bulkHandler, apiKeysHandler, usersHandler, issuesMeHandler, issuesAllHandler, activityHandler, dashboardHandler, usersStore, issuesStore, depsStore, projectsStore, notifStore, remindersStore, searchSvc, s3Client, attachmentsHandler, meHandler, themesHandler, meThemeHandler, themesStore, themesPublisher, inspectCache, remindersHandler, pushHandler)
+	router, drainMCPStreams, err := buildServingRouter(monitorregistry.Embedded(), func(reg *monitorregistry.Registry, doc []byte) (chi.Router, func()) {
+		return buildRouterWithRegistry(doc, reg, pool, cfg, authHandler, projectsHandler, componentsHandler, issuesHandler, depsHandler, readyHandler, searchH, notificationsHandler, bulkHandler, apiKeysHandler, usersHandler, issuesMeHandler, issuesAllHandler, activityHandler, dashboardHandler, usersStore, issuesStore, depsStore, projectsStore, notifStore, remindersStore, searchSvc, s3Client, attachmentsHandler, meHandler, themesHandler, meThemeHandler, themesStore, themesPublisher, inspectCache, remindersHandler, pushHandler)
 	})
 	if err != nil {
 		slog.Error("monitor registry is invalid", "error", err.Error())
@@ -1474,17 +1474,20 @@ func buildRouter(
 	remindersH *handler.RemindersHandler,
 	pushH *handler.PushHandler,
 ) (chi.Router, func()) {
-	return buildRouterWithRegistry(nil,
+	return buildRouterWithRegistry(nil, nil,
 		pool, cfg, authH, projectsH, componentsH, issuesH, depsH, readyH, searchH, notifH, bulkH, apiKeysH, usersH, issuesMeH, issuesAllH, activityH, dashboardH, usersStore, issuesStore, depsStore, projectsStore, notifStore, remindersStore, searchSvc, s3Client, attachmentsH, meH, themesH, meThemeH, themesStore, themesPublisher, inspectCache, remindersH, pushH)
 }
 
 // buildRouterWithRegistry assembles the chi router; registryDoc is the
 // monitor registry document the served runner body carries (nil: the
-// embedded registry.json). It is the seam through which a test hands the
-// router a fixture registry; buildServingRouter validates the document the
-// same way for production and for that test before the router is built.
+// embedded registry.json) and registry the same document as
+// buildServingRouter already loaded and validated it (nil: loaded here).
+// It is the seam through which a test hands the router a fixture registry;
+// buildServingRouter validates the document the same way for production
+// and for that test before the router is built.
 func buildRouterWithRegistry(
 	registryDoc []byte,
+	registry *monitorregistry.Registry,
 	pool *pgxpool.Pool,
 	cfg *config.Config,
 	authH *handler.AuthHandler,
@@ -1685,9 +1688,13 @@ func buildRouterWithRegistry(
 	// The MCP tool and the served runner body read this one document. A
 	// caller hands either the embedded document or one buildServingRouter
 	// validated, so a refusal here is a defect of the build.
-	monitorRegistry, err := monitorregistry.Load(registryDoc)
-	if err != nil {
-		panic(fmt.Sprintf("monitor registry: the document the router is built with is invalid: %v", err))
+	monitorRegistry := registry
+	if monitorRegistry == nil {
+		loaded, err := monitorregistry.Load(registryDoc)
+		if err != nil {
+			panic(fmt.Sprintf("monitor registry: the document the router is built with is invalid: %v", err))
+		}
+		monitorRegistry = loaded
 	}
 	agentScriptHandler := handler.NewAgentScriptHandlerWithRegistry(
 		registryDoc,
