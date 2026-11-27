@@ -8,7 +8,9 @@
 #   1. it finds the one-runner lock (locks/<key>.lock, P-5) held, checks the
 #      result it names against the last preflight.json (an outdated number is
 #      config_invalid, without a poll or a delivery) and that the holder's
-#      addressee changed (else already_running);
+#      addressee changed; else it waits up to TAKEOVER_WAIT_SEC for the
+#      holder to end (an earlier run being cancelled, US-10) and goes on, or
+#      answers already_running when the holder stays;
 #   2. it writes the takeover request (takeover.json, beside the token) and
 #      waits for the lock up to TAKEOVER_WAIT_SEC;
 #   3. the old runner sees the request between pages, when every outcome,
@@ -125,7 +127,16 @@ def take_over(token_file, env, settings, held=None):
         raise ConfigInvalid(os.path.dirname(os.path.abspath(token_file)),
                             "the preflight result cannot be read (%s)" % exc)
     if not addressee_changed(token_file):
-        raise Stop("already_running")
+        # A live holder whose addressee is the same: wait for it to end (an
+        # earlier run being cancelled, US-10), then go on, or answer
+        # already_running when it still holds the lock.
+        try:
+            return wait_runner_lock(token_file, env, TAKEOVER_WAIT_SEC), None
+        except LockBusy:
+            raise Stop("already_running")
+        except PlatformRefusal as exc:
+            raise ConfigInvalid(runner_lock_path(token_file, env),
+                                "the runner lock cannot be taken (%s)" % exc.reason)
     try:
         request_id = request_takeover(token_file, doc["preflightId"])
     except PlatformRefusal as exc:
