@@ -158,6 +158,9 @@ class _FileLock(object):
         except OSError as exc:
             os.close(self.fd)
             raise LedgerUnavailable(exc.strerror or "lock_failed")
+        except PlatformRefusal as exc:
+            os.close(self.fd)
+            raise LedgerUnavailable(exc.reason)
         except BaseException:
             # A stop signal during the wait for the lock: no descriptor is
             # left outside the release.

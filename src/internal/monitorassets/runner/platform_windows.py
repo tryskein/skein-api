@@ -14,6 +14,7 @@
 # Windows API.
 
 import ctypes
+import errno
 import os
 import subprocess
 import threading
@@ -31,6 +32,16 @@ _ERROR_PATH_NOT_FOUND = 3
 _DETACHED_FLAGS = 0x00000008 | 0x00000200 | 0x08000000
 # Step of the wait for a lock held by another process.
 _WIN_LOCK_WAIT_STEP_SEC = 0.05
+# The longest a blocking lock_fd waits for another process's lock (the
+# state and ledger locks are held for one step of a monitor).
+_WIN_LOCK_BLOCKING_SEC = 60
+
+
+def _win_lock_busy(exc):
+    """Whether msvcrt.locking failed because another process holds the
+    byte: EACCES for LK_NBLCK, EDEADLOCK once LK_LOCK gave up (CRT
+    _locking). Any other error is not a held lock."""
+    return exc.errno in (errno.EACCES, getattr(errno, "EDEADLOCK", errno.EDEADLK))
 
 _WIN_SECURITY = []
 
@@ -153,14 +164,20 @@ class WindowsPlatform(object):
         BlockingIOError when another process holds it and blocking is
         false. A blocking wait polls, since LK_LOCK gives up after ten
         seconds."""
+        deadline = time.monotonic() + _WIN_LOCK_BLOCKING_SEC
         while True:
             os.lseek(fd, 0, os.SEEK_SET)
             try:
                 msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
                 return
-            except OSError:
+            except OSError as exc:
+                if not _win_lock_busy(exc):
+                    # Not another process's lock: the platform refuses it.
+                    raise PlatformRefusal("unreadable", "lock (error %s)" % exc.errno)
                 if not blocking:
                     raise BlockingIOError("the file is locked by another process")
+            if time.monotonic() >= deadline:
+                raise PlatformRefusal("lock_timeout", "lock")
             time.sleep(_WIN_LOCK_WAIT_STEP_SEC)
 
     @staticmethod
@@ -343,7 +360,9 @@ class WindowsPlatform(object):
                 _win_check(_win_view(msvcrt.get_osfhandle(fd), path), path, False)
                 try:
                     msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
-                except OSError:
+                except OSError as exc:
+                    if not _win_lock_busy(exc):
+                        raise PlatformRefusal("unreadable", path)
                     remaining = deadline - time.monotonic()
                     if remaining <= 0:
                         raise LockBusy(path)

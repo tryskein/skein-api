@@ -24,6 +24,7 @@ class PlatformRefusal(Exception):
       open_to_others  group/other permission bits where none are allowed
       exists          a directory that must be created new already exists
       unreadable      the system refused to open or read it
+      lock_timeout    a lock another process held was not released in time
       no_user_dir     the user directory cannot be named (no HOME)
       unsupported     the platform layer is not implemented on this system
     """

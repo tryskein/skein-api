@@ -25,6 +25,7 @@ Windows shows is the SC-007 smoke (T034).
 Run on its own: python3 internal/handler/assets/runner_tests/platform_windows_test.py
 """
 
+import errno
 import json
 import os
 import shutil
@@ -88,9 +89,10 @@ class WindowsWorld(object):
 
     def active(self, ns):
         """Patches that make ns run its Windows layer on the fake."""
+        self.crt = FakeMsvcrt()
         stack = [mock.patch.object(os, "name", "nt"),
                  mock.patch.object(os, "O_BINARY", 0, create=True),
-                 mock.patch.dict(ns, {"_WIN_SECURITY": [(self.fake, ME)], "msvcrt": FakeMsvcrt()})]
+                 mock.patch.dict(ns, {"_WIN_SECURITY": [(self.fake, ME)], "msvcrt": self.crt})]
         return _Stack(stack)
 
     def reads(self):
@@ -102,8 +104,20 @@ class FakeMsvcrt(object):
     """The CRT of the layer on a POSIX test system: a handle of the fake
     security source becomes a real descriptor of its path."""
 
+    LK_NBLCK = 2
+    LK_UNLCK = 0
+
     def __init__(self):
         self.handles = {}
+        # The OSError locking raises (another process's lock, a failure), or
+        # None: the byte is locked.
+        self.lock_error = None
+        self.locks = []
+
+    def locking(self, fd, mode, nbytes):
+        self.locks.append(mode)
+        if mode == self.LK_NBLCK and self.lock_error is not None:
+            raise self.lock_error
 
     def open_osfhandle(self, handle, flags):
         fd = os.open(handle.path, os.O_RDONLY)
@@ -111,6 +125,9 @@ class FakeMsvcrt(object):
         return fd
 
     def get_osfhandle(self, fd):
+        if fd not in self.handles:
+            # A descriptor the layer opened itself (os.open): its path.
+            self.handles[fd] = fs.Handle(os.readlink("/proc/self/fd/%d" % fd), fd)
         return self.handles[fd]
 
 
@@ -310,6 +327,57 @@ class JobObjectTest(unittest.TestCase):
         result = RUNNER.CallResult(0, b"", b"", False, tree_failure="CloseHandle error 5")
         self.assertEqual(RUNNER.classify_result(rows, result), ("unknown", {"treeKill": "CloseHandle error 5"}))
         self.assertEqual(RUNNER.classify_result(rows, RUNNER.CallResult(0, b"", b"", False))[0], "queued")
+
+
+class LockTest(unittest.TestCase):
+    """msvcrt.locking: only EACCES or EDEADLOCK is another process's lock;
+    any other error is a refusal of the platform, and a blocking wait ends
+    by its deadline."""
+
+    def lock_fd(self, error, blocking, limit=None):
+        world = WindowsWorld(self)
+        fd = os.open(world.token, os.O_RDWR)
+        self.addCleanup(os.close, fd)
+        patches = [mock.patch.dict(RUNNER.__dict__, {"_WIN_LOCK_BLOCKING_SEC": limit})] if limit is not None else []
+        with world.active(RUNNER.__dict__), _Stack(patches):
+            world.crt.lock_error = error
+            RUNNER.WindowsPlatform.lock_fd(fd, blocking=blocking)
+
+    def test_a_held_lock_is_busy(self):
+        for code in (errno.EACCES, getattr(errno, "EDEADLOCK", errno.EDEADLK)):
+            with self.subTest(errno=code):
+                with self.assertRaises(BlockingIOError):
+                    self.lock_fd(OSError(code, "locked"), blocking=False)
+
+    def test_another_error_is_a_refusal_not_a_lock(self):
+        for blocking in (False, True):
+            with self.subTest(blocking=blocking):
+                with self.assertRaises(RUNNER.PlatformRefusal) as ctx:
+                    self.lock_fd(OSError(errno.EIO, "I/O error"), blocking=blocking)
+                self.assertEqual(ctx.exception.reason, "unreadable")
+
+    def test_a_blocking_wait_ends_by_its_deadline(self):
+        with self.assertRaises(RUNNER.PlatformRefusal) as ctx:
+            self.lock_fd(OSError(errno.EACCES, "locked"), blocking=True, limit=0.2)
+        self.assertEqual(ctx.exception.reason, "lock_timeout")
+
+    def test_the_lock_is_taken(self):
+        self.lock_fd(None, blocking=True)
+
+    def runner_lock(self, error):
+        world = WindowsWorld(self)
+        env = {"LOCALAPPDATA": world.root}
+        with world.active(RUNNER.__dict__):
+            world.fake.views[RUNNER.runner_lock_path(world.token, env)] = private_file_view()
+            world.crt.lock_error = error
+            return RUNNER.WindowsPlatform.acquire_runner_lock(world.token, 0, env)
+
+    def test_the_runner_lock_takes_only_a_held_lock_for_busy(self):
+        self.assertIsInstance(self.runner_lock(None), RUNNER.WindowsRunnerLock)
+        with self.assertRaises(RUNNER.LockBusy):
+            self.runner_lock(OSError(errno.EACCES, "locked"))
+        with self.assertRaises(RUNNER.PlatformRefusal):
+            self.runner_lock(OSError(errno.EIO, "I/O error"))
 
 
 class BatchProgramTest(unittest.TestCase):

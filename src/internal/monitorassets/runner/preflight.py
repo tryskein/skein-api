@@ -718,6 +718,9 @@ class StateLock(object):
         except OSError:
             os.close(self._fd)
             raise PlatformRefusal("unreadable", path)
+        except PlatformRefusal as exc:
+            os.close(self._fd)
+            raise PlatformRefusal(exc.reason, path)
 
     def __enter__(self):
         return self
