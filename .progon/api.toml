@@ -131,7 +131,7 @@ adapter = "mutmut"
 image = "python:3.13.18-slim-bookworm"
 timeout_seconds = 7200
 [kind.pymutation.options]
-install = "python3 -m pip install mutmut==3.8.1"
+install = "python3 -m pip install --user mutmut==3.8.1"
 
 # The monitor starter under Python 2.7 (R-9): scripts/progon/starter-py27.sh
 # runs both modes of the starter with python2.7 and prints TAP; an old
