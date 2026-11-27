@@ -322,6 +322,64 @@ class IdOnlyBatchTest(unittest.TestCase):
         self.assertNotEqual(statuses.get(2), "queued")
 
 
+class SharedDeadlineTest(unittest.TestCase):
+    """The idle wait and the call share one attempt explicitly: the wait
+    takes its own timeout and never the time kept for the call; a wait that
+    left the call less than its timeout sends nothing (a refusal before
+    send, no call)."""
+
+    CHANNEL = {"id": "T", "executor": {"type": "argv", "argv": ["t"], "feed": "arg", "timeoutSec": 60},
+               "idle": {"type": "argv", "argv": ["t", "wait"], "timeoutSec": 70}}
+
+    class Pipeline(object):
+        def __init__(self, test, wait_takes):
+            self.clock = Clock()
+            self.cancel = FakeCancel()
+            self.wait_takes = wait_takes
+            self.waits = []
+            self.exclusion = None
+
+        def check_addressee(self, channel, timeout):
+            pass
+
+        def wait_idle(self, channel, timeout):
+            self.waits.append(timeout)
+            self.clock.t += self.wait_takes
+
+    class Attempt(object):
+        handed = False
+
+        def note_call(self):
+            pass
+
+        def confirm(self):
+            pass
+
+    def guard(self, wait_takes, window=1800):
+        runner = harness.load_runner()
+        pipeline = self.Pipeline(self, wait_takes)
+        timeout = min(runner._attempt_seconds(self.CHANNEL, window), window)
+        return runner, pipeline, runner.Guard(pipeline, self.CHANNEL, self.Attempt(), timeout)
+
+    def test_the_call_keeps_its_timeout_after_a_long_wait(self):
+        runner, pipeline, guard = self.guard(wait_takes=70)
+        guard.before_send()
+        self.assertEqual(pipeline.waits, [70])
+        self.assertEqual(guard.call_timeout(), 60)
+
+    def test_a_wait_that_ate_the_call_s_time_sends_nothing(self):
+        runner, pipeline, guard = self.guard(wait_takes=100)
+        with self.assertRaises(runner.RefusedBeforeSend):
+            guard.before_send()
+        self.assertFalse(guard.handed)
+
+    def test_a_short_window_keeps_no_more_than_it_has(self):
+        runner, pipeline, guard = self.guard(wait_takes=1, window=30)
+        guard.before_send()
+        self.assertLessEqual(guard.call_timeout(), 29)
+        self.assertTrue(guard.handed)
+
+
 class UnknownTest(unittest.TestCase):
     """Row #52: unknown is not repeated and does not move to another
     channel; degraded delivery_unknown; a second monitor of the addressee

@@ -128,6 +128,31 @@ def identity_from_doc(doc):
                     doc.get("terminal"))
 
 
+def _call_seconds(channel, fallback):
+    """The own timeout of the channel's call (executor.timeoutSec)."""
+    return (channel.get("executor") or {}).get("timeoutSec") or fallback
+
+
+# The time an attempt keeps for its two addressee checks besides the wait
+# and the call.
+_CHECKS_SEC = 2 * 10
+
+
+def _attempt_seconds(channel, fallback):
+    """The time of one attempt: the idle wait's own, the call's own and the
+    checks around them."""
+    idle = _idle_seconds(channel)
+    return _call_seconds(channel, fallback) + (idle + _CHECKS_SEC if idle else 0)
+
+
+def _idle_seconds(channel):
+    """The own timeout of the channel's idle wait: 0 without an argv wait."""
+    idle = channel.get("idle") or {}
+    if idle.get("type") != "argv":
+        return 0
+    return idle.get("timeoutSec") or 0
+
+
 class Guard(object):
     """The checks of one attempt, within one deadline for all its steps (the
     address check, the idle wait and the call share the attempt's timeout).
@@ -148,6 +173,7 @@ class Guard(object):
         # right before the hand-over.
         self.batch = list(batch)
         self.deadline = pipeline.clock.now() + timeout
+        self.total = timeout
         # Set when before_commit failed because access was lost: the
         # journal line goes without the preview.
         self.access_lost = False
@@ -177,19 +203,45 @@ class Guard(object):
         if not self.pipeline.cancel.may_send():
             raise PollStale()
 
+    def call_timeout(self):
+        """The time the call of the channel gets: its own timeout, within
+        what is left of the attempt."""
+        return min(self.remaining(), _call_seconds(self.channel, self.remaining()))
+
+    def reserve(self):
+        """The time kept for the call: its own timeout, less when the
+        attempt is shorter than the wait, the checks and the call together
+        (a short idle window)."""
+        return max(min(_call_seconds(self.channel, 0),
+                       self.total - _idle_seconds(self.channel) - _CHECKS_SEC), 0)
+
+    def wait_and_keep_the_call(self):
+        """The idle wait within its own timeout and never into the time kept
+        for the call."""
+        idle = _idle_seconds(self.channel)
+        if idle:
+            self.pipeline.wait_idle(self.channel, max(min(self.remaining() - self.reserve(), idle), 0.001))
+
+    def keep_the_call(self):
+        """After the last check: the time kept for the call must be left, or
+        nothing is sent (a refusal before send)."""
+        if self.remaining() < self.reserve():
+            raise RefusedBeforeSend("the idle wait left the call too little of its time")
+
     def before_send(self):
         self.boundary()
         # Counted first: a refusal of the checks below spends the budget of
         # INV-8 like a refusal of the channel.
         self.count_call()
         self.pipeline.check_addressee(self.channel, self.remaining())
-        self.pipeline.wait_idle(self.channel, self.remaining())
+        self.wait_and_keep_the_call()
         # After the wait: the access boundary, which may poll the server -
         # the last step that may take time on the network - then the
         # addressee it waited for and the reservation of every event (a
         # merge of the addressee's records may have taken one meanwhile).
         self.boundary()
         self.pipeline.check_addressee(self.channel, self.remaining())
+        self.keep_the_call()
         self.check_echo()
         self.attempt.confirm()
         # Last, right before the hand-over and without the network: what is
@@ -265,9 +317,9 @@ class _ReceiptGuard(Guard):
         # (the agent of a PTY may change during the wait), then nothing that
         # waits or goes to the network before the hand-over.
         self.pipeline.check_addressee(self.channel, self.remaining())
-        self.pipeline.wait_idle(self.channel, self.remaining())
+        self.wait_and_keep_the_call()
         self.pipeline.check_addressee(self.channel, self.remaining())
-        self.remaining()
+        self.keep_the_call()
 
     def before_commit(self):
         try:
@@ -291,7 +343,7 @@ class ArgvDriver(object):
         if spec.get("type") not in ("argv", "http"):
             raise RefusedBeforeSend("executor %s is not available" % spec.get("type"))
         try:
-            result = self.executor.call(spec, text, guard.remaining())
+            result = self.executor.call(spec, text, guard.call_timeout())
         except ExecutorRefusal as exc:
             raise RefusedBeforeSend(exc.reason)
         return classify_result(self.channel.get("outcomes"), result)
@@ -313,7 +365,7 @@ class TwoStepDriver(object):
     def send(self, text, guard):
         guard.before_send()
         try:
-            first = self.executor.call(self.insert["executor"], text, guard.remaining())
+            first = self.executor.call(self.insert["executor"], text, guard.call_timeout())
         except ExecutorRefusal as exc:
             raise RefusedBeforeSend(exc.reason)
         outcome, sign = classify_result(self.insert.get("outcomes"), first)
@@ -778,8 +830,9 @@ class DeliverySink(object):
                     return
                 self._wait(due)
                 return
-        timeout = min((channel.get("executor") or {}).get("timeoutSec") or self.idle_window,
-                      deadline - now)
+        # The attempt's time is the idle wait's own plus the call's own, so
+        # a long wait leaves the call its whole timeout (or no call).
+        timeout = min(_attempt_seconds(channel, self.idle_window), deadline - now)
         if len(batch) < len(attempt.events):
             batch = [n for n in batch if str(n["id"]) in attempt.events]
         limit, unit = _line_limit(channel)
@@ -940,8 +993,7 @@ class DeliverySink(object):
             left = start + self.idle_window - self.clock.now()
             if left <= 0:
                 return
-            guard = _ReceiptGuard(self, channel, min((channel.get("executor") or {}).get("timeoutSec")
-                                                     or PROBE_TIMEOUT_SEC, left))
+            guard = _ReceiptGuard(self, channel, min(_attempt_seconds(channel, PROBE_TIMEOUT_SEC), left))
             try:
                 outcome, _ = driver.send(text, guard)
             except (RefusedBeforeSend, PollStale):
