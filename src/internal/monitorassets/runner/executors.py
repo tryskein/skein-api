@@ -1475,22 +1475,28 @@ class HTTPExecutor(object):
         self.env = env
         self.secrets = [s for s in secrets if s]
 
-    def call(self, executor, text, timeout_sec):
+    def call(self, executor, text, timeout_sec, endpoint=None):
         """Send the request. Returns an HTTPResult; raises ExecutorRefusal
         when nothing was handed over."""
         http = executor.get("http") or {}
-        return self.request(http, http.get("url") or "", http.get("method") or "POST", text, timeout_sec)
+        return self.request(http, http.get("url") or "", http.get("method") or "POST", text, timeout_sec,
+                            endpoint=endpoint)
 
-    def get(self, http, url_template, timeout_sec):
+    def get(self, http, url_template, timeout_sec, endpoint=None):
         """A GET of url_template with the address and the authentication
         of http (an http-get probe, an http check): an HTTPResult;
         ExecutorRefusal when nothing was sent."""
-        return self.request(http, url_template, "GET", None, timeout_sec)
+        return self.request(http, url_template, "GET", None, timeout_sec, endpoint=endpoint)
 
-    def request(self, http, url_template, method, text, timeout_sec):
-        endpoint = user = password = None
+    def request(self, http, url_template, method, text, timeout_sec, endpoint=None):
+        """endpoint: the (base URL, user, password) an attempt read once
+        from the endpoint file (read_endpoint), so its check and its
+        request go to the same end; None reads the file now."""
+        user = password = None
         if http.get("endpointFile"):
-            endpoint, user, password = read_endpoint(http, self.env)
+            endpoint, user, password = endpoint if endpoint is not None else read_endpoint(http, self.env)
+        else:
+            endpoint = None
         url = expand_url(url_template, self.env, endpoint=endpoint)
         key = http_key(http, self.env)
         if http.get("keyEnv") and key is None:
@@ -1624,9 +1630,11 @@ class ChannelExecutor(object):
         self.programs = self.argv.programs
         self.strict = self.argv.strict
 
-    def call(self, executor, text, timeout_sec):
+    def call(self, executor, text, timeout_sec, endpoint=None):
+        """endpoint: the endpoint snapshot of the attempt (an http request
+        with an endpoint file), see HTTPExecutor.request."""
         if executor.get("type") == "http":
-            return self.http.call(executor, text, timeout_sec)
+            return self.http.call(executor, text, timeout_sec, endpoint=endpoint)
         return self.argv.call(executor, text, timeout_sec)
 
 

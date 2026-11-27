@@ -1015,6 +1015,22 @@ def instruction(registry, record, choice):
     return " ".join(p for p in parts if p)
 
 
+def _endpoints_doc(registry, env, channel_ids):
+    """{channel id: base URL} of the endpoint files of the chosen channel
+    and its fallbacks as the preflight reads them: a working start that
+    finds another endpoint has another addressee."""
+    out = {}
+    for cid in channel_ids:
+        channel = registry.channel(cid) if cid else None
+        http = ((channel or {}).get("executor") or {}).get("http") or {}
+        if http.get("endpointFile"):
+            try:
+                out[cid] = read_endpoint(http, env)[0]
+            except ExecutorRefusal:
+                pass
+    return out
+
+
 def _identity_doc(identity, captures=None):
     if identity is None:
         return None
@@ -1132,6 +1148,7 @@ def preflight(token_file, env, registry, settings, detector=None, prober=None, p
                 "binding": binding,
                 "hostMessage": "; ".join(host_messages) if host_messages else None,
                 "programs": _programs_doc(ctx, [choice.channel] + list(choice.fallbacks)),
+                "endpoints": _endpoints_doc(registry, env, [choice.channel] + list(choice.fallbacks)),
                 "degraded": detector.degraded,
             })
     except (PlatformRefusal, OSError) as exc:

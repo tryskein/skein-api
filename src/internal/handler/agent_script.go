@@ -217,7 +217,9 @@ func wholeSecondsAtLeastOne(d time.Duration) int {
 // @Description  that takes no write is a warning and no external channel is
 // @Description  used. It saves the result with its number, reason, warnings,
 // @Description  journal, the addressee identity, the pane binding of a blind
-// @Description  channel and a degraded cause of the detection in
+// @Description  channel, the base URL of each endpoint file the channels
+// @Description  read (a working start that reads another one has another
+// @Description  addressee) and a degraded cause of the detection in
 // @Description  preflight.json next to the token under state.lock, and
 // @Description  prints one line `{event:
 // @Description  "preflight", preflightId, client, method, channel, reason,

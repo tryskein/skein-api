@@ -153,6 +153,8 @@ class EndpointFileTest(unittest.TestCase):
         sink = mock.Mock()
         sink.identity, sink.env = {}, self.env
         sink.executor.secrets = []
+        # The end the preflight read (preflight.json "endpoints").
+        sink.doc = {"endpoints": {channel()["id"]: self.server.url}}
         check = RUNNER.DeliverySink.check_addressee
         self.server.respond([{"status": 200, "json": {"data": {"id": SESSION}}}])
         check(sink, channel())
@@ -171,6 +173,8 @@ class EndpointFileTest(unittest.TestCase):
         sink = mock.Mock()
         sink.identity, sink.env = {}, self.env
         sink.executor.secrets = []
+        # The end the preflight read (preflight.json "endpoints").
+        sink.doc = {"endpoints": {channel()["id"]: self.server.url}}
         with mock.patch.object(RUNNER.subprocess, "Popen", side_effect=AssertionError("a program ran")):
             self.send()
             RUNNER.SystemProbeRunner().run(channel(), channel()["probes"][0], self.env)

@@ -198,6 +198,10 @@ class Guard(object):
         # The stop answer before_commit saw: the monitor stops on it once
         # the outcome of the batch is written.
         self.cancel_reason = None
+        # The endpoint file of the channel as this attempt read it, once:
+        # its checks and its request go to that end (executors.py
+        # #read_endpoint); None until the first check reads it.
+        self.endpoint = None
 
     def remaining(self):
         """The time left of the attempt's deadline; RefusedBeforeSend when
@@ -228,7 +232,7 @@ class Guard(object):
 
     def check(self):
         """One check of the addressee, within its own time."""
-        self.pipeline.check_addressee(self.channel, min(_CHECK_SEC, self.remaining()))
+        self.pipeline.check_addressee(self.channel, min(_CHECK_SEC, self.remaining()), guard=self)
 
     def wait_and_keep_the_call(self):
         """The idle wait within its own timeout and never into the time kept
@@ -379,8 +383,11 @@ class ArgvDriver(object):
         spec = self.channel.get("executor") or {}
         if spec.get("type") not in ("argv", "http"):
             raise RefusedBeforeSend("executor %s is not available" % spec.get("type"))
+        extra = {}
+        if getattr(guard, "endpoint", None) is not None:
+            extra["endpoint"] = guard.endpoint
         try:
-            result = self.executor.call(spec, text, guard.call_timeout())
+            result = self.executor.call(spec, text, guard.call_timeout(), **extra)
         except ExecutorRefusal as exc:
             raise RefusedBeforeSend(exc.reason)
         return classify_result(self.channel.get("outcomes"), result, env=getattr(self.executor, "env", None))
@@ -580,13 +587,29 @@ class DeliverySink(object):
 
     # --- checks -----------------------------------------------------------------
 
-    def check_addressee(self, channel, timeout=None):
+    def check_addressee(self, channel, timeout=None, guard=None):
         """INV-4 before a transfer: the agent process of the preflight for a
         terminal channel (alive, same start; in the foreground where the
         record asks), the address of the preflight - the call takes its
         address from the environment of this run, which must still name the
         addressee the preflight saw (value and qualifiers) - and the
-        record's own check where it has one, run within timeout."""
+        record's own check where it has one, run within timeout. An http
+        channel with an endpoint file reads it once per attempt (kept on
+        guard): an end other than the preflight's is another addressee,
+        and the check and the request of the attempt go to that one end."""
+        http = (channel.get("executor") or {}).get("http") or {}
+        endpoint = None
+        if http.get("endpointFile"):
+            endpoint = getattr(guard, "endpoint", None)
+            if endpoint is None:
+                try:
+                    endpoint = read_endpoint(http, self.env)
+                except ExecutorRefusal as exc:
+                    raise RefusedBeforeSend(exc.reason)
+                if guard is not None:
+                    guard.endpoint = endpoint
+            if ((self.doc or {}).get("endpoints") or {}).get(channel.get("id")) != endpoint[0]:
+                raise AddresseeChanged()
         for a in self.identity.get("addresses") or []:
             if a.get("channel") != channel.get("id"):
                 continue
@@ -628,7 +651,8 @@ class DeliverySink(object):
                     # A GET with the address and authentication of the
                     # channel's http executor; no program runs.
                     http = (channel.get("executor") or {}).get("http") or {}
-                    result = HTTPExecutor(self.env, self.executor.secrets).get(http, command["httpGet"], limit)
+                    result = HTTPExecutor(self.env, self.executor.secrets).get(http, command["httpGet"], limit,
+                                                                               endpoint=endpoint)
                     if getattr(result, "error", None) is not None:
                         raise RefusedBeforeSend("the addressee check failed (%s)" % result.error)
                 else:

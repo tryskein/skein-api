@@ -178,6 +178,7 @@ class OpenCodeTest(unittest.TestCase):
                                         "value": SESSION}]}
         sink.env = self.env
         sink.executor.secrets = []
+        sink.doc = {"endpoints": {"opencode-synthetic": self.service.url}}
         channel = REG.channel("opencode-synthetic")
         self.service.respond([{"status": 200, "json": {"data": {"id": SESSION}}}])
         RUNNER.DeliverySink.check_addressee(sink, channel)
@@ -191,6 +192,56 @@ class OpenCodeTest(unittest.TestCase):
                 self.service.respond([answer])
                 with self.assertRaises(RUNNER.RefusedBeforeSend):
                     RUNNER.DeliverySink.check_addressee(sink, channel)
+
+    def sink(self):
+        sink = mock.Mock()
+        sink.identity = {"addresses": [{"channel": "opencode-synthetic", "env": "OPENCODE_SESSION_ID",
+                                        "value": SESSION}]}
+        sink.env = self.env
+        sink.executor.secrets = []
+        sink.doc = {"endpoints": {"opencode-synthetic": self.service.url}}
+        return sink
+
+    def test_the_preflight_keeps_the_end_of_the_service(self):
+        self.register()
+        self.service.respond([{"status": 200, "json": {"data": {"id": SESSION}}}])
+        line = self.line()
+        self.assertEqual(line["channel"], "opencode-synthetic", line)
+        self.assertEqual(RUNNER.load_preflight(self.box.token)["endpoints"],
+                         {"opencode-synthetic": self.service.url})
+
+    def test_another_end_than_the_preflight_s_is_another_addressee(self):
+        # The service registered again elsewhere between the preflight and
+        # the attempt: nothing goes there.
+        other = fake_channel.FakeHTTPChannel()
+        self.addCleanup(other.close)
+        self.register({"url": other.url, "pid": 4243, "password": "c0ffee11"})
+        other.respond([{"status": 200, "json": {"data": {"id": SESSION}}}])
+        with self.assertRaises(RUNNER.AddresseeChanged):
+            RUNNER.DeliverySink.check_addressee(self.sink(), REG.channel("opencode-synthetic"))
+        self.assertEqual(other.requests(), [])
+
+    def test_the_check_and_the_request_of_an_attempt_go_to_one_end(self):
+        # One read of the registration file per attempt: a registration
+        # published again after the check does not move the request, nor
+        # its password, to the new end.
+        self.register()
+        channel = REG.channel("opencode-synthetic")
+        guard = mock.Mock()
+        guard.endpoint = None
+        guard.call_timeout.return_value = 10
+        self.service.respond([{"status": 200, "json": {"data": {"id": SESSION}}}, {"status": 200, "json": RECEIPT}])
+        RUNNER.DeliverySink.check_addressee(self.sink(), channel, guard=guard)
+        other = fake_channel.FakeHTTPChannel()
+        self.addCleanup(other.close)
+        self.register({"url": other.url, "pid": 4243, "password": "c0ffee11"})
+        RUNNER.DeliverySink.check_addressee(self.sink(), channel, guard=guard)
+        driver = RUNNER.ArgvDriver(channel, RUNNER.ChannelExecutor(self.box.token, self.env, [pm.TOKEN], None, REG))
+        self.assertEqual(driver.send("event", guard)[0], "queued")
+        self.assertEqual(other.requests(), [])
+        methods = [(r["method"], r["headers"]["Authorization"]) for r in self.service.requests()]
+        basic = "Basic " + base64.b64encode(("opencode:" + PASSWORD).encode()).decode()
+        self.assertEqual(methods, [("GET", basic), ("GET", basic), ("POST", basic)])
 
     def test_no_opencode_process_runs_on_any_path(self):
         self.register()
