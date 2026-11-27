@@ -222,6 +222,12 @@ def env_holds(cond, env):
     return cond.get("equals") is None or value == cond["equals"]
 
 
+def env_not_holds(cond, env):
+    """registry.go#Conditions.EnvNot: the variable is unset, empty, or not
+    equal to `equals` exactly."""
+    return env.get(cond.get("name", ""), "") != cond.get("equals")
+
+
 def expand_path(path, env):
     """A setting path: "~/" is the home directory, "{env:NAME}/" the value
     of NAME. None when the variable it needs is not set."""
@@ -432,6 +438,9 @@ def conditions_hold(conds, env, agent=None, record=None):
     for cond in conds.get("env") or []:
         if not env_holds(cond, env):
             return False, "variable %s not set as required" % cond.get("name")
+    for cond in conds.get("envNot") or []:
+        if not env_not_holds(cond, env):
+            return False, "variable %s is %s" % (cond.get("name"), cond.get("equals"))
     for cond in conds.get("settings") or []:
         if not setting_holds(cond, env):
             return False, "setting %s of %s not read or not as required" % (cond.get("key"), cond.get("path"))

@@ -102,6 +102,163 @@
           "instruction": "Run `command` once in a shell: it returns after the line {\"event\":\"monitor_started\",...} and the monitor queues every event into this thread with codex queue on its own; a queued message starts a turn when the thread is idle."
         }
       ]
+    },
+    {
+      "id": "codebuddy",
+      "about": "CodeBuddy Code: the runner's stdout lines become turns through its Monitor tool; with Monitor turned off, the runner exits after a batch of events and the end of the background command wakes the agent.",
+      "source": "cnb.cool/codebuddy/codebuddy-code d220986 (documentation of the closed CLI; npm @tencent-ai/codebuddy-code 2.186.0): docs/release-notes/v2.129.0.md (Monitor: new output lines wake an idle agent; on by default, CODEBUDDY_MONITOR_ENABLED=false turns it off), docs/release-notes/v2.168.0.md (Monitor runs 5 minutes by default and at most 30, then reports once and may be started again; output within 200 ms makes one notice; output that keeps coming for more than 30 s stops the monitor, so batches go out with pauses well above 200 ms), docs/tools-reference.md (Monitor is deferred, found with ToolSearch; Bash run_in_background, TaskOutput), docs/headless.md (the end of a background task starts a turn; said for stream-json and the SDK, assumed for the terminal UI); npm bin codebuddy, cbc, codebuddy-code, codebuddy-lowmem (bin/codebuddy, a Node script).",
+      "process": {
+        "executables": [
+          "codebuddy",
+          "cbc"
+        ],
+        "argvBaseNames": [
+          "codebuddy",
+          "cbc",
+          "codebuddy-code",
+          "codebuddy-lowmem"
+        ]
+      },
+      "methods": [
+        {
+          "kind": "stream",
+          "conditions": {
+            "envNot": [
+              {
+                "name": "CODEBUDDY_MONITOR_ENABLED",
+                "equals": "false"
+              }
+            ]
+          },
+          "instruction": "Monitor is a deferred tool: find it with ToolSearch first. Run `command` with the Monitor tool, timeout_ms 1800000 (its maximum, 30 minutes). Each stdout line is an event of the monitor. When Monitor reports the command ended at its deadline, start it with Monitor again: the cursor is kept, no event is lost.",
+          "limits": {
+            "rate": {
+              "burst": 10,
+              "intervalSec": 2
+            }
+          }
+        },
+        {
+          "kind": "exit-on-event",
+          "conditions": {},
+          "instruction": "Run `command` with the Bash tool, run_in_background=true. It ends after a batch of events with a stop line, and its end wakes you: read its output with TaskOutput, handle the events, then follow the action of that line."
+        }
+      ]
+    },
+    {
+      "id": "omp",
+      "about": "oh-my-pi: the runner runs as a background bash job whose stdout lines matching its notify regex become turns.",
+      "source": "github.com/can1357/oh-my-pi 03597e3 (packages/coding-agent 19.1.1): src/tools/bash.ts#bashSchemaWithAsync (notify: a regex; a matching output line is reported while the command runs, and the command runs as a background job), #BASH_TIMEOUT_DESCRIPTION (timeout 0 disables the command deadline); src/async/notify.ts#OutputNotifier (matches within NOTIFY_BATCH_MS 200 make one batch of at most NOTIFY_MAX_LINES 50 lines, more are omitted; a line is cut to NOTIFY_MAX_LINE_CHARS 400 by JS length; NOTIFY_BURST 30 batches, one more every NOTIFY_REFILL_MS 20000; the batch that spends the allowance is stopped and notify ends for the job); src/prompts/tools/async-notify.md (the notice names the job id and says when notify is off); src/prompts/internal-urls/proc.md (proc://<id>/kill with empty content cancels a job); src/tools/settings.ts#cfgAsyncEnabled (async on by default); executable 'omp' (scripts/ci-release-build-binaries.ts, 'omp.exe' on Windows; bun install runs src/cli.ts as 'omp'); its own bash engine on Windows, no WSL (README.md).",
+      "process": {
+        "executables": [
+          "omp",
+          "omp.exe"
+        ],
+        "argvBaseNames": [
+          "omp"
+        ]
+      },
+      "methods": [
+        {
+          "kind": "stream",
+          "conditions": {},
+          "instruction": "Run `command` with the bash tool as {\"command\": <command>, \"notify\": \"^\\\\{\\\"event\\\"\", \"timeout\": 0}: it runs as a background job and every stdout line of the monitor comes to you in a notice. If a notice says the job matched too often and notify is off for it, cancel that job (write empty content to proc://<job id>/kill, the id the notice names), then run `command` the same way again; events printed after that notice are in the monitor's journal. If the new run stops with already_running, cancel the earlier job the same way and run `command` again.",
+          "limits": {
+            "line": {
+              "max": 400,
+              "unit": "utf16"
+            },
+            "batch": {
+              "max": 50,
+              "unit": "lines"
+            },
+            "rate": {
+              "burst": 25,
+              "intervalSec": 20
+            },
+            "window": {
+              "lengthMs": 200,
+              "lines": 50,
+              "budget": 30,
+              "refillSec": 20
+            }
+          }
+        }
+      ],
+      "windowsShell": "git-bash"
+    },
+    {
+      "id": "xum",
+      "about": "Xum: its bash tool wakes the agent on each stdout line of the background runner that matches the monitor filter; the agent reads the lines with task_await.",
+      "source": "github.com/coder/xum d158f96 (0.32.5): src/common/utils/tools/toolDefinitions.ts#BashToolArgsObjectSchema (script, display_name, run_in_background; timeout_secs omitted: a background command has no kill deadline), #BashMonitorSchema (filter: a regex per complete output line; cooldown_ms 1000 by default coalesces matches into one wake), src/node/builtinSkills/background-monitors.md (a wake carries no output: the agent reads it with task_await, task id bash:<id>; the process settling wakes once more), src/common/constants/toolLimits.ts#BASH_MAX_LINE_BYTES (1024 bytes per line), #BASH_MAX_TOTAL_BYTES (16 KiB per read); package.json build.executableName 'xum' (productName 'Xum'; npm bin xum, mux); bash is Git Bash on Windows.",
+      "process": {
+        "executables": [
+          "xum",
+          "Xum",
+          "xum.exe"
+        ],
+        "argvBaseNames": [
+          "xum"
+        ]
+      },
+      "methods": [
+        {
+          "kind": "stream",
+          "conditions": {},
+          "instruction": "Run `command` with the bash tool: script `command`, display_name \"Skein monitor\", run_in_background true, no timeout_secs, monitor {\"filter\": \"^\\\\{\\\"event\\\"\"}. A wake carries no output: read the new lines with task_await, task_ids [the bash:<id> the call returned], timeout_secs 0; each line is an event of the monitor. If the process ends, run `command` the same way again: the cursor is kept, no event is lost.",
+          "limits": {
+            "line": {
+              "max": 1024,
+              "unit": "bytes"
+            },
+            "batch": {
+              "max": 16384,
+              "unit": "bytes"
+            }
+          }
+        }
+      ],
+      "windowsShell": "git-bash"
+    },
+    {
+      "id": "qwen-code",
+      "about": "Qwen Code: the runner's stdout lines become turns through its monitor tool, started again when it stops; or the runner exits after a batch and the end of the background command wakes the agent.",
+      "source": "github.com/QwenLM/qwen-code df0f008d (0.28.3): packages/core/src/tools/monitor.ts#MonitorTool (every stdout and stderr line is a notification; THROTTLE_BURST_SIZE 5 lines, then one per THROTTLE_REFILL_INTERVAL_MS 1000, the rest dropped; a line is cut at PARTIAL_LINE_BUFFER_CAP 4096 by JS length; the monitor stops after idle_timeout_ms of silence, at most MAX_IDLE_TIMEOUT_MS 600000, or after max_events, at most MAX_MAX_EVENTS 10000, with a notice that wakes the agent), packages/core/src/tools/shell.ts#ShellToolParams (run_shell_command, is_background: true; its end starts a turn through packages/cli/src/ui/hooks/use-llm-stream.ts); npm @qwen-code/qwen-code bin qwen (scripts/cli-entry.js under Node).",
+      "process": {
+        "executables": [
+          "qwen"
+        ],
+        "argvBaseNames": [
+          "qwen",
+          "cli-entry.js"
+        ]
+      },
+      "methods": [
+        {
+          "kind": "stream",
+          "conditions": {},
+          "instruction": "Run `command` with the monitor tool, idle_timeout_ms 600000 and max_events 10000 (their maximums). Each stdout line is an event of the monitor. When the monitor stops (Idle timeout after ten minutes without an event, or its event limit), run `command` with the monitor tool again: the cursor is kept, no event is lost.",
+          "limits": {
+            "line": {
+              "max": 4096,
+              "unit": "utf16"
+            },
+            "batch": {
+              "max": 1,
+              "unit": "lines"
+            },
+            "rate": {
+              "burst": 4,
+              "intervalSec": 2
+            }
+          }
+        },
+        {
+          "kind": "exit-on-event",
+          "conditions": {},
+          "instruction": "Run `command` with the run_shell_command tool, is_background: true. It ends after a batch of events with a stop line, and its end wakes you; handle the events, then follow the action of that line."
+        }
+      ]
     }
   ],
   "channels": [

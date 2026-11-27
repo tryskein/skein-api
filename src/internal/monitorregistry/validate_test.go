@@ -221,6 +221,22 @@ func TestValidate_RejectsEachRule(t *testing.T) {
 		{"agent option that is not a bare long option", func(r *Registry) {
 			r.Agents[0].Methods[1].Conditions.AgentOptionsAbsent = []string{"--remote=ws://x"}
 		}, RuleInvalid},
+		{"a variable that must not carry a value, without that value", func(r *Registry) {
+			r.Agents[0].Methods[1].Conditions.EnvNot = []EnvCondition{{Name: "ALPHA_MONITOR_ENABLED"}}
+		}, RuleInvalid},
+		{"a variable that must not carry an empty value", func(r *Registry) {
+			r.Agents[0].Methods[1].Conditions.EnvNot = []EnvCondition{{Name: "ALPHA_MONITOR_ENABLED", Equals: strp("")}}
+		}, RuleInvalid},
+		{"a variable that must not carry a value, read by a pattern", func(r *Registry) {
+			r.Agents[0].Methods[1].Conditions.EnvNot = []EnvCondition{
+				{Name: "ALPHA_MONITOR_ENABLED", Pattern: "false|0", Equals: strp("false")}}
+		}, RuleInvalid},
+		{"a variable that must not carry a value, with a name that is no variable", func(r *Registry) {
+			r.Agents[0].Methods[1].Conditions.EnvNot = []EnvCondition{{Name: "ALPHA MONITOR", Equals: strp("false")}}
+		}, RuleInvalid},
+		{"a variable that must not carry a value in a channel's detection", func(r *Registry) {
+			r.Channels[1].Detect.EnvNot = []EnvCondition{{Name: "ALPHA_MONITOR_ENABLED", Equals: strp("false")}}
+		}, RuleInvalid},
 		{"stderr criterion in the table of an http channel", func(r *Registry) {
 			r.Channels[1].Executor = Executor{Type: ExecutorHTTP, TimeoutSec: 30,
 				HTTP: &HTTPRequest{Method: "POST", URL: "{env:HOST_URL}", BodyField: "text"}}
@@ -569,6 +585,17 @@ func TestValidate_AcceptsTheCodexReadings(t *testing.T) {
 	r.Agents[0].Methods[1].Conditions.AgentOptionsAbsent = []string{"--remote"}
 	if err := r.Validate(); err != nil {
 		t.Fatalf("a correct record with the Codex readings was refused: %v", err)
+	}
+}
+
+// TestValidate_AcceptsAVariableThatMustNotCarryAValue — a method available
+// unless the agent's own switch turns its tool off (CodeBuddy:
+// CODEBUDDY_MONITOR_ENABLED=false) passes in a correct record.
+func TestValidate_AcceptsAVariableThatMustNotCarryAValue(t *testing.T) {
+	r := validRegistry()
+	r.Agents[0].Methods[1].Conditions.EnvNot = []EnvCondition{{Name: "ALPHA_MONITOR_ENABLED", Equals: strp("false")}}
+	if err := r.Validate(); err != nil {
+		t.Fatalf("a method with a variable that must not carry a value was refused: %v", err)
 	}
 }
 

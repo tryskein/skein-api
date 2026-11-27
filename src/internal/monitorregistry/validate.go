@@ -347,6 +347,21 @@ func (v *validator) conditions(path string, c Conditions, agentOptions bool) {
 			}
 		}
 	}
+	if len(c.EnvNot) > 0 && !agentOptions {
+		v.add(RuleInvalid, path+".envNot", "only a method of an agent record states a variable that must not carry a value")
+	}
+	for i, e := range c.EnvNot {
+		epath := fmt.Sprintf("%s.envNot[%d]", path, i)
+		if !envNamePattern.MatchString(e.Name) {
+			v.add(RuleInvalid, epath+".name", "%q is not an environment variable name", e.Name)
+		}
+		if e.Pattern != "" {
+			v.add(RuleInvalid, epath+".pattern", "a variable that must not carry a value is compared literally, without a pattern")
+		}
+		if e.Equals == nil || *e.Equals == "" {
+			v.add(RuleInvalid, epath+".equals", "the value the variable must not carry is missing")
+		}
+	}
 	for i, s := range c.Settings {
 		spath := fmt.Sprintf("%s.settings[%d]", path, i)
 		v.text(RuleInvalid, spath+".path", s.Path)

@@ -196,6 +196,12 @@ type Method struct {
 type Conditions struct {
 	// Env are environment variables of the agent process.
 	Env []EnvCondition `json:"env,omitempty"`
+	// EnvNot are variables of the agent process that must not carry a
+	// value: each holds when its variable is unset, empty, or not equal to
+	// its Equals exactly (an agent's own switch that turns a tool off). Every
+	// entry has Equals and no Pattern. Only a method of an agent record
+	// states it.
+	EnvNot []EnvCondition `json:"envNot,omitempty"`
 	// Settings are values read from configuration files of the agent. A
 	// setting that cannot be read does not hold.
 	Settings []SettingCondition `json:"settings,omitempty"`

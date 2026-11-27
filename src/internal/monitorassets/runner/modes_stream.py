@@ -55,7 +55,7 @@ _WAIT_EPSILON_SEC = 1e-6
 STATUS_PRINTED = "printed"
 STATUS_UNFIT = "unfit"
 # Line limit units of the registry and their measure in text.py.
-_LINE_UNITS = {"chars": UNIT_CHARS, "bytes": UNIT_BYTES}
+_LINE_UNITS = {"chars": UNIT_CHARS, "utf16": UNIT_UTF16, "bytes": UNIT_BYTES}
 # Batch limit units counted in lines.
 _COUNT_UNITS = ("lines", "events")
 
