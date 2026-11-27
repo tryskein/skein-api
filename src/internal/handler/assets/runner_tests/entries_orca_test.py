@@ -269,6 +269,14 @@ class OrcaRecordTest(unittest.TestCase):
             ("unreachable after the request", failed("runtime_unavailable", {"orchestrationRequestId": "req-1"}),
              "unknown"),
             ("unreachable, delivery unknown", failed("runtime_unavailable", {"deliveryOutcome": "unknown"}), "unknown"),
+            # A damaged receipt proves no refusal: only a whole absence does
+            # (no writeSettlement at all, no error.data at all).
+            ("a refusal with an empty write settlement", refused_send(writeSettlement={}), "unknown"),
+            ("a refusal with a null write settlement", refused_send(writeSettlement=None), "unknown"),
+            ("unreachable with empty data", failed("runtime_unavailable", {}), "unknown"),
+            ("unreachable with null data", {"exit": 1, "stdout": {"id": "local", "ok": False, "error": {
+                "code": "runtime_unavailable", "message": "failure", "data": None}, "_meta": {"runtimeId": None}}},
+             "unknown"),
             ("incompatible runtime before the send", failed("incompatible_runtime"), "unknown"),
             ("incompatible runtime after acceptance", failed("incompatible_runtime", {"deliveryOutcome": "unknown"}),
              "unknown"),

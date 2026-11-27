@@ -637,3 +637,23 @@ func TestValidate_AcceptsRecordsAndStderrPhrases(t *testing.T) {
 		t.Fatalf("a correct record with records and stderr phrases was refused: %v", err)
 	}
 }
+
+// TestValidate_AParentAbsentIsApartFromItsChild — a row that wants a whole
+// object absent and a row that reads a field of it cannot both match one
+// answer (the Orca refusals: no writeSettlement, or its outcome refused).
+func TestValidate_AParentAbsentIsApartFromItsChild(t *testing.T) {
+	r := validRegistry()
+	r.Channels[1].Outcomes = []OutcomeRow{
+		{Match: Match{ExitCode: intp(1), JSONAbsent: []string{"result.settlement"}}, Outcome: OutcomeRefused},
+		{Match: Match{ExitCode: intp(1), JSON: map[string]string{"result.settlement.outcome": "refused"}},
+			Outcome: OutcomeRefused},
+	}
+	if err := r.Validate(); err != nil {
+		t.Fatalf("rows apart by a parent's absence were refused: %v", err)
+	}
+	// A sibling's absence does not keep them apart.
+	r.Channels[1].Outcomes[0].Match.JSONAbsent = []string{"result.settle"}
+	if err := r.Validate(); err == nil {
+		t.Fatal("rows one answer can match both were accepted")
+	}
+}

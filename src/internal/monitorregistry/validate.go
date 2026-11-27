@@ -776,12 +776,12 @@ func (m Match) overlaps(o Match) bool {
 		if got, both := o.JSON[k]; both && got != want {
 			return false
 		}
-		if slices.Contains(o.JSONAbsent, k) {
+		if absentAt(o.JSONAbsent, k) {
 			return false
 		}
 	}
 	for k := range o.JSON {
-		if slices.Contains(m.JSONAbsent, k) {
+		if absentAt(m.JSONAbsent, k) {
 			return false
 		}
 	}
@@ -791,6 +791,17 @@ func (m Match) overlaps(o Match) bool {
 		}
 	}
 	return true
+}
+
+// absentAt reports whether a path that holds a value cannot be there when
+// one of the absent paths is absent: the path itself or one of its parents.
+func absentAt(absent []string, k string) bool {
+	for _, a := range absent {
+		if k == a || strings.HasPrefix(k, a+".") {
+			return true
+		}
+	}
+	return false
 }
 
 func (v *validator) probe(path string, p *Probe) {

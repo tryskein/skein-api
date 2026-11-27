@@ -485,7 +485,7 @@
               "result.send.accepted": "false"
             },
             "jsonAbsent": [
-              "result.send.writeSettlement.outcome"
+              "result.send.writeSettlement"
             ]
           },
           "outcome": "refused-before-send"
@@ -509,8 +509,7 @@
               "error.code": "runtime_unavailable"
             },
             "jsonAbsent": [
-              "error.data.orchestrationRequestId",
-              "error.data.deliveryOutcome"
+              "error.data"
             ]
           },
           "outcome": "refused-before-send"
