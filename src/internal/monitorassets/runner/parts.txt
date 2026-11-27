@@ -23,6 +23,7 @@ executors.py
 ledger.py
 classify.py
 detect.py
+blind.py
 takeover.py
 detach.py
 rootclosed.py

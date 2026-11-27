@@ -153,6 +153,11 @@ class Detector(object):
         This one finds none."""
         return []
 
+    def blind_causes(self, ctx):
+        """Why the blind channels of this environment whose binding is not
+        confirmed are not enabled, for the preflight line."""
+        return []
+
     def address_specs(self, ctx):
         """The AddressSpecs of the identity of the addressee."""
         return []
@@ -606,6 +611,9 @@ def choose(ctx):
     # Condition (2) of US-7: a detected host, available or not, keeps the
     # blind channels off.
     if not done and chosen is None and not hosts and not settings.blind_off:
+        # A blind channel of this environment whose binding is not confirmed
+        # is not enabled: the line says why.
+        reasons.extend(ctx.detector.blind_causes(ctx))
         chosen, done = _walk(ctx, [(7, "blind", c, None) for c in ctx.detector.blind(ctx)], reasons, chosen, [])
     if chosen is None:
         return Choice(METHOD_JOURNAL, None, reasons + ["journal: no other method available"])
@@ -937,8 +945,12 @@ def _programs_doc(registry, channel_ids, env, agent):
             # The programs of its addressee check and its idle wait, when
             # they name another one: the working runner runs them by these
             # absolute paths too, never by a bare name.
+            # So do the stage, unstage and submit of a blind record.
             for argv in (((channel.get("addressee") or {}).get("command") or {}).get("argv"),
-                         (channel.get("idle") or {}).get("argv")):
+                         (channel.get("idle") or {}).get("argv"),
+                         (channel.get("stage") or {}).get("argv"),
+                         (channel.get("unstage") or {}).get("argv"),
+                         ((channel.get("submit") or {}).get("executor") or {}).get("argv")):
                 name = argv[0] if argv else None
                 if name and name not in programs:
                     path = absolute_program(name, env)

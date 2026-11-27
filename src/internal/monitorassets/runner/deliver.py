@@ -133,6 +133,14 @@ def _call_seconds(channel, fallback):
     return (channel.get("executor") or {}).get("timeoutSec") or fallback
 
 
+def _transfer_seconds(channel, fallback):
+    """The own timeouts of every call of one transfer: the stage and the
+    submit of a blind record besides its insert (blind.py)."""
+    stage = (channel.get("stage") or {}).get("timeoutSec") or 0
+    submit = ((channel.get("submit") or {}).get("executor") or {}).get("timeoutSec") or 0
+    return _call_seconds(channel, fallback) + stage + submit
+
+
 # The time an attempt keeps for its two addressee checks besides the wait
 # and the call.
 _CHECKS_SEC = 2 * 10
@@ -142,7 +150,7 @@ def _attempt_seconds(channel, fallback):
     """The time of one attempt: the idle wait's own, the call's own and the
     checks around them."""
     idle = _idle_seconds(channel)
-    return _call_seconds(channel, fallback) + (idle + _CHECKS_SEC if idle else 0)
+    return _transfer_seconds(channel, fallback) + (idle + _CHECKS_SEC if idle else 0)
 
 
 def _idle_seconds(channel):
@@ -212,7 +220,7 @@ class Guard(object):
         """The time kept for the call: its own timeout, less when the
         attempt is shorter than the wait, the checks and the call together
         (a short idle window)."""
-        return max(min(_call_seconds(self.channel, 0),
+        return max(min(_transfer_seconds(self.channel, 0),
                        self.total - _idle_seconds(self.channel) - _CHECKS_SEC), 0)
 
     def wait_and_keep_the_call(self):
@@ -351,33 +359,75 @@ class ArgvDriver(object):
 
 class TwoStepDriver(object):
     """A step that may write the text (an insert) and a final step that
-    submits it (Enter), each an argv executor with its own closed table.
-    The insert's table proves "input-written" or a refusal; once written,
-    the outcome is the driver's: before the final step it asks the guard,
-    and a refused check means no final step and "unknown"."""
+    submits it (Enter), each an argv executor with its own closed table
+    (blind.py). The insert's table proves the text written (with or without
+    a receipt) or a refusal; once written, the outcome is the driver's:
+    before the final step it asks the guard, and a refused check means no
+    final step and "unknown". A stage before the insert hands the text to
+    the channel without writing it into the pane: it failing is a refusal
+    before send; the unstage removes what it left when the insert did not
+    take the text. No commit: the insert is the whole delivery. Every call
+    of one transfer names the same {delivery}."""
 
-    def __init__(self, channel, executor, insert, commit):
+    def __init__(self, channel, executor, insert, commit, stage=None, unstage=None):
         self.channel = channel
         self.executor = executor
         self.insert = insert
         self.commit = commit
+        self.stage = stage
+        self.unstage = unstage
+
+    def _call(self, spec, text, guard, own=False):
+        """One call within the attempt's deadline and the call's own
+        timeout."""
+        left = guard.remaining()
+        return self.executor.call(spec, text, min(left, spec.get("timeoutSec") or left) if own else left)
 
     def send(self, text, guard):
         guard.before_send()
+        name = delivery_name()
+        insert = with_delivery_name(self.insert["executor"], name)
+        taken = False
         try:
-            first = self.executor.call(self.insert["executor"], text, guard.call_timeout())
-        except ExecutorRefusal as exc:
-            raise RefusedBeforeSend(exc.reason)
-        outcome, sign = classify_result(self.insert.get("outcomes"), first)
-        if outcome != OUTCOME_INPUT_WRITTEN:
-            return outcome, sign
+            if self.stage:
+                try:
+                    staged = self._call(with_delivery_name(self.stage, name), text, guard, own=True)
+                except ExecutorRefusal as exc:
+                    raise RefusedBeforeSend(exc.reason)
+                if staged.timed_out or staged.exit_code != 0 or getattr(staged, "tree_failure", None):
+                    # The insert never ran: nothing reached the pane.
+                    raise RefusedBeforeSend("the stage of the text failed (%s)" % (
+                        "timeout" if staged.timed_out else "exit code %s" % staged.exit_code))
+                # The stage carried the text: the insert takes what the
+                # stage left (the buffer of this transfer), no text.
+                text = ""
+            try:
+                first = self.executor.call(insert, text, guard.call_timeout())
+            except ExecutorRefusal as exc:
+                raise RefusedBeforeSend(exc.reason)
+            outcome, sign = classify_result(self.insert.get("outcomes"), first)
+            taken = outcome in (OUTCOME_INPUT_WRITTEN, OUTCOME_INPUT_NO_RECEIPT)
+            if not taken or not self.commit:
+                return outcome, sign
+        finally:
+            if self.unstage and not taken:
+                self._unstage(name)
         if not guard.before_commit():
             return OUTCOME_UNKNOWN, {"commit": "withheld"}
+        commit = with_delivery_name(self.commit["executor"], name)
         try:
-            second = self.executor.call(self.commit["executor"], "", guard.remaining())
+            second = self._call(commit, self.commit.get("text", ""), guard, own=True)
         except (ExecutorRefusal, RefusedBeforeSend):
             return OUTCOME_UNKNOWN, {"commit": "notStarted"}
         return classify_result(self.commit.get("outcomes"), second, written=True)
+
+    def _unstage(self, name):
+        """Remove what the stage left; its answer changes no outcome."""
+        spec = with_delivery_name(self.unstage, name)
+        try:
+            self.executor.call(spec, "", spec.get("timeoutSec") or PROBE_TIMEOUT_SEC)
+        except (ExecutorRefusal, OSError):
+            pass
 
 
 class DeliverySink(object):
@@ -846,7 +896,7 @@ class DeliverySink(object):
             # carried (INV-1): nothing is handed over.
             text = None
         guard = Guard(self, channel, attempt, timeout, batch)
-        driver = self.drivers.get(channel_id) or ArgvDriver(channel, self.executor)
+        driver = self.drivers.get(channel_id) or channel_driver(channel, self.executor)
         try:
             if text is None:
                 raise RefusedBeforeSend("no text of this channel carries the batch")
@@ -980,7 +1030,7 @@ class DeliverySink(object):
             if short is None or measure(short, unit) > limit:
                 return
             text = short
-        driver = self.drivers.get(channel_id) or ArgvDriver(channel, self.executor)
+        driver = self.drivers.get(channel_id) or channel_driver(channel, self.executor)
         start = self.clock.now()
         for calls in range(MAX_CALLS):
             if calls:

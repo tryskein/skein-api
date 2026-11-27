@@ -23,7 +23,8 @@
 #
 # The binding to a pane is a boundary object (PaneBinder): bind() answers for
 # one blind channel whether the runner is a descendant of the agent process
-# in a pane of that channel. The one here confirms nothing.
+# in a pane of that channel. The base one here confirms nothing; the
+# detector binds by the records (blind.py#PanePIDBinder).
 
 import re
 
@@ -52,8 +53,11 @@ class Binding(object):
     tmux/Zellij pane; depth the distance of the pane's process from the
     runner in the chain (nearest first); pane what the delivery needs."""
 
-    def __init__(self, channel, confirmed, multiplexer=False, depth=None, pane=None, descendant=None):
+    def __init__(self, channel, confirmed, multiplexer=False, depth=None, pane=None, descendant=None,
+                 cause=None):
         self.channel = channel
+        # Why a binding is not confirmed, for the preflight line.
+        self.cause = cause
         self.confirmed = confirmed
         self.descendant = bool(confirmed) if descendant is None else (descendant or bool(confirmed))
         self.multiplexer = multiplexer
@@ -78,7 +82,7 @@ class RegistryDetector(Detector):
 
     def __init__(self, binder=None):
         Detector.__init__(self)
-        self.binder = binder or PaneBinder()
+        self.binder = binder or PanePIDBinder()
         self._bindings = None
 
     def _channels(self, ctx, step):
@@ -101,6 +105,12 @@ class RegistryDetector(Detector):
             if b.channel["id"] == channel_id and b.confirmed:
                 return b
         return None
+
+    def blind_causes(self, ctx):
+        """Why each blind channel of this environment is not enabled by its
+        binding: "<channel>: <cause>" for every binding not confirmed."""
+        return ["%s: %s" % (b.channel["id"], b.cause or "the binding to its pane is not confirmed")
+                for b in self.bindings(ctx) if not b.confirmed]
 
     def in_multiplexer(self, ctx):
         return any(b.descendant and b.multiplexer for b in self.bindings(ctx))
