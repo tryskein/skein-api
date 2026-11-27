@@ -366,5 +366,113 @@ class AvailabilityTest(unittest.TestCase):
             executor.call(http_channel()["executor"], "hello", 2)
 
 
+def checked_channel():
+    """A host of its own beside the http channel whose probe, addressee
+    capture, idle wait and send are all one program: none of them may see
+    the key of the http channel."""
+    return {"id": "Q", "about": "checked host", "source": "test", "step": 5, "order": 2, "kind": "addressed",
+            "blind": False, "detect": {"env": [{"name": "Q_ID"}]},
+            "executor": {"type": "argv", "argv": ["chan-q", "send", "{env:Q_ID}"], "feed": "stdin", "timeoutSec": 2},
+            "idle": {"type": "argv", "argv": ["chan-q", "idle"], "timeoutSec": 2},
+            "outcomes": [{"match": {"exitCode": 0}, "outcome": "queued"}],
+            "probes": [{"type": "argv", "source": "test", "argv": ["chan-q", "probe"],
+                        "results": [{"match": {"exitCode": 0}, "result": "available"}]}],
+            "addressee": {"process": "none",
+                          "command": {"argv": ["chan-q", "check", "{env:Q_ID}"], "capture": ["id"],
+                                      "results": [{"match": {"exitCode": 0}, "result": "same"}]}},
+            "address": {"env": "Q_ID"}, "binaries": {"linux": ["chan-q"], "macos": ["chan-q"]}}
+
+
+class KeyOutOfEveryCheckTest(unittest.TestCase):
+    """Row #97, INV-6: the probe and the capture of the preflight, the idle
+    wait and the check of the addressee run no program that sees the key,
+    neither by its variable nor by its value under another name."""
+
+    def test_no_program_of_a_check_sees_the_key(self):
+        import fake_proc
+        world = World(self, [http_channel(), checked_channel()])
+        prog = fake_channel.FakeProgram(world.bin, "chan-q", watch=("HOST_KEY", "HOST_TOKEN", "KEY_COPY"))
+        prog.respond([{"exit": 0, "stdout": {"id": "q-1"}}])
+        env = dict(world.env, Q_ID="q-1", HOST_SESSION="", KEY_COPY=KEY)
+        token_dir = os.path.join(world.root, "skein-mon-q")
+        os.mkdir(token_dir, 0o700)
+        token = os.path.join(token_dir, "token")
+        with open(token, "w") as fh:
+            fh.write(TOKEN)
+        os.chmod(token, 0o600)
+        r = world.runner
+        source, pids = fake_proc.linear(("python3", ["python3", "-c", "_SKEIN_LOADER_MODE = 'client'"]),
+                                        "bash", "agent", "sshd")
+        record = r.resolve_record(world.reg, "agent")
+        pl = r.place(r.ancestry(source, pids[0]), world.reg, record, self_pid=pids[0])
+        line = r.preflight(token, env, world.reg, r.Settings(record=record, platform="posix"),
+                           detector=r.RegistryDetector(), placement=pl)
+        self.assertEqual(line["channel"], "Q")
+        doc = r.load_preflight(token)
+        journal = r.Journal(token, ISSUE, secrets=[TOKEN], env=env)
+        ledger = r.Ledger(SERVER, "q", r.identity_from_doc(doc["identity"]), env=env, clock=world.clock.now)
+        executor = r.ChannelExecutor(token, env, [TOKEN], doc.get("programs"), world.reg)
+        sink = r.DeliverySink(journal, token, doc, world.reg, env, ledger, executor, ISSUE,
+                              cancel=delivery.FakeCancel(), clock=world.clock)
+        sink.page(delivery.CURSOR, [note(1)])
+        subs = [c["argv"][0] for c in prog.calls()]
+        for sub in ("probe", "check", "idle", "send"):
+            self.assertIn(sub, subs)
+        for call in prog.calls():
+            marker = json.dumps(call)
+            self.assertNotIn(KEY, marker)
+            self.assertNotIn(TOKEN_KEY, marker)
+            self.assertEqual(call["env"], {"HOST_KEY": None, "HOST_TOKEN": None, "KEY_COPY": None})
+
+
+class OutcomeBranchesTest(unittest.TestCase):
+    """Row #97: the branches of an http answer by the closed table of
+    outcomes - nothing went out (a name that does not resolve, a key that is
+    not one header line) is a refusal before send, called again within the
+    budget; a connection broken after the request, a connect that times
+    out and an answer past the output cap are unknown, called once."""
+
+    def outcome(self, world, timeout=2):
+        mon = world.monitor()
+        mon.page([note(1)])
+        return [d[:2] for d in mon.deliveries()], len(mon.spy.calls)
+
+    def test_nothing_went_out(self):
+        for name, change in (("a name that does not resolve", {"HOST_URL": "https://skein-monitor-test.invalid"}),
+                             ("a key that is not one header line", {"HOST_KEY": "cdk_" + "K" * 20 + "\nX-Injected: 1"})):
+            with self.subTest(case=name):
+                world = World(self)
+                world.env.update(change)
+                self.assertEqual(self.outcome(world), ([(1, "refused-before-send")], 4))
+                self.assertEqual(world.server.requests(), [])
+
+    def test_a_connection_broken_after_the_request(self):
+        world = World(self)
+        server = socket.socket()
+        server.bind(("127.0.0.1", 0))
+        server.listen(1)
+        self.addCleanup(server.close)
+
+        def accept_and_drop():
+            conn, _ = server.accept()
+            conn.recv(65536)
+            conn.close()
+        threading.Thread(target=accept_and_drop, daemon=True).start()
+        world.env["HOST_URL"] = "http://127.0.0.1:%d" % server.getsockname()[1]
+        self.assertEqual(self.outcome(world), ([(1, "unknown")], 1))
+
+    def test_a_connect_that_times_out(self):
+        # A blackhole address: the connection never completes, the socket
+        # timeout comes wrapped in URLError.
+        world = World(self, [http_channel(timeout=1)])
+        world.env["HOST_URL"] = "https://10.255.255.1:9"
+        self.assertEqual(self.outcome(world), ([(1, "unknown")], 1))
+
+    def test_an_answer_past_the_output_cap(self):
+        world = World(self)
+        world.server.respond([{"status": 201, "json": {"state": "queued", "pad": "x" * (70 * 1024)}}])
+        self.assertEqual(self.outcome(world), ([(1, "unknown")], 1))
+
+
 if __name__ == "__main__":
     unittest.main()
