@@ -47,14 +47,19 @@ GENERIC_ALL = 0x10000000
 GENERIC_WRITE = 0x40000000
 
 
+FILE_ATTRIBUTE_DIRECTORY = 0x10
+
+
 class View(object):
     def __init__(self, owner=SYSTEM, dacl=None, final=None, reparse=False, protected=False,
-                 null_dacl=False):
+                 null_dacl=False, attributes=None):
         self.owner = owner
         self.dacl = None if null_dacl else (list(dacl) if dacl is not None else trusted_dacl())
         self.final = final
         self.reparse = reparse
         self.protected = protected
+        # None: taken from what lies at the path (a directory or not).
+        self.attributes = attributes
 
 
 def trusted_dacl():
@@ -95,7 +100,7 @@ class FakeSecurity(object):
         self.made.append(path)
         self.views.setdefault(path, View(owner=self._me, dacl=private_dacl(), protected=True))
 
-    def open(self, path):
+    def open(self, path, data=False):
         if path in self.fail_open:
             raise OSError(5, "Access is denied")
         handle = Handle(path, len(self.opened))
@@ -109,10 +114,11 @@ class FakeSecurity(object):
         if handle.path in self.fail_view:
             raise OSError(1336, "The access control list structure is invalid")
         view = self.views.get(handle.path) or View()
-        if view.final is None:
-            view = View(owner=view.owner, dacl=view.dacl, final=handle.path, reparse=view.reparse,
-                        protected=view.protected, null_dacl=view.dacl is None)
-        return view
+        attributes = view.attributes
+        if attributes is None:
+            attributes = FILE_ATTRIBUTE_DIRECTORY if os.path.isdir(handle.path) else 0
+        return View(owner=view.owner, dacl=view.dacl, final=view.final or handle.path, reparse=view.reparse,
+                    protected=view.protected, null_dacl=view.dacl is None, attributes=attributes)
 
     def open_handles(self):
         return [h for h in self.opened if h not in self.closed]
