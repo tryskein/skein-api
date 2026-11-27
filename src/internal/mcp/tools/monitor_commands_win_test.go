@@ -323,3 +323,21 @@ func TestWindowsCommands_TokenInstruction(t *testing.T) {
 		t.Fatalf("the failed-prepare branch has a Write step:\n%s", instr)
 	}
 }
+
+// TestWindowsCommands_TypographicQuotesStayLiteral — row #88 (review of the
+// gate T051): PowerShell reads U+2018..U+201B as single quotes too (the
+// PowerShell language specification, single-quote-character), so a value
+// that holds them reaches Python literally only when each is doubled; the
+// characters right outside that range are no quotes and are not doubled.
+func TestWindowsCommands_TypographicQuotesStayLiteral(t *testing.T) {
+	in := winCommandInput(gmsTestPublicURL, gmsTestLoaderSHA256)
+	in.tokenFilePath = "C:\\Users\\a\u2017b\u2018c\u2019d\u201ae\u201bf\u201cg\\skein-mon-sk-1-0011223344556677\\token"
+	for _, sh := range []string{monitorregistry.WindowsShellPwsh, monitorregistry.WindowsShellPowerShell} {
+		t.Run(sh, func(t *testing.T) {
+			f := parsePowerShell(t, buildWindowsClientCommands(in, sh).preflight)
+			if got := f.vars["SKEIN_TOKEN_FILE"]; got != in.tokenFilePath {
+				t.Fatalf("SKEIN_TOKEN_FILE = %q, want %q", got, in.tokenFilePath)
+			}
+		})
+	}
+}
