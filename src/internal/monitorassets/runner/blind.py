@@ -156,9 +156,9 @@ class PanePIDBinder(PaneBinder):
 
 
 def channel_driver(channel, executor):
-    """The driver of a channel's delivery: two steps for a record with a
-    submit, one call (after a stage, if any) otherwise."""
-    if channel.get("submit") or channel.get("stage"):
+    """The driver of a channel's delivery: a blind record's calls (its
+    {delivery} named in each), one call of the executor otherwise."""
+    if channel.get("blind"):
         commit = channel.get("submit")
         return TwoStepDriver(channel, executor, {"executor": channel.get("executor") or {},
                                                  "outcomes": channel.get("outcomes")},
