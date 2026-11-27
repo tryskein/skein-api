@@ -13,10 +13,12 @@
 # text), the pane's id is known (the variable of the channel's address; its
 # qualifiers name the server and session of a multiplexer) and so is the
 # start of the agent process. A channel whose pane PID cannot be had binds
-# nothing and is never enabled. The depth of a binding is the distance of the
-# pane's process from the runner: of two multiplexers the nearest wins
-# (detect.py). A channel record marks a multiplexer (tmux, Zellij) with
-# "multiplexer".
+# nothing and is never enabled; a multiplexer's own process (its server)
+# among the runner's ancestors still places the runner in its pane. The
+# depth of a binding is the distance of the pane's process (or of that
+# multiplexer process) from the runner: of two multiplexers the nearest
+# decides, and only a confirmed one is used (detect.py). A channel record
+# marks a multiplexer (tmux, Zellij) with "multiplexer".
 #
 # Before every transfer the working runner checks that the agent process is
 # alive with the start of the preflight and is the foreground process of its
@@ -88,7 +90,12 @@ def pane_pid(channel, env, secrets=()):
         raise ProbeError("the pane PID command exited with %s" % result.exit_code)
     field = spec.get("jsonField")
     if field:
-        value = json_path_value(result.json, field) if result.json is not None else None
+        # The answer may be a list (kitty's ls): any JSON document.
+        try:
+            doc = None if result.truncated else json.loads(result.stdout.decode("utf-8"))
+        except (UnicodeDecodeError, ValueError):
+            doc = None
+        value = json_path_value(doc, field) if isinstance(doc, (dict, list)) else None
     else:
         try:
             value = result.stdout.decode("utf-8").strip()
@@ -113,15 +120,17 @@ class PanePIDBinder(PaneBinder):
         if not records_hold(conds, ctx.settings.record if ctx.settings is not None else None):
             return None
         multiplexer = bool(channel.get("multiplexer"))
+        chain = ctx.placement.chain if ctx.placement is not None else []
         if os.name == "nt":
             # Windows gives a process no foreground group of its terminal:
             # the check before each transfer could never hold.
-            return self._unbound(channel, multiplexer, "the foreground of its pane cannot be checked here")
+            return self._by_process(channel, multiplexer, chain, "the foreground of its pane cannot be checked here")
+        if not channel.get("panePid"):
+            return self._by_process(channel, multiplexer, chain, "its record gives no source of the pane PID")
         try:
             pid = self.pid_of(channel, ctx.env, getattr(ctx.prober, "secrets", ()))
         except ProbeError as exc:
-            return self._unbound(channel, multiplexer, "no pane PID: %s" % exc)
-        chain = ctx.placement.chain if ctx.placement is not None else []
+            return self._by_process(channel, multiplexer, chain, "no pane PID: %s" % exc)
         depth = None
         for i, proc in enumerate(chain):
             if i and proc.pid == pid:
@@ -146,6 +155,24 @@ class PanePIDBinder(PaneBinder):
             return self._unbound(channel, multiplexer, "the start of the agent process is not known", depth)
         return Binding(channel, True, multiplexer=multiplexer, depth=depth,
                        pane={"id": pane_id, "pid": pid, "agent": [agent.pid, agent.start]})
+
+    @classmethod
+    def _by_process(cls, channel, multiplexer, chain, cause):
+        """A binding that cannot be confirmed. A multiplexer's own process
+        (one of its programs, its server) among the runner's ancestors still
+        places the runner in its pane, which skips step 6 and the other
+        blind channels and keeps an outer multiplexer from being used."""
+        depth = None
+        if multiplexer:
+            names = set()
+            for b in (channel.get("binaries") or {}).get(_platform_key()) or []:
+                if not b.startswith("{env:"):
+                    names.add(_program_name(b.replace("\\", "/").rsplit("/", 1)[-1]))
+            for i, proc in enumerate(chain):
+                if i and set(_program_name(n) for n in proc.names()) & names:
+                    depth = i
+                    break
+        return cls._unbound(channel, multiplexer, cause, depth)
 
     @staticmethod
     def _unbound(channel, multiplexer, cause, depth=None):

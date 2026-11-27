@@ -256,12 +256,13 @@ class RegistryDetector(Detector):
         (3) of US-7 and the multiplexer rules, without conditions (1) and
         (2), which a forced channel lifts (decision 8)."""
         confirmed = [b for b in self.bindings(ctx) if b.confirmed]
-        muxes = sorted((b for b in confirmed if b.multiplexer),
+        muxes = sorted((b for b in self.bindings(ctx) if b.multiplexer and b.descendant),
                        key=lambda b: b.depth if b.depth is not None else 1 << 30)
         if muxes:
-            # Only the nearest: typing into an outer pane reaches the inner
-            # multiplexer's client, not the agent.
-            return [muxes[0].channel["id"]]
+            # Only the nearest, and only when its binding is confirmed:
+            # typing into an outer pane reaches the inner multiplexer's
+            # client, not the agent.
+            return [muxes[0].channel["id"]] if muxes[0].confirmed else []
         # Inside a multiplexer pane the other blind channels are skipped,
         # even when the binding to that pane is not confirmed.
         if self.in_multiplexer(ctx):
