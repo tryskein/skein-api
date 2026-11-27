@@ -89,6 +89,18 @@ class Exclusion(object):
                     pass
         return self.value
 
+    def peek(self):
+        """Read the exclusion file again and return the value in force,
+        writing nothing (the look right before a hand-over: no write, no
+        fsync between the last check and the insert). A new value is kept
+        in the state by the next current()."""
+        if not self.token_file:
+            return self.value
+        got = read_exclude_file(self.token_file)
+        if got is not None:
+            self.value = got
+        return self.value
+
     def own(self, notification):
         """The event was caused by the excluded session."""
         if not self.value or not isinstance(notification, dict):

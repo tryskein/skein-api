@@ -27,6 +27,7 @@ import json
 import os
 import sys
 import unittest
+from unittest import mock
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -166,6 +167,35 @@ class OwnEchoDeliveryTest(unittest.TestCase):
         texts = [t for _, _, t in mon.spy.calls]
         self.assertFalse(any("c1" in t for t in texts))
         self.assertTrue(any("c2" in t for t in texts))
+
+    def test_after_the_last_check_the_exclusion_is_only_read(self):
+        # Warning 7 of wave 13 round 2: between the last check of the
+        # addressee and the hand-over nothing is written or synced. A file
+        # written during the last check still holds the event back (it is
+        # read), and its value is saved only after the transfer.
+        world = EchoWorld(self, dt.two_channels())
+        mon = world.monitor()
+        real = mon.sink.check_addressee
+        checks = []
+        saves = []
+        real_save = world.runner.save_exclusion
+
+        def check_addressee(*args, **kw):
+            checks.append(1)
+            if len(checks) == 2:
+                world.write_exclusion(mon, NEW)
+            return real(*args, **kw)
+
+        def save(token_file, value):
+            saves.append((len(checks), value))
+            return real_save(token_file, value)
+        mon.sink.check_addressee = check_addressee
+        with mock.patch.object(world.runner, "save_exclusion", save):
+            mon.page([dt.note(1, session=NEW)])
+        self.assertEqual(outcomes(mon), {1: "own-echo"})
+        self.assertEqual([t for _, _, t in mon.spy.calls], [])
+        # Not saved within the transfer whose last check saw it.
+        self.assertNotIn((2, NEW), saves)
 
     def test_the_new_session_before_the_file_is_delivered(self):
         # The agent learns of its new session from this very event.

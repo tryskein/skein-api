@@ -292,7 +292,7 @@ class Guard(object):
         lock held now is a refusal before send), the time kept for the
         call, what is already known of access."""
         self.check()
-        self.check_echo()
+        self.check_echo(save=False)
         try:
             self.attempt.still_ours()
         except LockBusy:
@@ -302,14 +302,15 @@ class Guard(object):
         self.handed = True
         self.attempt.handed = True
 
-    def check_echo(self):
+    def check_echo(self, save=True):
         """Read the exclusion file again (local, no poll): EchoNow when an
-        event of the text is now one's own echo."""
+        event of the text is now one's own echo. save=False, after the last
+        check, only reads: a new value is kept in the state before it."""
         exclusion = getattr(self.pipeline, "exclusion", None)
-        current = getattr(exclusion, "current", None)
-        if current is None:
+        read = getattr(exclusion, "current" if save else "peek", None)
+        if read is None:
             return
-        current()
+        read()
         if any(exclusion.own(n) for n in self.batch):
             raise EchoNow()
 
