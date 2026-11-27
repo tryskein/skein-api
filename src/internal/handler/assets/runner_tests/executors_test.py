@@ -690,5 +690,59 @@ class PolledWaitTest(unittest.TestCase):
         self.assertIsNone(box["result"].exit_code)
 
 
+class ProbeProgramOfThePreflightTest(unittest.TestCase):
+    """Round 2 of the wave 11 review, line 9: the probe runs the program the
+    preflight found with the agent process (its own executable, which no
+    PATH names), never another program of that name on the PATH; a program
+    of the channel's own check or wait that is not found leaves the channel
+    unavailable at the preflight."""
+
+    def preflight(self, idle_program=None):
+        import fake_proc
+        box = Box(self)
+        vendor = os.path.join(box.root, "vendor")
+        os.mkdir(vendor, 0o700)
+        own = fake_channel.FakeProgram(vendor, "tool")
+        own.respond([{"exit": 0}])
+        decoy = fake_channel.FakeProgram(box.bin, "tool")
+        decoy.respond([{"exit": 0}])
+        channel = {"id": "own", "about": "own", "source": "t", "step": 3, "order": 1, "kind": "addressed",
+                   "blind": False, "detect": {},
+                   "executor": {"type": "argv", "argv": ["tool", "send"], "feed": "stdin", "timeoutSec": 1},
+                   "idle": {"type": "none"}, "outcomes": [{"match": {"exitCode": 0}, "outcome": "queued"}],
+                   "probes": [{"type": "argv", "source": "t", "argv": ["tool", "status"],
+                               "results": [{"match": {"exitCode": 0}, "result": "available"}]}],
+                   "addressee": {"process": "none"}, "binaries": {"linux": ["tool"], "macos": ["tool"]}}
+        if idle_program:
+            channel["idle"] = {"type": "argv", "argv": [idle_program, "wait"], "timeoutSec": 1}
+        doc = {"schemaVersion": 1, "general": {"about": "g", "source": "t", "warnings": ["w"]},
+               "agents": [{"id": "tool", "about": "a", "source": "t", "process": {"executables": ["tool"]},
+                           "methods": [{"kind": "delivery", "channel": "own", "conditions": {}, "instruction": "I"}]}],
+               "channels": [channel], "shells": {"source": "t", "names": ["sh", "bash"]}, "zavodEngines": {}}
+        runner = harness.load_runner(registry=base64.b64encode(json.dumps(doc).encode("utf-8")).decode("ascii"))
+        reg = runner.load_registry()
+        env = box.env(SKEIN_PUBLIC_URL="http://127.0.0.1:9", SKEIN_ISSUE="sk-44", SKEIN_TOKEN_FILE=box.token,
+                      SKEIN_CLIENT="tool", SKEIN_PLATFORM="posix", SKEIN_MONITOR_CHANNEL="", SKEIN_MONITOR_BLIND="")
+        source = fake_proc.FakeProcesses()
+        source.add(9001, 9000, "python3", ["python3", "-c", "_SKEIN_LOADER_MODE = 'client'"])
+        source.add(9000, 8999, "bash")
+        source.add(8999, 1, "tool", [own.path], executable=own.path)
+        settings = runner.read_settings(env, reg, mode="client")
+        pl = runner.place(runner.ancestry(source, 9001), reg, settings.record, self_pid=9001)
+        line = runner.preflight(box.token, env, reg, settings, detector=runner.Detector(), placement=pl)
+        return line, own, decoy
+
+    def test_the_probe_runs_the_agent_s_own_program(self):
+        line, own, decoy = self.preflight()
+        self.assertEqual(line["channel"], "own")
+        self.assertEqual([c["argv"] for c in own.calls()], [["status"]])
+        self.assertEqual(decoy.calls(), [])
+
+    def test_a_check_program_not_found_leaves_the_channel_unavailable(self):
+        line, own, decoy = self.preflight(idle_program="no-such-waiter")
+        self.assertEqual((line["method"], line["channel"]), ("journal", None))
+        self.assertIn("no-such-waiter", line["reason"])
+
+
 if __name__ == "__main__":
     unittest.main()

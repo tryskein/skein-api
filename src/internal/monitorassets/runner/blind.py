@@ -68,7 +68,7 @@ def with_delivery_name(spec, name):
     return out
 
 
-def pane_pid(channel, env, secrets=(), drop=()):
+def pane_pid(channel, env, secrets=(), drop=(), agent=None):
     """The PID of the process of the channel's pane by its panePid command
     (a bare PID on stdout, or the number at jsonField of its JSON answer);
     ProbeError when the command cannot run, fails, or gives no PID."""
@@ -78,7 +78,7 @@ def pane_pid(channel, env, secrets=(), drop=()):
         argv = expand_argv(spec.get("argv") or [], clean)
     except ExecutorRefusal as exc:
         raise ProbeError(exc.reason)
-    argv = _probe_program(channel, argv, env)
+    argv = _probe_program(channel, argv, env, agent)
     timeout = min((channel.get("executor") or {}).get("timeoutSec") or PROBE_TIMEOUT_SEC, PROBE_TIMEOUT_SEC)
     try:
         result = run_program(argv, clean, None, timeout, secrets)
@@ -128,7 +128,8 @@ class PanePIDBinder(PaneBinder):
         if not channel.get("panePid"):
             return self._by_process(channel, multiplexer, chain, "its record gives no source of the pane PID")
         try:
-            pid = self.pid_of(channel, ctx.env, getattr(ctx.prober, "secrets", ()), getattr(ctx.prober, "drop", ()))
+            pid = self.pid_of(channel, ctx.env, getattr(ctx.prober, "secrets", ()), getattr(ctx.prober, "drop", ()),
+                              ctx.placement.agent if ctx.placement is not None else None)
         except ProbeError as exc:
             return self._by_process(channel, multiplexer, chain, "no pane PID: %s" % exc)
         depth = None

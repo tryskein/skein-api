@@ -1137,14 +1137,20 @@ class ChannelExecutor(object):
         return self.argv.call(executor, text, timeout_sec)
 
 
-def _probe_program(channel, argv, env):
-    """argv with its program as an absolute path: the channel's program as
-    the preflight finds it, or a program of another name found on the PATH
-    of the agent process (a check or a probe of its own); never a bare name.
-    ProbeError when none is found."""
-    programs = channel_programs(channel, env, None)
+def _probe_program(channel, argv, env, agent=None):
+    """argv with its program as an absolute path: the channel's own program
+    as the preflight finds it with the agent process (its executable, a
+    path under the home directory, the PATH), never another program of that
+    name; a program of another name (a check or a probe of its own) found on
+    the PATH of the agent process. ProbeError when none is found."""
+    programs = channel_programs(channel, env, agent)
     name = argv[0] if argv else ""
-    path = programs.get(name) or absolute_program(name, env)
+    path = programs.get(name)
+    if path is None:
+        own = ((channel.get("executor") or {}).get("argv") or [""])[0]
+        if name == own:
+            raise ProbeError("program %s not found" % name)
+        path = absolute_program(name, env)
     if path is None:
         raise ProbeError("program %s not found" % name)
     return [path] + list(argv[1:])
@@ -1169,6 +1175,9 @@ class SystemProbeRunner(ProbeRunner):
         self.secrets = list(secrets)
         # Variables no probe or check gets (the http keys, by name).
         self.drop = tuple(drop)
+        # The agent process of the preflight: a channel's own program is
+        # the one the preflight found with it.
+        self.agent = None
 
     def run(self, channel, probe, env):
         kind = probe.get("type")
@@ -1192,7 +1201,7 @@ class SystemProbeRunner(ProbeRunner):
         argv = expand_argv(probe.get("argv") or [], clean)
         # The program of the channel by the path it is found at (a path under
         # the home directory among them), as the working runner runs it.
-        argv = _probe_program(channel, argv, env)
+        argv = _probe_program(channel, argv, env, self.agent)
         result = run_program(argv, clean, None, timeout, self.secrets)
         if result.timed_out:
             raise ProbeError("timed out after %d s" % timeout)
@@ -1214,7 +1223,7 @@ class SystemProbeRunner(ProbeRunner):
             argv = expand_argv(command.get("argv") or [], clean)
         except ExecutorRefusal as exc:
             raise ProbeError(exc.reason)
-        argv = _probe_program(channel, argv, env)
+        argv = _probe_program(channel, argv, env, self.agent)
         result = run_program(argv, clean, None, timeout, self.secrets)
         if result.timed_out:
             raise ProbeError("timed out after %d s" % timeout)

@@ -480,6 +480,18 @@ def channel_available(ctx, channel_id):
     programs = [channel_program(b, ctx.env, ctx.placement.agent) for b in binaries]
     if not any(p is not None for p in programs):
         return False, _missing_programs_cause(channel_id, binaries, ctx.env)
+    # The programs of its own check, wait and blind steps: one that is not
+    # found leaves the channel unavailable here, not every attempt refused
+    # by the working runner.
+    own = (spec.get("argv") or [""])[0]
+    for argv in (((channel.get("addressee") or {}).get("command") or {}).get("argv"),
+                 (channel.get("idle") or {}).get("argv"),
+                 (channel.get("stage") or {}).get("argv"),
+                 (channel.get("unstage") or {}).get("argv"),
+                 ((channel.get("submit") or {}).get("executor") or {}).get("argv")):
+        name = argv[0] if argv else None
+        if name and name != own and absolute_program(name, ctx.env) is None:
+            return False, "channel %s: program %s of its check or wait is not found" % (channel_id, name)
     if any(is_batch_program(p) for p in programs if p is not None) and \
             (channel.get("executor") or {}).get("feed") == "file" and \
             ctx.token_file is not None and batch_message_dir(ctx.token_file, ctx.env) is None:
@@ -984,6 +996,10 @@ def preflight(token_file, env, registry, settings, detector=None, prober=None, p
     journal, external = check_sandbox(token_file, env)
     if placement is None:
         placement = system_placement(registry, settings.record)
+    if hasattr(prober, "agent"):
+        # The probes and the capture run the program the preflight finds
+        # with the agent process.
+        prober.agent = placement.agent
     ctx = Context(registry, settings, env, placement, detector, prober, external, token_file=token_file)
     ctx.identity = identity(placement, registry, env, detector.address_specs(ctx))
     choice = choose(ctx)
