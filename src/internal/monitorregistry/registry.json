@@ -614,6 +614,234 @@
       }
     },
     {
+      "id": "herdr",
+      "about": "Herdr: the event is submitted as a prompt to the agent of the Herdr pane, which then starts working.",
+      "source": "github.com/herdrdev/herdr e8d7d970 (0.9.5): src/cli/agent/bindings.rs#command (agent prompt <TARGET> <TEXT>: \"If the agent is already blocked, submission is rejected with agent_blocked before any input is sent. When an accepted submission starts from another non-working state, --wait requires an observed working or blocked state within 5000ms; otherwise it returns agent_prompt_stalled. A caller timeout that expires first returns timeout. It then matches idle, done, or blocked by default, or any exact --until state\"; agent wait --until idle); src/app/api/agents.rs#validate_agent_prompt (before the write: agent_not_found, agent_blocked, agent_not_ready when no known agent or another foreground process); src/api/wait.rs#prompt_agent and #agent_wait_timeout (after the write: agent_not_running when the pane's agent changed, agent_prompt_stalled, timeout); src/cli.rs#print_response and src/main.rs#finish_cli (an error is {id, error: {code, message}} on stderr with exit 1, server_not_running among them when no server listens; a result goes to stdout with exit 0); src/pane.rs (every pane gets HERDR_ENV=1 and HERDR_PANE_ID); Cargo.toml (binary herdr). --until working ends the wait once the prompt's turn is working, not at its end.",
+      "step": 6,
+      "order": 2,
+      "kind": "terminal",
+      "blind": false,
+      "detect": {
+        "env": [
+          {
+            "name": "HERDR_ENV",
+            "pattern": "1"
+          },
+          {
+            "name": "HERDR_PANE_ID"
+          }
+        ]
+      },
+      "executor": {
+        "type": "argv",
+        "argv": [
+          "herdr",
+          "agent",
+          "prompt",
+          "{env:HERDR_PANE_ID}",
+          "--wait",
+          "--until",
+          "working",
+          "--timeout",
+          "30000",
+          "--",
+          "{text}"
+        ],
+        "feed": "arg",
+        "timeoutSec": 40
+      },
+      "idle": {
+        "type": "argv",
+        "argv": [
+          "herdr",
+          "agent",
+          "wait",
+          "{env:HERDR_PANE_ID}",
+          "--until",
+          "idle",
+          "--timeout",
+          "60000"
+        ],
+        "timeoutSec": 70
+      },
+      "outcomes": [
+        {
+          "match": {
+            "exitCode": 0
+          },
+          "outcome": "turn-started"
+        },
+        {
+          "match": {
+            "exitCode": 1,
+            "stderrJson": {
+              "error.code": "agent_blocked"
+            }
+          },
+          "outcome": "refused-before-send"
+        },
+        {
+          "match": {
+            "exitCode": 1,
+            "stderrJson": {
+              "error.code": "agent_not_ready"
+            }
+          },
+          "outcome": "refused-before-send"
+        },
+        {
+          "match": {
+            "exitCode": 1,
+            "stderrJson": {
+              "error.code": "agent_not_found"
+            }
+          },
+          "outcome": "refused-before-send"
+        },
+        {
+          "match": {
+            "exitCode": 1,
+            "stderrJson": {
+              "error.code": "server_not_running"
+            }
+          },
+          "outcome": "refused-before-send"
+        }
+      ],
+      "probes": [
+        {
+          "type": "argv",
+          "source": "github.com/herdrdev/herdr e8d7d970: src/cli/agent/bindings.rs (agent get shows an agent, sends nothing).",
+          "argv": [
+            "herdr",
+            "agent",
+            "get",
+            "{env:HERDR_PANE_ID}"
+          ],
+          "results": [
+            {
+              "match": {
+                "exitCode": 0
+              },
+              "result": "available"
+            }
+          ]
+        }
+      ],
+      "addressee": {
+        "process": "alive",
+        "limitation": "Herdr itself refuses a pane whose foreground process is not the agent it detected."
+      },
+      "binaries": {
+        "linux": [
+          "herdr"
+        ],
+        "macos": [
+          "herdr"
+        ],
+        "windows": [
+          "herdr.exe"
+        ]
+      },
+      "warnings": [
+        "The text of an event is one argument of the herdr command, visible to other local users through ps."
+      ],
+      "address": {
+        "env": "HERDR_PANE_ID"
+      }
+    },
+    {
+      "id": "paradev",
+      "about": "Paradev: the event is typed into the agent's terminal of the workspace and submitted; the CLI waits until the agent works.",
+      "source": "github.com/ParadevAI/Paradev d3feccef (2.0.11): packages/cli/src/commands/terminals/send/command.ts (--text and Enter by terminal.send; with --wait it first needs the agent's hook binding, else it fails before sending, then waits for --until; a wait that sees no activity within 10 s, an exited agent or a timeout is an error after the send; on success {terminalId, submitted, state}); packages/cli/src/commands/agents/wait/command.ts (agents wait --until idle, an error when no agent runs or on timeout); packages/cli/src/lib/agent-wait.ts#AGENT_WAIT_TARGETS (settled, idle, blocked, working); packages/cli-framework/src/runner.ts#handleError and src/output.ts#formatOutput (under --json the data goes to stdout; every error is \"Error: <message>\" text on stderr with exit 1, so no failure proves that nothing was sent); docs/environment-variables.md (SUPERSET_TERMINAL_ID and SUPERSET_WORKSPACE_ID in terminals and agents, PARADEV_* the same values; SUPERSET_ wins); packages/cli/cli.config.ts (the CLI paradev); package.json (darwin and linux builds).",
+      "step": 6,
+      "order": 3,
+      "kind": "terminal",
+      "blind": false,
+      "detect": {
+        "env": [
+          {
+            "name": "SUPERSET_TERMINAL_ID"
+          },
+          {
+            "name": "SUPERSET_WORKSPACE_ID"
+          }
+        ]
+      },
+      "executor": {
+        "type": "argv",
+        "argv": [
+          "paradev",
+          "terminals",
+          "send",
+          "--local",
+          "--workspace",
+          "{env:SUPERSET_WORKSPACE_ID}",
+          "--terminal",
+          "{env:SUPERSET_TERMINAL_ID}",
+          "--text",
+          "{text}",
+          "--wait",
+          "--until",
+          "working",
+          "--timeout",
+          "30",
+          "--json"
+        ],
+        "feed": "arg",
+        "timeoutSec": 40
+      },
+      "idle": {
+        "type": "argv",
+        "argv": [
+          "paradev",
+          "agents",
+          "wait",
+          "--local",
+          "--workspace",
+          "{env:SUPERSET_WORKSPACE_ID}",
+          "--terminal",
+          "{env:SUPERSET_TERMINAL_ID}",
+          "--until",
+          "idle",
+          "--timeout",
+          "60",
+          "--json"
+        ],
+        "timeoutSec": 70
+      },
+      "outcomes": [
+        {
+          "match": {
+            "exitCode": 0,
+            "json": {
+              "state": "working"
+            }
+          },
+          "outcome": "turn-started"
+        }
+      ],
+      "probeUndefined": true,
+      "addressee": {
+        "process": "alive",
+        "limitation": "Without the agent's hooks Paradev cannot follow the agent: the idle wait fails and nothing is sent."
+      },
+      "binaries": {
+        "linux": [
+          "paradev"
+        ],
+        "macos": [
+          "paradev"
+        ]
+      },
+      "warnings": [
+        "Paradev follows an agent only through its hooks; the text of an event is one argument of the paradev command, visible to other local users through ps."
+      ],
+      "address": {
+        "env": "SUPERSET_TERMINAL_ID"
+      }
+    },
+    {
       "id": "paseo",
       "about": "Paseo (agent): the daemon that launched the agent queues each event as a message to the agent's own session.",
       "source": "github.com/getpaseo/paseo c1b43ee571ee15f409b4f1374b279f2f94387448 (0.17.4): packages/server/src/server/agent/agent-manager.ts (every agent process the daemon launches gets PASEO_AGENT_ID, its agent UUID, and PASEO_AGENT_CWD); packages/server/src/server/daemon-worker.ts (the daemon process is titled 'Paseo Daemon'; it launches the provider processes: Claude through the Agent SDK, Codex app-server, ACP agents, OpenCode, Pi); packages/cli/src/commands/agent/send.ts#runSendCommand and #buildNoWaitResult (--prompt-file reads the text from a UTF-8 file; from a process with PASEO_AGENT_ID the default behaviour is queue; --no-wait prints {agentId, status, activeTurnBehavior, message}, status 'queued' when the daemon queued it); packages/server/src/server/agent/agent-messages/delivery.ts#QUIET_MS (the queue waits a 2 s quiet window and the end of the running turn, so no idle wait of the runner); packages/cli/src/utils/client.ts#connectToDaemon (DAEMON_UNREACHABLE and AUTH_REQUIRED come from connecting, before the message is sent); packages/cli/src/output/with-output.ts and render.ts#renderError (a result on stdout; an error as {\"error\":{code,message}} on stderr, exit 1); packages/cli/src/commands/agent/inspect.ts#runInspectCommand (the agent object on stdout: Id, Provider, Status, Archived, CreatedAt; AGENT_NOT_FOUND on stderr; it sends nothing); packages/server/src/server/agent/idle-runtime-cleanup/index.ts#IDLE_PERIOD_MS (an agent idle for an hour is unloaded with its process tree unless agents.idleRuntimeCleanup is false); packages/desktop/src/integrations/cli-install/install.ts#buildCmdTrampoline (the app installs the CLI as ~/.local/bin/paseo, on Windows %USERPROFILE%\\.local\\bin\\paseo.cmd, which the agent's PATH may lack; a .cmd takes the text only by file, US-11). No deduplication: every send is a new message.",
@@ -873,6 +1101,94 @@
       ],
       "address": {
         "env": "AGENTDECK_INSTANCE_ID"
+      }
+    },
+    {
+      "id": "agent-orchestrator",
+      "about": "Agent Orchestrator: its daemon hands each event to the agent's own session (a TUI pane, or a Chat session).",
+      "source": "github.com/OrchestratorInc/agent-orchestrator 80c941f6 (0.10.0): backend/internal/cli/send.go#newSendCommand and #sendMessage (without --steer: POST sessions/<id>/send to the local daemon, retried while CHAT_INTERFACE_TRANSITION; with AO_SESSION_ID set the CLI prefixes \"[from <id>] \"; --steer is not used); backend/internal/session_manager/manager.go#Send and #sendWithConfirmationStop (a TUI pane gets paste and Enter and the call returns only once the user-prompt-submit hook marks the session active, else ErrDeliveryUnconfirmed; a session in an interface transition gets the message queued durably and the call returns at once; a Chat session gets it through the Chat relay; the guard refuses a session that is gone, terminated, exited or paused on a permission decision); backend/cmd/ao/main.go and backend/internal/cli/root.go#ExitCode (an error is a line of text on stderr: exit 2 for a usage error, which comes before the daemon is called, 1 for any other failure, so neither a refusal of the guard nor ErrDeliveryUnconfirmed is told apart from a failure after the send); backend/internal/cli/session.go (session get reads one session, sends nothing). Exit 0 does not tell a confirmed TUI turn from a queued or relayed message, so it proves the message queued only.",
+      "step": 5,
+      "order": 4,
+      "kind": "addressed",
+      "blind": false,
+      "detect": {
+        "env": [
+          {
+            "name": "AO_SESSION_ID"
+          }
+        ]
+      },
+      "executor": {
+        "type": "argv",
+        "argv": [
+          "ao",
+          "send",
+          "--session",
+          "{env:AO_SESSION_ID}",
+          "--message",
+          "{text}"
+        ],
+        "feed": "arg",
+        "timeoutSec": 60
+      },
+      "idle": {
+        "type": "builtin"
+      },
+      "outcomes": [
+        {
+          "match": {
+            "exitCode": 0
+          },
+          "outcome": "queued"
+        },
+        {
+          "match": {
+            "exitCode": 2
+          },
+          "outcome": "refused-before-send"
+        }
+      ],
+      "probes": [
+        {
+          "type": "argv",
+          "source": "github.com/OrchestratorInc/agent-orchestrator 80c941f6: backend/internal/cli/session.go (session get fetches one session from the local daemon, sends nothing).",
+          "argv": [
+            "ao",
+            "session",
+            "get",
+            "{env:AO_SESSION_ID}",
+            "--json"
+          ],
+          "results": [
+            {
+              "match": {
+                "exitCode": 0
+              },
+              "result": "available"
+            }
+          ]
+        }
+      ],
+      "addressee": {
+        "process": "none",
+        "limitation": "The session id is the address; the source does not say whether a session recreated under the same id is told apart."
+      },
+      "binaries": {
+        "linux": [
+          "ao"
+        ],
+        "macos": [
+          "ao"
+        ],
+        "windows": [
+          "ao.exe"
+        ]
+      },
+      "warnings": [
+        "Agent Orchestrator prefixes every event with [from <this session id>]; the text of an event is one argument of the ao command, visible to other local users through ps."
+      ],
+      "address": {
+        "env": "AO_SESSION_ID"
       }
     },
     {
