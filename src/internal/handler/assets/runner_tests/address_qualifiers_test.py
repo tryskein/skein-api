@@ -24,6 +24,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 
 import deliver_test as dt  # noqa: E402
+import entries_addressed_hosts_test as ah  # noqa: E402
 import failures_test as ft  # noqa: E402
 
 RUNNER = ft.RUNNER
@@ -86,6 +87,13 @@ class AddressQualifierTest(unittest.TestCase):
         journal = RUNNER.Journal(token, ft.ISSUE, secrets=[ft.TOKEN], env=env)
         ledger = RUNNER.Ledger(ft.SERVER, "tok", RUNNER.identity_from_doc(identity), env=env, clock=world.clock.now)
         calls = Calls()
+        command = (REG.channel(record)["addressee"].get("command") or {}).get("argv")
+        if command:
+            # A record that also asks its own check: the program answers
+            # the same addressee (its id, by the variable of the send).
+            cli = ah.FakeCli(world.bin, command[0])
+            cli.respond(**{" ".join(command[1:3]): [ah.out(stdout={"id": value})]})
+            calls.programs = {command[0]: cli.path}
         sink = RUNNER.DeliverySink(journal, token, doc, REG, env, ledger, calls, ft.ISSUE, cancel=dt.FakeCancel(),
                                    clock=world.clock)
         return world, sink, journal, doc, calls
