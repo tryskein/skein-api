@@ -1328,7 +1328,7 @@
     {
       "id": "agent-orchestrator",
       "about": "Agent Orchestrator: its daemon hands each event to the agent's own session (a TUI pane, or a Chat session).",
-      "source": "github.com/OrchestratorInc/agent-orchestrator 80c941f6 (0.10.0): backend/internal/cli/send.go#newSendCommand and #sendMessage (without --steer: POST sessions/<id>/send to the local daemon, retried while CHAT_INTERFACE_TRANSITION; with AO_SESSION_ID set the CLI prefixes \"[from <id>] \"; --steer is not used); backend/internal/session_manager/manager.go#Send and #sendWithConfirmationStop (a TUI pane gets paste and Enter and the call returns only once the user-prompt-submit hook marks the session active, else ErrDeliveryUnconfirmed; a session in an interface transition gets the message queued durably and the call returns at once; a Chat session gets it through the Chat relay; the guard refuses a session that is gone, terminated, exited or paused on a permission decision); backend/cmd/ao/main.go and backend/internal/cli/root.go#ExitCode (an error is a line of text on stderr: exit 2 for a usage error, which comes before the daemon is called, 1 for any other failure); backend/internal/cli/client.go#apiError.String (the daemon's error is printed \"<message> (<code>) [request <id>]\"); backend/internal/service/session/service.go (the codes of the send: SESSION_COMPOSER_BUSY for ErrComposerBusy, an unsent human draft, SESSION_AWAITING_DECISION for ErrAwaitingDecision, a permission dialog, SESSION_STARTUP_PENDING for ErrStartupPending, all refused by the guard before the paste — manager.go#sendWithConfirmationStop: \"The check runs under the guard's held input lease, immediately before the write\"; SESSION_DELIVERY_UNCONFIRMED after the write); backend/internal/cli/session.go (session get reads one session, sends nothing). Exit 0 does not tell a confirmed TUI turn from a queued or relayed message, so it proves the message queued only.",
+      "source": "github.com/OrchestratorInc/agent-orchestrator 80c941f6 (0.10.0): backend/internal/cli/send.go#newSendCommand and #sendMessage (without --steer: POST sessions/<id>/send to the local daemon, retried while CHAT_INTERFACE_TRANSITION; with AO_SESSION_ID set the CLI prefixes \"[from <id>] \"; --steer is not used); backend/internal/session_manager/manager.go#Send and #sendWithConfirmationStop (a TUI pane gets paste and Enter and the call returns only once the user-prompt-submit hook marks the session active, else ErrDeliveryUnconfirmed; a session in an interface transition gets the message queued durably and the call returns at once; a Chat session gets it through the Chat relay; the guard refuses a session that is gone, terminated, exited or paused on a permission decision); backend/cmd/ao/main.go and backend/internal/cli/root.go#ExitCode (an error is a line of text on stderr: exit 2 for a usage error, which comes before the daemon is called, 1 for any other failure); backend/internal/cli/client.go#apiError.String (the daemon's error is printed \"<message> (<code>) [request <id>]\"); backend/internal/service/session/service.go (the codes of the send: SESSION_COMPOSER_BUSY for ErrComposerBusy, an unsent human draft, SESSION_AWAITING_DECISION for ErrAwaitingDecision, a permission dialog, SESSION_STARTUP_PENDING for ErrStartupPending, all refused by the guard before the paste — manager.go#sendWithConfirmationStop: \"The check runs under the guard's held input lease, immediately before the write\"; SESSION_DELIVERY_UNCONFIRMED after the write); backend/internal/cli/session.go (session get reads one session, sends nothing). Exit 0 does not tell a confirmed TUI turn from a queued or relayed message, so it proves the message queued only. backend/internal/cli/session.go#newSessionGetCommand and #getSession (session get <id> --json prints {session} of the local daemon, sessionDTO with id and isTerminated; sends nothing).",
       "step": 5,
       "order": 4,
       "kind": "addressed",
@@ -1414,7 +1414,38 @@
       ],
       "addressee": {
         "process": "none",
-        "limitation": "The session id is the address; the source does not say whether a session recreated under the same id is told apart."
+        "limitation": "The session id is the address; the source does not say whether a session recreated under the same id is told apart.",
+        "command": {
+          "argv": [
+            "ao",
+            "session",
+            "get",
+            "{env:AO_SESSION_ID}",
+            "--json"
+          ],
+          "results": [
+            {
+              "match": {
+                "exitCode": 0,
+                "json": {
+                  "session.id": "{env:AO_SESSION_ID}",
+                  "session.isTerminated": "false"
+                }
+              },
+              "result": "same"
+            },
+            {
+              "match": {
+                "exitCode": 0,
+                "json": {
+                  "session.id": "{env:AO_SESSION_ID}",
+                  "session.isTerminated": "true"
+                }
+              },
+              "result": "gone"
+            }
+          ]
+        }
       },
       "binaries": {
         "linux": [
@@ -1437,7 +1468,7 @@
     {
       "id": "t3code",
       "about": "T3 Code: the thread of the agent gets each event as its next turn; a busy thread queues it.",
-      "source": "github.com/pingdotgg/t3code 45a3880c (0.1.12): apps/server/src/cli/thread.ts#threadSendCommand (\"A busy thread gets it as its next turn; nothing is interrupted\"; the message argument - reads stdin; it calls the t3_thread_send tool with mode queue and with --json prints its result); packages/contracts/src/orchestratorMcp.ts#OrchestratorMcpThreadSendResult (delivery one of started, queued, steered, restarted); thread.ts#withThreadTools and #reportThreadErrors (every failure, the server not running among them, is a plain line on stderr and a non-zero exit, so none proves that the message was not sent); apps/server/src/preview/PortScanner.ts#AGENT_THREAD_ENV and packages/provider-acp/src/server/adapter.ts (T3CODE_THREAD_ID in every agent process of a thread); apps/server/package.json (the CLI is the npm bin t3, t3.cmd on Windows); docs/user/outside-agents.md (t3 thread show prints a thread, it sends nothing).",
+      "source": "github.com/pingdotgg/t3code 45a3880c (0.1.12): apps/server/src/cli/thread.ts#threadSendCommand (\"A busy thread gets it as its next turn; nothing is interrupted\"; the message argument - reads stdin; it calls the t3_thread_send tool with mode queue and with --json prints its result); packages/contracts/src/orchestratorMcp.ts#OrchestratorMcpThreadSendResult (delivery one of started, queued, steered, restarted); thread.ts#withThreadTools and #reportThreadErrors (every failure, the server not running among them, is a plain line on stderr and a non-zero exit, so none proves that the message was not sent); apps/server/src/preview/PortScanner.ts#AGENT_THREAD_ENV and packages/provider-acp/src/server/adapter.ts (T3CODE_THREAD_ID in every agent process of a thread); apps/server/package.json (the CLI is the npm bin t3, t3.cmd on Windows); docs/user/outside-agents.md (t3 thread show prints a thread, it sends nothing). thread.ts#threadShowCommand (thread show <id> --json prints {thread, messages, error}, thread.threadId the thread; --messages bounds the messages it reads; sends nothing).",
       "step": 5,
       "order": 5,
       "kind": "addressed",
@@ -1512,6 +1543,8 @@
             "thread",
             "show",
             "{env:T3CODE_THREAD_ID}",
+            "--messages",
+            "1",
             "--json"
           ],
           "results": [
@@ -1526,7 +1559,29 @@
       ],
       "addressee": {
         "process": "none",
-        "limitation": "The thread id is the address; the source does not say whether a thread recreated under the same id is told apart."
+        "limitation": "The thread id is the address; the source does not say whether a thread recreated under the same id is told apart.",
+        "command": {
+          "argv": [
+            "t3",
+            "thread",
+            "show",
+            "{env:T3CODE_THREAD_ID}",
+            "--messages",
+            "1",
+            "--json"
+          ],
+          "results": [
+            {
+              "match": {
+                "exitCode": 0,
+                "json": {
+                  "thread.threadId": "{env:T3CODE_THREAD_ID}"
+                }
+              },
+              "result": "same"
+            }
+          ]
+        }
       },
       "binaries": {
         "linux": [
@@ -1546,7 +1601,7 @@
     {
       "id": "sculptor",
       "about": "Sculptor: the Sculptor server takes each event as a message to the agent; a terminal agent only at its prompt.",
-      "source": "github.com/imbue-ai/sculptor cdd6dc68 (0.51.0.dev0): tools/sculpt/sculpt/commands/agent.py#send (POST of the message; exit 0 with {sent: true, agent_id, message} on --json; an answer of 400 or more becomes the error {error: detail or \"Server returned <n>\", detail: \"\"}; httpx.ConnectError ends in handle_connection_error); tools/sculpt/sculpt/formatting.py#cli_error, #handle_connection_error and #CONNECTION_HINT (under --json the error is a JSON object on stderr, exit 1; a connection that failed gives detail CONNECTION_HINT: before any request); sculptor/sculptor/web/app.py#send_workspace_agent_messages (a chat agent: the message is queued; a terminal agent: typed into its PTY; 409 with the detail \"Cannot send a message while the agent is waiting for a response to AskUserQuestion.\" before queuing) and #_raise_for_terminal_delivery_result (409 \"this agent does not accept automated prompts\", \"agent is busy or not at its prompt\", \"terminal not running\"); sculptor/sculptor/web/terminal_input.py#deliver_prompt_to_terminal_agent (the three guards run before the bracketed paste is written: \"Only DELIVERED means the bytes were written\"); #status (sculpt agent status reads the agent, sends nothing); tools/sculpt/sculpt/auth.py#get_default_base_url (http://localhost:$SCULPT_API_PORT); sculptor/sculptor/agents/default/claude_code_sdk/process_manager_utils.py (SCULPT_AGENT_ID and SCULPT_WORKSPACE_ID in the agent's shell). No Windows build.",
+      "source": "github.com/imbue-ai/sculptor cdd6dc68 (0.51.0.dev0): tools/sculpt/sculpt/commands/agent.py#send (POST of the message; exit 0 with {sent: true, agent_id, message} on --json; an answer of 400 or more becomes the error {error: detail or \"Server returned <n>\", detail: \"\"}; httpx.ConnectError ends in handle_connection_error); tools/sculpt/sculpt/formatting.py#cli_error, #handle_connection_error and #CONNECTION_HINT (under --json the error is a JSON object on stderr, exit 1; a connection that failed gives detail CONNECTION_HINT: before any request); sculptor/sculptor/web/app.py#send_workspace_agent_messages (a chat agent: the message is queued; a terminal agent: typed into its PTY; 409 with the detail \"Cannot send a message while the agent is waiting for a response to AskUserQuestion.\" before queuing) and #_raise_for_terminal_delivery_result (409 \"this agent does not accept automated prompts\", \"agent is busy or not at its prompt\", \"terminal not running\"); sculptor/sculptor/web/terminal_input.py#deliver_prompt_to_terminal_agent (the three guards run before the bracketed paste is written: \"Only DELIVERED means the bytes were written\"); #status (sculpt agent status reads the agent, sends nothing); tools/sculpt/sculpt/auth.py#get_default_base_url (http://localhost:$SCULPT_API_PORT); sculptor/sculptor/agents/default/claude_code_sdk/process_manager_utils.py (SCULPT_AGENT_ID and SCULPT_WORKSPACE_ID in the agent's shell). No Windows build. tools/sculpt/sculpt/commands/agent.py#status, #_fetch_snapshot and #_status_output (agent status <id> --json prints {id, status, ...} of the agent; an agent that is not there is the error \"Agent not found: <id>\"; sends nothing).",
       "step": 5,
       "order": 6,
       "kind": "addressed",
@@ -1658,7 +1713,34 @@
       ],
       "addressee": {
         "process": "none",
-        "limitation": "The agent id is the address; the source does not say whether an agent recreated under the same id is told apart."
+        "limitation": "The agent id is the address; the source does not say whether an agent recreated under the same id is told apart.",
+        "command": {
+          "argv": [
+            "sculpt",
+            "agent",
+            "status",
+            "{env:SCULPT_AGENT_ID}",
+            "--json"
+          ],
+          "results": [
+            {
+              "match": {
+                "exitCode": 0,
+                "json": {
+                  "id": "{env:SCULPT_AGENT_ID}"
+                }
+              },
+              "result": "same"
+            },
+            {
+              "match": {
+                "exitCode": 1,
+                "stderrContains": "Agent not found"
+              },
+              "result": "gone"
+            }
+          ]
+        }
       },
       "binaries": {
         "linux": [

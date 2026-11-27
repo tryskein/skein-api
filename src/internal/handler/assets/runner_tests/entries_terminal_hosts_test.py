@@ -71,7 +71,7 @@ class AgentOrchestratorRecordTest(ah.HostCase):
     ENV = {"AO_SESSION_ID": AO_SESSION}
 
     def answers(self):
-        self.cli.respond(send=[out()], session_get=[out(stdout={"id": AO_SESSION})])
+        self.cli.respond(send=[out()], session_get=[out(stdout={"session": {"id": AO_SESSION, "isTerminated": False}})])
 
     def test_recognised_by_the_session_id(self):
         self.fresh()
@@ -115,6 +115,23 @@ class AgentOrchestratorRecordTest(ah.HostCase):
                                                   "is ready", "SESSION_STARTUP_PENDING")),
             ("a usage error", out(2, stderr="usage: --message is required\n")),
         ], out(), "queued")
+
+    def test_the_check_before_each_send_is_the_session_get(self):
+        # session get must name the very session the send addresses; a
+        # terminated session has ended (addressee_gone).
+        self.fresh()
+        mon = self.mon()
+        self.cli.respond(session_get=[out(stdout={"session": {"id": "ao-other", "isTerminated": False}})])
+        mon.page([ft.note(1)])
+        self.assertEqual(self.cli.calls("send"), [])
+        self.assertEqual(mon.statuses(), [(1, "refused-before-send")])
+        self.fresh()
+        mon = self.mon()
+        self.cli.respond(session_get=[out(stdout={"session": {"id": AO_SESSION, "isTerminated": True}})])
+        with self.assertRaises(RUNNER.Stop) as caught:
+            mon.page([ft.note(1)], cursor={"ts": "t", "id": 2})
+        self.assertEqual(caught.exception.reason, "addressee_gone")
+        self.assertEqual(self.cli.calls("send"), [])
 
     def test_the_probe_is_the_session(self):
         self.fresh()

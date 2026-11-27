@@ -47,6 +47,8 @@ sys.path.insert(0, HERE)
 import entries_orca_test as eo  # noqa: E402
 import failures_test as ft  # noqa: E402
 
+RUNNER = ft.RUNNER
+
 DECK_ID = "deck-5f1c2a"
 THREAD = "thread-8c41e2"
 SCULPT_ID = "agent-3b9d7e"
@@ -289,7 +291,7 @@ class T3CodeRecordTest(HostCase):
     ENV = {"T3CODE_THREAD_ID": THREAD}
 
     def answers(self):
-        self.cli.respond(thread_send=[t3_sent("queued")], thread_show=[out(stdout={"thread": {"id": THREAD}})])
+        self.cli.respond(thread_send=[t3_sent("queued")], thread_show=[out(stdout={"thread": {"threadId": THREAD}})])
 
     def test_recognised_by_the_thread_id(self):
         self.fresh()
@@ -325,9 +327,19 @@ class T3CodeRecordTest(HostCase):
     def test_a_thread_recreated_under_the_same_id_gets_the_event(self):
         self.fresh()
         mon = self.mon()
-        self.cli.respond(thread_show=[out(stdout={"thread": {"id": THREAD, "createdAt": "later"}})])
+        self.cli.respond(thread_show=[out(stdout={"thread": {"threadId": THREAD, "createdAt": "later"}})])
         mon.page([ft.note(1)])
         self.assertEqual(mon.statuses(), [(1, "queued")])
+
+    def test_the_check_before_each_send_is_the_thread_show(self):
+        # thread show must name the very thread the send addresses
+        # (thread.threadId): another thread proves nothing, nothing is sent.
+        self.fresh()
+        mon = self.mon()
+        self.cli.respond(thread_show=[out(stdout={"thread": {"threadId": "thread-other"}})])
+        mon.page([ft.note(1)])
+        self.assertEqual(self.cli.calls("thread send"), [])
+        self.assertEqual(mon.statuses(), [(1, "refused-before-send")])
 
     def test_the_probe_is_the_thread_show(self):
         self.fresh()
@@ -335,7 +347,8 @@ class T3CodeRecordTest(HostCase):
         line = self.mon().line
         self.assertEqual((line["method"], line["channel"]), ("journal", None))
         self.assertEqual(self.cli.calls("thread send"), [])
-        self.assertTrue(all(c["argv"] == ["thread", "show", THREAD, "--json"] for c in self.cli.calls("thread show")))
+        self.assertTrue(all(c["argv"] == ["thread", "show", THREAD, "--messages", "1", "--json"]
+                            for c in self.cli.calls("thread show")))
 
 
 def sculpt_sent():
@@ -401,6 +414,23 @@ class SculptorRecordTest(HostCase):
         self.cli.respond(agent_status=[out(stdout={"id": SCULPT_ID, "status": "new"})])
         mon.page([ft.note(1)])
         self.assertEqual(mon.statuses(), [(1, "queued")])
+
+    def test_the_check_before_each_send_is_the_agent_status(self):
+        # agent status must name the very agent the send addresses; an
+        # agent that is not there has ended (addressee_gone).
+        self.fresh()
+        mon = self.mon()
+        self.cli.respond(agent_status=[out(stdout={"id": "agent-other"})])
+        mon.page([ft.note(1)])
+        self.assertEqual(self.cli.calls("agent send"), [])
+        self.assertEqual(mon.statuses(), [(1, "refused-before-send")])
+        self.fresh()
+        mon = self.mon()
+        self.cli.respond(agent_status=[sculpt_error("Agent not found: %s" % SCULPT_ID)])
+        with self.assertRaises(RUNNER.Stop) as caught:
+            mon.page([ft.note(1)], cursor={"ts": "t", "id": 2})
+        self.assertEqual(caught.exception.reason, "addressee_gone")
+        self.assertEqual(self.cli.calls("agent send"), [])
 
     def test_the_probe_is_the_agent_status(self):
         self.fresh()
