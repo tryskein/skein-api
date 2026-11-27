@@ -149,6 +149,22 @@ def take_over(token_file, env, settings, held=None):
         # not hand over to a successor that is gone.
         _drop_request(token_file, request_id, held)
         raise
+    # Of two starts waiting with the result in force, the one whose request
+    # the file still holds goes on; the other - its request replaced, or the
+    # winner's handover already done - gets already_running.
+    try:
+        current = load_takeover(token_file)
+    except (PlatformRefusal, OSError):
+        current = None
+    if current is None and not os.path.exists(token_file):
+        # The old runner ended on its own and its files went with the token:
+        # the start goes on to see that result (token_file_missing).
+        return lock, request_id
+    if current is None or current.get("id") != request_id or current.get("taken"):
+        if held is not None:
+            held.takeover = None
+        lock.release()
+        raise Stop("already_running")
     return lock, request_id
 
 
@@ -181,15 +197,15 @@ def hand_over(token_file, env, release, retake, wait_sec=TAKEOVER_WAIT_SEC, cloc
     the request was withdrawn, or wait_sec passed without the mark while the
     lock is free. release() releases the lock; retake() tries to take it
     without waiting and returns True when it did."""
-    request = load_takeover(token_file)
     release()
     end = clock() + wait_sec
     while True:
         current = load_takeover(token_file)
-        if current is not None and current.get("taken") and (request is None or current["id"] == request["id"]):
+        if current is not None and current.get("taken"):
+            # Whichever of the waiting starts went on, its monitor is out.
             withdraw_takeover(token_file, current["id"])
             return True
-        withdrawn = current is None or (request is not None and current["id"] != request["id"])
+        withdrawn = current is None
         if withdrawn or clock() >= end:
             if retake():
                 if not withdrawn:
@@ -200,8 +216,8 @@ def hand_over(token_file, env, release, retake, wait_sec=TAKEOVER_WAIT_SEC, cloc
                 # The successor holds the lock past the wait: it is alive.
                 return True
             if withdrawn and clock() >= end + wait_sec:
-                # A successor that withdrew still holds the lock: it took
-                # the monitor by another start; nothing to go back to.
+                # A start that withdrew still holds the lock: it took the
+                # monitor by another way; nothing to go back to.
                 return True
         sleep(TAKEOVER_CHECK_SEC)
 

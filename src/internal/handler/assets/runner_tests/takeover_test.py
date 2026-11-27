@@ -251,6 +251,36 @@ class TakeoverTest(unittest.TestCase):
             self.addCleanup(s.held.release)
         self.assertEqual(sorted(str(s.reason()) for s in starts), ["None", "already_running"])
 
+    def test_a_winner_that_ends_at_once_leaves_the_other_start_already_running(self):
+        # Review of wave 8, row 19: the winner's monitor starts and the
+        # winner releases the lock at once; the other start, which waited
+        # with the same result, does not go on after it.
+        world = World(self)
+        old = world.old_runner()
+        self.assertEqual(world.preflight(), 2)
+        with mock.patch.object(world.runner, "TAKEOVER_WAIT_SEC", 3):
+            starts = [Start(world, 2), Start(world, 2)]
+            for s in starts:
+                s.start()
+            deadline = time.time() + 10
+            while not world.request_file() and time.time() < deadline:
+                time.sleep(0.02)
+            loop = OldRunner(world, old)
+            loop.start()
+            deadline = time.time() + 20
+            first = None
+            while first is None and time.time() < deadline:
+                first = next((s for s in starts if not s.is_alive()), None)
+                time.sleep(0.01)
+            if first.error is None:
+                first.held.started(world.journal())
+                first.held.release()
+            for s in starts:
+                s.join(20)
+        for s in starts:
+            self.addCleanup(s.held.release)
+        self.assertEqual(sorted(str(s.reason()) for s in starts), ["None", "already_running"])
+
     def test_two_preflights_in_any_order_the_last_result_is_in_force(self):
         world = World(self)
         old = world.old_runner()
