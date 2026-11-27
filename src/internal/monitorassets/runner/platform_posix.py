@@ -512,19 +512,35 @@ def _darwin_process_info(pid):
                               stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=env)
     except OSError:
         return None
-    fields = proc.stdout.decode("utf-8", "replace").split(None, 9)
-    if proc.returncode != 0 or len(fields) < 10:
+    if proc.returncode != 0:
+        return None
+    return _parse_darwin_ps(pid, proc.stdout.decode("utf-8", "replace"))
+
+
+def _parse_darwin_ps(pid, line):
+    """The ProcessInfo of the line `ps -o ppid=,pgid=,tpgid=,tdev=,lstart=,
+    comm=` prints for pid in the C locale, or None."""
+    fields = line.split(None, 9)
+    if len(fields) < 10:
         return None
     try:
         int(fields[0]), int(fields[1]), int(fields[2])
     except ValueError:
         return None
-    # tdev is the device number of the controlling terminal, "-" without
-    # one; lstart is five words in the C locale: "Wed Nov 26 11:00:00 2026".
-    try:
-        tty = int(fields[3])
-    except ValueError:
-        tty = None
+    # lstart is five words in the C locale: "Wed Nov 26 11:00:00 2026".
     return ProcessInfo(pid=pid, ppid=int(fields[0]), start=" ".join(fields[4:9]),
                        pgid=int(fields[1]), tpgid=int(fields[2]),
-                       name=os.path.basename(fields[9].strip()), tty=tty)
+                       name=os.path.basename(fields[9].strip()), tty=_darwin_tdev(fields[3]))
+
+
+def _darwin_tdev(text):
+    """The controlling terminal of Apple ps's tdev column as its device
+    number, or None: the column is "major/minor" of the device, "??" without
+    one (adv_cmds ps/print.c#tdev: printf "%d/%d" of major(dev) and
+    minor(dev), "??" for NODEV). The number is makedev of macOS
+    (sys/types.h: major << 24 | minor), so the pane's terminal and the
+    agent's compare in one form."""
+    major, slash, minor = text.partition("/")
+    if not slash or not major.isdigit() or not minor.isdigit():
+        return None
+    return (int(major) << 24) | int(minor)

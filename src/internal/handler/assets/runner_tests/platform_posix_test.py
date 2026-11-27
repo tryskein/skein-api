@@ -394,5 +394,40 @@ class ProcessTest(unittest.TestCase):
         self.assertFalse(os.path.exists("/proc/%d" % pid), "a turned-down child is still running")
 
 
+class ControllingTerminalTest(unittest.TestCase):
+    """The terminal of a process as each platform prints it (P-8), from
+    lines in the form of the source of the platform, not a stand-in tty.
+
+    macOS: Apple ps prints tdev as "major/minor" of the device and "??"
+    without one (adv_cmds ps/print.c#tdev); the device number is
+    major << 24 | minor (sys/types.h#makedev). Linux: field 7 of
+    /proc/<pid>/stat is tty_nr, 0 without a terminal (proc(5))."""
+
+    def test_apple_ps_lines(self):
+        for line, tty in (
+                ("  812  812  930   16/3 Wed Nov 26 11:00:00 2026 /bin/zsh\n", (16 << 24) | 3),
+                ("  930  930  930   16/12 Wed Nov 26 11:02:41 2026 /usr/local/bin/claude\n", (16 << 24) | 12),
+                ("    1    1    0     ?? Mon Nov 24 08:00:00 2026 /sbin/launchd\n", None)):
+            with self.subTest(line=line):
+                info = RUNNER._parse_darwin_ps(4242, line)
+                self.assertIsNotNone(info)
+                self.assertEqual(info.tty, tty)
+        # Two processes on one terminal compare equal; another terminal not.
+        a = RUNNER._parse_darwin_ps(1, "  1  1  1   16/3 Wed Nov 26 11:00:00 2026 /bin/zsh")
+        b = RUNNER._parse_darwin_ps(2, "  1  2  1   16/3 Wed Nov 26 11:00:01 2026 claude")
+        c = RUNNER._parse_darwin_ps(3, "  1  3  3   16/4 Wed Nov 26 11:00:02 2026 claude")
+        self.assertEqual(a.tty, b.tty)
+        self.assertNotEqual(a.tty, c.tty)
+
+    def test_linux_stat_lines(self):
+        # pts/1: major 136, minor 1 -> tty_nr 136 << 8 | 1.
+        on_pts = ("4242 (claude code) S 4100 4242 4100 34817 4242 4194560 1 0 0 0 5 2 0 0 20 0 9 0 "
+                  "123456 0 0 18446744073709551615 0 0 0 0 0 0 0 0 0 0 0 0 17 3 0 0 0 0 0")
+        no_tty = ("17 (kworker) S 2 0 0 0 -1 69238880 0 0 0 0 0 0 0 0 20 0 1 0 "
+                  "50 0 0 18446744073709551615 0 0 0 0 0 0 0 0 0 0 0 0 17 0 0 0 0 0 0")
+        self.assertEqual(RUNNER._parse_linux_stat(4242, on_pts, "boot").tty, (136 << 8) | 1)
+        self.assertIsNone(RUNNER._parse_linux_stat(17, no_tty, "boot").tty)
+
+
 if __name__ == "__main__":
     unittest.main()
