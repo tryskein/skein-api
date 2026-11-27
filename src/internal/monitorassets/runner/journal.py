@@ -118,11 +118,6 @@ class Journal(object):
         self.issue = issue
         self._secrets = [s for s in secrets if s]
         self._env = env
-        if env is not None:
-            # The keys of the http channels are secrets like the token: a
-            # preview that carries one is journaled redacted (INV-6).
-            for key in http_key_secrets(load_registry(), env):
-                self.add_secret(key)
 
     def add_secret(self, value):
         """Redact value from every later line too."""

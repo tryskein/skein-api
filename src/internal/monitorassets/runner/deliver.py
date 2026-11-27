@@ -336,6 +336,11 @@ class DeliverySink(object):
         self.env = env
         self.ledger = ledger
         self.executor = executor
+        # The secrets of the channels (the keys of the http channels) are
+        # the journal's too: a preview that carries one is journaled
+        # redacted (INV-6).
+        for secret in getattr(executor, "secrets", None) or []:
+            journal.add_secret(secret)
         self.issue = issue
         self.cancel = cancel or NoCancel()
         self.clock = clock or SystemClock()
