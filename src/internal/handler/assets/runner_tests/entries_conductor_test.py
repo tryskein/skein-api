@@ -92,7 +92,9 @@ class ConductorRecordTest(unittest.TestCase):
 
     def fresh(self):
         self.world = eo.new_world(self)
-        self.api = fake_channel.FakeHTTPChannel()
+        # The proxy in front of the API answers 403 to urllib's own
+        # signature (conductor.build/docs/api, Tips).
+        self.api = fake_channel.FakeHTTPChannel(reject_agent="Python-urllib")
         self.addCleanup(self.api.close)
         self.api.respond([created("queued")])
 
@@ -104,6 +106,19 @@ class ConductorRecordTest(unittest.TestCase):
 
     def mon(self, name="tok", **change):
         return monitor(self.world, name, "codex", eo.codex_agent(), **self.variables(**change))
+
+    def test_the_request_signs_as_its_own_client(self):
+        self.fresh()
+        mon = self.mon()
+        mon.page([ft.note(1)])
+        self.assertEqual(mon.statuses(), [(1, "queued")])
+        [request] = self.api.requests()
+        self.assertEqual(request["headers"].get("User-Agent"), "skein-monitor")
+        # The default signature would be refused: the fixture is the proxy.
+        spec = dict(REG.channel("conductor")["executor"])
+        spec["http"] = dict(spec["http"], userAgent="")
+        result = RUNNER.HTTPExecutor(self.variables(), []).call(spec, "hello", 5)
+        self.assertEqual(result.http_status, 403)
 
     def test_recognised_only_with_the_session_the_url_and_a_key(self):
         self.fresh()

@@ -885,3 +885,29 @@ func TestValidate_AVariableIsComparedOnlyByAChecks(t *testing.T) {
 		t.Fatal("a variable and a literal on one path do not overlap")
 	}
 }
+
+// TestValidate_AUserAgentIsALiteralHeaderValue — the User-Agent of an http
+// request is a literal of printable ASCII: no placeholder (no variable, no
+// secret), no line break, no padding.
+func TestValidate_AUserAgentIsALiteralHeaderValue(t *testing.T) {
+	r := validRegistry()
+	httpHost(r)
+	r.Channels[1].Executor.HTTP.UserAgent = "skein-monitor/1 (agent)"
+	if err := r.Validate(); err != nil {
+		t.Fatalf("a literal User-Agent was refused: %v", err)
+	}
+	for _, ua := range []string{"{env:HOST_KEY}", "a\r\nX-Injected: 1", " padded", "café"} {
+		r := validRegistry()
+		httpHost(r)
+		r.Channels[1].Executor.HTTP.UserAgent = ua
+		err := r.Validate()
+		if err == nil {
+			t.Fatalf("User-Agent %q was accepted", ua)
+		}
+		for _, got := range rulesOf(t, err) {
+			if got != RuleInvalid {
+				t.Fatalf("User-Agent %q: %v, want only %s", ua, err, RuleInvalid)
+			}
+		}
+	}
+}

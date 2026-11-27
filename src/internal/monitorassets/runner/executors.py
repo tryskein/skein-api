@@ -994,6 +994,10 @@ class HTTPExecutor(object):
         headers = {"Content-Type": "application/json", "Accept": "application/json"}
         if key:
             headers["Authorization"] = "Bearer " + key
+        if http.get("userAgent"):
+            # The client's own signature: a proxy in front of some APIs
+            # rejects the default one of urllib.
+            headers["User-Agent"] = http["userAgent"]
         request = urllib.request.Request(url, data=body, headers=headers, method=http.get("method") or "POST")
         handlers = [_NoRedirect]
         if urllib.parse.urlsplit(url).scheme == "http":

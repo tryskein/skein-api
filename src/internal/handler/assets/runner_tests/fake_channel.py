@@ -132,9 +132,12 @@ class FakeHTTPChannel(object):
     answers like FakeProgram: {"status": int, "json": value, "headers":
     {..}, "delay": sec, "hang": bool}. requests() returns what came in."""
 
-    def __init__(self):
+    def __init__(self, reject_agent=None):
         self._lock = threading.Lock()
         self._answers = [{"status": 200, "json": {}}]
+        # A User-Agent prefix answered with 403 (a proxy that rejects some
+        # default client signatures).
+        self._reject_agent = reject_agent
         self._requests = []
         owner = self
 
@@ -151,6 +154,9 @@ class FakeHTTPChannel(object):
                                             "headers": dict(self.headers.items()),
                                             "body": body.decode("utf-8", "replace"), "time": time.time()})
                     answer = owner._answers[min(n, len(owner._answers) - 1)]
+                    agent = self.headers.get("User-Agent") or ""
+                    if owner._reject_agent is not None and agent.startswith(owner._reject_agent):
+                        answer = {"status": 403, "json": {"error": "forbidden"}}
                 if answer.get("hang"):
                     time.sleep(3600)
                 if answer.get("delay"):

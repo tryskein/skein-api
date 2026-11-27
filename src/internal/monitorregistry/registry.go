@@ -490,6 +490,11 @@ type HTTPRequest struct {
 	KeyEnv []string `json:"keyEnv,omitempty"`
 	// BodyField is the field of the JSON body that carries the text.
 	BodyField string `json:"bodyField"`
+	// UserAgent is the User-Agent header of the request, a literal of
+	// printable ASCII, when the source asks for a client signature of its
+	// own (a proxy that rejects the default one of urllib); empty: the
+	// default of the runner's HTTP library.
+	UserAgent string `json:"userAgent,omitempty"`
 }
 
 // Idle wait types.

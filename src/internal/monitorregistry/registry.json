@@ -1681,7 +1681,7 @@
     {
       "id": "conductor",
       "about": "Conductor: the cloud API of the workspace queues each event as a message to the agent's own session.",
-      "source": "Conductor (closed product), documentation read 2026-11-27: conductor.build/docs/api (endpoints under https://api.conductor.build/v0; \"Pass your API key as a bearer token: Authorization: Bearer <your API key>\"; the example of a cloud workspace calls \"$CONDUCTOR_API_URL/me\" with \"Bearer ${CONDUCTOR_API_KEY:-$CONDUCTOR_API_TOKEN}\"); conductor.build/docs/reference/environment-variables (CONDUCTOR_SESSION_ID: the current session in agent processes; CONDUCTOR_API_URL: set in every cloud workspace, not in local ones; CONDUCTOR_API_KEY: the user's own key, it takes precedence over the workspace token CONDUCTOR_API_TOKEN); api.conductor.build/v0/openapi.json (POST /v0/sessions/{sessionId}/messages, operation message.create: body {message} with message a non-empty string; 201 with messageId, state and deepLink required, state one of queued, sent; 400, 401, 404 and a default error otherwise; /me lies outside /v0, so CONDUCTOR_API_URL is the base without /v0 — the documentation does not say it). Every send is a new message.",
+      "source": "Conductor (closed product), documentation read 2026-11-27: conductor.build/docs/api (endpoints under https://api.conductor.build/v0; \"Pass your API key as a bearer token: Authorization: Bearer <your API key>\"; the example of a cloud workspace calls \"$CONDUCTOR_API_URL/me\" with \"Bearer ${CONDUCTOR_API_KEY:-$CONDUCTOR_API_TOKEN}\"); conductor.build/docs/reference/environment-variables (CONDUCTOR_SESSION_ID: the current session in agent processes; CONDUCTOR_API_URL: set in every cloud workspace, not in local ones; CONDUCTOR_API_KEY: the user's own key, it takes precedence over the workspace token CONDUCTOR_API_TOKEN); api.conductor.build/v0/openapi.json (POST /v0/sessions/{sessionId}/messages, operation message.create: body {message} with message a non-empty string; 201 with messageId, state and deepLink required, state one of queued, sent; 400, 401, 404 and a default error otherwise; /me lies outside /v0, so CONDUCTOR_API_URL is the base without /v0 — the documentation does not say it). Every send is a new message. conductor.build/docs/api, Tips: \"Send a User-Agent header from custom clients.\" and \"The API sits behind a proxy that rejects some default client signatures — notably Python's urllib — with a 403.\"",
       "step": 5,
       "order": 7,
       "kind": "addressed",
@@ -1705,7 +1705,8 @@
             "CONDUCTOR_API_KEY",
             "CONDUCTOR_API_TOKEN"
           ],
-          "bodyField": "message"
+          "bodyField": "message",
+          "userAgent": "skein-monitor"
         },
         "timeoutSec": 30
       },

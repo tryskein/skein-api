@@ -568,6 +568,12 @@ func (v *validator) executor(path string, e Executor) {
 			}
 		}
 		v.text(RuleInvalid, path+".http.bodyField", e.HTTP.BodyField)
+		if ua := e.HTTP.UserAgent; ua != "" {
+			if strings.ContainsAny(ua, "{}") || strings.TrimSpace(ua) != ua || len(ua) > 200 ||
+				strings.IndexFunc(ua, func(r rune) bool { return r < 0x20 || r > 0x7e }) >= 0 {
+				v.add(RuleInvalid, path+".http.userAgent", "%q is not a literal header value of printable ASCII", ua)
+			}
+		}
 	}
 }
 
