@@ -1172,7 +1172,8 @@ func TestValidate_AUserAgentIsALiteralHeaderValue(t *testing.T) {
 
 // TestValidate_RejectsAURLOutOfItsRules — the authority is read by the
 // standard parse: user information, a missing host or a port that is no
-// number are refused; a placeholder past the base is one element of the
+// number in 1..65535 are refused, and so is a broken percent escape in a
+// literal after a placeholder; a placeholder past the base is one element of the
 // path, never the authority, the query or the fragment.
 func TestValidate_RejectsAURLOutOfItsRules(t *testing.T) {
 	for _, u := range []string{
@@ -1182,6 +1183,11 @@ func TestValidate_RejectsAURLOutOfItsRules(t *testing.T) {
 		"https://",
 		"https:///v0/{env:HOST_ID}",
 		"http://localhost:port/{env:HOST_ID}",
+		"http://localhost:0/{env:HOST_ID}",
+		"https://api.example.com:0/v0",
+		"https://api.example.com/v0/{env:HOST_ID}/bad%zz",
+		"https://api.example.com/v0/{env:HOST_ID}%2",
+		"{env:HOST_URL}/v0/%zz",
 		"https://{env:HOST_ID}.example.com/v0",
 		"https://api.example.com/v0?session={env:HOST_ID}",
 		"https://api.example.com/v0#{env:HOST_ID}",

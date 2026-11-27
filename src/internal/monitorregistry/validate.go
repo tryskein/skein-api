@@ -943,6 +943,22 @@ func (v *validator) url(path, s string) {
 			}
 		}
 	}
+	// The whole template, each placeholder replaced by a plain element
+	// (the runner percent-escapes values), parses as a URL: a literal past
+	// a placeholder is checked too, its percent escapes included.
+	whole := s
+	for i := len(at) - 1; i >= 0; i-- {
+		stand := "x"
+		if at[i] == 0 {
+			stand = "https://base.test"
+		}
+		end := at[i] + strings.Index(s[at[i]:], "}") + 1
+		whole = whole[:at[i]] + stand + whole[end:]
+	}
+	if _, err := url.Parse(whole); err != nil {
+		v.add(RuleInvalid, path, "%q is no URL once its placeholders are filled (%v)", s, err)
+		return
+	}
 	if len(at) > 0 && at[0] == 0 {
 		// A leading placeholder is the base (scheme, host, maybe a path),
 		// checked by the runner once substituted; what follows it is path.
@@ -975,7 +991,8 @@ func secureURL(s string) bool {
 		return false
 	}
 	if p := u.Port(); p != "" {
-		if _, err := strconv.ParseUint(p, 10, 16); err != nil {
+		// The runner sends to a port in 1..65535 (executors.py#expand_url).
+		if n, err := strconv.ParseUint(p, 10, 16); err != nil || n == 0 {
 			return false
 		}
 	}
