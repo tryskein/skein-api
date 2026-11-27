@@ -218,7 +218,12 @@ class PaseoRecordTest(unittest.TestCase):
         # delivery is called again within the budget of INV-8.
         cases = [("the daemon unreachable", error("DAEMON_UNREACHABLE")),
                  ("no JSON", {"exit": 0, "stdout": "agent 3f6c\n"}),
-                 ("an exit code of another version", {"exit": 3, "stdout": inspected()["stdout"]})]
+                 ("an exit code of another version", {"exit": 3, "stdout": inspected()["stdout"]}),
+                 # inspect.ts: Id is the agent's, Archived a boolean.
+                 ("another agent", {"exit": 0, "stdout": dict(inspected()["stdout"], Id="agent-other")}),
+                 ("no Id", {"exit": 0, "stdout": dict((k, v) for k, v in inspected()["stdout"].items() if k != "Id")}),
+                 ("Archived as the string false", {"exit": 0, "stdout": dict(inspected()["stdout"], Archived="false")}),
+                 ("Archived as the string true", {"exit": 0, "stdout": dict(inspected()["stdout"], Archived="true")})]
         for name, answer in cases:
             with self.subTest(case=name):
                 self.fresh()
