@@ -138,10 +138,11 @@ _ASCII_INDEX = re.compile(r"\A[0-9]+\Z")
 
 def json_path_lookup(doc, path):
     """(True, value) at the dotted path of a JSON document, else (False,
-    None). An element that is a decimal number indexes a list ("stages.1":
-    its second element); in an object it is a key like any other."""
+    None). An element of ASCII digits indexes a list ("stages.1": its second
+    element) and only a list: an object with the key "0" is no list, so an
+    element read as an index never finds an object's key."""
     for part in path.split("."):
-        if isinstance(doc, dict) and part in doc:
+        if isinstance(doc, dict) and part in doc and not _ASCII_INDEX.match(part):
             doc = doc[part]
         elif isinstance(doc, list) and _ASCII_INDEX.match(part) and int(part) < len(doc):
             doc = doc[int(part)]

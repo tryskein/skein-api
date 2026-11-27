@@ -19,8 +19,13 @@ record:
   transport (src/main/runtime/rpc/methods/terminal/terminal-send-method.ts#
   refusedSend, src/shared/terminal/pty/lifecycle/pty-write-settlement.ts);
 - a failure prints {ok: false, error: {code, data}} and exits 1
-  (src/cli/output/cli-error.ts#reportCliError); runtime_unavailable before
-  the send call carries no request id, a failure of the send call itself
+  (src/cli/output/cli-error.ts#reportCliError), a local error of the CLI
+  with id 'local' and data only when its raiser gave some
+  (#cliErrorJsonResponse); runtime_unavailable without data is raised only
+  before any connection (src/cli/runtime/profile/metadata.ts, transport.ts
+  before createConnection, terminal-send.ts "so no input was sent"), while
+  the advice TRANSIENT_DISCONNECT_NEXT_STEPS comes with a failed connect
+  and with a close before the answer alike; a failure of the send call itself
   carries data.orchestrationRequestId or data.deliveryOutcome 'unknown'
   (src/cli/runtime/client.ts#call, src/cli/runtime/connection/
   terminal-prompt-mutation-recovery.ts); incompatible_runtime and
@@ -284,6 +289,18 @@ class OrcaRecordTest(unittest.TestCase):
             ("unreachable with null data", {"exit": 1, "stdout": {"id": "local", "ok": False, "error": {
                 "code": "runtime_unavailable", "message": "failure", "data": None}, "_meta": {"runtimeId": None}}},
              "unknown"),
+            # transport.ts: the same advice comes with a failed connect and
+            # with a connection closed before the answer, after the request
+            # may have gone out.
+            ("the connection failed or closed, the advice only", failed("runtime_unavailable",
+                                                                         {"nextSteps": NEXT_STEPS}), "unknown"),
+            ("the advice in an object, not a list", failed("runtime_unavailable", {"nextSteps": {"0": NEXT_STEPS[0]}}),
+             "unknown"),
+            # A failure frame of the runtime itself (not a local error of the
+            # CLI) proves nothing of the write.
+            ("a failure frame of the runtime without data", {"exit": 1, "stdout": {
+                "id": "r2", "ok": False, "error": {"code": "runtime_unavailable", "message": "failure"},
+                "_meta": {"runtimeId": "rt-1"}}}, "unknown"),
             ("incompatible runtime before the send", failed("incompatible_runtime"), "unknown"),
             ("incompatible runtime after acceptance", failed("incompatible_runtime", {"deliveryOutcome": "unknown"}),
              "unknown"),
@@ -309,7 +326,6 @@ class OrcaRecordTest(unittest.TestCase):
             "a write refused before the transport": refused_send(writeSettlement={"outcome": "refused",
                                                                                   "reason": "endpoint_disconnected"}),
             "the host unreachable before the send call": failed("runtime_unavailable"),
-            "the connection failed, no recovery data": failed("runtime_unavailable", {"nextSteps": NEXT_STEPS}),
         }
         for name, answer in refusals.items():
             with self.subTest(case=name):

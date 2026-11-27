@@ -164,9 +164,12 @@ class ListAndAbsenceSignTest(unittest.TestCase):
             with self.subTest(element=element):
                 self.assertEqual(RUNNER.json_path_lookup(doc, "stages." + element), (False, None))
 
-    def test_a_digit_in_an_object_is_a_key(self):
+    def test_an_object_with_the_key_0_is_no_list(self):
+        # Round 2 of the wave 11 review: an element read as an index reads
+        # only a list; an object with the key "0" proves no stage.
         doc = {"result": {"prompt": {"stages": {"0": "input_accepted"}}}}
-        self.assertEqual(self.outcome(doc), "input-written")
+        self.assertEqual(self.outcome(doc), "unknown")
+        self.assertEqual(RUNNER.json_path_lookup(doc, "result.prompt.stages.0"), (False, None))
 
     def test_absence_needs_a_json_answer(self):
         rows = [{"match": {"exitCode": 0, "jsonAbsent": ["warning"]}, "outcome": "queued"}]
