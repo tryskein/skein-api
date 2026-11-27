@@ -217,7 +217,7 @@ func handleGetMonitorScript(issues monitorIssueResolver, watcher monitorWatcher,
 		eventTypes, ok := normalizeMonitorEventTypes(req.GetStringSlice("eventTypes", nil))
 		if !ok {
 			return skmcp.ToolError(ErrCodeValidationError,
-				"eventTypes entries must be \"comment.created\" or start with \"issue.\"",
+				"eventTypes entries must be \"comment.created\" or start with \"issue.\", one type per entry",
 				map[string]any{"eventTypes": req.GetStringSlice("eventTypes", nil)}), nil
 		}
 
@@ -363,12 +363,14 @@ func handleGetMonitorScript(issues monitorIssueResolver, watcher monitorWatcher,
 // "comment.created" or start with "issue." — the set the poll endpoint can
 // normalise (spec §5/§6); a blank or otherwise disallowed entry returns
 // ok=false (the handler maps it to validation_error). I.e. a blank entry is
-// rejected, NOT treated as "default".
+// rejected, NOT treated as "default". An entry with a comma is rejected too:
+// the start variable SKEIN_EVENT_TYPES joins the types with commas, so such
+// an entry would come back as several types in a reissue (US-12).
 func normalizeMonitorEventTypes(in []string) ([]string, bool) {
 	out := make([]string, 0, len(in))
 	for _, t := range in {
 		t = strings.TrimSpace(t)
-		if t == "" {
+		if t == "" || strings.Contains(t, ",") {
 			return nil, false
 		}
 		if t != monitorCommentEventType && !strings.HasPrefix(t, "issue.") {

@@ -448,6 +448,7 @@ func TestNormalizeMonitorEventTypes(t *testing.T) {
 		{name: "attachment rejected", in: []string{"attachment.added"}, ok: false},
 		{name: "blank entry rejected", in: []string{"comment.created", "  "}, ok: false},
 		{name: "unknown rejected", in: []string{"comment.deleted"}, ok: false},
+		{name: "comma in one entry rejected", in: []string{"issue.created,issue.closed"}, ok: false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
