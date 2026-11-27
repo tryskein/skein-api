@@ -468,6 +468,9 @@ def choose(ctx):
             ok, cause = channel_available(ctx, forced)
             return Choice(METHOD_JOURNAL, None,
                           ["forced %s unavailable: %s" % (forced, cause if not ok else "its addressee is not this agent")])
+        if ctx.registry.is_blind(forced) and ctx.detector.binding(ctx, forced) is None:
+            return Choice(METHOD_JOURNAL, None,
+                          ["forced %s unavailable: the binding to its pane is not confirmed" % forced])
         if ctx.registry.is_blind(forced) and forced not in ctx.detector.blind_reachable(ctx):
             return Choice(METHOD_JOURNAL, None,
                           ["forced %s unavailable: its text would not reach this agent's pane" % forced])
