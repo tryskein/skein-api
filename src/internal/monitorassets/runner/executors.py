@@ -861,15 +861,17 @@ def http_key(http, env):
 
 
 def http_key_secrets(registry, env):
-    """The keys every http channel of the registry would send from this
-    environment: secrets of the monitor."""
+    """The value of every key variable of every http channel of the
+    registry that is set in this environment, the ones a request would not
+    send among them: secrets of the monitor."""
     keys = []
     for channel in (registry.channels.values() if registry is not None else []):
         spec = channel.get("executor") or {}
         if spec.get("type") == "http":
-            key = http_key(spec.get("http") or {}, env)
-            if key and key not in keys:
-                keys.append(key)
+            for name in (spec.get("http") or {}).get("keyEnv") or []:
+                key = (env or {}).get(name, "")
+                if key and key not in keys:
+                    keys.append(key)
     return keys
 
 
