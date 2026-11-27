@@ -240,6 +240,14 @@ class PrepareOutcomeTest(unittest.TestCase):
             owner=fs.ME, dacl=fs.private_dacl(), final=os.path.join(self.root, "elsewhere"))})
         self.assert_refused(*self.run_prepare(fake)[:2], reason="token_dir_insecure")
 
+    def test_a_new_token_directory_that_is_not_private_is_refused(self):
+        # Criterion (b) holds (only trusted accounts), criterion (a) does not:
+        # the DACL inherits.
+        fake = fs.FakeSecurity(views={self.token_dir: fs.View(owner=fs.ME, dacl=fs.private_dacl())})
+        code, lines, _ = self.run_prepare(fake)
+        self.assert_refused(code, lines, reason="token_dir_insecure")
+        self.assertIn("not private", lines[0]["action"])
+
     def test_the_cause_names_the_component_by_its_role(self):
         fake = fs.FakeSecurity(views={self.parent: fs.View(owner=fs.ME, dacl=[
             (fs.ALLOW, 0, fs.FILE_DELETE_CHILD, fs.OTHER)] + fs.trusted_dacl())})

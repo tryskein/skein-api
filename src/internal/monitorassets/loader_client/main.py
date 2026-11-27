@@ -346,6 +346,13 @@ def loader_client_prepare_dir(env, source):
     if cause is not None:
         raise PrepareRefused("token_dir_insecure", "Another account could replace the path of the token "
                              "directory (%s)." % cause + LOADER_PREPARE_FIX)
+    # The new directory itself must be private by criterion (a) too, on the
+    # handle just checked, before the agent is told to write the token: a
+    # creation that left another DACL is refused here, not by a later read.
+    reason = private_refusal(views[-1][1], source.me(), True)
+    if reason is not None:
+        raise PrepareRefused("token_dir_insecure", "The token directory is not private (%s)." % reason
+                             + LOADER_PREPARE_FIX)
     tmp = os.path.join(token_dir, ".starter.py.tmp")
     try:
         fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0), 0o600)
