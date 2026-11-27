@@ -454,6 +454,11 @@ func TestValidate_RejectsEachRule(t *testing.T) {
 		{"one path both required and absent", func(r *Registry) {
 			r.Channels[1].Outcomes[0].Match.JSONAbsent = []string{"status"}
 		}, RuleInvalid},
+		{"an index with a leading zero", func(r *Registry) {
+			m := &r.Channels[1].Outcomes[0].Match
+			m.JSONAbsent = []string{"result.stages.00"}
+			m.JSON = map[string]string{"status": "queued", "result.stages.0.state": "x"}
+		}, RuleInvalid},
 		{"dotted path with an empty element", func(r *Registry) {
 			r.Channels[1].Outcomes[0].Match.JSON = map[string]string{"result..stages": "queued"}
 		}, RuleInvalid},

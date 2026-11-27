@@ -1203,6 +1203,15 @@ func (v *validator) jsonPath(path, p string) {
 			return
 		}
 	}
+	// The runner reads an element of ASCII digits as a list index by its
+	// number ("00" and "0" are one element): one spelling per index keeps
+	// the comparison of paths here the runner's.
+	for _, e := range strings.Split(p, ".") {
+		if len(e) > 1 && e[0] == '0' && strings.Trim(e, "0123456789") == "" {
+			v.add(RuleInvalid, path, "%q: the index %q has a leading zero", p, e)
+			return
+		}
+	}
 }
 
 // envRef reports the variable of a JSON criterion "{env:NAME}": the value
