@@ -148,8 +148,12 @@ class PanePIDBinder(PaneBinder):
             # inherited TMUX of another terminal).
             return self._unbound(channel, multiplexer, "the runner is not in its pane")
         agent_i = ctx.placement.agent_index
-        if agent_i is None or agent_i >= depth:
+        if agent_i is None or agent_i > depth:
             return self._unbound(channel, multiplexer, "no agent process in its pane", depth)
+        if agent_i == depth and ctx.placement.outer is not None:
+            # The pane's own process is the agent (tmux new-session 'claude',
+            # kitty claude): its pane, unless another agent stands above it.
+            return self._unbound(channel, multiplexer, "another agent stands above the agent of its pane", depth)
         outer = ctx.placement.outer
         if outer is not None and any(p is outer for p in chain[agent_i + 1:depth]):
             return self._unbound(channel, multiplexer, "another agent stands between the agent and its pane", depth)

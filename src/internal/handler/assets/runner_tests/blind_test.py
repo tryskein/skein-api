@@ -361,6 +361,21 @@ class BlindBindingTest(unittest.TestCase):
                 channels = [spec.channel for spec in ctx.detector.address_specs(ctx)]
                 self.assertEqual("mux" in channels, has, channels)
 
+    def test_a_pane_whose_process_is_the_agent_is_bound(self):
+        # Warning 12 of wave 13 round 1: tmux new-session 'alpha', kitty
+        # alpha - the pane's own process is the agent.
+        box = Box(self, [mux()])
+        source, pids = fake_proc.linear(RUNNER_PROC, ("bash", None), ("alpha", None), ("mux-server", None))
+        box.progs["mux"].respond([{"exit": 0, "stdout": "%d\n" % pids[2]}])
+        r = box.runner
+        record = r.resolve_record(box.reg, "alpha")
+        pl = r.place(r.ancestry(source, pids[0]), box.reg, record, self_pid=pids[0])
+        ctx = r.Context(box.reg, r.Settings(record=record, platform="posix"), box.env, pl, r.RegistryDetector(),
+                        r.ProbeRunner())
+        binding = ctx.detector.binding(ctx, "mux")
+        self.assertIsNotNone(binding)
+        self.assertEqual(binding.pane["pid"], pids[2])
+
     def test_a_pane_pid_the_command_does_not_give_binds_nothing(self):
         for name, answer in (("failed", {"exit": 1}), ("no PID", {"exit": 0, "stdout": "\n"}),
                              ("not an ancestor", {"exit": 0, "stdout": "77\n"})):
