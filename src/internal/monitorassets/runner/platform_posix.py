@@ -50,6 +50,102 @@ class PosixPlatform(object):
     """The POSIX implementation of the platform layer."""
 
     @staticmethod
+    def has_file_locks():
+        """Whether this system has advisory file locks (flock)."""
+        return fcntl is not None
+
+    @staticmethod
+    def lock_fd(fd, blocking=True):
+        """Take the exclusive lock of an open file. Raises BlockingIOError
+        when another process holds it and blocking is false, OSError when
+        the lock cannot be taken."""
+        fcntl.flock(fd, fcntl.LOCK_EX | (0 if blocking else fcntl.LOCK_NB))
+
+    @staticmethod
+    def owns(st):
+        """Whether the file of stat st belongs to this user."""
+        return st.st_uid == os.getuid()
+
+    @staticmethod
+    def read_checked(path, private):
+        """The content of path, read only after the opened file and its
+        opened directory passed private(file_st, dir_st). Raises
+        PlatformRefusal."""
+        return _read_checked(path, private)
+
+    @staticmethod
+    def open_file_refusal(fd, path):
+        """Why the open file fd may not be used as a file of the monitor's
+        own (a regular 0600 file of ours), or None."""
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode):
+            return "not_regular"
+        if st.st_uid != os.getuid():
+            return "foreign_owner"
+        if st.st_mode & _GROUP_OTHER:
+            return "open_to_others"
+        return None
+
+    @staticmethod
+    def remove_stale_lock(path, max_age_sec):
+        """Remove the lock file path when it is ours, older than max_age_sec
+        and no process holds it: only while this process holds its lock and
+        the path still names the file it locked (the identity rule of
+        acquire_runner_lock)."""
+        try:
+            fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | _O_NONBLOCK)
+        except OSError:
+            return
+        try:
+            st = os.fstat(fd)
+            if (not stat.S_ISREG(st.st_mode) or st.st_uid != os.getuid()
+                    or time.time() - st.st_mtime < max_age_sec):
+                return
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError:
+                return
+            try:
+                cur = os.lstat(path)
+            except OSError:
+                return
+            if (cur.st_dev, cur.st_ino) == (st.st_dev, st.st_ino):
+                try:
+                    os.unlink(path)
+                except OSError:
+                    pass
+        finally:
+            os.close(fd)
+
+    # The processes of one call of a channel program: the session the
+    # program leads, killed as its group.
+
+    @staticmethod
+    def tree_popen_options():
+        return {"start_new_session": True}
+
+    @staticmethod
+    def tree_make(proc):
+        return None
+
+    @staticmethod
+    def tree_start(proc, job):
+        pass
+
+    @staticmethod
+    def tree_kill(proc, job):
+        PosixPlatform.kill_group(proc.pid)
+
+    @staticmethod
+    def kill_group(pgid):
+        """SIGKILL the process group pgid; a group that is gone is not an
+        error."""
+        try:
+            os.killpg(pgid, signal.SIGKILL)
+        except OSError:
+            pass
+
+    @staticmethod
     def make_private_dir(path):
         """Create path as a new directory of ours with mode 0700. An existing
         entry — directory, file or link — is refused (exists), never adopted."""

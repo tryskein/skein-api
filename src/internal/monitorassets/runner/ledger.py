@@ -58,10 +58,6 @@ import json
 import os
 import time
 
-try:
-    import fcntl as _ledger_fcntl
-except ImportError:  # not POSIX
-    _ledger_fcntl = None
 
 LEDGER_VERSION = 1
 LEDGER_LOCK_NAME = "ledger.lock"
@@ -142,7 +138,7 @@ class _FileLock(object):
     open. blocking=False raises LockBusy when another process holds it."""
 
     def __init__(self, path, blocking=True, create=True):
-        if _ledger_fcntl is None:
+        if not current_platform().has_file_locks():
             raise LedgerUnavailable("unsupported")
         flags = os.O_RDWR | getattr(os, "O_NOFOLLOW", 0) | (os.O_CREAT if create else 0)
         try:
@@ -155,7 +151,7 @@ class _FileLock(object):
         except OSError as exc:
             raise LedgerUnavailable(exc.strerror or "open_failed")
         try:
-            _ledger_fcntl.flock(self.fd, _ledger_fcntl.LOCK_EX | (0 if blocking else _ledger_fcntl.LOCK_NB))
+            current_platform().lock_fd(self.fd, blocking)
         except BlockingIOError:
             os.close(self.fd)
             raise LockBusy(path)
@@ -846,7 +842,7 @@ def _prune_doc(doc, now, keep=None):
 
 
 def _ledger_dir_ok(dir_st):
-    return dir_st.st_uid == os.getuid() and not dir_st.st_mode & 0o077
+    return current_platform().owns(dir_st) and not dir_st.st_mode & 0o077
 
 
 # --- deferred journal tails ---------------------------------------------------

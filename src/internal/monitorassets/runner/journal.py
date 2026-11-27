@@ -203,18 +203,12 @@ class Journal(object):
         """Open the current file for appending; it must be a regular 0600-ish
         file of ours."""
         try:
-            fd = os.open(self.path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0),
+            fd = os.open(self.path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
+                         | getattr(os, "O_BINARY", 0),
                          0o600)
         except OSError as exc:
             raise JournalUnavailable(_open_refusal(exc), self.path)
-        st = os.fstat(fd)
-        reason = None
-        if not stat.S_ISREG(st.st_mode):
-            reason = "not_regular"
-        elif hasattr(os, "getuid") and st.st_uid != os.getuid():
-            reason = "foreign_owner"
-        elif st.st_mode & 0o077:
-            reason = "open_to_others"
+        reason = current_platform().open_file_refusal(fd, self.path)
         if reason:
             os.close(fd)
             raise JournalUnavailable(reason, self.path)

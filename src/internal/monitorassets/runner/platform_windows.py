@@ -142,6 +142,95 @@ class WindowsPlatform(object):
     """The Windows implementation of the platform layer."""
 
     @staticmethod
+    def has_file_locks():
+        """Whether this system has file locks (msvcrt)."""
+        return msvcrt is not None
+
+    @staticmethod
+    def lock_fd(fd, blocking=True):
+        """Take the lock of the first byte of an open file (msvcrt.locking
+        locks from the current position, so it is set to 0 first). Raises
+        BlockingIOError when another process holds it and blocking is
+        false. A blocking wait polls, since LK_LOCK gives up after ten
+        seconds."""
+        while True:
+            os.lseek(fd, 0, os.SEEK_SET)
+            try:
+                msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+                return
+            except OSError:
+                if not blocking:
+                    raise BlockingIOError("the file is locked by another process")
+            time.sleep(_WIN_LOCK_WAIT_STEP_SEC)
+
+    @staticmethod
+    def owns(st):
+        """Ownership is not the privacy criterion on Windows (criterion (a)
+        of P-9 reads the DACL where privacy is checked); stat has no owner
+        here."""
+        return True
+
+    @staticmethod
+    def read_checked(path, private):
+        """The content of path, read only after its directory and the opened
+        file passed criterion (a); private, the POSIX predicate of a caller,
+        has no meaning here and is not read. Raises PlatformRefusal."""
+        return _win_read_checked(path)
+
+    @staticmethod
+    def open_file_refusal(fd, path):
+        """Why the open file fd may not be used as a file of the monitor's
+        own (criterion (a) on its handle), or None."""
+        try:
+            _win_check(_win_view(msvcrt.get_osfhandle(fd), path), path, False)
+        except PlatformRefusal as exc:
+            return exc.reason
+        return None
+
+    @staticmethod
+    def remove_stale_lock(path, max_age_sec):
+        """Remove the lock file path when it is older than max_age_sec. A
+        file another process has open cannot be deleted (the layer opens
+        lock files without sharing deletion), so a held lock stays."""
+        try:
+            if time.time() - os.lstat(path).st_mtime < max_age_sec:
+                return
+            os.remove(path)
+        except OSError:
+            pass
+
+    # The processes of one call of a channel program: a job object the
+    # program is assigned to while it is still suspended, so every
+    # descendant is born in it.
+
+    @staticmethod
+    def tree_popen_options():
+        return {"creationflags": _CREATE_SUSPENDED}
+
+    @staticmethod
+    def tree_make(proc):
+        """The job of the suspended proc. A job that cannot be made is a
+        refusal before send: the suspended program is killed and nothing
+        ran (ExecutorRefusal names why)."""
+        try:
+            return _WINDOWS_JOBS.make(proc)
+        except ExecutorRefusal:
+            _win_kill_quietly(proc)
+            raise
+
+    @staticmethod
+    def tree_start(proc, job):
+        """Resume the program inside its job (ExecutorRefusal when it
+        cannot be resumed)."""
+        _WINDOWS_JOBS.resume(job, proc)
+
+    @staticmethod
+    def tree_kill(proc, job):
+        if job is not None:
+            _WINDOWS_JOBS.close(job)
+        _win_kill_quietly(proc)
+
+    @staticmethod
     def make_private_dir(path):
         """Create path as a new private directory in one call (a protected
         DACL for the user, SYSTEM and the administrators). An existing entry
@@ -399,3 +488,78 @@ def _win_creation_time(pid):
         return "win:%d" % created.value
     finally:
         k.CloseHandle(handle)
+
+
+# CreateProcess flag of a program started suspended.
+_CREATE_SUSPENDED = 0x00000004
+
+
+def _win_kill_quietly(proc):
+    try:
+        proc.kill()
+    except OSError:
+        pass
+
+
+class _WindowsJobs(object):
+    """The job object calls of kernel32 and ntdll through ctypes, each with
+    its restype and argtypes, and every BOOL, HANDLE and NTSTATUS checked."""
+
+    def __init__(self):
+        self._k32 = None
+        self._nt = None
+
+    def _api(self):
+        if self._k32 is None:
+            from ctypes import wintypes
+            k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            k32.CreateJobObjectW.restype = wintypes.HANDLE
+            k32.CreateJobObjectW.argtypes = (wintypes.LPVOID, wintypes.LPCWSTR)
+            k32.AssignProcessToJobObject.restype = wintypes.BOOL
+            k32.AssignProcessToJobObject.argtypes = (wintypes.HANDLE, wintypes.HANDLE)
+            k32.TerminateJobObject.restype = wintypes.BOOL
+            k32.TerminateJobObject.argtypes = (wintypes.HANDLE, wintypes.UINT)
+            k32.CloseHandle.restype = wintypes.BOOL
+            k32.CloseHandle.argtypes = (wintypes.HANDLE,)
+            nt = ctypes.WinDLL("ntdll")
+            nt.NtResumeProcess.restype = wintypes.LONG
+            nt.NtResumeProcess.argtypes = (wintypes.HANDLE,)
+            self._k32, self._nt = k32, nt
+        return self._k32, self._nt
+
+    def make(self, proc):
+        """A job object holding the suspended proc."""
+        try:
+            k32, _ = self._api()
+            job = k32.CreateJobObjectW(None, None)
+            if not job:
+                raise ExecutorRefusal("no job object for the call (error %d)" % ctypes.get_last_error())
+            if not k32.AssignProcessToJobObject(job, int(proc._handle)):
+                err = ctypes.get_last_error()
+                k32.CloseHandle(job)
+                raise ExecutorRefusal("the program cannot join its job object (error %d)" % err)
+            return job
+        except ExecutorRefusal:
+            raise
+        except Exception as exc:  # ctypes.ArgumentError among them: the call is refused, not crashed
+            raise ExecutorRefusal("no job object for the call (%s)" % exc)
+
+    def resume(self, job, proc):
+        try:
+            _, nt = self._api()
+            status = nt.NtResumeProcess(int(proc._handle))
+        except Exception as exc:  # ctypes.ArgumentError among them
+            raise ExecutorRefusal("the program cannot be resumed (%s)" % exc)
+        if status != 0:
+            raise ExecutorRefusal("the program cannot be resumed (status 0x%08x)" % (status & 0xFFFFFFFF))
+
+    def close(self, job):
+        try:
+            k32, _ = self._api()
+            k32.TerminateJobObject(job, 1)
+            k32.CloseHandle(job)
+        except Exception:  # ctypes.ArgumentError among them: the program is killed anyway
+            pass
+
+
+_WINDOWS_JOBS = _WindowsJobs()

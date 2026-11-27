@@ -128,7 +128,7 @@ class AttemptFileRaceTest(Base):
         warm = led.begin([ev("warm")], "c1").attempt
         warm.abandon()
         warm.release()
-        real = RUNNER._ledger_fcntl.flock
+        real = RUNNER.fcntl.flock
         removed = []
 
         def flock(fd, op):
@@ -138,7 +138,7 @@ class AttemptFileRaceTest(Base):
                 removed.append(path)
             return real(fd, op)
 
-        with mock.patch.object(RUNNER._ledger_fcntl, "flock", flock):
+        with mock.patch.object(RUNNER.fcntl, "flock", flock):
             d = led.begin([ev("e1")], "c1")
         self.assertTrue(removed)
         self.assertTrue(os.path.exists(os.path.join(self.attempts_dir(), d.attempt.key)),

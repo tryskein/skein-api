@@ -141,8 +141,8 @@ def mark_addressee_changed(token_file, preflight_id, changed=True):
 def _load_state_doc(token_file):
     path = state_file_path(token_file)
     try:
-        if os.name == "posix":
-            raw = _read_checked(path, _state_private)
+        if _state_checked():
+            raw = current_platform().read_checked(path, _state_private)
         else:
             with open(path, "rb") as fh:
                 raw = fh.read()
@@ -196,8 +196,8 @@ def _save_state_doc(token_file, doc):
                 doc[key] = old[key]
     data = json.dumps(doc, separators=(",", ":"), sort_keys=True).encode("utf-8")
     path = state_file_path(token_file)
-    if os.name == "posix":
-        PosixPlatform.atomic_write(path, data, dir_check=_state_dir_ok)
+    if _state_checked():
+        current_platform().atomic_write(path, data, dir_check=_state_dir_ok)
         return
     tmp = "%s.tmp-%d" % (path, os.getpid())
     try:
@@ -218,17 +218,25 @@ def remove_state_file(token_file):
     """Delete the state file of this token file when it is ours."""
     path = state_file_path(token_file)
     try:
-        if hasattr(os, "getuid") and os.lstat(path).st_uid != os.getuid():
+        if os.name == "posix" and not current_platform().owns(os.lstat(path)):
             return
         os.remove(path)
     except OSError:
         pass
 
 
+def _state_checked():
+    """Whether the state goes through the checks of the platform layer: on
+    POSIX in every mode, on Windows with `client` (P-9 (a)); a legacy runner
+    on Windows keeps its plain read and write (US-11, INV-7)."""
+    return os.name == "posix" or LOADER_MODE == "client"
+
+
 def _state_dir_ok(dir_st):
     """The token directory may hold the state: it is ours and no one else
-    can create, replace or remove files in it."""
-    return dir_st.st_uid == os.getuid() and not dir_st.st_mode & 0o022
+    can create, replace or remove files in it (POSIX; on Windows the layer
+    reads the DACL instead)."""
+    return current_platform().owns(dir_st) and not dir_st.st_mode & 0o022
 
 
 def _state_private(file_st, dir_st):

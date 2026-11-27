@@ -39,8 +39,8 @@ def read_exclude_file(token_file):
     not one session id."""
     path = exclude_file_path(token_file)
     try:
-        if os.name == "posix":
-            raw = _read_checked(path, _exclude_file_ok)
+        if _state_checked():
+            raw = current_platform().read_checked(path, _exclude_file_ok)
         else:
             with open(path, "rb") as fh:
                 raw = fh.read(EXCLUDE_FILE_MAX + 1)

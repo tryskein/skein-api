@@ -58,7 +58,7 @@ def load_takeover(token_file):
     """The takeover request, or None."""
     try:
         if os.name == "posix":
-            raw = _read_checked(takeover_file_path(token_file), _state_private)
+            raw = current_platform().read_checked(takeover_file_path(token_file), _state_private)
         else:
             with open(takeover_file_path(token_file), "rb") as fh:
                 raw = fh.read()
@@ -76,7 +76,7 @@ def request_takeover(token_file, preflight_id):
     request = {"preflightId": preflight_id, "id": uuid.uuid4().hex}
     data = json.dumps(request, separators=(",", ":"), sort_keys=True).encode("utf-8")
     with StateLock(token_file, create=False):
-        PosixPlatform.atomic_write(takeover_file_path(token_file), data, dir_check=_state_dir_ok)
+        current_platform().atomic_write(takeover_file_path(token_file), data, dir_check=_state_dir_ok)
     return request["id"]
 
 
@@ -184,7 +184,7 @@ def confirm_takeover(token_file, request_id):
                 return
             doc["taken"] = True
             data = json.dumps(doc, separators=(",", ":"), sort_keys=True).encode("utf-8")
-            PosixPlatform.atomic_write(takeover_file_path(token_file), data, dir_check=_state_dir_ok)
+            current_platform().atomic_write(takeover_file_path(token_file), data, dir_check=_state_dir_ok)
     except (PlatformRefusal, OSError):
         pass
 

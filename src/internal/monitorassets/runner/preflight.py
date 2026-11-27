@@ -49,11 +49,6 @@ import re
 import shutil
 import sys
 
-try:
-    import fcntl as _preflight_fcntl
-except ImportError:  # not POSIX
-    _preflight_fcntl = None
-
 # The result of the last preflight, next to the token.
 PREFLIGHT_FILE_NAME = "preflight.json"
 PREFLIGHT_VERSION = 1
@@ -548,7 +543,7 @@ class StateLock(object):
     is none)."""
 
     def __init__(self, token_file, create=True):
-        if _preflight_fcntl is None:
+        if not current_platform().has_file_locks():
             raise PlatformRefusal("unsupported", STATE_LOCK_NAME)
         path = os.path.join(os.path.dirname(os.path.abspath(token_file)), STATE_LOCK_NAME)
         flags = os.O_RDWR | getattr(os, "O_NOFOLLOW", 0) | (os.O_CREAT if create else 0)
@@ -559,7 +554,7 @@ class StateLock(object):
         except OSError:
             raise PlatformRefusal("unreadable", path)
         try:
-            _preflight_fcntl.flock(self._fd, _preflight_fcntl.LOCK_EX)
+            current_platform().lock_fd(self._fd, blocking=True)
         except OSError:
             os.close(self._fd)
             raise PlatformRefusal("unreadable", path)
@@ -575,7 +570,7 @@ class StateLock(object):
 def load_preflight(token_file):
     """The saved result, or None when there is none that can be read."""
     try:
-        raw = _read_checked(preflight_file_path(token_file), _state_private)
+        raw = current_platform().read_checked(preflight_file_path(token_file), _state_private)
         doc = json.loads(raw.decode("utf-8"))
     except (PlatformRefusal, OSError, ValueError):
         return None
@@ -588,7 +583,7 @@ def load_preflight(token_file):
 
 def save_preflight(token_file, doc):
     data = json.dumps(doc, separators=(",", ":"), sort_keys=True).encode("utf-8")
-    PosixPlatform.atomic_write(preflight_file_path(token_file), data, dir_check=_state_dir_ok)
+    current_platform().atomic_write(preflight_file_path(token_file), data, dir_check=_state_dir_ok)
 
 
 def runner_alive(token_file, env):

@@ -12,11 +12,6 @@ import signal
 import stat
 import sys
 
-try:
-    import fcntl
-except ImportError:  # not POSIX (Python on Windows): no OS file locks
-    fcntl = None
-
 def emit(obj):
     """Write one JSON object as a single flushed stdout line (the Monitor contract)."""
     text = json.dumps(obj, separators=(",", ":"))
@@ -48,12 +43,14 @@ def open_token(path):
     any death of the process, SIGKILL included.
     """
     fd = open_token_checked(path)
-    if fcntl is None:
+    # The legacy runner keeps its behaviour off POSIX (US-11, INV-7): no
+    # lock on the token file there.
+    if os.name != "posix" or not current_platform().has_file_locks():
         log_stderr("monitor runner: this platform has no OS file locks; running without the "
                    "one-runner lock, so a second runner on this token file is not prevented")
     else:
         try:
-            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            current_platform().lock_fd(fd, blocking=False)
         except BlockingIOError:
             os.close(fd)
             raise Stop("already_running")
@@ -104,7 +101,7 @@ def open_token_checked(path):
         os.close(fd)
         # The token is burnt: delete our readable copy so it does not
         # outlive the refusal on disk. Another user's file is not ours to touch.
-        if hasattr(os, "getuid") and st.st_uid == os.getuid():
+        if os.name == "posix" and current_platform().owns(st):
             remove_token_file(path, opened=st)
         raise Stop("token_file_insecure")
     return fd
@@ -114,10 +111,10 @@ def token_file_private(path, st):
     """True when no other user can read the token file of stat st: it is
     ours and either has no group/other bits or sits in a directory of ours
     that has none. Platforms without POSIX owners (Windows) are not checked."""
-    if not hasattr(os, "getuid"):
+    if os.name != "posix":
         return True
-    uid = os.getuid()
-    if st.st_uid != uid:
+    owns = current_platform().owns
+    if not owns(st):
         return False
     if not st.st_mode & 0o077:
         return True
@@ -125,7 +122,7 @@ def token_file_private(path, st):
         parent = os.lstat(os.path.dirname(os.path.abspath(path)))
     except OSError:
         return False
-    return stat.S_ISDIR(parent.st_mode) and parent.st_uid == uid and not parent.st_mode & 0o077
+    return stat.S_ISDIR(parent.st_mode) and owns(parent) and not parent.st_mode & 0o077
 
 
 def remove_token_file(path, opened=None):

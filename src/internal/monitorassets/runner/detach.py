@@ -68,11 +68,6 @@ JOURNAL_ONLY_STATUS = "journal"
 _METHODS = (METHOD_STREAM, METHOD_EXIT_ON_EVENT, METHOD_DETACHED, METHOD_JOURNAL)
 _START_SIGNALS = (signal.SIGTERM, signal.SIGINT)
 
-try:
-    import fcntl as _detach_fcntl
-except ImportError:  # not POSIX
-    _detach_fcntl = None
-
 
 def runner_body():
     """The text of this body as the loader ran it, or None."""
@@ -259,46 +254,22 @@ def ledger_tails_at_start(env):
 
 def sweep_stale_locks(env, keep):
     """Remove the files of locks/ older than STALE_LOCK_AGE_SEC that no
-    process holds (P-5), keep (the caller's own lock) aside. A file is
-    removed only while this process holds its lock and the path still names
-    the file it locked, the identity rule of acquire_runner_lock: a process
-    that opened it meanwhile finds the path renewed and starts over."""
-    if _detach_fcntl is None:
+    process holds (P-5), keep (the caller's own lock) aside. The platform
+    layer removes a file only when no process holds it
+    (remove_stale_lock)."""
+    platform = current_platform()
+    if not platform.has_file_locks():
         return
     try:
         locks = os.path.join(user_dir(env), LOCKS_DIR_NAME)
         names = os.listdir(locks)
     except (PlatformRefusal, OSError):
         return
-    now = time.time()
     for name in names:
         path = os.path.join(locks, name)
         if not name.endswith(".lock") or path == keep:
             continue
-        try:
-            fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
-        except OSError:
-            continue
-        try:
-            st = os.fstat(fd)
-            if (not stat.S_ISREG(st.st_mode) or st.st_uid != os.getuid()
-                    or now - st.st_mtime < STALE_LOCK_AGE_SEC):
-                continue
-            try:
-                _detach_fcntl.flock(fd, _detach_fcntl.LOCK_EX | _detach_fcntl.LOCK_NB)
-            except OSError:
-                continue
-            try:
-                cur = os.lstat(path)
-            except OSError:
-                continue
-            if (cur.st_dev, cur.st_ino) == (st.st_dev, st.st_ino):
-                try:
-                    os.unlink(path)
-                except OSError:
-                    pass
-        finally:
-            os.close(fd)
+        platform.remove_stale_lock(path, STALE_LOCK_AGE_SEC)
 
 
 def read_token_once(path):
