@@ -81,6 +81,27 @@ class JournalOnlyTest(unittest.TestCase):
                 self.assertEqual(REG.agents[client]["methods"], [])
                 self.assertEqual(REG.agents[client].get("windowsShell"), shell)
 
+    def test_a_short_name_marks_only_the_program_or_the_script_node_runs(self):
+        # A short entry-point name is an ordinary word of other command
+        # lines: it marks the process only as its executable or as the
+        # script node runs (the npm bin of the record), never as any
+        # argument and never in a shell.
+        for client, name in (("pi", "pi"), ("continue", "cn"), ("roo", "roo"), ("kilo", "kilo"),
+                             ("command-code", "cmd")):
+            with self.subTest(client=client):
+                self.assertIsNotNone(w1.agent_of(client, [("node", ["node", "/usr/lib/node_modules/x/bin/" + name])]))
+                self.assertIsNotNone(w1.agent_of(client, [("node", ["node", "--no-warnings", "/usr/bin/" + name])]))
+                for other in ([("vim", ["vim", name])], [("less", ["less", "/tmp/" + name])],
+                              [("node", ["node", "/srv/app.js", name])], [("bash", ["bash", "/usr/bin/" + name])],
+                              [("cmd.exe", ["cmd.exe", "/c", name])]):
+                    self.assertIsNone(w1.agent_of(client, other), other)
+
+    def test_an_entry_point_name_does_not_mark_a_shell(self):
+        # A shell runs whatever command line it got: opencode.cjs in its
+        # arguments does not make it the agent.
+        self.assertIsNotNone(w1.agent_of("opencode", [("node", ["node", "/usr/lib/opencode/bin/opencode.cjs"])]))
+        self.assertIsNone(w1.agent_of("opencode", [("sh", ["sh", "-c", "/usr/lib/opencode/bin/opencode.cjs"])]))
+
     def test_without_a_host_the_journal(self):
         for client, (exe, _, _) in sorted(RECORDS.items()):
             with self.subTest(client=client):

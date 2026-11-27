@@ -159,7 +159,9 @@ type ProcessSign struct {
 	Argv []string `json:"argv,omitempty"`
 	// ArgvBaseNames are file names any argument may end with, after its last
 	// "/" or "\\" (an entry point started by its path, wherever it is
-	// installed).
+	// installed). A shell's process is never marked by them. A short name
+	// that other command lines carry as an ordinary word goes into Scripts
+	// instead (the interpreter that runs it).
 	ArgvBaseNames []string `json:"argvBaseNames,omitempty"`
 	// Scripts mark a process an interpreter runs a script of: its
 	// executable is one of Interpreters and the script it runs (the first

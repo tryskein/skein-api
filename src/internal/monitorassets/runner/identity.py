@@ -33,10 +33,11 @@ HOST_FORM_AGENT = "agent"  # the agent process was launched by the host
 HOST_FORM_FOREIGN = "foreign"  # another agent stands between: not ours
 
 
-def sign_matches(proc, sign):
+def sign_matches(proc, sign, shells=()):
     """Whether proc bears a process sign ({"executables": [...], "argv":
     [...], "argvBaseNames": [...], "scripts": [...]}, as in a registry
-    record)."""
+    record). shells: the names of the shells (registry "shells"), whose
+    process an entry-point name never marks."""
     if not sign:
         return False
     if proc.names() & set(sign.get("executables") or []):
@@ -44,15 +45,21 @@ def sign_matches(proc, sign):
     wanted = sign.get("argv") or []
     if proc.argv and any(a in proc.argv for a in wanted):
         return True
-    # An entry point started by its path, wherever it is installed.
+    # An entry point started by its path, wherever it is installed; never
+    # in a shell, which runs whatever command line it was given.
     bases = sign.get("argvBaseNames") or []
-    if proc.argv and bases and any(a.replace("\\", "/").rsplit("/", 1)[-1] in bases for a in proc.argv):
+    if proc.argv and bases and not (proc.names() & set(shells)) and \
+            any(a.replace("\\", "/").rsplit("/", 1)[-1] in bases for a in proc.argv):
         return True
     # An interpreter running a script of that path tail.
     for script in sign.get("scripts") or []:
         if proc.names() & set(script.get("interpreters") or []) and _runs_script(proc.argv, script):
             return True
     return False
+
+
+def _shell_names(registry):
+    return (registry.doc.get("shells") or {}).get("names") or [] if registry is not None else []
 
 
 def _runs_script(argv, script):
@@ -84,7 +91,7 @@ def _ends_with(arg, tail):
 def record_of(proc, registry):
     """The id of the agent record whose process sign proc bears, or None."""
     for agent_id in sorted(registry.agents):
-        if sign_matches(proc, registry.agents[agent_id].get("process")):
+        if sign_matches(proc, registry.agents[agent_id].get("process"), _shell_names(registry)):
             return agent_id
     return None
 
@@ -137,7 +144,7 @@ def place(chain, registry, record, self_pid=None):
         if is_loader(proc, self_pid):
             continue
         if record.agent is not None:
-            if sign_matches(proc, record.agent.get("process")):
+            if sign_matches(proc, record.agent.get("process"), _shell_names(registry)):
                 index = i
                 break
         elif not is_shell(proc, registry):
@@ -185,7 +192,7 @@ def host_form(placement, registry, host_sign, self_pid=None):
     chain = placement.chain
     host = None
     for i, proc in enumerate(chain):
-        if not is_loader(proc, self_pid) and sign_matches(proc, host_sign):
+        if not is_loader(proc, self_pid) and sign_matches(proc, host_sign, _shell_names(registry)):
             host = i
             break
     if host is None:

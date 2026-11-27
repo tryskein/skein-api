@@ -670,10 +670,18 @@
           "cmdc"
         ],
         "argvBaseNames": [
-          "cmd",
           "cmdc",
           "commandcode",
           "command-code"
+        ],
+        "scripts": [
+          {
+            "interpreters": [
+              "node",
+              "node.exe"
+            ],
+            "pathTail": "cmd"
+          }
         ]
       },
       "methods": [
@@ -796,8 +804,16 @@
           "cn"
         ],
         "argvBaseNames": [
-          "cn",
           "cn.js"
+        ],
+        "scripts": [
+          {
+            "interpreters": [
+              "node",
+              "node.exe"
+            ],
+            "pathTail": "cn"
+          }
         ]
       },
       "methods": []
@@ -857,8 +873,14 @@
         "executables": [
           "roo"
         ],
-        "argvBaseNames": [
-          "roo"
+        "scripts": [
+          {
+            "interpreters": [
+              "node",
+              "node.exe"
+            ],
+            "pathTail": "roo"
+          }
         ]
       },
       "methods": []
@@ -956,8 +978,14 @@
         "executables": [
           "pi"
         ],
-        "argvBaseNames": [
-          "pi"
+        "scripts": [
+          {
+            "interpreters": [
+              "node",
+              "node.exe"
+            ],
+            "pathTail": "pi"
+          }
         ]
       },
       "methods": []
@@ -984,8 +1012,16 @@
           "kilocode"
         ],
         "argvBaseNames": [
-          "kilo",
           "kilocode"
+        ],
+        "scripts": [
+          {
+            "interpreters": [
+              "node",
+              "node.exe"
+            ],
+            "pathTail": "kilo"
+          }
         ]
       },
       "methods": []
