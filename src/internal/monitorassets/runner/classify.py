@@ -56,6 +56,11 @@ def classify_result(rows, result, written=False, earlier_refused=True):
     """classify for a CallResult of the argv executor or an HTTPResult of
     the http executor; a request that failed without a status is
     "unknown"."""
+    failure = getattr(result, "tree_failure", None)
+    if failure:
+        # The processes of the call were not all killed: whatever it
+        # answered, the outcome is not proven.
+        return OUTCOME_UNKNOWN, {"treeKill": failure}
     error = getattr(result, "error", None)
     if error is not None and not result.timed_out:
         return OUTCOME_UNKNOWN, {"httpError": error}

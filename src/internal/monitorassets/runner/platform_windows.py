@@ -234,9 +234,11 @@ class WindowsPlatform(object):
 
     @staticmethod
     def tree_kill(proc, job):
-        if job is not None:
-            _WINDOWS_JOBS.close(job)
+        """Kill the tree of proc. Returns None, or why the tree may outlive
+        the call (the job was not ended): the root is killed all the same."""
+        failure = _WINDOWS_JOBS.close(job) if job is not None else None
         _win_kill_quietly(proc)
+        return failure
 
     @staticmethod
     def make_private_dir(path):
@@ -531,6 +533,8 @@ class _WindowsJobs(object):
             k32.TerminateJobObject.argtypes = (wintypes.HANDLE, wintypes.UINT)
             k32.CloseHandle.restype = wintypes.BOOL
             k32.CloseHandle.argtypes = (wintypes.HANDLE,)
+            k32.SetInformationJobObject.restype = wintypes.BOOL
+            k32.SetInformationJobObject.argtypes = (wintypes.HANDLE, ctypes.c_int, wintypes.LPVOID, wintypes.DWORD)
             nt = ctypes.WinDLL("ntdll")
             nt.NtResumeProcess.restype = wintypes.LONG
             nt.NtResumeProcess.argtypes = (wintypes.HANDLE,)
@@ -544,6 +548,15 @@ class _WindowsJobs(object):
             job = k32.CreateJobObjectW(None, None)
             if not job:
                 raise ExecutorRefusal("no job object for the call (error %d)" % ctypes.get_last_error())
+            # Closing the last handle of the job kills every process in it:
+            # the tree dies with the runner too (JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE).
+            info = _JobExtendedLimits()
+            info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+            if not k32.SetInformationJobObject(job, JOB_OBJECT_EXTENDED_LIMIT_INFORMATION, ctypes.byref(info),
+                                               ctypes.sizeof(info)):
+                err = ctypes.get_last_error()
+                k32.CloseHandle(job)
+                raise ExecutorRefusal("the job object cannot kill its processes on close (error %d)" % err)
             if not k32.AssignProcessToJobObject(job, int(proc._handle)):
                 err = ctypes.get_last_error()
                 k32.CloseHandle(job)
@@ -564,12 +577,57 @@ class _WindowsJobs(object):
             raise ExecutorRefusal("the program cannot be resumed (status 0x%08x)" % (status & 0xFFFFFFFF))
 
     def close(self, job):
+        """Terminate every process of the job and close its handle. Returns
+        None, or why the tree may not be ended: a failed TerminateJobObject
+        (the close still kills it by JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE when
+        CloseHandle succeeds), a failed CloseHandle, or a ctypes error."""
+        failures = []
         try:
             k32, _ = self._api()
-            k32.TerminateJobObject(job, 1)
-            k32.CloseHandle(job)
-        except Exception:  # ctypes.ArgumentError among them: the program is killed anyway
-            pass
+        except Exception as exc:  # ctypes.ArgumentError among them
+            return "the job object API is not available (%s)" % exc
+        try:
+            if not k32.TerminateJobObject(job, 1):
+                failures.append("TerminateJobObject error %d" % ctypes.get_last_error())
+        except Exception as exc:
+            failures.append("TerminateJobObject: %s" % exc)
+        try:
+            if not k32.CloseHandle(job):
+                failures.append("CloseHandle error %d" % ctypes.get_last_error())
+                return "; ".join(failures)
+        except Exception as exc:
+            failures.append("CloseHandle: %s" % exc)
+            return "; ".join(failures)
+        # The handle is closed: kill-on-close ends whatever the termination
+        # left, so the tree is ended either way.
+        return None
+
+
+# SetInformationJobObject: the class of JOBOBJECT_EXTENDED_LIMIT_INFORMATION
+# and its limit that kills every process of the job when its last handle is
+# closed (winnt.h).
+JOB_OBJECT_EXTENDED_LIMIT_INFORMATION = 9
+JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x2000
+
+
+class _JobBasicLimits(ctypes.Structure):
+    _fields_ = [("PerProcessUserTimeLimit", ctypes.c_int64), ("PerJobUserTimeLimit", ctypes.c_int64),
+                ("LimitFlags", ctypes.c_uint32), ("MinimumWorkingSetSize", ctypes.c_size_t),
+                ("MaximumWorkingSetSize", ctypes.c_size_t), ("ActiveProcessLimit", ctypes.c_uint32),
+                ("Affinity", ctypes.c_size_t), ("PriorityClass", ctypes.c_uint32),
+                ("SchedulingClass", ctypes.c_uint32)]
+
+
+class _IoCounters(ctypes.Structure):
+    _fields_ = [(name, ctypes.c_uint64) for name in ("ReadOperationCount", "WriteOperationCount",
+                                                     "OtherOperationCount", "ReadTransferCount",
+                                                     "WriteTransferCount", "OtherTransferCount")]
+
+
+class _JobExtendedLimits(ctypes.Structure):
+    _fields_ = [("BasicLimitInformation", _JobBasicLimits), ("IoInfo", _IoCounters),
+                ("ProcessMemoryLimit", ctypes.c_size_t), ("JobMemoryLimit", ctypes.c_size_t),
+                ("PeakProcessMemoryUsed", ctypes.c_size_t), ("PeakJobMemoryUsed", ctypes.c_size_t)]
 
 
 _WINDOWS_JOBS = _WindowsJobs()

@@ -100,12 +100,16 @@ class CallResult(object):
     the cap: a prefix of a longer answer is not that answer), whether the
     timeout ended it and whether stdout was cut."""
 
-    def __init__(self, exit_code, stdout, stderr, timed_out, truncated=False):
+    def __init__(self, exit_code, stdout, stderr, timed_out, truncated=False, tree_failure=None):
         self.exit_code = exit_code
         self.stdout = stdout
         self.stderr = stderr
         self.timed_out = timed_out
         self.truncated = truncated
+        # Why the processes of the call could not all be killed (Windows: a
+        # job object call failed), or None: such a call is unknown whatever
+        # it answered, its descendants may still run.
+        self.tree_failure = tree_failure
         self.json = None if truncated else parse_json_object(stdout)
 
 
@@ -662,7 +666,7 @@ def _run_polled(argv, env, stdin_data, timeout_sec):
             except subprocess.TimeoutExpired:
                 pass
     return CallResult(None if timed_out else proc.returncode, b"".join(chunks[out_fd]), b"".join(chunks[err_fd]),
-                      timed_out, cut[out_fd])
+                      timed_out, cut[out_fd], tree_failure=tree.failure if tree is not None else None)
 
 
 def _run_threads(argv, env, stdin_data, timeout_sec):
@@ -719,7 +723,7 @@ def _run_threads(argv, env, stdin_data, timeout_sec):
             except OSError:
                 pass
     return CallResult(None if timed_out else proc.returncode, readers[0].data(), readers[1].data(), timed_out,
-                      readers[0].cut)
+                      readers[0].cut, tree_failure=tree.failure if tree is not None else None)
 
 
 def _kill_quietly(proc):
@@ -740,6 +744,8 @@ class _ProcessTree(object):
     def __init__(self, proc):
         self.proc = proc
         self.job = current_platform().tree_make(proc)
+        # Why a kill could not end the tree (the first such cause), or None.
+        self.failure = None
 
     def start(self):
         """Let the program run (Windows: resume it inside its job)."""
@@ -747,7 +753,9 @@ class _ProcessTree(object):
 
     def kill(self):
         job, self.job = self.job, None
-        current_platform().tree_kill(self.proc, job)
+        failure = current_platform().tree_kill(self.proc, job)
+        if failure and self.failure is None:
+            self.failure = failure
 
 
 class ArgvExecutor(object):

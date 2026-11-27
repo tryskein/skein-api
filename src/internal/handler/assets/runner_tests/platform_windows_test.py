@@ -234,6 +234,84 @@ class RunnerRereadsByTheCriterionTest(unittest.TestCase):
             self.assertIsNone(RUNNER.load_takeover(world.token))
 
 
+class FakeKernel32(object):
+    """kernel32 of the job object calls: each records its arguments and
+    answers the BOOL the test gives (True by default)."""
+
+    def __init__(self, **answers):
+        self.answers = answers
+        self.calls = []
+        self.limits = None
+
+    def _answer(self, name, *args):
+        self.calls.append((name,) + args)
+        answer = self.answers.get(name, True)
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
+
+    def CreateJobObjectW(self, attrs, name):
+        self.calls.append(("CreateJobObjectW",))
+        return self.answers.get("CreateJobObjectW", 77)
+
+    def SetInformationJobObject(self, job, klass, info, size):
+        self.limits = (klass, info._obj.BasicLimitInformation.LimitFlags)
+        return self._answer("SetInformationJobObject", job)
+
+    def AssignProcessToJobObject(self, job, handle):
+        return self._answer("AssignProcessToJobObject", job, handle)
+
+    def TerminateJobObject(self, job, code):
+        return self._answer("TerminateJobObject", job)
+
+    def CloseHandle(self, job):
+        return self._answer("CloseHandle", job)
+
+
+class JobObjectTest(unittest.TestCase):
+    """The job of a Windows call kills its processes on close, every BOOL of
+    its calls is checked, and a tree that may outlive the call makes the
+    outcome unknown, not a silent kill of the root alone."""
+
+    def jobs(self, **answers):
+        jobs = RUNNER._WindowsJobs()
+        jobs._k32, jobs._nt = FakeKernel32(**answers), object()
+        patch = mock.patch.object(RUNNER.ctypes, "get_last_error", lambda: 5, create=True)
+        patch.start()
+        self.addCleanup(patch.stop)
+        return jobs
+
+    class Proc(object):
+        _handle = 9
+
+    def test_the_job_kills_its_processes_on_close(self):
+        jobs = self.jobs()
+        self.assertEqual(jobs.make(self.Proc()), 77)
+        self.assertEqual(jobs._k32.limits, (9, 0x2000))
+
+    def test_a_job_without_kill_on_close_is_a_refusal(self):
+        jobs = self.jobs(SetInformationJobObject=False)
+        with self.assertRaises(RUNNER.ExecutorRefusal):
+            jobs.make(self.Proc())
+        self.assertIn(("CloseHandle", 77), jobs._k32.calls)
+        self.assertNotIn("AssignProcessToJobObject", [c[0] for c in jobs._k32.calls])
+
+    def test_close_checks_every_bool(self):
+        self.assertIsNone(self.jobs().close(77))
+        # The close still ends the tree by kill-on-close.
+        self.assertIsNone(self.jobs(TerminateJobObject=False).close(77))
+        failure = self.jobs(TerminateJobObject=False, CloseHandle=False).close(77)
+        self.assertIn("TerminateJobObject error 5", failure)
+        self.assertIn("CloseHandle error 5", failure)
+        self.assertIn("CloseHandle", self.jobs(CloseHandle=OSError("closed")).close(77))
+
+    def test_a_tree_not_killed_is_unknown(self):
+        rows = [{"match": {"exitCode": 0}, "outcome": "queued"}]
+        result = RUNNER.CallResult(0, b"", b"", False, tree_failure="CloseHandle error 5")
+        self.assertEqual(RUNNER.classify_result(rows, result), ("unknown", {"treeKill": "CloseHandle error 5"}))
+        self.assertEqual(RUNNER.classify_result(rows, RUNNER.CallResult(0, b"", b"", False))[0], "queued")
+
+
 class BatchProgramTest(unittest.TestCase):
     """Row #91: a .cmd/.bat program of Windows and the Codex executable."""
 
