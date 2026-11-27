@@ -28,6 +28,7 @@ sys.path.insert(0, HERE)
 import entries_stream_w1_test as w1  # noqa: E402
 import fake_channel  # noqa: E402
 import preflight_matrix_test as pm  # noqa: E402
+import start_test as st  # noqa: E402
 
 RUNNER = pm.RUNNER
 REG = pm.REG
@@ -54,6 +55,37 @@ RECORDS = {
     "mimo-code": ("mimo", "mimox", None),
 }
 PASEO_ID = "0f8fad5b-d9cb-469f-a165-70867728950e"
+
+
+def check_journal_run(test, client):
+    """The working command of a journal-only record runs the journal
+    runner of the product: it returns after monitor_started, the detached
+    process holds the one-runner lock, polls, and writes each event to the
+    journal (US-8). A runner that stopped before its start, or stopped
+    writing events, fails it."""
+    page = {"notifications": [{"id": 5, "type": "comment_added", "entity": {"type": "issue", "id": st.ISSUE},
+                               "actor": {"username": "bob"}, "commentId": "c-5", "bodyPreview": "hello"},
+                              {"id": 6, "type": "comment_added", "entity": {"type": "issue", "id": st.ISSUE},
+                               "actor": {"username": "ann"}, "commentId": "c-6", "bodyPreview": "again"}],
+            "cursor": {"ts": "2026-01-01T00:00:06Z", "id": 6}}
+    served = []
+
+    def respond(h, qs):
+        h.send_json(200, st.harness.EMPTY if served else page)
+        served.append(1)
+
+    box = st.Box(test, respond)
+    pre = box.preflight(SKEIN_CLIENT=client)
+    test.assertEqual((pre["client"], pre["method"]), (client, "journal"), pre)
+    code, lines = box.start(pre["preflightId"], SKEIN_CLIENT=client)
+    test.assertEqual((code, [l["event"] for l in lines]), (0, ["monitor_started"]), lines)
+    test.assertTrue(box.lock_busy(), "the journal runner is not running")
+
+    def delivered():
+        return sorted(l.get("notificationId") for l in box.journal_lines()
+                      if l.get("event") == "delivery" and l.get("status") == "journal")
+    test.assertTrue(st.wait_until(lambda: delivered() == [5, 6]), box.journal_lines())
+    test.assertTrue(box.lock_busy(), "the journal runner ended after the events")
 
 
 def check_journal_line(test, line):
@@ -111,6 +143,12 @@ class JournalOnlyTest(unittest.TestCase):
                 check_journal_line(self, line)
                 started = RUNNER.monitor_started_line(RUNNER.load_preflight(env["SKEIN_TOKEN_FILE"]), pm.ISSUE, True)
                 self.assertEqual((started["method"], started["journal"]), ("journal", line["journal"]))
+
+    def test_the_journal_runner_writes_the_events(self):
+        # Row #116 by the product path: one record per form of the group.
+        for client in ("pi", "kiro", "goose"):
+            with self.subTest(client=client):
+                check_journal_run(self, client)
 
     def test_with_a_host_that_launched_it_the_host(self):
         # SC-002 "Kiro under Paseo": Paseo keeps no own method of these

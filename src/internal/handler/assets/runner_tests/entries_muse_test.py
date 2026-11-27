@@ -44,6 +44,11 @@ class MuseTest(unittest.TestCase):
         box = pm.Box(self)
         jo.check_journal_line(self, box.preflight(box.env("muse"), ["muse"]))
 
+    def test_the_journal_runner_writes_the_events(self):
+        # Row #117 by the product path: no method found, so the working
+        # command runs the journal runner, which writes each event.
+        jo.check_journal_run(self, "muse")
+
     def test_with_a_host_that_launched_it_the_host(self):
         box = pm.Box(self)
         jo.fake_channel.FakeProgram(box.bin, "paseo")
