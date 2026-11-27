@@ -755,6 +755,368 @@
       }
     },
     {
+      "id": "agent-deck",
+      "about": "Agent Deck: its send queue delivers each event to the agent's own session when the session can take it.",
+      "source": "github.com/asheshgoplani/agent-deck fec4fcbc (1.16.40): cmd/agent-deck/session_send_cmd.go#handleSessionSend (--message-file - reads the text from stdin; --json without --wait, --stream, --draft, --defer-if-busy and --no-wait delivers through the queue: asyncJSON; --no-tag drops the [agent-deck from:<id>] envelope of a send from inside a session; an unknown session exits 2; every refusal of this path comes before the text is queued, nothing is typed); cmd/agent-deck/session_send_queue_cmd.go#queueSend and #queuedSendFields (exit 0 with {success: true, delivery: \"queued\", submitted: false} once the send is queued; a record that failed at once, or that could not be queued, exits 1 with success false — \"failed means nothing was typed\"); a muted trigger exits 0 with {success: true, muted: true} and no delivery: not delivered; cmd/agent-deck/cli_utils.go#ErrorWithData (an error under --json is {success: false, error, code} on stdout); internal/sendqueue/sendqueue.go#DefaultRetryBudget (the worker types when the target is idle, Claude also while busy, and gives up after 30 min); cmd/agent-deck/session_output_cmd.go#handleSessionCurrent (the session of the calling tmux session: exit 0 with id; outside an Agent Deck tmux session exit 1); .goreleaser.yml (linux and darwin builds; Windows only through WSL). Not used: the synchronous --defer-if-busy send, which holds the call up to --defer-timeout and types into the pane itself.",
+      "step": 5,
+      "order": 3,
+      "kind": "addressed",
+      "blind": false,
+      "detect": {
+        "env": [
+          {
+            "name": "AGENTDECK_INSTANCE_ID"
+          }
+        ]
+      },
+      "executor": {
+        "type": "argv",
+        "argv": [
+          "agent-deck",
+          "session",
+          "send",
+          "{env:AGENTDECK_INSTANCE_ID}",
+          "--message-file",
+          "-",
+          "--no-tag",
+          "--json"
+        ],
+        "feed": "stdin",
+        "timeoutSec": 30
+      },
+      "idle": {
+        "type": "builtin"
+      },
+      "outcomes": [
+        {
+          "match": {
+            "exitCode": 0,
+            "json": {
+              "success": "true",
+              "delivery": "queued"
+            }
+          },
+          "outcome": "queued"
+        },
+        {
+          "match": {
+            "exitCode": 1,
+            "json": {
+              "success": "false"
+            }
+          },
+          "outcome": "refused-before-send"
+        },
+        {
+          "match": {
+            "exitCode": 2,
+            "json": {
+              "success": "false"
+            }
+          },
+          "outcome": "refused-before-send"
+        }
+      ],
+      "probes": [
+        {
+          "type": "argv",
+          "source": "github.com/asheshgoplani/agent-deck fec4fcbc: cmd/agent-deck/session_output_cmd.go#handleSessionCurrent (reads the session of the calling tmux session, sends nothing).",
+          "argv": [
+            "agent-deck",
+            "session",
+            "current",
+            "--json"
+          ],
+          "results": [
+            {
+              "match": {
+                "exitCode": 0
+              },
+              "result": "available"
+            }
+          ]
+        }
+      ],
+      "addressee": {
+        "process": "none",
+        "command": {
+          "argv": [
+            "agent-deck",
+            "session",
+            "current",
+            "--json"
+          ],
+          "results": [
+            {
+              "match": {
+                "exitCode": 0
+              },
+              "result": "same"
+            }
+          ],
+          "capture": [
+            "id"
+          ]
+        },
+        "limitation": "The session id is the address; the source does not say whether a session recreated under the same id is told apart."
+      },
+      "binaries": {
+        "linux": [
+          "agent-deck"
+        ],
+        "macos": [
+          "agent-deck"
+        ]
+      },
+      "warnings": [
+        "Agent Deck gives up a queued event it could not type within 30 minutes; the monitor sees only that it was queued."
+      ],
+      "address": {
+        "env": "AGENTDECK_INSTANCE_ID"
+      }
+    },
+    {
+      "id": "t3code",
+      "about": "T3 Code: the thread of the agent gets each event as its next turn; a busy thread queues it.",
+      "source": "github.com/pingdotgg/t3code 45a3880c (0.1.12): apps/server/src/cli/thread.ts#threadSendCommand (\"A busy thread gets it as its next turn; nothing is interrupted\"; the message argument - reads stdin; it calls the t3_thread_send tool with mode queue and with --json prints its result); packages/contracts/src/orchestratorMcp.ts#OrchestratorMcpThreadSendResult (delivery one of started, queued, steered, restarted); thread.ts#withThreadTools and #reportThreadErrors (every failure, the server not running among them, is a plain line on stderr and a non-zero exit, so none proves that the message was not sent); apps/server/src/preview/PortScanner.ts#AGENT_THREAD_ENV and packages/provider-acp/src/server/adapter.ts (T3CODE_THREAD_ID in every agent process of a thread); apps/server/package.json (the CLI is the npm bin t3, t3.cmd on Windows); docs/user/outside-agents.md (t3 thread show prints a thread, it sends nothing).",
+      "step": 5,
+      "order": 5,
+      "kind": "addressed",
+      "blind": false,
+      "detect": {
+        "env": [
+          {
+            "name": "T3CODE_THREAD_ID"
+          }
+        ]
+      },
+      "executor": {
+        "type": "argv",
+        "argv": [
+          "t3",
+          "thread",
+          "send",
+          "{env:T3CODE_THREAD_ID}",
+          "-",
+          "--json"
+        ],
+        "feed": "stdin",
+        "timeoutSec": 30
+      },
+      "idle": {
+        "type": "builtin"
+      },
+      "outcomes": [
+        {
+          "match": {
+            "exitCode": 0,
+            "json": {
+              "delivery": "queued"
+            }
+          },
+          "outcome": "queued"
+        },
+        {
+          "match": {
+            "exitCode": 0,
+            "json": {
+              "delivery": "started"
+            }
+          },
+          "outcome": "turn-started"
+        },
+        {
+          "match": {
+            "exitCode": 0,
+            "json": {
+              "delivery": "steered"
+            }
+          },
+          "outcome": "turn-started"
+        },
+        {
+          "match": {
+            "exitCode": 0,
+            "json": {
+              "delivery": "restarted"
+            }
+          },
+          "outcome": "turn-started"
+        }
+      ],
+      "probes": [
+        {
+          "type": "argv",
+          "source": "github.com/pingdotgg/t3code 45a3880c: apps/server/src/cli/thread.ts#threadShowCommand (reads the thread from the running server, sends nothing).",
+          "argv": [
+            "t3",
+            "thread",
+            "show",
+            "{env:T3CODE_THREAD_ID}",
+            "--json"
+          ],
+          "results": [
+            {
+              "match": {
+                "exitCode": 0
+              },
+              "result": "available"
+            }
+          ]
+        }
+      ],
+      "addressee": {
+        "process": "none",
+        "limitation": "The thread id is the address; the source does not say whether a thread recreated under the same id is told apart."
+      },
+      "binaries": {
+        "linux": [
+          "t3"
+        ],
+        "macos": [
+          "t3"
+        ],
+        "windows": [
+          "t3.cmd"
+        ]
+      },
+      "address": {
+        "env": "T3CODE_THREAD_ID"
+      }
+    },
+    {
+      "id": "sculptor",
+      "about": "Sculptor: the Sculptor server takes each event as a message to the agent; a terminal agent only at its prompt.",
+      "source": "github.com/imbue-ai/sculptor cdd6dc68 (0.51.0.dev0): tools/sculpt/sculpt/commands/agent.py#send (POST of the message; exit 0 with {sent: true, agent_id, message} on --json; an answer of 400 or more becomes the error {error: detail or \"Server returned <n>\", detail: \"\"}; httpx.ConnectError ends in handle_connection_error); tools/sculpt/sculpt/formatting.py#cli_error, #handle_connection_error and #CONNECTION_HINT (under --json the error is a JSON object on stderr, exit 1; a connection that failed gives detail CONNECTION_HINT: before any request); sculptor/sculptor/web/app.py#send_workspace_agent_messages (a chat agent: the message is queued; a terminal agent: typed into its PTY; 409 with the detail \"Cannot send a message while the agent is waiting for a response to AskUserQuestion.\" before queuing) and #_raise_for_terminal_delivery_result (409 \"this agent does not accept automated prompts\", \"agent is busy or not at its prompt\", \"terminal not running\"); sculptor/sculptor/web/terminal_input.py#deliver_prompt_to_terminal_agent (the three guards run before the bracketed paste is written: \"Only DELIVERED means the bytes were written\"); #status (sculpt agent status reads the agent, sends nothing); tools/sculpt/sculpt/auth.py#get_default_base_url (http://localhost:$SCULPT_API_PORT); sculptor/sculptor/agents/default/claude_code_sdk/process_manager_utils.py (SCULPT_AGENT_ID and SCULPT_WORKSPACE_ID in the agent's shell). No Windows build.",
+      "step": 5,
+      "order": 6,
+      "kind": "addressed",
+      "blind": false,
+      "detect": {
+        "env": [
+          {
+            "name": "SCULPT_AGENT_ID"
+          }
+        ]
+      },
+      "executor": {
+        "type": "argv",
+        "argv": [
+          "sculpt",
+          "agent",
+          "send",
+          "--json",
+          "{env:SCULPT_AGENT_ID}",
+          "--",
+          "{text}"
+        ],
+        "feed": "arg",
+        "timeoutSec": 30
+      },
+      "idle": {
+        "type": "builtin"
+      },
+      "outcomes": [
+        {
+          "match": {
+            "exitCode": 0,
+            "json": {
+              "sent": "true"
+            }
+          },
+          "outcome": "queued"
+        },
+        {
+          "match": {
+            "exitCode": 1,
+            "stderrJson": {
+              "error": "this agent does not accept automated prompts",
+              "detail": ""
+            }
+          },
+          "outcome": "refused-before-send"
+        },
+        {
+          "match": {
+            "exitCode": 1,
+            "stderrJson": {
+              "error": "agent is busy or not at its prompt",
+              "detail": ""
+            }
+          },
+          "outcome": "refused-before-send"
+        },
+        {
+          "match": {
+            "exitCode": 1,
+            "stderrJson": {
+              "error": "terminal not running",
+              "detail": ""
+            }
+          },
+          "outcome": "refused-before-send"
+        },
+        {
+          "match": {
+            "exitCode": 1,
+            "stderrJson": {
+              "error": "Cannot send a message while the agent is waiting for a response to AskUserQuestion.",
+              "detail": ""
+            }
+          },
+          "outcome": "refused-before-send"
+        },
+        {
+          "match": {
+            "exitCode": 1,
+            "stderrJson": {
+              "detail": "Is the Sculptor app running? If it serves a non-default port, set SCULPT_API_PORT or pass --base-url."
+            }
+          },
+          "outcome": "refused-before-send"
+        }
+      ],
+      "probes": [
+        {
+          "type": "argv",
+          "source": "github.com/imbue-ai/sculptor cdd6dc68: tools/sculpt/sculpt/commands/agent.py#status (reads the agent from the server, sends nothing).",
+          "argv": [
+            "sculpt",
+            "agent",
+            "status",
+            "{env:SCULPT_AGENT_ID}",
+            "--json"
+          ],
+          "results": [
+            {
+              "match": {
+                "exitCode": 0
+              },
+              "result": "available"
+            }
+          ]
+        }
+      ],
+      "addressee": {
+        "process": "none",
+        "limitation": "The agent id is the address; the source does not say whether an agent recreated under the same id is told apart."
+      },
+      "binaries": {
+        "linux": [
+          "sculpt"
+        ],
+        "macos": [
+          "sculpt"
+        ]
+      },
+      "warnings": [
+        "Sculptor refuses a terminal agent that is busy or did not opt in to automated prompts; the text of an event is one argument of the sculpt command, visible to other local users through ps."
+      ],
+      "address": {
+        "env": "SCULPT_AGENT_ID"
+      }
+    },
+    {
       "id": "conductor",
       "about": "Conductor: the cloud API of the workspace queues each event as a message to the agent's own session.",
       "source": "Conductor (closed product), documentation read 2026-11-27: conductor.build/docs/api (endpoints under https://api.conductor.build/v0; \"Pass your API key as a bearer token: Authorization: Bearer <your API key>\"; the example of a cloud workspace calls \"$CONDUCTOR_API_URL/me\" with \"Bearer ${CONDUCTOR_API_KEY:-$CONDUCTOR_API_TOKEN}\"); conductor.build/docs/reference/environment-variables (CONDUCTOR_SESSION_ID: the current session in agent processes; CONDUCTOR_API_URL: set in every cloud workspace, not in local ones; CONDUCTOR_API_KEY: the user's own key, it takes precedence over the workspace token CONDUCTOR_API_TOKEN); api.conductor.build/v0/openapi.json (POST /v0/sessions/{sessionId}/messages, operation message.create: body {message} with message a non-empty string; 201 with messageId, state and deepLink required, state one of queued, sent; 400, 401, 404 and a default error otherwise; /me lies outside /v0, so CONDUCTOR_API_URL is the base without /v0 — the documentation does not say it). Every send is a new message.",
