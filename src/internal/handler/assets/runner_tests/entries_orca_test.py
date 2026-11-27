@@ -106,6 +106,14 @@ def sent(stages, observation="supported", accepted=True, exit_code=0, submit=Non
                                           "_meta": {"runtimeId": "rt-1"}}}
 
 
+def damaged_submit(stages, submit):
+    """A receipt whose submit is present but no submit of the source (null,
+    an empty object, not an object)."""
+    answer = sent(stages)
+    answer["stdout"]["result"]["send"]["prompt"]["submit"] = submit
+    return answer
+
+
 def refused_send(**send):
     body = {"handle": HANDLE, "accepted": False, "bytesWritten": 0}
     body.update(send)
@@ -274,6 +282,18 @@ class OrcaRecordTest(unittest.TestCase):
             ("the terminal process was replaced", sent(["input_accepted"], "incarnation_replaced"), "unknown"),
             ("the paste without its Enter", sent(["input_accepted"], submit={"pastedAt": 1, "withheldFor": "terminal-input"}),
              "unknown"),
+            # terminal-agent-prompt.ts: submit is {pastedAt, renderWait,
+            # enteredAt} once Enter went, or absent; anything else is damaged.
+            ("the turn started, Enter sent", sent(["input_accepted", "turn_started"],
+                                                  submit={"pastedAt": 1, "renderWait": 0, "enteredAt": 2}),
+             "turn-started"),
+            ("input accepted, Enter sent", sent(["input_accepted"], submit={"pastedAt": 1, "renderWait": 0,
+                                                                          "enteredAt": 2}), "input-written"),
+            ("the turn started, a null submit", damaged_submit(["input_accepted", "turn_started"], None), "unknown"),
+            ("the turn started, an empty submit", damaged_submit(["input_accepted", "turn_started"], {}), "unknown"),
+            ("input accepted, a null submit", damaged_submit(["input_accepted"], None), "unknown"),
+            ("input accepted, an empty submit", damaged_submit(["input_accepted"], {}), "unknown"),
+            ("input accepted, a submit that is no object", damaged_submit(["input_accepted"], "entered"), "unknown"),
             ("a write of unproven fate", refused_send(writeSettlement={"outcome": "unverifiable",
                                                                        "reason": "settlement_timeout"}), "unknown"),
             ("unreachable after the request", failed("runtime_unavailable", {"orchestrationRequestId": "req-1"}),
