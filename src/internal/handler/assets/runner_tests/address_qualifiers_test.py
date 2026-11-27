@@ -106,10 +106,18 @@ class AddressQualifierTest(unittest.TestCase):
         if qualifier is not None:
             env[qualifier] = current
         token = env["SKEIN_TOKEN_FILE"]
-        quals = REG.channel(record)["address"].get("qualifiers") or []
+        address = REG.channel(record)["address"]
+        quals = address.get("qualifiers") or []
+        current_of = lambda q: RUNNER.qualifier_value(q, env, address.get("qualifierPaths"),  # noqa: E731
+                                                       address.get("qualifierDefaults"))
         identity = {"process": [os.getpid(), ft.start_of(os.getpid())], "inherited": [], "terminal": None,
                     "addresses": [{"channel": record, "value": value, "env": var,
-                                   "qualifiers": [[q, saved if q == qualifier else env.get(q, "")] for q in quals]}]}
+                                   "qualifiers": [[q, saved if q == qualifier else current_of(q)] for q in quals]}]}
+        capture = (REG.channel(record)["addressee"].get("command") or {}).get("capture") or []
+        if capture:
+            # The preflight captured these paths from the same addressee.
+            same = ANSWERS.get(record, lambda i: {"id": i})(value)
+            identity["captures"] = {record: [[p, RUNNER.capture_value(same, p)] for p in capture]}
         doc = {"method": "detached", "channel": record, "fallbacks": [], "identity": identity, "preflightId": 1}
         journal = RUNNER.Journal(token, ft.ISSUE, secrets=[ft.TOKEN], env=env)
         ledger = RUNNER.Ledger(ft.SERVER, "tok", RUNNER.identity_from_doc(identity), env=env, clock=world.clock.now)
