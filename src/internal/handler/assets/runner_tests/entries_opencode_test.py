@@ -251,6 +251,29 @@ class OpenCodeTest(unittest.TestCase):
         self.assertEqual(RUNNER.load_preflight(self.box.token)["endpoints"],
                          {"opencode-synthetic": self.service.url})
 
+    def test_the_preflight_speaks_of_the_end_its_probe_went_to(self):
+        # Review round 2 of wave 14, row 7 (INV-4): one read of the
+        # registration file per preflight; the service registered again at
+        # another end after the probe does not become the end of the result.
+        self.register()
+        self.service.respond([{"status": 200, "json": SESSION_INFO}])
+        other = fake_channel.FakeHTTPChannel()
+        self.addCleanup(other.close)
+        other.respond([{"status": 200, "json": SESSION_INFO}])
+        real = RUNNER.SystemProbeRunner._http_get
+
+        def probe_then_move(prober, channel, probe, env):
+            answer = real(prober, channel, probe, env)
+            self.register({"url": other.url, "pid": 4243, "password": "c0ffee11"})
+            return answer
+        with mock.patch.object(RUNNER.SystemProbeRunner, "_http_get", probe_then_move):
+            line = self.line()
+        self.assertEqual(line["channel"], "opencode-synthetic", line)
+        self.assertEqual(RUNNER.load_preflight(self.box.token)["endpoints"],
+                         {"opencode-synthetic": self.service.url})
+        self.assertEqual([r["method"] for r in self.service.requests()], ["GET"])
+        self.assertEqual(other.requests(), [])
+
     def test_another_end_than_the_preflight_s_is_a_refusal_before_send(self):
         # The service registered again elsewhere between the preflight and
         # the attempt: nothing goes there. The addressee is the session, and

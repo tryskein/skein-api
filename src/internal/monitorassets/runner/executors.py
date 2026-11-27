@@ -1795,6 +1795,9 @@ class SystemProbeRunner(ProbeRunner):
         # {channel id: {name: path}} the preflight checked (its Context's
         # programs), or None outside a preflight.
         self.programs = None
+        # {channel id: (base URL, user, password)} the preflight read (its
+        # Context's endpoints), or None outside a preflight.
+        self.endpoints = None
 
     def _checked(self, channel):
         """The programs the preflight checked for channel, or None."""
@@ -1825,7 +1828,11 @@ class SystemProbeRunner(ProbeRunner):
         the channel's http executor; its status by the probe's table."""
         executor = channel.get("executor") or {}
         timeout = min(executor.get("timeoutSec") or PROBE_TIMEOUT_SEC, PROBE_TIMEOUT_SEC)
-        result = HTTPExecutor(env, self.secrets).get(executor.get("http") or {}, probe.get("url") or "", timeout)
+        # The end the preflight read for the channel; outside a preflight,
+        # the endpoint file now.
+        endpoint = (self.endpoints or {}).get(channel.get("id"))
+        result = HTTPExecutor(env, self.secrets).get(executor.get("http") or {}, probe.get("url") or "", timeout,
+                                                      endpoint=endpoint)
         if result.timed_out:
             raise ProbeError("timed out after %d s" % timeout)
         for row in probe.get("results") or []:

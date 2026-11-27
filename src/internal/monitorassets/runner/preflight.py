@@ -196,6 +196,11 @@ class Context(object):
         # this preflight checked, resolved once (checked_programs); the
         # probes, the capture and preflight.json take them from here.
         self.programs = {}
+        # {channel id: (base URL, user, password)}: the endpoint file of
+        # each http channel this preflight read, once (preflight_endpoint):
+        # the check of availability, the probes and preflight.json take it
+        # from here, so they all speak of one end.
+        self.endpoints = {}
 
 
 class Choice(object):
@@ -594,7 +599,7 @@ def channel_available(ctx, channel_id):
         # given by the variables of the agent process.
         http = spec.get("http") or {}
         try:
-            endpoint = read_endpoint(http, ctx.env)[0] if http.get("endpointFile") else None
+            endpoint = preflight_endpoint(ctx, channel_id, http)[0] if http.get("endpointFile") else None
             expand_url(http.get("url") or "", ctx.env, endpoint=endpoint)
         except ExecutorRefusal as exc:
             return False, "channel %s: %s" % (channel_id, exc.reason)
@@ -624,6 +629,15 @@ def channel_available(ctx, channel_id):
         # US-11: a .cmd program takes a message file only by an ASCII path.
         return False, "no private message directory of an ASCII path for the .cmd program of %s" % channel_id
     return _probe(ctx, channel_id, channel)
+
+
+def preflight_endpoint(ctx, channel_id, http):
+    """The (base URL, user, password) of the endpoint file of an http
+    channel, read once per preflight and kept in ctx.endpoints;
+    ExecutorRefusal when it cannot be read."""
+    if channel_id not in ctx.endpoints:
+        ctx.endpoints[channel_id] = read_endpoint(http, ctx.env)
+    return ctx.endpoints[channel_id]
 
 
 def _probe(ctx, channel_id, channel):
@@ -1049,17 +1063,17 @@ def instruction(registry, record, choice):
     return " ".join(p for p in parts if p)
 
 
-def _endpoints_doc(registry, env, channel_ids):
+def _endpoints_doc(ctx, channel_ids):
     """{channel id: base URL} of the endpoint files of the chosen channel
-    and its fallbacks as the preflight reads them: a working start that
-    finds another endpoint has another addressee."""
+    and its fallbacks, the one read of this preflight its probes went to:
+    a working attempt that finds another end refuses before send."""
     out = {}
     for cid in channel_ids:
-        channel = registry.channel(cid) if cid else None
+        channel = ctx.registry.channel(cid) if cid else None
         http = ((channel or {}).get("executor") or {}).get("http") or {}
         if http.get("endpointFile"):
             try:
-                out[cid] = read_endpoint(http, env)[0]
+                out[cid] = preflight_endpoint(ctx, cid, http)[0]
             except ExecutorRefusal:
                 pass
     return out
@@ -1137,6 +1151,9 @@ def preflight(token_file, env, registry, settings, detector=None, prober=None, p
     if hasattr(prober, "programs"):
         # The probes and the capture run the programs the preflight checked.
         prober.programs = ctx.programs
+    if hasattr(prober, "endpoints"):
+        # The probes go to the ends the preflight read.
+        prober.endpoints = ctx.endpoints
     ctx.identity = identity(placement, registry, env, detector.address_specs(ctx))
     choice = choose(ctx)
     # The record's warnings go into the instruction (a named record) or are
@@ -1185,7 +1202,7 @@ def preflight(token_file, env, registry, settings, detector=None, prober=None, p
                 "binding": binding,
                 "hostMessage": "; ".join(host_messages) if host_messages else None,
                 "programs": _programs_doc(ctx, [choice.channel] + list(choice.fallbacks)),
-                "endpoints": _endpoints_doc(registry, env, [choice.channel] + list(choice.fallbacks)),
+                "endpoints": _endpoints_doc(ctx, [choice.channel] + list(choice.fallbacks)),
                 "degraded": detector.degraded,
             })
     except (PlatformRefusal, OSError) as exc:
