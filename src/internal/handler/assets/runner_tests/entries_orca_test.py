@@ -90,9 +90,11 @@ def show(incarnation="pty-1:3", agent="codex"):
                                   "_meta": {"runtimeId": "rt-1"}}}
 
 
-def sent(stages, observation="supported", accepted=True, exit_code=0, **send):
+def sent(stages, observation="supported", accepted=True, exit_code=0, submit=None, **send):
     prompt = {"requestId": "req-1", "stages": stages, "provider": "codex", "observation": observation,
               "processIncarnation": "pty-1:3", "generation": 1, "baselineWorkingSequence": 0}
+    if submit is not None:
+        prompt["submit"] = submit
     body = {"handle": HANDLE, "accepted": accepted, "bytesWritten": 120 if accepted else 0, "prompt": prompt}
     body.update(send)
     return {"exit": exit_code, "stdout": {"id": "r2", "ok": True, "result": {"send": body},
