@@ -167,9 +167,9 @@ def _scalar(rest):
         raise _NotRead()
     first = rest[0]
     if first == "'":
-        return _quoted(rest, "'")
+        return _yaml_quoted(rest, "'")
     if first == '"':
-        return _quoted(rest, '"')
+        return _yaml_quoted(rest, '"')
     if first in _VALUE_INDICATORS or rest[:2] in ("- ", "? ", ": ") or rest in ("-", "?", ":"):
         raise _NotRead()
     cut = rest.find(" #")
@@ -191,7 +191,7 @@ def _scalar(rest):
     return value
 
 
-def _quoted(rest, quote):
+def _yaml_quoted(rest, quote):
     out = []
     i = 1
     while i < len(rest):
