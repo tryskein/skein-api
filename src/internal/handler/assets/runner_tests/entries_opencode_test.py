@@ -203,7 +203,13 @@ class OpenCodeTest(unittest.TestCase):
             with self.subTest(case=name):
                 self.service.respond([{"status": 200, "raw": raw}])
                 result = RUNNER.HTTPExecutor(self.env, []).call(spec, "event", 10)
-                self.assertEqual(RUNNER.classify_result(rows, result)[0], "unknown")
+                # With the variables of the call, as the driver classifies:
+                # the whole receipt would be queued, so only the body makes it
+                # unknown (review round 3 of wave 14, row 6).
+                self.assertEqual(RUNNER.classify_result(rows, result, env=self.env)[0], "unknown")
+        self.service.respond([{"status": 200, "json": RECEIPT}])
+        whole_result = RUNNER.HTTPExecutor(self.env, []).call(spec, "event", 10)
+        self.assertEqual(RUNNER.classify_result(rows, whole_result, env=self.env)[0], "queued")
 
     def test_the_check_before_a_send_finds_the_session(self):
         self.register()
