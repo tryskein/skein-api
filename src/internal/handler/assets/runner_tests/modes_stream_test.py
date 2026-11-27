@@ -367,6 +367,42 @@ class StateUnavailableTest(unittest.TestCase):
         self.assertNotIn("delivered", [l.get("reason") for l in out.lines()])
 
 
+class AccessLostInTheHoldTest(unittest.TestCase):
+    """Review of wave 8, row 9: lost access while the rest of a page cannot
+    be saved gives every event without an outcome "access lost" without the
+    preview - the unprinted ones and the rest the state already keeps -
+    before the token goes."""
+
+    LIMITS = {"line": {"max": 400, "unit": "chars"}, "batch": {"max": 700, "unit": "bytes"}}
+
+    def test_a_401_in_the_hold_closes_the_stored_and_the_waiting_events(self):
+        box = Box(self)
+        answer = page(list(range(1, 9)), 8)
+        for n in answer["notifications"]:
+            n["bodyPreview"] = "привет " * 10
+        first = Out()
+        stop, _ = box.cycle(FakeExecutor([answer]), box.output(self.LIMITS, "exit-on-event", out=first),
+                            "exit-on-event")
+        self.assertEqual(stop.reason, "delivered")
+        printed = [l["notification"]["id"] for l in first.lines() if l["event"] == "notification"]
+        self.assertIsNotNone(RUNNER.load_remainder(box.token, RUNNER.load_cursor(box.token)))
+
+        def refuse(*args):
+            raise OSError(28, "No space left on device")
+        second = Out()
+        with mock.patch.object(RUNNER, "save_remainder", refuse):
+            stop, _ = box.cycle(FakeExecutor([answer, 401]), box.output(self.LIMITS, "exit-on-event", out=second),
+                                "exit-on-event")
+        self.assertEqual(stop.reason, "token_expired")
+        printed += [l["notification"]["id"] for l in second.lines() if l["event"] == "notification"]
+        self.assertLess(len(printed), 8)
+        lost = [l for l in box.journal_lines()
+                if l.get("event") == "delivery" and l.get("status") == RUNNER.OUTCOME_ACCESS_LOST]
+        self.assertEqual(sorted(l["notificationId"] for l in lost), [i for i in range(1, 9) if i not in printed])
+        self.assertFalse(any("bodyPreview" in l for l in lost))
+        self.assertFalse(os.path.exists(box.token))
+
+
 class ExitOnEventTest(unittest.TestCase):
     """Matrix row #41 (US-3 "the stdout guarantee", INV-11)."""
 

@@ -446,7 +446,27 @@ def run_stream_loop(executor, base, token, issue, exclusion, token_file, doc, ou
     root = RootClosed(token_file)
 
     def hold(save, *args):
-        _save_or_hold(save, token_file, args, output, executor, base, token, cursor, exclude_session, issue)
+        _save_or_hold(save, token_file, args, output, executor, base, token, cursor, exclude_session, issue,
+                      lambda reason: close_on_access_lost(save, args, reason))
+
+    def close_on_access_lost(save, args, reason):
+        # Lost access while the state cannot be written: every event without
+        # an outcome - the unprinted ones being saved and the rest of a page
+        # the state already keeps - gets "access lost" without the preview
+        # before the stop deletes the token (US-12).
+        waiting = list(args[1]) if save is save_remainder else []
+        stored = load_remainder(token_file, cursor) if exit_on_event else None
+        if stored is not None:
+            waiting.extend(n for n in stored[0] if not isinstance(n, dict) or n.get("id") not in seen)
+        items, ids = [], set()
+        for n in waiting:
+            key = n.get("id") if isinstance(n, dict) else None
+            if key is None or key in ids:
+                continue
+            ids.add(key)
+            items.append((n, OUTCOME_ACCESS_LOST))
+        if items:
+            close_stored(output.journal, doc.get("method"), items, reason, env)
 
     # (events, cursor after the page, rootClosed) of a page received but not
     # yet given an outcome in full; an exit-on-event cycle resumes it from
@@ -596,7 +616,8 @@ def limited_write(doc):
     return write
 
 
-def _save_or_hold(save, token_file, args, output, executor, base, token, cursor, exclude_session, issue):
+def _save_or_hold(save, token_file, args, output, executor, base, token, cursor, exclude_session, issue,
+                  on_access_lost=None):
     """Write the monitor state (the cursor, or the ids printed from a
     partial page). The run goes on only once it is written: the cursor in
     memory moves after its state, and exit-on-event prints delivered only
@@ -605,7 +626,8 @@ def _save_or_hold(save, token_file, args, output, executor, base, token, cursor,
     degraded state_unavailable once, keeps the access boundary by polling at
     the last saved cursor (401 and 403 still stop it; what such a poll
     returns is not delivered) and tries again every poll interval; recovered
-    once it is written."""
+    once it is written. Before a stop by lost access, on_access_lost(reason)
+    gives the events without an outcome theirs."""
     failed_at = None
     while True:
         try:
@@ -622,10 +644,11 @@ def _save_or_hold(save, token_file, args, output, executor, base, token, cursor,
                               "that the directory of the token file can be written." % issue})
             time.sleep(jitter(float(POLL_INTERVAL_SEC)))
             status, _, _ = poll_once(executor, base, token, cursor, exclude_session)
-            if status == 401:
-                raise Stop("token_expired", status=401, delete_token=True)
-            if status == 403:
-                raise Stop("visibility_lost", status=403, delete_token=True)
+            if status in (401, 403):
+                reason = "token_expired" if status == 401 else "visibility_lost"
+                if on_access_lost is not None:
+                    on_access_lost(reason)
+                raise Stop(reason, status=status, delete_token=True)
             continue
         if failed_at is not None:
             output.lifecycle({"event": "recovered", "cause": "state_unavailable", "issue": issue,
