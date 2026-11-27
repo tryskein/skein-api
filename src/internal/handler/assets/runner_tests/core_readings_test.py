@@ -416,8 +416,9 @@ class CaptureBeforeTransferTest(unittest.TestCase):
 class LauncherTest(unittest.TestCase):
     """A host that launches agents: the agent it launched skips its own
     methods but the kept ones, the host goes first at step 5 (the method
-    order, "agent under Paseo"); not launched by it: a nested agent, the
-    host's own terminal, the variables without the host's process."""
+    order, "agent under Paseo"); the host's own terminal keeps the same;
+    not launched by it: a nested agent, the variables without the host's
+    process."""
 
     ENV = {"PATH": os.environ.get("PATH", os.defpath), "HOST_AGENT_ID": "agent-1", "FIRST_ID": "first-1",
            "BETA_THREAD": "thread-1"}
@@ -451,10 +452,13 @@ class LauncherTest(unittest.TestCase):
                 self.assertIn("launch", ctx.identity.inherited)
                 self.assertEqual(RUNNER.choose(ctx).channel, chosen)
 
-    def test_the_host_terminal_is_its_session_not_a_launch(self):
+    def test_the_host_terminal_is_its_session_and_keeps_what_the_launcher_names(self):
+        # The addressee is the host's session (identity.terminal), and its
+        # record keeps only the launcher's keeps, as an agent the host
+        # launched (the ACP terminal of Paseo): gamma keeps nothing.
         ctx = context(["bash", "host-daemon"], "gamma", self.ENV)
         self.assertEqual(ctx.identity.terminal, "launch")
-        self.assertIsNone(ctx.detector.under_host(ctx))
+        self.assertEqual(ctx.detector.under_host(ctx), ("launch", ()))
         self.assertEqual(RUNNER.choose(ctx).channel, "launch")
 
 
