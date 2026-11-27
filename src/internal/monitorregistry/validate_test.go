@@ -383,6 +383,9 @@ func TestValidate_RejectsEachRule(t *testing.T) {
 				Feed: FeedStdin, TimeoutSec: 5}, Outcomes: []OutcomeRow{{Match: Match{ExitCode: intp(0)}, Outcome: OutcomeInputWritten}}}
 			r.Channels[2].Outcomes = []OutcomeRow{{Match: Match{ExitCode: intp(0)}, Outcome: OutcomeQueued}}
 		}, RuleInvalid},
+		{"a variable in stderrJson", func(r *Registry) {
+			r.Channels[0].Outcomes[0].Match.StderrJSON = map[string]string{"id": "{env:ALPHA_ID}"}
+		}, RuleInvalid},
 		{"two rows of a call still running", func(r *Registry) {
 			r.Channels[0].Executor.Detach = true
 			r.Channels[0].Outcomes = append(r.Channels[0].Outcomes,
@@ -1282,5 +1285,57 @@ func TestValidate_AKeyMayBeAnyPrintableText(t *testing.T) {
 		"stages.\u00b2": "c"}
 	if err := r.Validate(); err != nil {
 		t.Fatalf("a path with printable Unicode keys was refused: %v", err)
+	}
+}
+
+// TestValidate_PhrasesThatRunOnOverlap — "session busy" and "busy now" are
+// both in "session busy now": such rows are refused; phrases no run of text
+// joins stay apart (review of wave 12 round 2, warning 15).
+func TestValidate_PhrasesThatRunOnOverlap(t *testing.T) {
+	for _, tc := range []struct {
+		a, b      string
+		ambiguous bool
+	}{
+		{"session busy", "busy now", true},
+		{"busy now", "session busy", true},
+		{"not found", "found it", true},
+		{"busy", "gone", false},
+	} {
+		r := validRegistry()
+		r.Channels[1].Outcomes = append(r.Channels[1].Outcomes,
+			OutcomeRow{Match: Match{ExitCode: intp(4), StderrContains: strp(tc.a)}, Outcome: OutcomeRefused},
+			OutcomeRow{Match: Match{ExitCode: intp(4), StderrContains: strp(tc.b)}, Outcome: OutcomeUnknown})
+		err := r.Validate()
+		if got := err != nil && slices.Contains(rulesOf(t, err), RuleAmbiguousSign); got != tc.ambiguous {
+			t.Fatalf("%q and %q: ambiguous %v, want %v (%v)", tc.a, tc.b, got, tc.ambiguous, err)
+		}
+	}
+}
+
+// TestValidate_ATypeAndALiteralOnOnePath — a row with jsonType object (or
+// list) and a row with a literal on the same path cannot match one answer:
+// the runner never compares an object or a list with a literal. A string
+// type and any literal, a boolean and "true", a number and "3" can.
+func TestValidate_ATypeAndALiteralOnOnePath(t *testing.T) {
+	for _, tc := range []struct {
+		kind, literal string
+		ambiguous     bool
+	}{
+		{"object", "x", false},
+		{"list", "{env:ALPHA_ID}", false},
+		{"boolean", "yes", false},
+		{"number", "abc", false},
+		{"string", "x", true},
+		{"boolean", "true", true},
+		{"number", "3", true},
+	} {
+		r := validRegistry()
+		r.Channels[1].Outcomes = append(r.Channels[1].Outcomes,
+			OutcomeRow{Match: Match{ExitCode: intp(5), JSONType: map[string]string{"data": tc.kind}}, Outcome: OutcomeRefused},
+			OutcomeRow{Match: Match{ExitCode: intp(5), JSON: map[string]string{"data": tc.literal}}, Outcome: OutcomeUnknown})
+		err := r.Validate()
+		if got := err != nil && slices.Contains(rulesOf(t, err), RuleAmbiguousSign); got != tc.ambiguous {
+			t.Fatalf("%s and %q: ambiguous %v, want %v (%v)", tc.kind, tc.literal, got, tc.ambiguous, err)
+		}
 	}
 }

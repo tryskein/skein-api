@@ -1,6 +1,7 @@
 package monitorregistry
 
 import (
+	"encoding/json"
 	"fmt"
 	"maps"
 	"net/url"
@@ -1062,6 +1063,11 @@ func (v *validator) signs(path string, rows []Match) {
 		}
 		for _, k := range slices.Sorted(maps.Keys(m.StderrJSON)) {
 			v.jsonPath(rpath+".stderrJson", k)
+			// The runner compares stderrJson literally: a variable there
+			// would match nothing.
+			if isEnvRef(m.StderrJSON[k]) {
+				v.add(RuleInvalid, rpath+".stderrJson."+k, "a stderrJson value is a literal, not a variable")
+			}
 		}
 		for _, k := range slices.Sorted(maps.Keys(m.JSONType)) {
 			v.jsonPath(rpath+".jsonType", k)
@@ -1206,10 +1212,11 @@ func (m Match) overlaps(o Match) bool {
 	if m.StderrEmpty != nil && o.StderrEmpty != nil && *m.StderrEmpty != *o.StderrEmpty {
 		return false
 	}
-	// One stderr holds a phrase and every phrase inside it: two phrases are
-	// apart only when neither holds the other.
-	if m.StderrContains != nil && o.StderrContains != nil &&
-		!strings.Contains(*m.StderrContains, *o.StderrContains) && !strings.Contains(*o.StderrContains, *m.StderrContains) {
+	// One stderr holds a phrase and every phrase inside it, and one run of
+	// text holds two phrases whose ends overlap ("session busy" and "busy
+	// now" in "session busy now"): two phrases are apart only when neither
+	// holds the other nor runs on into it.
+	if m.StderrContains != nil && o.StderrContains != nil && phrasesApart(*m.StderrContains, *o.StderrContains) {
 		return false
 	}
 	// An empty stderr holds no JSON document.
@@ -1251,6 +1258,18 @@ func (m Match) overlaps(o Match) bool {
 			return false
 		}
 	}
+	// A literal (or a variable's value) on a typed path of the other row:
+	// apart when no value of that type compares equal to it.
+	for k, kind := range m.JSONType {
+		if want, both := o.JSON[k]; both && !literalOfType(want, kind) {
+			return false
+		}
+	}
+	for k, kind := range o.JSONType {
+		if want, both := m.JSON[k]; both && !literalOfType(want, kind) {
+			return false
+		}
+	}
 	for k := range o.JSONType {
 		if absentAt(m.JSONAbsent, k) {
 			return false
@@ -1262,6 +1281,40 @@ func (m Match) overlaps(o Match) bool {
 		}
 	}
 	return true
+}
+
+// phrasesApart reports whether no run of text holds both phrases as one
+// piece: neither holds the other and no end of one is the start of the
+// other.
+func phrasesApart(a, b string) bool {
+	if strings.Contains(a, b) || strings.Contains(b, a) {
+		return false
+	}
+	for _, pair := range [][2]string{{a, b}, {b, a}} {
+		for n := 1; n < len(pair[0]) && n < len(pair[1]); n++ {
+			if strings.HasSuffix(pair[0], pair[1][:n]) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// literalOfType reports whether a value of the JSON type kind can compare
+// equal to a json criterion: the runner compares a string as itself and a
+// number, a boolean or null in its JSON form, never an object or a list
+// (executors.py#json_path_value); a variable's value is a string.
+func literalOfType(want, kind string) bool {
+	switch kind {
+	case "string":
+		return true
+	case "boolean":
+		return isEnvRef(want) || want == "true" || want == "false"
+	case "number":
+		var n json.Number
+		return isEnvRef(want) || (json.Unmarshal([]byte(want), &n) == nil && want == strings.TrimSpace(want))
+	}
+	return false
 }
 
 // absentAt reports whether a path that holds a value cannot be there when
