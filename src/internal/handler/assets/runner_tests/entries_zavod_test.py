@@ -102,7 +102,8 @@ class SendTest(unittest.TestCase):
                  ("14", [envelope(14, "protocol_error")], "unknown", 1),
                  ("11 with another code", [envelope(11, "letter_rejected")], "unknown", 1),
                  ("11 with a corrupt envelope", [{"exit": 11, "stdout": "{not json"}], "unknown", 1),
-                 ("12", [envelope(12, "no_connection")], "refused-before-send", RUNNER.MAX_CALLS)]
+                 # INV-8: a delivery takes at most three calls.
+                 ("12", [envelope(12, "no_connection")], "refused-before-send", 3)]
         for name, answers, status, calls in cases:
             with self.subTest(code=name):
                 world, mon = zavod_monitor(self, answers)
