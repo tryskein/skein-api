@@ -478,6 +478,21 @@ def delivery_sink(journal, token_file, doc, env, base, issue, token, executor, e
                         cancel=cancel, clock=clock, exclusion=exclusion)
 
 
+def detached_failure_line(journal):
+    """The listener of the detached calls (DetachedCalls.on_failure): a
+    kill at a deadline or at the stop that could not end the tree of a call
+    is a line of the journal of its own, detached_tree_kill_failed with the
+    program of the channel and the failure (treeKill). The call's outcome,
+    unknown, is already in the journal: a delivery line is one change of a
+    status, and this is none."""
+    def listen(key, failure):
+        try:
+            journal.lifecycle("detached_tree_kill_failed", program=key[0] if key else None, treeKill=failure)
+        except JournalUnavailable:
+            pass
+    return listen
+
+
 def run_detached_child():
     """The detached child: start in the lock order, hand the receipt, then
     poll into the journal until a stop. Returns the exit code."""
@@ -513,6 +528,7 @@ def _run_detached_child(held, issue, token_file):
             held.begin(token_file, env, settings, issue)
             journal = Journal(token_file, issue, secrets=monitor_secrets(held.token, env, load_registry(),
                                                                          held.doc.get("record")), env=env)
+            DETACHED_CALLS.on_failure = detached_failure_line(journal)
             # Ready means the journal took the monitor_started line: a
             # journal that refuses it is a refused start, before the receipt.
             fields = dict(held.line)
@@ -643,6 +659,7 @@ def _run_foreground(held, token_file, issue, env, settings, doc):
             limits = StreamLimits(held.doc.get("limits"))
             secrets = monitor_secrets(held.token, env, load_registry(), held.doc.get("record"))
             journal = Journal(token_file, issue, secrets=secrets, env=env)
+            DETACHED_CALLS.on_failure = detached_failure_line(journal)
             output = StreamOutput(limits, journal, held.doc.get("method"), issue=issue, secrets=secrets)
             # exit-on-event: monitor_started is part of the cycle's output,
             # which keeps room for its stop line from the start.

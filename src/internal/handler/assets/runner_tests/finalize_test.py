@@ -676,7 +676,22 @@ class StopReceiptByDetachedCallTest(unittest.TestCase):
     # unknown.
     ROWS = TABLE + [{"match": {"stillRunning": True}, "outcome": "unknown"}]
 
-    def child_stop(self, end, events=()):
+    def test_a_failed_kill_at_the_stop_is_a_line_of_the_journal(self):
+        # Review round 2 of wave 14, row 3: the event was given as unknown
+        # at the end of its window; the kill of its tree at the stop that
+        # could not end it is a line of its own, without a status (a
+        # delivery line is one change of a status, and this is none).
+        failure = "TerminateJobObject error 5"
+        world, _ = self.child_stop(lambda r: r.access_stop("token_expired"), events=[note(1)],
+                                   tree_kill=failure)
+        mon = self.mon
+        kills = [l for l in mon.lines() if l.get("event") == "detached_tree_kill_failed"]
+        self.assertEqual([(l.get("program"), l.get("treeKill")) for l in kills], [("chan-a", failure)])
+        self.assertNotIn("status", kills[0])
+        deliveries = [l for l in mon.lines() if l.get("event") == "delivery"]
+        self.assertEqual([l["status"] for l in deliveries][-1:], ["unknown"])
+
+    def child_stop(self, end, events=(), tree_kill=None):
         """Run the detached child of a fresh world: its poll delivers the
         notes events, then raises end(runner); returns the world and its
         detached calls."""
@@ -685,7 +700,16 @@ class StopReceiptByDetachedCallTest(unittest.TestCase):
         world = World(self, [rec])
         world.prog("chan-a").respond([{"hang": True}])
         r = world.runner
-        mon = world.monitor(fallbacks=())
+        mon = self.mon = world.monitor(fallbacks=())
+        if tree_kill is not None:
+            kill_group = r.PosixPlatform.kill_group
+
+            def failing(proc, job):
+                kill_group(proc.pid)
+                return tree_kill
+            patch = mock.patch.object(r.PosixPlatform, "tree_kill", staticmethod(failing))
+            patch.start()
+            self.addCleanup(patch.stop)
         doc = {"method": "detached", "channel": "A", "fallbacks": [], "identity": ADDRESS, "preflightId": 1,
                "announced": True}
         calls = r.DetachedCalls()

@@ -53,6 +53,9 @@ if mode == "slow":
 sys.exit(0)
 '''
 
+# What a kill of a tree that failed reports (a Windows job object call).
+FAILURE = "TerminateJobObject error 5"
+
 # The table of the synthetic channel, in the form of the Hermes record.
 ROWS = [
     {"match": {"exitCode": 0}, "outcome": "queued"},
@@ -214,6 +217,43 @@ class DetachedCallTest(unittest.TestCase):
             reaper.join(30)
             second.join(30)
         self.assertEqual(order, ["old tree killed", "second call admitted"])
+
+    def failing_kill(self):
+        """The tree kill of the platform kills the group but reports a
+        failure, as a job object call of Windows that failed does."""
+        kill_group = RUNNER.PosixPlatform.kill_group
+
+        def tree_kill(proc, job):
+            kill_group(proc.pid)
+            return FAILURE
+        return mock.patch.object(RUNNER.PosixPlatform, "tree_kill", staticmethod(tree_kill))
+
+    def test_a_kill_that_cannot_end_the_tree_is_never_lost(self):
+        # Review round 2 of wave 14, row 3: whatever way the call ends, a
+        # failed kill of its tree is told; a call that gave its outcome
+        # carries it (unknown with the sign treeKill), a call already given
+        # as unknown tells the listener of the calls.
+        with self.failing_kill():
+            calls = RUNNER.DetachedCalls(clock=lambda: 0.0)
+            self.addCleanup(calls.end_all)
+            early = self.detached("ok", calls)
+            self.assertEqual(early.exit_code, 0)
+            self.assertEqual(RUNNER.classify_result(ROWS, early), ("unknown", {"treeKill": FAILURE}))
+
+            closing = RUNNER.DetachedCalls(clock=lambda: 0.0)
+            closing.closing = True
+            killed = self.detached("slow", closing)
+            self.assertTrue(killed.still_running)
+            self.assertEqual(RUNNER.classify_result(ROWS, killed), ("unknown", {"treeKill": FAILURE}))
+            self.assertEqual(closing.running(), [])
+
+            told = []
+            stopped = RUNNER.DetachedCalls(clock=lambda: 0.0)
+            stopped.on_failure = lambda key, failure: told.append((key, failure))
+            self.assertTrue(self.detached("slow", stopped).still_running)
+            self.assertEqual(told, [])
+            stopped.close()
+            self.assertEqual(told, [("channel", FAILURE)])
 
     def test_a_program_left_to_run_is_reaped_once_it_ends(self):
         calls = RUNNER.DetachedCalls(clock=lambda: 0.0)

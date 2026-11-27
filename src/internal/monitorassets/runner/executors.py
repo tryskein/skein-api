@@ -573,6 +573,10 @@ class DetachedCalls(object):
         self._calls = {}
         # Set when the monitor stops: no call is left running from then on.
         self.closing = False
+        # on_failure(key, failure) hears of a kill at a deadline or at the
+        # stop that could not end a tree (the call's outcome, unknown, was
+        # given at the end of its window); None hears nothing.
+        self.on_failure = None
 
     def admit(self, key):
         """Raise ExecutorRefusal when a call of this channel still runs: a
@@ -618,8 +622,7 @@ class DetachedCalls(object):
             now = self.clock()
             for key, (proc, tree, deadline) in list(self._calls.items()):
                 if _ended_unreaped(proc) or now >= deadline:
-                    _end_tree(proc, tree)
-                    del self._calls[key]
+                    self._end(key, proc, tree)
 
     def close(self):
         """The monitor stops: no call is left running from now on, and every
@@ -633,8 +636,18 @@ class DetachedCalls(object):
         """Kill and reap every program left running."""
         with self._lock:
             for key, (proc, tree, _) in list(self._calls.items()):
-                _end_tree(proc, tree)
-                del self._calls[key]
+                self._end(key, proc, tree)
+
+    def _end(self, key, proc, tree):
+        # Under the lock: the record goes once its tree is killed.
+        failure = _end_tree(proc, tree)
+        del self._calls[key]
+        if failure and self.on_failure is not None:
+            try:
+                self.on_failure(key, failure)
+            except Exception:
+                # The clean-up goes on whatever the listener does.
+                pass
 
 
 # How often a watcher of a detached call looks at its program and its
@@ -644,12 +657,10 @@ _DETACHED_WATCH_STEP_SEC = 1.0
 
 def _end_tree(proc, tree):
     """Kill what is left of a call's tree (its descendants too) and reap
-    its program."""
+    its program; why the kill could not end the tree, or None."""
     tree.kill()
-    try:
-        proc.wait(timeout=_READER_GRACE_SEC)
-    except subprocess.TimeoutExpired:
-        pass
+    _reap(proc)
+    return tree.failure
 
 
 # The detached calls of this process.
@@ -698,31 +709,51 @@ def run_detached(argv, env, stdin_data, wait_sec, secrets=(), key=None, calls=No
             # A writer of its own: a program that reads its stdin late never
             # holds the call past its time.
             _Writer(proc.stdin, stdin_data).start()
-        try:
-            exit_code = proc.wait(timeout=max(wait_sec, 0))
-        except subprocess.TimeoutExpired:
-            # A closing monitor leaves no call running: it is killed now,
-            # and the call is unknown all the same.
-            left = calls.leave(key, proc, tree, started + max(wait_sec, 0) + DETACHED_GRACE_SEC)
-            return CallResult(None, b"", b"", False, still_running=True)
-        stdout, cut = _read_capped(out)
-        stderr, err_cut = _read_capped(err)
-        return CallResult(exit_code, stdout, stderr, False, truncated=cut, stderr_truncated=err_cut)
+        if _wait_unreaped(proc, max(wait_sec, 0)):
+            # An exit within the window: the tree goes before the program is
+            # reaped (the id of its group is not reused before the kill), and
+            # a kill that could not end it leaves the call unknown.
+            tree.kill()
+            exit_code = _reap(proc)
+            stdout, cut = _read_capped(out)
+            stderr, err_cut = _read_capped(err)
+            return CallResult(exit_code, stdout, stderr, False, truncated=cut, tree_failure=tree.failure,
+                              stderr_truncated=err_cut)
+        # A closing monitor leaves no call running: it is killed now, and
+        # the call is unknown all the same, with the failure of that kill.
+        left = calls.leave(key, proc, tree, started + max(wait_sec, 0) + DETACHED_GRACE_SEC)
+        return CallResult(None, b"", b"", False, still_running=True, tree_failure=None if left else tree.failure)
     finally:
-        if not left and proc is not None:
-            # An exit within the window, an error or a stop signal: nothing
-            # of the call outlives it.
+        if not left and proc is not None and proc.returncode is None:
+            # An error or a stop signal during the call: nothing of it
+            # outlives it.
             if tree is not None:
                 tree.kill()
             else:
                 _kill_quietly(proc)
-            if proc.returncode is None:
-                try:
-                    proc.wait(timeout=_READER_GRACE_SEC)
-                except subprocess.TimeoutExpired:
-                    pass
+            _reap(proc)
         out.close()
         err.close()
+
+
+def _wait_unreaped(proc, timeout_sec):
+    """Whether the program ends within timeout_sec, leaving it unreaped
+    where the system allows it (_ended_unreaped)."""
+    deadline = time.monotonic() + timeout_sec
+    while not _ended_unreaped(proc):
+        left = deadline - time.monotonic()
+        if left <= 0:
+            return False
+        time.sleep(min(_WAIT_STEP_SEC, left))
+    return True
+
+
+def _reap(proc):
+    """Reap the program within one grace; its exit code, or None."""
+    try:
+        return proc.wait(timeout=_READER_GRACE_SEC)
+    except subprocess.TimeoutExpired:
+        return None
 
 
 def _ended_unreaped(proc):
