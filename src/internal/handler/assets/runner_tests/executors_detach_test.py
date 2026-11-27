@@ -45,11 +45,30 @@ if mode == "tree":
     with open(os.environ["MARK"] + ".pids", "w") as fh:
         fh.write("%d %d" % (os.getpid(), child.pid))
     time.sleep(600)
+if mode == "orphan":
+    # The program ends at once and leaves a descendant of its tree running.
+    child = __import__("subprocess").Popen([sys.executable, "-c", "import time; time.sleep(600)"])
+    with open(os.environ["MARK"] + ".pids", "w") as fh:
+        fh.write("%d %d" % (os.getpid(), child.pid))
+    sys.exit(0)
 if mode == "noisy":
     # More output than the cap, on both streams.
     size = int(os.environ["NOISE"])
     sys.stdout.write("o" * size)
     sys.stderr.write("e" * size)
+    sys.exit(0)
+if mode == "noisy-live":
+    # More output than the cap on both streams while the call lives, then
+    # it waits to be let go.
+    size = int(os.environ["NOISE"])
+    sys.stdout.write("o" * size)
+    sys.stdout.flush()
+    sys.stderr.write("e" * size)
+    sys.stderr.flush()
+    with open(os.environ["MARK"] + ".written", "w") as fh:
+        fh.write(str(os.getpid()))
+    while not os.path.exists(os.environ["MARK"] + ".go"):
+        time.sleep(0.05)
     sys.exit(0)
 if mode == "slow":
     while not os.path.exists(os.environ["MARK"] + ".go"):
@@ -58,6 +77,10 @@ if mode == "slow":
         fh.write("done")
 sys.exit(0)
 '''
+
+# A detached call lives no longer than the call window of its record plus
+# this, then its tree is killed (spec, INV-8), not from the runner.
+DETACHED_GRACE_SPEC_SEC = 30
 
 # What a kill of a tree that failed reports (a Windows job object call).
 FAILURE = "TerminateJobObject error 5"
@@ -162,16 +185,17 @@ class DetachedCallTest(unittest.TestCase):
             result = self.detached("tree", calls)
             self.assertTrue(result.still_running)
             program, child = self.pids()
-            # One second before the window plus the grace: it runs on
-            # through two more looks of the watcher.
-            now[0] = 1000.0 + 0.2 + RUNNER.DETACHED_GRACE_SEC - 1
+            # Just before the window plus the grace of INV-8 (review round 3
+            # of wave 14, row 10): it runs on through two more looks of the
+            # watcher.
+            now[0] = 1000.0 + 0.2 + DETACHED_GRACE_SPEC_SEC - 0.001
             seen = looks[0]
             self.assertTrue(wait_until(lambda: looks[0] >= seen + 2), "the watcher does not look")
             self.assertTrue(alive(program) and alive(child))
             self.assertEqual(calls.running(), ["channel"])
             # At the deadline: the watcher kills the program and its
             # descendant.
-            now[0] = 1000.0 + 0.2 + RUNNER.DETACHED_GRACE_SEC
+            now[0] = 1000.0 + 0.2 + DETACHED_GRACE_SPEC_SEC
             self.assertTrue(wait_until(lambda: calls.running() == []), "the watcher did not end the call")
         self.assertTrue(gone(program) and gone(child), "the tree of the hung call outlived its deadline")
 
@@ -186,13 +210,18 @@ class DetachedCallTest(unittest.TestCase):
         self.assertEqual(calls.running(), ["channel", "other"])
 
     def test_no_second_call_of_a_channel_while_its_old_tree_is_being_killed(self):
-        # Review round 2 of wave 14, row 5: the record of a channel leaves
-        # the table only once its tree is killed, under the lock a new call
-        # is admitted under.
+        # Review round 2 of wave 14, row 5, and round 3, row 1: the record of
+        # a channel leaves the table only once its tree is killed, under the
+        # lock a new call is admitted under. The second call is seen waiting
+        # on that lock while the kill runs (an event, not a wait of a fixed
+        # time).
         now = [1000.0]
         calls = RUNNER.DetachedCalls(clock=lambda: now[0])
         self.addCleanup(calls.end_all)
+        contended = threading.Event()
+        calls._lock = _SeenLock(calls._lock, contended)
         self.assertTrue(self.detached("tree", calls).still_running)
+        program, child = self.pids()
         end_tree = RUNNER._end_tree
         killing, killed = threading.Event(), threading.Event()
         order = []
@@ -200,29 +229,30 @@ class DetachedCallTest(unittest.TestCase):
         def slow_end_tree(proc, tree):
             killing.set()
             killed.wait(30)
-            end_tree(proc, tree)
+            failure = end_tree(proc, tree)
             order.append("old tree killed")
+            return failure
 
         def second_call():
             try:
-                calls.admit("channel")
+                calls.reserve("channel")
                 order.append("second call admitted")
             except RUNNER.ExecutorRefusal:
                 order.append("second call refused")
         with mock.patch.object(RUNNER, "_end_tree", slow_end_tree):
-            now[0] = 1000.0 + 0.2 + RUNNER.DETACHED_GRACE_SEC
+            now[0] = 1000.0 + 0.2 + DETACHED_GRACE_SPEC_SEC
             reaper = threading.Thread(target=calls.reap)
             reaper.start()
             self.assertTrue(killing.wait(30), "the deadline did not kill the tree")
             second = threading.Thread(target=second_call)
             second.start()
-            # A second call let in now would be admitted while the old tree
-            # lives: it is given the time to get through before the kill.
-            second.join(0.5)
+            waited = contended.wait(10)
             killed.set()
             reaper.join(30)
             second.join(30)
+        self.assertTrue(waited, "the second call was not held while the old tree was killed")
         self.assertEqual(order, ["old tree killed", "second call admitted"])
+        self.assertTrue(gone(program) and gone(child))
 
     def test_the_output_kept_of_a_call_is_capped(self):
         # Review round 2 of wave 14, row 16: the output of a detached call
@@ -237,42 +267,130 @@ class DetachedCallTest(unittest.TestCase):
         self.assertEqual((len(result.stderr), result.stderr_truncated), (RUNNER.OUTPUT_CAP_BYTES, True))
         self.assertIsNone(result.json)
 
+    def test_the_output_of_a_live_call_goes_to_no_file(self):
+        # Review round 3 of wave 14, row 12: while a call left to run lives,
+        # its output goes through pipes read to their end - no file on disk
+        # holds it - so a program that writes past the cap on both streams
+        # is never held on a full pipe either.
+        if not os.path.isdir("/proc"):
+            self.skipTest("the descriptors of a process are read from /proc")
+        self.env["NOISE"] = str(4 * RUNNER.OUTPUT_CAP_BYTES)
+        calls = RUNNER.DetachedCalls(clock=lambda: 0.0)
+        self.addCleanup(calls.end_all)
+        result = RUNNER.run_detached([sys.executable, self.script, "noisy-live"], self.env, b"", 0.2,
+                                     key="channel", calls=calls)
+        self.assertTrue(result.still_running)
+        self.assertTrue(self.wait_for(self.mark + ".written"), "the live call was held writing its output")
+        with open(self.mark + ".written") as fh:
+            pid = int(fh.read())
+        for fd in (1, 2):
+            target = os.readlink("/proc/%d/fd/%d" % (pid, fd))
+            self.assertTrue(target.startswith("pipe:"), "fd %d of the live call is %s" % (fd, target))
+
     def failing_kill(self):
-        """The tree kill of the platform kills the group but reports a
-        failure, as a job object call of Windows that failed does."""
-        kill_group = RUNNER.PosixPlatform.kill_group
+        """The tree kill of the platform fails and kills nothing, as a job
+        object call of Windows that failed may, until self.kill_works is
+        set; then it is the platform's own."""
+        self.kill_works = False
+        real = RUNNER.PosixPlatform.tree_kill
 
         def tree_kill(proc, job):
-            kill_group(proc.pid)
+            if self.kill_works:
+                return real(proc, job)
             return FAILURE
         return mock.patch.object(RUNNER.PosixPlatform, "tree_kill", staticmethod(tree_kill))
 
-    def test_a_kill_that_cannot_end_the_tree_is_never_lost(self):
-        # Review round 2 of wave 14, row 3: whatever way the call ends, a
-        # failed kill of its tree is told; a call that gave its outcome
-        # carries it (unknown with the sign treeKill), a call already given
-        # as unknown tells the listener of the calls.
-        with self.failing_kill():
+    def test_a_kill_that_cannot_end_the_tree_keeps_its_channel(self):
+        # Review round 2 of wave 14, row 3, and round 3, row 2: a failed
+        # kill is in the outcome (unknown with the sign treeKill), and the
+        # call keeps its channel while its tree may live: a second call is
+        # refused before send; the watcher kills the tree again and frees
+        # the channel once the kill works.
+        with self.failing_kill(), mock.patch.object(RUNNER, "_DETACHED_WATCH_STEP_SEC", 0.02):
             calls = RUNNER.DetachedCalls(clock=lambda: 0.0)
             self.addCleanup(calls.end_all)
-            early = self.detached("ok", calls)
+            early = self.detached("orphan", calls)
             self.assertEqual(early.exit_code, 0)
             self.assertEqual(RUNNER.classify_result(ROWS, early), ("unknown", {"treeKill": FAILURE}))
+            program, child = self.pids()
+            self.assertTrue(alive(child))
+            self.assertEqual(calls.running(), ["channel"])
+            with self.assertRaises(RUNNER.ExecutorRefusal):
+                self.detached("ok", calls)
+            self.kill_works = True
+            self.assertTrue(wait_until(lambda: calls.running() == []), "the watcher did not kill the tree again")
+            self.assertTrue(gone(child), "the tree outlived its kill")
+            self.assertEqual(self.detached("ok", calls).exit_code, 0)
 
-            closing = RUNNER.DetachedCalls(clock=lambda: 0.0)
-            closing.closing = True
-            killed = self.detached("slow", closing)
+    def test_a_closing_monitor_keeps_a_tree_it_could_not_kill(self):
+        with self.failing_kill():
+            calls = RUNNER.DetachedCalls(clock=lambda: 0.0)
+            calls.closing = True
+            killed = self.detached("tree", calls)
             self.assertTrue(killed.still_running)
             self.assertEqual(RUNNER.classify_result(ROWS, killed), ("unknown", {"treeKill": FAILURE}))
-            self.assertEqual(closing.running(), [])
+            program, child = self.pids()
+            self.assertEqual(calls.running(), ["channel"])
+            self.kill_works = True
+            calls.close()
+            self.assertEqual(calls.running(), [])
+            self.assertTrue(gone(program) and gone(child))
 
+    def test_a_failed_kill_at_the_stop_is_told(self):
+        # The call was given as unknown at the end of its window: a failed
+        # kill at the stop is told to the listener of the calls.
+        with self.failing_kill():
             told = []
-            stopped = RUNNER.DetachedCalls(clock=lambda: 0.0)
-            stopped.on_failure = lambda key, failure: told.append((key, failure))
-            self.assertTrue(self.detached("slow", stopped).still_running)
+            calls = RUNNER.DetachedCalls(clock=lambda: 0.0)
+            calls.on_failure = lambda key, failure: told.append((key, failure))
+            self.assertTrue(self.detached("tree", calls).still_running)
+            program, child = self.pids()
             self.assertEqual(told, [])
-            stopped.close()
+            calls.close()
             self.assertEqual(told, [("channel", FAILURE)])
+            self.kill_works = True
+            calls.close()
+            self.assertEqual(told, [("channel", FAILURE)])
+            self.assertTrue(gone(program) and gone(child))
+
+    def test_a_stop_signal_during_the_call_loses_no_failed_kill(self):
+        # Review round 3 of wave 14, row 4: a stop signal before the call is
+        # left to run kills the tree; a kill that failed is told and the
+        # call keeps its channel, so the stop of the monitor kills it again.
+        def stop(*args):
+            raise RUNNER.StopSignal()
+        with self.failing_kill():
+            told = []
+            calls = RUNNER.DetachedCalls(clock=lambda: 0.0)
+            calls.on_failure = lambda key, failure: told.append((key, failure))
+            with mock.patch.object(RUNNER, "_wait_unreaped", stop):
+                with self.assertRaises(RUNNER.StopSignal):
+                    self.detached("tree", calls)
+            program, child = self.pids()
+            self.assertEqual(told, [("channel", FAILURE)])
+            self.assertEqual(calls.running(), ["channel"])
+            self.kill_works = True
+            calls.close()
+            self.assertEqual(calls.running(), [])
+            self.assertTrue(gone(program) and gone(child))
+
+    def test_a_stop_signal_while_the_readers_start_stays_a_stop_signal(self):
+        # Review round 3 of wave 14, row 9: a stop signal between the starts
+        # of the two readers reaches the monitor as itself, and nothing of
+        # the call is left.
+        start = RUNNER._Reader.start
+        starts = [0]
+
+        def second_start_stops(reader):
+            starts[0] += 1
+            if starts[0] == 2:
+                raise RUNNER.StopSignal()
+            return start(reader)
+        calls = RUNNER.DetachedCalls(clock=lambda: 0.0)
+        with mock.patch.object(RUNNER._Reader, "start", second_start_stops):
+            with self.assertRaises(RUNNER.StopSignal):
+                self.detached("tree", calls)
+        self.assertEqual(calls.running(), [])
 
     def test_a_program_left_to_run_is_reaped_once_it_ends(self):
         calls = RUNNER.DetachedCalls(clock=lambda: 0.0)
@@ -293,6 +411,32 @@ def wait_until(pred):
             return True
         time.sleep(0.05)
     return False
+
+
+class _SeenLock(object):
+    """A lock that sets seen when an acquire has to wait for it."""
+
+    def __init__(self, lock, seen):
+        self.lock = lock
+        self.seen = seen
+
+    def acquire(self, blocking=True, timeout=-1):
+        if self.lock.acquire(False):
+            return True
+        if not blocking:
+            return False
+        self.seen.set()
+        return self.lock.acquire(True, timeout)
+
+    def release(self):
+        self.lock.release()
+
+    def __enter__(self):
+        self.acquire()
+        return self
+
+    def __exit__(self, *exc):
+        self.release()
 
 
 def _state(pid):

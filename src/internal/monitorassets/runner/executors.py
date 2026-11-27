@@ -579,75 +579,126 @@ def run_program(argv, env, stdin_data, timeout_sec, secrets=()):
 DETACHED_GRACE_SEC = 30.0
 
 
+class _DetachedCall(object):
+    """The record of a detached call of a channel: its program and tree
+    (None until it started), the deadline it is killed at once it was left
+    to run (None while its caller still waits on it), and whether a failed
+    kill of it was told."""
+
+    def __init__(self):
+        self.proc = None
+        self.tree = None
+        self.deadline = None
+        self.told = False
+        self.watched = False
+
+
 class DetachedCalls(object):
-    """The programs of detached calls that outlived their window
-    (registry.go#Executor.Detach), by channel: at most one lives per
-    channel. Each is reaped as it ends, killed with its tree at its hard
-    deadline (the window plus DETACHED_GRACE_SEC) and when the monitor
-    stops (close). A record leaves the table only once its tree is killed
-    and its program reaped, under the same lock a new call of the channel
-    is admitted under: no second call of a channel starts while the first
-    tree lives. Once the monitor stops (closing), no call is left to run on
-    its own: a call still running at the end of its window is killed and
-    is unknown. clock gives the monotonic time the deadlines are kept by."""
+    """The detached calls of channels (registry.go#Executor.Detach), by
+    channel: at most one lives per channel. A call holds its channel from
+    before its program starts (reserve) until its tree is killed and its
+    program reaped, on every way out: an exit within its window, an error
+    or a stop signal (release), or, for a program left to run (leave), its
+    end, its hard deadline (the window plus DETACHED_GRACE_SEC) or the stop
+    of the monitor (close). A kill that could not end the tree, or a
+    program not reaped, keeps the record: the channel takes no second call
+    while the first tree may live, and a watcher kills it again. Every step
+    runs under the lock a new call of the channel is admitted under. Once
+    the monitor stops (closing), no call is left to run on its own: a call
+    still running at the end of its window is killed and is unknown. clock
+    gives the monotonic time the deadlines are kept by."""
 
     def __init__(self, clock=time.monotonic):
         self.clock = clock
         self._lock = threading.RLock()
-        # {channel key: (proc, tree, deadline)}
+        # {channel key: _DetachedCall}
         self._calls = {}
         # Set when the monitor stops: no call is left running from then on.
         self.closing = False
-        # on_failure(key, failure) hears of a kill at a deadline or at the
-        # stop that could not end a tree (the call's outcome, unknown, was
-        # given at the end of its window); None hears nothing.
+        # on_failure(key, failure) hears of a kill that could not end a tree
+        # where no outcome of the call carries it (a deadline, the stop, an
+        # error during the call); told once per call. None hears nothing.
         self.on_failure = None
 
-    def admit(self, key):
-        """Raise ExecutorRefusal when a call of this channel still runs: a
-        refusal before send, retried by the delivery's budget."""
+    def reserve(self, key):
+        """Hold the channel for a new call; ExecutorRefusal when a call of
+        it still holds it: a refusal before send, retried by the delivery's
+        budget."""
         with self._lock:
             self.reap()
             if key in self._calls:
                 raise ExecutorRefusal("a detached call of this channel is still running")
+            self._calls[key] = _DetachedCall()
 
-    def leave(self, key, proc, tree, deadline):
-        """Leave proc running until deadline; a watcher reaps it as it ends
-        and kills it at its deadline. A monitor that is closing leaves
-        nothing: proc is killed now (False)."""
+    def started(self, key, proc, tree):
+        """The program of the call that reserved key runs (tree: None until
+        its tree is made)."""
+        with self._lock:
+            call = self._calls[key]
+            call.proc, call.tree = proc, tree
+
+    def leave(self, key, deadline):
+        """Leave the program of key running until deadline; a watcher reaps
+        it as it ends and kills it at its deadline. A monitor that is
+        closing leaves nothing (False): its caller releases it now."""
         with self._lock:
             if self.closing:
-                _end_tree(proc, tree)
                 return False
-            self._calls[key] = (proc, tree, deadline)
-        watcher = threading.Thread(target=self._watch, args=(key, proc))
-        watcher.daemon = True
-        watcher.start()
+            call = self._calls[key]
+            call.deadline = deadline
+            self._watch_call(key, call)
         return True
 
-    def _watch(self, key, proc):
+    def release(self, key, report):
+        """The call of key ends with its caller (an exit within its window,
+        an error, a stop signal, a closing monitor): its tree is killed and
+        its program reaped. Returns why the kill could not end the tree, or
+        None; such a call keeps the channel (a watcher kills it again) and,
+        with report, is told to on_failure."""
+        with self._lock:
+            call = self._calls.get(key)
+            if call is None:
+                return None
+            if call.proc is None:
+                # Nothing started.
+                del self._calls[key]
+                return None
+            return self._end(key, call, report)
+
+    def _watch_call(self, key, call):
+        if call.watched:
+            return
+        call.watched = True
+        watcher = threading.Thread(target=self._watch, args=(key, call))
+        watcher.daemon = True
+        watcher.start()
+
+    def _watch(self, key, call):
         # It only looks: the program is reaped by reap(), after its group
         # is killed, so the id of the group is never reused before.
         while True:
             with self._lock:
-                if self._calls.get(key, (None,))[0] is not proc:
+                if self._calls.get(key) is not call:
                     return
             time.sleep(_DETACHED_WATCH_STEP_SEC)
             self.reap()
 
     def running(self):
-        """The channel keys whose program still runs."""
+        """The channel keys a call still holds."""
         with self._lock:
             return sorted(self._calls)
 
     def reap(self):
-        """Reap the programs that ended and kill the trees of those past
-        their deadline; the others run on."""
+        """Reap the programs left to run that ended, kill the trees of
+        those past their deadline (and again those whose kill failed); the
+        others run on. A call its caller still waits on is its caller's."""
         with self._lock:
             now = self.clock()
-            for key, (proc, tree, deadline) in list(self._calls.items()):
-                if _ended_unreaped(proc) or now >= deadline:
-                    self._end(key, proc, tree)
+            for key, call in list(self._calls.items()):
+                if call.deadline is None:
+                    continue
+                if _ended_unreaped(call.proc) or now >= call.deadline:
+                    self._end(key, call, True)
 
     def close(self):
         """The monitor stops: no call is left running from now on, and every
@@ -660,19 +711,32 @@ class DetachedCalls(object):
     def end_all(self):
         """Kill and reap every program left running."""
         with self._lock:
-            for key, (proc, tree, _) in list(self._calls.items()):
-                self._end(key, proc, tree)
+            for key, call in list(self._calls.items()):
+                if call.deadline is not None:
+                    self._end(key, call, True)
 
-    def _end(self, key, proc, tree):
-        # Under the lock: the record goes once its tree is killed.
-        failure = _end_tree(proc, tree)
-        del self._calls[key]
-        if failure and self.on_failure is not None:
-            try:
-                self.on_failure(key, failure)
-            except Exception:
-                # The clean-up goes on whatever the listener does.
-                pass
+    def _end(self, key, call, report):
+        # Under the lock: the record goes only once the tree is killed and
+        # the program reaped.
+        failure = _end_tree(call.proc, call.tree)
+        if failure is None and call.proc.returncode is not None:
+            del self._calls[key]
+            return None
+        if failure is None:
+            failure = "the program of the call was not reaped after its kill"
+        # Kept, and killed again by a watcher from now on.
+        if call.deadline is None or call.deadline > self.clock():
+            call.deadline = self.clock()
+        self._watch_call(key, call)
+        if report and not call.told:
+            call.told = True
+            if self.on_failure is not None:
+                try:
+                    self.on_failure(key, failure)
+                except Exception:
+                    # The clean-up goes on whatever the listener does.
+                    pass
+        return failure
 
 
 # How often a watcher of a detached call looks at its program and its
@@ -681,11 +745,16 @@ _DETACHED_WATCH_STEP_SEC = 1.0
 
 
 def _end_tree(proc, tree):
-    """Kill what is left of a call's tree (its descendants too) and reap
-    its program; why the kill could not end the tree, or None."""
-    tree.kill()
+    """Kill what is left of a call's tree (its descendants too; the program
+    alone when its tree was never made) and reap its program; why this kill
+    could not end the tree, or None."""
+    if tree is None:
+        _kill_quietly(proc)
+        failure = None
+    else:
+        failure = tree.kill()
     _reap(proc)
-    return tree.failure
+    return failure
 
 
 # The detached calls of this process.
@@ -696,23 +765,25 @@ def run_detached(argv, env, stdin_data, wait_sec, secrets=(), key=None, calls=No
     """Run argv (no shell) as run_program does, as one tree of processes
     (_ProcessTree: its own session on POSIX, a job object on Windows, with
     the options of every call of a channel program), but wait at most
-    wait_sec for its exit (registry.go#Executor.Detach). An exit in that
-    time gives its CallResult and the tree goes. A program still running
-    is left to the detached calls (calls, DETACHED_CALLS by default) under
-    key, the channel: it is killed with its tree at wait_sec plus
-    DETACHED_GRACE_SEC from its start at the latest, and at the end of the
-    monitor; it gives a CallResult with still_running. A call of a channel
-    whose earlier program still runs is refused before send. Raises
-    ExecutorRefusal as run_program does."""
+    wait_sec for its exit (registry.go#Executor.Detach). The call holds its
+    channel (key) in the detached calls (calls, DETACHED_CALLS by default)
+    from before its start; a call of a channel another call still holds is
+    refused before send. An exit in that time gives its CallResult and the
+    tree goes. A program still running is left to the detached calls: it
+    is killed with its tree at wait_sec plus DETACHED_GRACE_SEC from its
+    start at the latest, and at the end of the monitor; it gives a
+    CallResult with still_running. A kill that could not end the tree is
+    in the result (tree_failure) or, after an error or a stop signal, told
+    to the listener of the calls. Raises ExecutorRefusal as run_program
+    does."""
     for s in secrets:
         if s and (any(s in a for a in argv) or (stdin_data is not None and s.encode("utf-8") in stdin_data)):
             raise ExecutorRefusal("the call would carry a secret of the monitor")
     calls = DETACHED_CALLS if calls is None else calls
     key = tuple(argv) if key is None else key
-    calls.admit(key)
+    calls.reserve(key)
     proc = None
-    tree = None
-    left = False
+    done = False
     readers = []
     try:
         try:
@@ -721,14 +792,17 @@ def run_detached(argv, env, stdin_data, wait_sec, secrets=(), key=None, calls=No
                                     **current_platform().tree_popen_options())
         except OSError as exc:
             raise ExecutorRefusal("the program cannot be started (%s)" % (exc.strerror or exc))
+        calls.started(key, proc, None)
         started = calls.clock()
         tree = _ProcessTree(proc)
+        calls.started(key, proc, tree)
         # The output is read through pipes and kept to OUTPUT_CAP_BYTES for
         # the whole life of the program, a program left running past its
         # window too: the rest is read and dropped, nothing piles up.
-        readers = [_Reader(proc.stdout), _Reader(proc.stderr)]
-        for r in readers:
-            r.start()
+        for pipe in (proc.stdout, proc.stderr):
+            reader = _Reader(pipe)
+            reader.start()
+            readers.append(reader)
         tree.start()
         if stdin_data is not None:
             # A writer of its own: a program that reads its stdin late never
@@ -738,31 +812,32 @@ def run_detached(argv, env, stdin_data, wait_sec, secrets=(), key=None, calls=No
             # An exit within the window: the tree goes before the program is
             # reaped (the id of its group is not reused before the kill), and
             # a kill that could not end it leaves the call unknown.
-            tree.kill()
-            exit_code = _reap(proc)
+            done = True
+            failure = calls.release(key, False)
             _join_readers(readers, proc)
-            return CallResult(exit_code, readers[0].data(), readers[1].data(), False, truncated=readers[0].cut,
-                              tree_failure=tree.failure, stderr_truncated=readers[1].cut)
+            return CallResult(proc.returncode, readers[0].data(), readers[1].data(), False,
+                              truncated=readers[0].cut, tree_failure=failure, stderr_truncated=readers[1].cut)
+        done = True
+        if calls.leave(key, started + max(wait_sec, 0) + DETACHED_GRACE_SEC):
+            return CallResult(None, b"", b"", False, still_running=True)
         # A closing monitor leaves no call running: it is killed now, and
         # the call is unknown all the same, with the failure of that kill.
-        left = calls.leave(key, proc, tree, started + max(wait_sec, 0) + DETACHED_GRACE_SEC)
-        return CallResult(None, b"", b"", False, still_running=True, tree_failure=None if left else tree.failure)
+        failure = calls.release(key, False)
+        return CallResult(None, b"", b"", False, still_running=True, tree_failure=failure)
     finally:
-        if not left and proc is not None and proc.returncode is None:
+        if not done:
             # An error or a stop signal during the call: nothing of it
-            # outlives it.
-            if tree is not None:
-                tree.kill()
-            else:
-                _kill_quietly(proc)
-            _reap(proc)
-            _join_readers(readers, proc)
+            # outlives it, and a kill that failed is told.
+            calls.release(key, True)
+            if proc is not None:
+                _join_readers(readers, proc)
 
 
 def _join_readers(readers, proc):
     """Give the readers of a call whose tree is gone one grace to reach the
     end of its pipes, and close the pipes they reached the end of (a pipe
-    a reader still blocks on is left to it)."""
+    a reader still blocks on is left to it); readers holds only the readers
+    that started."""
     deadline = time.monotonic() + _READER_GRACE_SEC
     for r in readers:
         r.join(max(deadline - time.monotonic(), 0))
@@ -1097,10 +1172,15 @@ class _ProcessTree(object):
         current_platform().tree_start(self.proc, self.job)
 
     def kill(self):
-        job, self.job = self.job, None
-        failure = current_platform().tree_kill(self.proc, job)
-        if failure and self.failure is None:
-            self.failure = failure
+        """Kill the tree; why this kill could not end it, or None. A job
+        whose end failed is kept, so a later kill tries it again."""
+        failure = current_platform().tree_kill(self.proc, self.job)
+        if failure:
+            if self.failure is None:
+                self.failure = failure
+            return failure
+        self.job = None
+        return None
 
 
 class MonitorSecrets(list):

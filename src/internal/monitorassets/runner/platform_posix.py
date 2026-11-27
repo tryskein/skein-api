@@ -140,7 +140,22 @@ class PosixPlatform(object):
 
     @staticmethod
     def tree_kill(proc, job):
-        PosixPlatform.kill_group(proc.pid)
+        """SIGKILL the group proc leads; None, or why the group may outlive
+        the call (killpg failed other than for a group that is gone)."""
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            return None
+        except PermissionError as exc:
+            # A group left with only its ended, unreaped leader may answer
+            # EPERM (macOS): nothing of it runs. A leader that still runs
+            # makes it a failure.
+            if proc.poll() is None:
+                return "killpg error %d (%s)" % (exc.errno, exc.strerror)
+            return None
+        except OSError as exc:
+            return "killpg error %d (%s)" % (exc.errno, exc.strerror)
+        return None
 
     @staticmethod
     def kill_group(pgid):
