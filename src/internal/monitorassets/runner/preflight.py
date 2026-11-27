@@ -141,6 +141,12 @@ class Detector(object):
         order."""
         return []
 
+    def blind_reachable(self, ctx):
+        """Channel ids of the blind channels whose text reaches this agent's
+        pane (condition (3) and the multiplexer rules), for a forced one.
+        This one finds none."""
+        return []
+
     def address_specs(self, ctx):
         """The AddressSpecs of the identity of the addressee."""
         return []
@@ -398,6 +404,19 @@ def _inherited(ctx, channel_id):
     return ctx.identity is not None and channel_id in ctx.identity.inherited
 
 
+def _delivery_refusal(ctx, method, channel_id):
+    """Why the own delivery method of a forced channel of step 3 may not be
+    used, or None: the same checks the order makes for it."""
+    if method is None:
+        return "no delivery method of this agent's record names it"
+    under = ctx.detector.under_host(ctx)
+    if under and "delivery" not in set(under[1]):
+        return "not used under host %s" % under[0]
+    agent_proc = ctx.placement.agent if (method.get("conditions") or {}).get("agentOptionsAbsent") else None
+    ok, cause = conditions_hold(method.get("conditions"), ctx.env, agent_proc)
+    return None if ok else cause
+
+
 def choose(ctx):
     """The Choice of the method order. Raises ConfigInvalid for a forced
     channel that belongs to an outer agent."""
@@ -417,14 +436,21 @@ def choose(ctx):
         if channel and channel.get("step") in (5, 6) and not ctx.detector.addressee_holds(ctx, channel):
             return Choice(METHOD_JOURNAL, None,
                           ["forced %s unavailable: its addressee is not this agent" % forced])
-        if ctx.registry.is_blind(forced) and ctx.detector.binding(ctx, forced) is None:
+        if ctx.registry.is_blind(forced) and forced not in ctx.detector.blind_reachable(ctx):
             return Choice(METHOD_JOURNAL, None,
-                          ["forced %s unavailable: the binding to its pane is not confirmed" % forced])
+                          ["forced %s unavailable: its text would not reach this agent's pane" % forced])
+        agent = settings.record.agent if settings.record is not None else None
+        own = [m for m in (agent or {}).get("methods") or []
+               if m.get("kind") == "delivery" and m.get("channel") == forced]
+        if channel and channel.get("step") == 3:
+            # A forced own delivery passes every check the order makes for
+            # it: a method of this record, the kinds a host keeps, the
+            # conditions of the method (US-5, INV-4).
+            cause = _delivery_refusal(ctx, own[0] if own else None, forced)
+            if cause is not None:
+                return Choice(METHOD_JOURNAL, None, ["forced %s unavailable: %s" % (forced, cause)])
         ok, cause = channel_available(ctx, forced)
         if ok:
-            agent = settings.record.agent if settings.record is not None else None
-            own = [m for m in (agent or {}).get("methods") or []
-                   if m.get("kind") == "delivery" and m.get("channel") == forced]
             return Choice(METHOD_DETACHED, forced, ["forced: %s" % forced],
                           record_method=own[0] if own else None)
         # A forced channel has no fallback but the journal.

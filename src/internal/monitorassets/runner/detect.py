@@ -159,7 +159,11 @@ class RegistryDetector(Detector):
         return specs
 
     def addressee_holds(self, ctx, channel):
-        """A forced host passes the same checks as a detected one."""
+        """A forced host passes the same checks as a detected one, the
+        terminal environment of step 6 not inside a multiplexer pane among
+        them."""
+        if channel.get("step") == 6 and self.in_multiplexer(ctx):
+            return False
         return self.detected(ctx, channel)
 
     def _detected_hosts(self, ctx):
@@ -187,6 +191,12 @@ class RegistryDetector(Detector):
         # so do two terminal environments.
         if step5 or step6:
             return []
+        return self.blind_reachable(ctx)
+
+    def blind_reachable(self, ctx):
+        """The blind channels whose text reaches this agent's pane: condition
+        (3) of US-7 and the multiplexer rules, without conditions (1) and
+        (2), which a forced channel lifts (decision 8)."""
         confirmed = [b for b in self.bindings(ctx) if b.confirmed]
         muxes = sorted((b for b in confirmed if b.multiplexer),
                        key=lambda b: b.depth if b.depth is not None else 1 << 30)
