@@ -24,6 +24,7 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest import mock
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -115,7 +116,10 @@ class World(object):
         self.env = fake_channel.with_path({"PATH": os.environ.get("PATH", os.defpath), "HOME": self.root,
                                            "XDG_STATE_HOME": os.path.join(self.root, "state"),
                                            "HOST_URL": self.server.url, "HOST_SESSION": SESSION,
-                                           "HOST_KEY": KEY, "HOST_TOKEN": TOKEN_KEY}, self.bin)
+                                           "HOST_KEY": KEY, "HOST_TOKEN": TOKEN_KEY,
+                                           # No proxy for any host: the
+                                           # requests go to the test servers.
+                                           "no_proxy": "*"}, self.bin)
         self.clock = delivery.Clock()
         registry = {"schemaVersion": 1, "general": {"about": "g", "source": "t", "warnings": ["w"]},
                     "agents": [], "channels": channels or [http_channel()],
@@ -256,8 +260,51 @@ class KeyIsASecretTest(unittest.TestCase):
         self.assertEqual([d[:3] for d in mon.deliveries()], [(1, "queued", "P")])
 
 
-def http_workers(runner):
+def workers_after(runner, wait):
+    """The request threads still alive after joining each for at most wait
+    seconds (a join, not a poll)."""
+    for t in [t for t in threading.enumerate() if t.name == runner.HTTP_WORKER_NAME]:
+        t.join(wait)
     return [t for t in threading.enumerate() if t.name == runner.HTTP_WORKER_NAME and t.is_alive()]
+
+
+class SilentServer(object):
+    """A TCP server on 127.0.0.1 that accepts and never speaks: a TLS
+    handshake to it never ends. Every byte that came in is kept."""
+
+    def __init__(self, test):
+        self.sock = socket.socket()
+        self.sock.bind(("127.0.0.1", 0))
+        self.sock.listen(4)
+        self.port = self.sock.getsockname()[1]
+        self.received = []
+        self.conns = []
+        test.addCleanup(self.close)
+        threading.Thread(target=self._accept, daemon=True).start()
+
+    def _accept(self):
+        while True:
+            try:
+                conn, _ = self.sock.accept()
+            except OSError:
+                return
+            self.conns.append(conn)
+            threading.Thread(target=self._read, args=(conn,), daemon=True).start()
+
+    def _read(self, conn):
+        while True:
+            try:
+                data = conn.recv(65536)
+            except OSError:
+                return
+            if not data:
+                return
+            self.received.append(data)
+
+    def close(self):
+        self.sock.close()
+        for c in self.conns:
+            c.close()
 
 
 class BudgetTest(unittest.TestCase):
@@ -275,16 +322,8 @@ class BudgetTest(unittest.TestCase):
         mon.page([note(1)])
         self.assertEqual([d[:3] for d in mon.deliveries()], [(1, "unknown", "H")])
         self.assertEqual(len(mon.spy.calls), 1)
-        # The thread of the request ends by its deadline plus one socket
-        # wait: nothing can still go out later.
-        done = threading.Event()
-
-        def ended():
-            while http_workers(world.runner):
-                time.sleep(0.02)
-            done.set()
-        threading.Thread(target=ended, daemon=True).start()
-        self.assertTrue(done.wait(1 + 2), "the thread of the request outlived its deadline")
+        # The caller shuts the socket at the deadline: the thread ends.
+        self.assertEqual(workers_after(world.runner, 1), [])
 
     def test_a_window_shorter_than_the_call_sends_nothing(self):
         # The channel's own timeout (30 s) is longer than the idle window
@@ -429,8 +468,8 @@ class OutcomeBranchesTest(unittest.TestCase):
     """Row #97: the branches of an http answer by the closed table of
     outcomes - nothing went out (a name that does not resolve, a key that is
     not one header line) is a refusal before send, called again within the
-    budget; a connection broken after the request, a connect that times
-    out and an answer past the output cap are unknown, called once."""
+    budget; a connection broken after the request and an answer past the
+    output cap are unknown, called once."""
 
     def outcome(self, world, timeout=2):
         mon = world.monitor()
@@ -438,12 +477,16 @@ class OutcomeBranchesTest(unittest.TestCase):
         return [d[:2] for d in mon.deliveries()], len(mon.spy.calls)
 
     def test_nothing_went_out(self):
-        for name, change in (("a name that does not resolve", {"HOST_URL": "https://skein-monitor-test.invalid"}),
-                             ("a key that is not one header line", {"HOST_KEY": "cdk_" + "K" * 20 + "\nX-Injected: 1"})):
+        def no_name(host, port):
+            raise socket.gaierror(socket.EAI_NONAME, "Name or service not known")
+        for name, change, resolve in (
+                ("a name that does not resolve", {"HOST_URL": "https://host.test"}, no_name),
+                ("a key that is not one header line", {"HOST_KEY": "cdk_" + "K" * 20 + "\nX-Injected: 1"}, None)):
             with self.subTest(case=name):
                 world = World(self)
                 world.env.update(change)
-                self.assertEqual(self.outcome(world), ([(1, "refused-before-send")], 4))
+                with mock.patch.object(world.runner, "_resolve", resolve or world.runner._resolve):
+                    self.assertEqual(self.outcome(world), ([(1, "refused-before-send")], 4))
                 self.assertEqual(world.server.requests(), [])
 
     def test_a_connection_broken_after_the_request(self):
@@ -461,17 +504,139 @@ class OutcomeBranchesTest(unittest.TestCase):
         world.env["HOST_URL"] = "http://127.0.0.1:%d" % server.getsockname()[1]
         self.assertEqual(self.outcome(world), ([(1, "unknown")], 1))
 
-    def test_a_connect_that_times_out(self):
-        # A blackhole address: the connection never completes, the socket
-        # timeout comes wrapped in URLError.
-        world = World(self, [http_channel(timeout=1)])
-        world.env["HOST_URL"] = "https://10.255.255.1:9"
-        self.assertEqual(self.outcome(world), ([(1, "unknown")], 1))
-
     def test_an_answer_past_the_output_cap(self):
         world = World(self)
         world.server.respond([{"status": 201, "json": {"state": "queued", "pad": "x" * (70 * 1024)}}])
         self.assertEqual(self.outcome(world), ([(1, "unknown")], 1))
+
+
+class OneDeadlineTest(unittest.TestCase):
+    """Warnings 4-6 of the wave 12 review, round 2: one deadline bounds the
+    name lookup, the connection, the TLS handshake, the request and every
+    read of the answer. Before the first byte of the request nothing was
+    sent (a refusal before send); after it, unknown. The thread of the
+    request ends by the deadline, and nothing goes out after it - also
+    from a lookup that returns late or a thread that starts late. No test
+    here reaches a network outside 127.0.0.1."""
+
+    TIMEOUT = 0.5
+
+    def setUp(self):
+        self.world = World(self)
+        self.executor = self.world.runner.HTTPExecutor(self.world.env, [])
+        self.spec = http_channel()["executor"]
+
+    def test_a_name_lookup_that_hangs_sends_nothing_ever(self):
+        release = threading.Event()
+        self.addCleanup(release.set)
+        real = self.world.runner._resolve
+
+        def hung(host, port):
+            release.wait()
+            return real("127.0.0.1", port)
+        with mock.patch.object(self.world.runner, "_resolve", hung):
+            started = time.monotonic()
+            with self.assertRaises(self.world.runner.ExecutorRefusal):
+                self.executor.call(self.spec, "hello", self.TIMEOUT)
+            self.assertLess(time.monotonic() - started, self.TIMEOUT + 1)
+            self.assertEqual(workers_after(self.world.runner, 1), [])
+            # The lookup returns after the deadline: still nothing is sent.
+            release.set()
+            for t in [t for t in threading.enumerate() if t.name == self.world.runner.HTTP_RESOLVER_NAME]:
+                t.join(1)
+        self.assertEqual(self.world.server.requests(), [])
+
+    def test_a_handshake_that_never_ends_sends_nothing(self):
+        silent = SilentServer(self)
+        self.world.env["HOST_URL"] = "https://127.0.0.1:%d" % silent.port
+        with self.assertRaises(self.world.runner.ExecutorRefusal):
+            self.executor.call(self.spec, "hello", self.TIMEOUT)
+        self.assertEqual(workers_after(self.world.runner, 1), [])
+        # Only the ClientHello went out, never the request.
+        self.assertNotIn(b"POST", b"".join(silent.received))
+        self.assertNotIn(KEY.encode(), b"".join(silent.received))
+
+    def test_a_body_sent_byte_by_byte_ends_at_the_deadline(self):
+        self.world.server.respond([{"status": 201, "dribble": 0.05}])
+        started = time.monotonic()
+        result = self.executor.call(self.spec, "hello", self.TIMEOUT)
+        self.assertTrue(result.timed_out)
+        self.assertLess(time.monotonic() - started, self.TIMEOUT + 1)
+        self.assertEqual(workers_after(self.world.runner, 1), [])
+        self.assertEqual(len(self.world.server.requests()), 1)
+
+    def test_an_error_status_ends_at_the_deadline_too(self):
+        # A status outside 2xx is read the same way as any answer.
+        self.world.server.respond([{"status": 503, "dribble": 0.05}])
+        result = self.executor.call(self.spec, "hello", self.TIMEOUT)
+        self.assertTrue(result.timed_out)
+        self.assertEqual(workers_after(self.world.runner, 1), [])
+
+    def test_a_thread_that_starts_after_the_deadline_sends_nothing(self):
+        r = self.world.runner
+        transfer = r._Transfer(time.monotonic() - 1)
+        self.executor._send(transfer, self.world.server.url + "/v0", "POST", b"{}", {})
+        self.assertIn("refused", transfer.answer)
+        self.assertEqual(self.world.server.requests(), [])
+
+    def test_a_redirect_is_the_answer(self):
+        self.world.server.respond([{"status": 307, "headers": {"Location": "http://127.0.0.1:9/x"}}])
+        result = self.executor.call(self.spec, "hello", 2)
+        self.assertEqual(result.http_status, 307)
+        self.assertEqual(len(self.world.server.requests()), 1)
+
+
+class ProxyTest(unittest.TestCase):
+    """An https request goes through the http proxy of the agent's
+    https_proxy unless no_proxy names the host: a CONNECT tunnel, so the
+    proxy never sees the key; a proxy that refuses the tunnel is a refusal
+    before send. A local http server never goes through a proxy."""
+
+    def proxy(self, answer):
+        server = socket.socket()
+        server.bind(("127.0.0.1", 0))
+        server.listen(1)
+        self.addCleanup(server.close)
+        heads = []
+
+        def serve():
+            conn, _ = server.accept()
+            data = b""
+            while b"\r\n\r\n" not in data:
+                chunk = conn.recv(4096)
+                if not chunk:
+                    break
+                data += chunk
+            heads.append(data)
+            conn.sendall(answer)
+            conn.close()
+        threading.Thread(target=serve, daemon=True).start()
+        return server.getsockname()[1], heads
+
+    def test_the_tunnel_names_the_host_and_carries_the_proxy_credentials(self):
+        world = World(self)
+        port, heads = self.proxy(b"HTTP/1.1 407 Proxy Authentication Required\r\n\r\n")
+        env = dict(world.env, HOST_URL="https://api.host.test", https_proxy="http://u%40x:p@127.0.0.1:%d" % port)
+        del env["no_proxy"]
+        with self.assertRaises(world.runner.ExecutorRefusal):
+            world.runner.HTTPExecutor(env, []).call(http_channel()["executor"], "hello", 2)
+        head = heads[0].decode("latin-1")
+        self.assertTrue(head.startswith("CONNECT api.host.test:443 HTTP/1.1\r\n"), head)
+        self.assertIn("Proxy-Authorization: Basic " + base64.b64encode(b"u@x:p").decode(), head)
+        self.assertNotIn(KEY, head)
+
+    def test_no_proxy_and_a_local_server_go_direct(self):
+        r = World(self).runner
+        for host, no_proxy, bypassed in (("api.host.test", "host.test", True), ("api.host.test", ".host.test", True),
+                                         ("api.host.test", "*", True), ("api.host.test", "host.test:8443", False),
+                                         ("api.host.test", "other.test", False), ("evilhost.test", "host.test", False)):
+            with self.subTest(host=host, no_proxy=no_proxy):
+                self.assertEqual(r._bypassed(host, 443, no_proxy), bypassed)
+        world = World(self)
+        env = dict(world.env, https_proxy="http://127.0.0.1:9")
+        del env["no_proxy"]
+        result = world.runner.HTTPExecutor(env, []).call(http_channel()["executor"], "hello", 2)
+        self.assertEqual(result.http_status, 201)
 
 
 if __name__ == "__main__":

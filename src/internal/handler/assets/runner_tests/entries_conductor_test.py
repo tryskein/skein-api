@@ -113,12 +113,9 @@ class ConductorRecordTest(unittest.TestCase):
         mon.page([ft.note(1)])
         self.assertEqual(mon.statuses(), [(1, "queued")])
         [request] = self.api.requests()
+        # The one signature the request carries: the client's own, never a
+        # library default the proxy refuses.
         self.assertEqual(request["headers"].get("User-Agent"), "skein-monitor")
-        # The default signature would be refused: the fixture is the proxy.
-        spec = dict(REG.channel("conductor")["executor"])
-        spec["http"] = dict(spec["http"], userAgent="")
-        result = RUNNER.HTTPExecutor(self.variables(), []).call(spec, "hello", 5)
-        self.assertEqual(result.http_status, 403)
 
     def test_recognised_only_with_the_session_the_url_and_a_key(self):
         self.fresh()

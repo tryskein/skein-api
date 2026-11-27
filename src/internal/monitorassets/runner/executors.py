@@ -55,20 +55,20 @@
 # is reachable from the sandbox, not that a message would be accepted.
 
 import base64
+import http.client
 import json
 import os
 import re
 import select
 import shutil
 import socket
+import ssl
 import subprocess
 import sys
 import tempfile
 import threading
 import time
-import urllib.error
 import urllib.parse
-import urllib.request
 
 # The prefix of a message file in the token directory.
 MESSAGE_FILE_PREFIX = "msg-"
@@ -1160,28 +1160,200 @@ def monitor_secrets(token, env, registry):
     return [s for s in [token] + http_key_secrets(registry, env) + endpoint_secrets(registry, env) if s]
 
 
-# The name of the thread of one http request.
+# The name of the thread of one http request, and of the name lookup it
+# waits for.
 HTTP_WORKER_NAME = "skein-http-request"
+HTTP_RESOLVER_NAME = "skein-http-resolve"
 
 
-def _shorten_socket_wait(resp, left):
-    """Let the next read of an answer wait at most left seconds: the socket
-    under the response, when the library shows it."""
-    fp = getattr(resp, "fp", None)
-    raw = getattr(fp, "raw", None)
-    sock = getattr(raw, "_sock", None)
-    if sock is not None:
+def _resolve(host, port):
+    """The addresses of host:port (the system resolver; it may hang)."""
+    return socket.getaddrinfo(host, port, 0, socket.SOCK_STREAM)
+
+
+class _NotReached(Exception):
+    """Nothing of the request went to the server."""
+
+    def __init__(self, reason):
+        Exception.__init__(self, reason)
+        self.reason = reason
+
+
+class _Transfer(object):
+    """One request under one deadline, shared by the caller and the thread
+    that sends it. The thread holds its socket here and asks before the
+    first byte of the request; the caller cancels at the deadline, which
+    shuts the socket so no wait of the thread outlives it, and learns
+    whether a byte may have gone."""
+
+    def __init__(self, deadline):
+        self.deadline = deadline
+        self.lock = threading.Lock()
+        self.cancelled = False
+        self.sent = False
+        self.sock = None
+        self.answer = {}
+
+    def left(self):
+        return self.deadline - time.monotonic()
+
+    def hold(self, sock):
+        """Keep sock as the socket of the request; False (sock closed) when
+        the caller has cancelled."""
+        with self.lock:
+            if not self.cancelled:
+                self.sock = sock
+                return True
+        _close_quietly(sock)
+        return False
+
+    def begin_send(self):
+        """Whether the request may start now (in its time, not cancelled);
+        from here on a byte may reach the server."""
+        with self.lock:
+            if self.cancelled or self.left() <= 0:
+                return False
+            self.sent = True
+            return True
+
+    def cancel(self):
+        """Stop the thread's waits; whether a byte of the request may have
+        gone out."""
+        with self.lock:
+            self.cancelled = True
+            sock, sent = self.sock, self.sent
+        if sock is not None:
+            _close_quietly(sock)
+        return sent
+
+
+def _close_quietly(sock):
+    try:
+        sock.shutdown(socket.SHUT_RDWR)
+    except OSError:
+        pass
+    try:
+        sock.close()
+    except OSError:
+        pass
+
+
+def _wait_left(transfer, what):
+    left = transfer.left()
+    if left <= 0:
+        raise _NotReached("%s outlasted the timeout" % what)
+    return left
+
+
+def _resolve_within(transfer, host, port):
+    """The addresses of host:port within the deadline: the lookup runs in a
+    thread of its own (no timeout bounds the system resolver), and a lookup
+    still running at the deadline is left behind - it sends nothing."""
+    box = {}
+    done = threading.Event()
+
+    def lookup():
+        try:
+            box["addresses"] = _resolve(host, port)
+        except Exception as exc:  # any failure of the lookup: not reached
+            box["error"] = type(exc).__name__
+        done.set()
+    resolver = threading.Thread(target=lookup, name=HTTP_RESOLVER_NAME)
+    resolver.daemon = True
+    resolver.start()
+    if not done.wait(_wait_left(transfer, "the name lookup")):
+        raise _NotReached("the name lookup outlasted the timeout")
+    if "error" in box:
+        raise _NotReached(box["error"])
+    return box["addresses"]
+
+
+def _connect_within(transfer, host, port):
+    """A connected socket to host:port within the deadline, held by the
+    transfer: each address in turn, each connect waiting what is left."""
+    last = "no address"
+    for family, kind, proto, _, address in _resolve_within(transfer, host, port):
+        left = _wait_left(transfer, "the connection")
+        sock = socket.socket(family, kind, proto)
+        if not transfer.hold(sock):
+            raise _NotReached("cancelled")
         try:
             sock.settimeout(left)
-        except OSError:
-            pass
+            sock.connect(address)
+            return sock
+        except OSError as exc:
+            last = type(exc).__name__
+            _close_quietly(sock)
+    raise _NotReached(last)
 
 
-class _NoRedirect(urllib.request.HTTPRedirectHandler):
-    """A 3xx is the answer: the request is never sent again elsewhere."""
+def _read_head(transfer, sock):
+    """The status line and headers of an answer on sock, up to the empty
+    line, within the deadline."""
+    raw = b""
+    while b"\r\n\r\n" not in raw:
+        if len(raw) > 65536:
+            raise _NotReached("the proxy answer is too long")
+        sock.settimeout(_wait_left(transfer, "the proxy answer"))
+        chunk = sock.recv(4096)
+        if not chunk:
+            raise _NotReached("the proxy closed the connection")
+        raw += chunk
+    return raw.split(b"\r\n", 1)[0]
 
-    def redirect_request(self, *args):
+
+def _tunnel(transfer, sock, host, port, proxy):
+    """A CONNECT through the proxy to host:port (the request itself goes
+    inside the tunnel, so the proxy sees no key); its Basic credentials
+    from the proxy URL."""
+    target = "%s:%d" % ("[%s]" % host if ":" in host else host, port)
+    lines = ["CONNECT %s HTTP/1.1" % target, "Host: %s" % target]
+    if proxy.username is not None:
+        user = urllib.parse.unquote(proxy.username)
+        password = urllib.parse.unquote(proxy.password or "")
+        token = base64.b64encode(("%s:%s" % (user, password)).encode("utf-8")).decode("ascii")
+        lines.append("Proxy-Authorization: Basic " + token)
+    sock.settimeout(_wait_left(transfer, "the proxy"))
+    sock.sendall(("\r\n".join(lines) + "\r\n\r\n").encode("latin-1"))
+    status = _read_head(transfer, sock).split(None, 2)
+    if len(status) < 2 or status[1] != b"200":
+        raise _NotReached("the proxy answered %s" % (status[1].decode("latin-1", "replace") if len(status) > 1
+                                                     else "nothing"))
+
+
+def _proxy_for(parts, env):
+    """The proxy of an https request by the variables of the agent process
+    (https_proxy, no_proxy), or None. Only an http proxy is used; another
+    is refused."""
+    proxies = dict((k.lower(), v) for k, v in env.items()
+                   if k.lower() in ("https_proxy", "no_proxy") and v)
+    url = proxies.get("https_proxy")
+    if not url:
         return None
+    if _bypassed(parts.hostname or "", parts.port or 443, proxies.get("no_proxy", "")):
+        return None
+    proxy = urllib.parse.urlsplit(url if "://" in url else "http://" + url)
+    if proxy.scheme != "http" or not proxy.hostname:
+        raise _NotReached("the proxy %s is not an http proxy" % proxy.scheme)
+    return proxy
+
+
+def _bypassed(host, port, no_proxy):
+    """Whether no_proxy names host (its whole name or a domain of it, with
+    or without the port, or *)."""
+    host = host.lower()
+    for entry in (e.strip().lower() for e in no_proxy.split(",")):
+        if not entry:
+            continue
+        if entry == "*":
+            return True
+        name, _, entry_port = entry.partition(":") if entry.count(":") == 1 else (entry, "", "")
+        if entry_port and entry_port != str(port):
+            continue
+        name = name.lstrip(".")
+        if host == name or host.endswith("." + name):
+            return True
+    return False
 
 
 class HTTPExecutor(object):
@@ -1230,67 +1402,93 @@ class HTTPExecutor(object):
             # The client's own signature: a proxy in front of some APIs
             # rejects the default one of urllib.
             headers["User-Agent"] = http["userAgent"]
-        request = urllib.request.Request(url, data=body, headers=headers, method=method)
-        handlers = [_NoRedirect]
-        if urllib.parse.urlsplit(url).scheme == "http":
-            # A local server: no proxy sees the key in the clear.
-            handlers.append(urllib.request.ProxyHandler({}))
-        opener = urllib.request.build_opener(*handlers)
-        answer = {}
-        deadline = time.monotonic() + timeout_sec
-        worker = threading.Thread(target=self._send, args=(opener, request, deadline, answer),
+        transfer = _Transfer(time.monotonic() + timeout_sec)
+        worker = threading.Thread(target=self._send, args=(transfer, url, method, body, headers),
                                   name=HTTP_WORKER_NAME)
         worker.daemon = True
         worker.start()
-        worker.join(timeout_sec)
-        if worker.is_alive() or "timeout" in answer:
+        worker.join(max(transfer.left(), 0))
+        if worker.is_alive():
+            if not transfer.cancel():
+                raise ExecutorRefusal("the server was not reached in %s s" % timeout_sec)
             return HTTPResult(None, None, True)
+        answer = transfer.answer
         if "refused" in answer:
             raise ExecutorRefusal("the server was not reached: %s" % answer["refused"])
+        if "timeout" in answer:
+            return HTTPResult(None, None, True)
         if "error" in answer:
             return HTTPResult(None, None, False, error=answer["error"])
         return HTTPResult(answer["status"], answer["body"], False, truncated=answer["truncated"])
 
-    @staticmethod
-    def _send(opener, request, deadline, answer):
-        """The request within one deadline: the connection and every read of
-        the answer wait at most what is left of it, so the thread ends by
-        the deadline plus one socket wait whatever the server does (a name
-        lookup of the system resolver is the one wait no timeout bounds)."""
+    def _send(self, transfer, url, method, body, headers):
+        """The request within the deadline of transfer: the name lookup,
+        the connection, a proxy tunnel, the TLS handshake, the request and
+        every read of the answer each wait at most what is left of it, and
+        the caller shuts the socket at the deadline. Nothing goes out once
+        the deadline has passed - also when this thread starts after it.
+        Any failure before the first byte of the request is a refusal; a
+        3xx is the answer (the request is never sent elsewhere)."""
+        answer = transfer.answer
+        sock = None
         try:
             try:
-                resp = opener.open(request, timeout=max(deadline - time.monotonic(), 0.001))
-            except urllib.error.HTTPError as exc:
-                resp = exc
-            try:
-                raw = b""
-                while len(raw) <= OUTPUT_CAP_BYTES:
-                    left = deadline - time.monotonic()
-                    if left <= 0:
-                        raise socket.timeout("the answer outlasted the timeout")
-                    _shorten_socket_wait(resp, left)
-                    chunk = resp.read(min(8192, OUTPUT_CAP_BYTES + 1 - len(raw)))
-                    if not chunk:
-                        break
-                    raw += chunk
-            finally:
-                resp.close()
-            answer["status"] = resp.code
+                parts = urllib.parse.urlsplit(url)
+                host, secure = parts.hostname or "", parts.scheme == "https"
+                port = parts.port or (443 if secure else 80)
+                # A local server (http) goes direct: no proxy sees the key in
+                # the clear.
+                proxy = _proxy_for(parts, self.env) if secure else None
+                if proxy is not None:
+                    sock = _connect_within(transfer, proxy.hostname, proxy.port or 80)
+                    _tunnel(transfer, sock, host, port, proxy)
+                else:
+                    sock = _connect_within(transfer, host, port)
+                if secure:
+                    tls = ssl.create_default_context().wrap_socket(sock, server_hostname=host,
+                                                                   do_handshake_on_connect=False)
+                    if not transfer.hold(tls):
+                        raise _NotReached("cancelled")
+                    sock = tls
+                    sock.settimeout(_wait_left(transfer, "the TLS handshake"))
+                    sock.do_handshake()
+                conn = (http.client.HTTPSConnection if secure else http.client.HTTPConnection)(host, port)
+                conn.sock = sock
+                path = parts.path or "/"
+                if parts.query:
+                    path += "?" + parts.query
+                if not transfer.begin_send():
+                    raise _NotReached("the request did not start in its time")
+            except (OSError, ValueError, http.client.HTTPException) as exc:
+                raise _NotReached(type(exc).__name__)
+            sock.settimeout(max(transfer.left(), 0.001))
+            conn.request(method, path, body=body, headers=headers)
+            resp = conn.getresponse()
+            raw = b""
+            while len(raw) <= OUTPUT_CAP_BYTES:
+                left = transfer.left()
+                if left <= 0:
+                    raise socket.timeout("the answer outlasted the timeout")
+                sock.settimeout(left)
+                chunk = resp.read(min(8192, OUTPUT_CAP_BYTES + 1 - len(raw)))
+                if not chunk:
+                    break
+                raw += chunk
+            answer["status"] = resp.status
             answer["body"] = raw[:OUTPUT_CAP_BYTES]
             answer["truncated"] = len(raw) > OUTPUT_CAP_BYTES
-        except urllib.error.URLError as exc:
-            reason = exc.reason
-            if isinstance(reason, (ConnectionRefusedError, socket.gaierror)):
-                # No connection: not a byte of the request went out.
-                answer["refused"] = type(reason).__name__
-            elif isinstance(reason, socket.timeout):
-                answer["timeout"] = True
-            else:
-                answer["error"] = type(reason).__name__
+        except _NotReached as exc:
+            answer["refused"] = exc.reason
         except socket.timeout:
             answer["timeout"] = True
-        except Exception as exc:  # any failure after the connection: unknown
-            answer["error"] = type(exc).__name__
+        except Exception as exc:  # any failure after the request started: unknown
+            if transfer.cancelled:
+                answer["timeout"] = True
+            else:
+                answer["error"] = type(exc).__name__
+        finally:
+            if sock is not None:
+                _close_quietly(sock)
 
 
 class ChannelExecutor(object):

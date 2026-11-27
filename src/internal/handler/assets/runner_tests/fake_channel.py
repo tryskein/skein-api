@@ -130,7 +130,9 @@ class _Server(socketserver.ThreadingMixIn, http.server.HTTPServer):
 class FakeHTTPChannel(object):
     """The HTTP side of a channel on 127.0.0.1. respond() scripts the
     answers like FakeProgram: {"status": int, "json": value, "headers":
-    {..}, "delay": sec, "hang": bool}. requests() returns what came in."""
+    {..}, "delay": sec, "hang": bool, "dribble": sec}. "hang" holds the
+    request until close(); "dribble" sends the head and then the body one
+    byte per interval until close(). requests() returns what came in."""
 
     def __init__(self, reject_agent=None):
         self._lock = threading.Lock()
@@ -139,6 +141,7 @@ class FakeHTTPChannel(object):
         # default client signatures).
         self._reject_agent = reject_agent
         self._requests = []
+        self._closed = threading.Event()
         owner = self
 
         class Handler(http.server.BaseHTTPRequestHandler):
@@ -158,7 +161,19 @@ class FakeHTTPChannel(object):
                     if owner._reject_agent is not None and agent.startswith(owner._reject_agent):
                         answer = {"status": 403, "json": {"error": "forbidden"}}
                 if answer.get("hang"):
-                    time.sleep(3600)
+                    owner._closed.wait()
+                    return
+                if answer.get("dribble"):
+                    self.send_response(answer.get("status", 200))
+                    self.send_header("Content-Length", "1000000")
+                    self.end_headers()
+                    while not owner._closed.wait(answer["dribble"]):
+                        try:
+                            self.wfile.write(b"x")
+                            self.wfile.flush()
+                        except OSError:
+                            return
+                    return
                 if answer.get("delay"):
                     time.sleep(answer["delay"])
                 data = json.dumps(answer.get("json", {})).encode("utf-8")
@@ -187,5 +202,6 @@ class FakeHTTPChannel(object):
             return list(self._requests)
 
     def close(self):
+        self._closed.set()
         self._server.shutdown()
         self._server.server_close()
