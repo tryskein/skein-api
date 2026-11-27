@@ -220,7 +220,8 @@ class RegistryDetector(Detector):
                                          per_process=per_process, host=step in (5, 6),
                                          root_pid_env=a.get("rootPidEnv") or None,
                                          host_sign=(c.get("launcher") or {}).get("process") or None,
-                                         qualifier_paths=a.get("qualifierPaths")))
+                                         qualifier_paths=a.get("qualifierPaths"),
+                                         qualifier_defaults=a.get("qualifierDefaults")))
         return specs
 
     def under_host(self, ctx):

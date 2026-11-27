@@ -215,13 +215,14 @@ class AddressSpec(object):
     launches agents itself (host_form decides)."""
 
     def __init__(self, channel, env, qualifiers=(), per_process=False, host=False,
-                 root_pid_env=None, host_sign=None, qualifier_paths=None):
+                 root_pid_env=None, host_sign=None, qualifier_paths=None, qualifier_defaults=None):
         self.channel = channel
         self.env = env
         self.qualifiers = tuple(qualifiers)
         # {qualifier: default}: qualifiers that are directory paths
         # (qualifier_value).
         self.qualifier_paths = dict(qualifier_paths or {})
+        self.qualifier_defaults = dict(qualifier_defaults or {})
         self.per_process = per_process
         self.host = host
         self.root_pid_env = root_pid_env
@@ -257,13 +258,17 @@ class Identity(object):
         self.terminal = terminal
 
 
-def qualifier_value(name, env, paths):
-    """The value of the qualifier name in env. A qualifier that is a
+def qualifier_value(name, env, paths, defaults=None):
+    """The value of the qualifier name in env. A qualifier with a default
+    of the harness (defaults: {name: value}) has it when the variable is
+    unset, as the harness does. A qualifier that is a
     directory path (paths: {name: default}) is the path the harness uses:
     the default when the variable is unset or empty, "~" expanded from HOME
     (USERPROFILE on Windows), made normal, so an explicit default and an
     unset variable are one addressee. A "~" that cannot be expanded stays
     as it is."""
+    if name in (defaults or {}) and name not in env:
+        return defaults[name]
     value = env.get(name, "")
     if name not in (paths or {}):
         return value
@@ -280,7 +285,8 @@ def qualifier_value(name, env, paths):
 
 def _address(spec, env):
     return Address(spec.channel, env[spec.env],
-                   tuple((q, qualifier_value(q, env, spec.qualifier_paths)) for q in spec.qualifiers), spec.env)
+                   tuple((q, qualifier_value(q, env, spec.qualifier_paths, spec.qualifier_defaults))
+                         for q in spec.qualifiers), spec.env)
 
 
 def _root_pid(spec, env):

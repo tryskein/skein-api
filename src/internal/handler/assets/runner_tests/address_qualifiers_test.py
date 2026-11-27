@@ -10,7 +10,7 @@ to another origin).
 The qualifiers come from the sources: Conductor CONDUCTOR_API_URL (the base
 of its API), Paradev SUPERSET_WORKSPACE_ID (the workspace of the terminal),
 cmux CMUX_SOCKET_PATH (the socket of the app), Sculptor SCULPT_API_PORT
-(the port of its API).
+(the port of its API, 5050 when unset).
 
 Run on its own: python3 internal/handler/assets/runner_tests/address_qualifiers_test.py
 Standard library of Python 3.6 only.
@@ -73,7 +73,8 @@ def address_of(record, env):
     """The Address the record's address declaration gives in env."""
     address = REG.channel(record)["address"]
     spec = RUNNER.AddressSpec(record, address["env"], qualifiers=address.get("qualifiers") or (),
-                              qualifier_paths=address.get("qualifierPaths"))
+                              qualifier_paths=address.get("qualifierPaths"),
+                              qualifier_defaults=address.get("qualifierDefaults"))
     return RUNNER._address(spec, env)
 
 
@@ -86,6 +87,14 @@ class AddressQualifierTest(unittest.TestCase):
                 other = address_of(record, {var: value, qualifier: b})
                 self.assertNotEqual(one.key(), other.key())
                 self.assertEqual(one.key(), address_of(record, {var: value, qualifier: a}).key())
+
+    def test_sculptor_s_default_port_and_an_unset_variable_are_one_addressee(self):
+        # sculpt/auth.py#get_default_base_url: os.environ.get("SCULPT_API_PORT", "5050").
+        unset = address_of("sculptor", {"SCULPT_AGENT_ID": "agent-1"})
+        self.assertEqual(unset.key(), address_of("sculptor", {"SCULPT_AGENT_ID": "agent-1",
+                                                              "SCULPT_API_PORT": "5050"}).key())
+        self.assertNotEqual(unset.key(), address_of("sculptor", {"SCULPT_AGENT_ID": "agent-1",
+                                                                 "SCULPT_API_PORT": ""}).key())
 
     def sink(self, record, var, value, qualifier, saved, current, answer=None):
         """The sink of a monitor whose preflight saw the server saved and

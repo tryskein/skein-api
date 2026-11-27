@@ -429,6 +429,18 @@ func TestValidate_RejectsEachRule(t *testing.T) {
 			r.Channels[0].Address = &AddressSpec{Env: "ALPHA_THREAD", Qualifiers: []string{"ALPHA_HOME"},
 				QualifierPaths: map[string]string{"ALPHA_HOME": ".alpha"}}
 		}, RuleInvalid},
+		{"a default that is not a qualifier", func(r *Registry) {
+			r.Channels[0].Address = &AddressSpec{Env: "ALPHA_THREAD", Qualifiers: []string{"ALPHA_PORT"},
+				QualifierDefaults: map[string]string{"ALPHA_HOST": "5050"}}
+		}, RuleInvalid},
+		{"an empty default", func(r *Registry) {
+			r.Channels[0].Address = &AddressSpec{Env: "ALPHA_THREAD", Qualifiers: []string{"ALPHA_PORT"},
+				QualifierDefaults: map[string]string{"ALPHA_PORT": ""}}
+		}, RuleInvalid},
+		{"a default and a default path of one qualifier", func(r *Registry) {
+			r.Channels[0].Address = &AddressSpec{Env: "ALPHA_THREAD", Qualifiers: []string{"ALPHA_HOME"},
+				QualifierPaths: map[string]string{"ALPHA_HOME": "~/.alpha"}, QualifierDefaults: map[string]string{"ALPHA_HOME": "x"}}
+		}, RuleInvalid},
 		{"a path that holds a value and something else", func(r *Registry) {
 			r.Channels[1].Outcomes[0].Match.JSONNot = map[string]string{"status": "queued"}
 		}, RuleInvalid},

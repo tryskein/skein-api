@@ -612,6 +612,18 @@ func (v *validator) channel(path string, c *Channel) {
 				v.add(RuleInvalid, path+".address.qualifierPaths."+q, "the default %q is neither absolute nor under ~/", d)
 			}
 		}
+		for _, q := range slices.Sorted(maps.Keys(a.QualifierDefaults)) {
+			qpath := path + ".address.qualifierDefaults." + q
+			if !slices.Contains(a.Qualifiers, q) {
+				v.add(RuleInvalid, qpath, "%q is not one of the qualifiers", q)
+			}
+			if _, both := a.QualifierPaths[q]; both {
+				v.add(RuleInvalid, qpath, "%q has a default path already", q)
+			}
+			if a.QualifierDefaults[q] == "" {
+				v.add(RuleInvalid, qpath, "the default is empty")
+			}
+		}
 	}
 }
 

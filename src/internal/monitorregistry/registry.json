@@ -2516,7 +2516,7 @@
     {
       "id": "sculptor",
       "about": "Sculptor: the Sculptor server takes each event as a message to the agent; a terminal agent only at its prompt.",
-      "source": "github.com/imbue-ai/sculptor cdd6dc68 (0.51.0.dev0): tools/sculpt/sculpt/commands/agent.py#send (POST of the message; exit 0 with {sent: true, agent_id, message} on --json; an answer of 400 or more becomes the error {error: detail or \"Server returned <n>\", detail: \"\"}; httpx.ConnectError ends in handle_connection_error); tools/sculpt/sculpt/formatting.py#cli_error, #handle_connection_error and #CONNECTION_HINT (under --json the error is a JSON object on stderr, exit 1; a connection that failed gives detail CONNECTION_HINT: before any request); sculptor/sculptor/web/app.py#send_workspace_agent_messages (a chat agent: the message is queued; a terminal agent: typed into its PTY; 409 with the detail \"Cannot send a message while the agent is waiting for a response to AskUserQuestion.\" before queuing) and #_raise_for_terminal_delivery_result (409 \"this agent does not accept automated prompts\", \"agent is busy or not at its prompt\", \"terminal not running\"); sculptor/sculptor/web/terminal_input.py#deliver_prompt_to_terminal_agent (the three guards run before the bracketed paste is written: \"Only DELIVERED means the bytes were written\"); #status (sculpt agent status reads the agent, sends nothing); tools/sculpt/sculpt/auth.py#get_default_base_url (http://localhost:$SCULPT_API_PORT); sculptor/sculptor/agents/default/claude_code_sdk/process_manager_utils.py (SCULPT_AGENT_ID and SCULPT_WORKSPACE_ID in the agent's shell). No Windows build. tools/sculpt/sculpt/commands/agent.py#status, #_fetch_snapshot and #_status_output (agent status <id> --json prints {id, status, ...} of the agent; an agent that is not there is the error \"Agent not found: <id>\"; sends nothing).",
+      "source": "github.com/imbue-ai/sculptor cdd6dc68 (0.51.0.dev0): tools/sculpt/sculpt/commands/agent.py#send (POST of the message; exit 0 with {sent: true, agent_id, message} on --json; an answer of 400 or more becomes the error {error: detail or \"Server returned <n>\", detail: \"\"}; httpx.ConnectError ends in handle_connection_error); tools/sculpt/sculpt/formatting.py#cli_error, #handle_connection_error and #CONNECTION_HINT (under --json the error is a JSON object on stderr, exit 1; a connection that failed gives detail CONNECTION_HINT: before any request); sculptor/sculptor/web/app.py#send_workspace_agent_messages (a chat agent: the message is queued; a terminal agent: typed into its PTY; 409 with the detail \"Cannot send a message while the agent is waiting for a response to AskUserQuestion.\" before queuing) and #_raise_for_terminal_delivery_result (409 \"this agent does not accept automated prompts\", \"agent is busy or not at its prompt\", \"terminal not running\"); sculptor/sculptor/web/terminal_input.py#deliver_prompt_to_terminal_agent (the three guards run before the bracketed paste is written: \"Only DELIVERED means the bytes were written\"); #status (sculpt agent status reads the agent, sends nothing); tools/sculpt/sculpt/auth.py#get_default_base_url (http://localhost:$SCULPT_API_PORT, #DEFAULT_PORT 5050 when the variable is unset); sculptor/sculptor/agents/default/claude_code_sdk/process_manager_utils.py (SCULPT_AGENT_ID and SCULPT_WORKSPACE_ID in the agent's shell). No Windows build. tools/sculpt/sculpt/commands/agent.py#status, #_fetch_snapshot and #_status_output (agent status <id> --json prints {id, status, ...} of the agent; an agent that is not there is the error \"Agent not found: <id>\"; sends nothing).",
       "step": 5,
       "order": 6,
       "kind": "addressed",
@@ -2674,7 +2674,10 @@
         "env": "SCULPT_AGENT_ID",
         "qualifiers": [
           "SCULPT_API_PORT"
-        ]
+        ],
+        "qualifierDefaults": {
+          "SCULPT_API_PORT": "5050"
+        }
       }
     },
     {

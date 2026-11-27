@@ -598,9 +598,10 @@ class DeliverySink(object):
                 continue
             if a.get("env") and self.env.get(a["env"], "") != a.get("value"):
                 raise AddresseeChanged()
-            paths = (channel.get("address") or {}).get("qualifierPaths")
+            address = channel.get("address") or {}
+            paths, defaults = address.get("qualifierPaths"), address.get("qualifierDefaults")
             for q in a.get("qualifiers") or []:
-                if len(q) == 2 and qualifier_value(q[0], self.env, paths) != q[1]:
+                if len(q) == 2 and qualifier_value(q[0], self.env, paths, defaults) != q[1]:
                     raise AddresseeChanged()
         check = channel.get("addressee") or {}
         mode = check.get("process")

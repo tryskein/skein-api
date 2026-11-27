@@ -439,6 +439,11 @@ type AddressSpec struct {
 	// normal ("~/" from HOME), so an explicit default and an unset variable
 	// are one addressee.
 	QualifierPaths map[string]string `json:"qualifierPaths,omitempty"`
+	// QualifierDefaults names the qualifiers the harness gives a value of
+	// its own when the variable is unset (not when it is empty), each with
+	// that value: an explicit default and an unset variable are one
+	// addressee.
+	QualifierDefaults map[string]string `json:"qualifierDefaults,omitempty"`
 }
 
 // Launcher is the process of a host that launches agents and the own
