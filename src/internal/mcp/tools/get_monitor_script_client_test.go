@@ -423,6 +423,9 @@ func TestGetMonitorScriptClient_StartCommands(t *testing.T) {
 				"SKEIN_MONITOR_MODE=preflight ",
 				" SKEIN_LOADER_SHA256=" + shellSingleQuote(loaderSHA256) + " ",
 				" SKEIN_RUNNER_SHA256=" + shellSingleQuote(gmsTestRunnerSHA256) + " ",
+				// A default call sets the mint's parameters empty: a value in
+				// the agent's environment does not reach the reissue (US-12).
+				" SKEIN_SUBTREE='' SKEIN_EVENT_TYPES='' ",
 			} {
 				if !strings.Contains(preflight, want) {
 					t.Fatalf("preflight lacks %q:\n%s", want, preflight)

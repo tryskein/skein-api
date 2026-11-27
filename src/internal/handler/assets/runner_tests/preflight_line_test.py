@@ -148,19 +148,24 @@ class PreflightLineTest(unittest.TestCase):
             fh.write(FAKE_PYTHON)
         os.chmod(fake, stat.S_IRWXU)
         # What an earlier command left in the shell: the preflight mode, a
-        # foreign number and override.
+        # foreign number and override, and mint parameters of another monitor
+        # (review of wave 8, row 11: they must not reach the reissue).
         env = dict((k, v) for k, v in os.environ.items() if not k.startswith("SKEIN_"))
         env.update({"PATH": bin_dir + os.pathsep + os.environ.get("PATH", ""),
                     "SKEIN_MONITOR_MODE": "preflight", "SKEIN_MONITOR_PREFLIGHT": "99",
-                    "SKEIN_MONITOR_CHANNEL": "tmux", "SKEIN_MONITOR_BLIND": "off"})
+                    "SKEIN_MONITOR_CHANNEL": "tmux", "SKEIN_MONITOR_BLIND": "off",
+                    "SKEIN_SUBTREE": "1", "SKEIN_EVENT_TYPES": "issue.updated"})
         out = subprocess.check_output(["sh", "-c", command], env=env, universal_newlines=True, timeout=30)
         seen = json.loads(out)
         self.assertEqual(seen["argv"], [os.path.join(self.box.token_dir, "starter.py")])
         got = seen["env"]
         want = dict((k, v) for k, v in self.box.env().items() if k.startswith("SKEIN_"))
         want.update({"SKEIN_MONITOR_MODE": "run", "SKEIN_MONITOR_PREFLIGHT": str(line["preflightId"]),
-                     "SKEIN_MONITOR_CHANNEL": "", "SKEIN_MONITOR_BLIND": ""})
+                     "SKEIN_MONITOR_CHANNEL": "", "SKEIN_MONITOR_BLIND": "",
+                     "SKEIN_SUBTREE": self.box.env().get("SKEIN_SUBTREE", ""),
+                     "SKEIN_EVENT_TYPES": self.box.env().get("SKEIN_EVENT_TYPES", "")})
         self.assertEqual(got, want)
+        self.assertNotIn("subtree", RUNNER.mint_call(FIXTURE_ISSUE, env=got))
         # The runner reads it as a working start with these values.
         self.assertEqual(RUNNER.monitor_mode(got, loader_mode="client"), RUNNER.MODE_RUN)
         settings = RUNNER.read_settings(got, REG, mode="client")

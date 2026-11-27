@@ -196,8 +196,8 @@ STOPS = {
 def mint_call(issue, env=None):
     """The call that mints a new monitor for issue with the parameters of
     this one (US-12): in client mode subtree and eventTypes when the start
-    variables carry them (SKEIN_SUBTREE, SKEIN_EVENT_TYPES: only when not the
-    mint's default), client and platform, and tokenDir on Windows (the
+    variables carry them (SKEIN_SUBTREE, SKEIN_EVENT_TYPES: set by the
+    command, empty for the mint's default), client and platform, and tokenDir on Windows (the
     directory the token directory was made in). Without `client` the start
     variables are not read (INV-7): the issue id alone."""
     args = ["id=%s" % json.dumps(issue)]

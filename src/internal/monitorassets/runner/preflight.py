@@ -80,9 +80,9 @@ _KIND_STEP = {"stream": 2, "delivery": 3, "exit-on-event": 4}
 # The variables of the preflight command the working command repeats.
 BOOTSTRAP_VARS = ("SKEIN_PUBLIC_URL", "SKEIN_ISSUE", "SKEIN_TOKEN_FILE", "SKEIN_EXCLUDE_SESSION",
                   "SKEIN_RUNNER_SHA256", "SKEIN_LOADER_SHA256", "SKEIN_CLIENT", "SKEIN_PLATFORM")
-# Start variables of the mint's parameters, set only when not the mint's
-# default: SKEIN_SUBTREE=1 (subtree=true), SKEIN_EVENT_TYPES (comma-separated
-# eventTypes other than the default).
+# Start variables of the mint's parameters, always set by the preflight
+# command (empty for the mint's default): SKEIN_SUBTREE=1 (subtree=true),
+# SKEIN_EVENT_TYPES (comma-separated eventTypes other than the default).
 MINT_PARAM_VARS = ("SKEIN_SUBTREE", "SKEIN_EVENT_TYPES")
 
 # The parts of the instruction that are not the record's.
@@ -618,9 +618,10 @@ def working_command(env, token_file, preflight_id, settings):
              "SKEIN_MONITOR_CHANNEL=" + shell_quote(settings.channel or ""),
              "SKEIN_MONITOR_BLIND=" + shell_quote(BLIND_OFF if settings.blind_off else "")]
     parts.extend(name + "=" + shell_quote(env.get(name, "")) for name in BOOTSTRAP_VARS)
-    # Parameters of the mint that differ from its default ride along only
-    # then (INV-17): the reissue command of an action repeats them (US-12).
-    parts.extend(name + "=" + shell_quote(env[name]) for name in MINT_PARAM_VARS if env.get(name, ""))
+    # The parameters of the mint, empty for its default: set either way, so
+    # the environment the command runs in does not change what the reissue
+    # command of an action repeats (US-12).
+    parts.extend(name + "=" + shell_quote(env.get(name, "")) for name in MINT_PARAM_VARS)
     starter = os.path.join(os.path.dirname(os.path.abspath(token_file)), CLIENT_STARTER_FILE)
     parts.append("python3 " + shell_quote(starter))
     return " ".join(parts)

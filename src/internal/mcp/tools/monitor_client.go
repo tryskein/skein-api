@@ -189,9 +189,9 @@ type clientCommandInput struct {
 	runnerSHA256, loaderSHA256                        string
 	client, platform                                  string
 	// subtree and eventTypes are the mint's parameters; the preflight
-	// command carries them only when they are not the mint's default
-	// (SKEIN_SUBTREE, SKEIN_EVENT_TYPES), so a default call does not grow
-	// (INV-17) and the runner's reissue commands keep them (US-12).
+	// command always sets SKEIN_SUBTREE and SKEIN_EVENT_TYPES, empty for the
+	// mint's default, so a value from the agent's environment never reaches
+	// the runner's reissue commands, which keep the mint's own (US-12).
 	subtree    bool
 	eventTypes []string
 }
@@ -228,19 +228,20 @@ func buildClientCommands(in clientCommandInput) clientCommands {
 	}
 }
 
-// mintParamVars are the start variables of the mint's parameters that are
-// not its default, each with a leading space: SKEIN_SUBTREE=1 for
-// subtree=true, SKEIN_EVENT_TYPES with the comma-separated event types when
-// they are not defaultMonitorEventTypes. Empty for a default call.
+// mintParamVars are the start variables of the mint's parameters, each with
+// a leading space: SKEIN_SUBTREE is 1 for subtree=true, SKEIN_EVENT_TYPES the
+// comma-separated event types when they are not defaultMonitorEventTypes.
+// Both are always set - empty for the default - so the command, not the
+// environment it runs in, decides them.
 func mintParamVars(subtree bool, eventTypes []string) string {
-	var b strings.Builder
+	sub, types := "", ""
 	if subtree {
-		b.WriteString(" SKEIN_SUBTREE=" + shellSingleQuote("1"))
+		sub = "1"
 	}
 	if len(eventTypes) > 0 && !slices.Equal(eventTypes, defaultMonitorEventTypes) {
-		b.WriteString(" SKEIN_EVENT_TYPES=" + shellSingleQuote(strings.Join(eventTypes, ",")))
+		types = strings.Join(eventTypes, ",")
 	}
-	return b.String()
+	return " SKEIN_SUBTREE=" + shellSingleQuote(sub) + " SKEIN_EVENT_TYPES=" + shellSingleQuote(types)
 }
 
 // clientStarterFile is the name of the starter file prepare writes into the
