@@ -893,6 +893,32 @@ class WindowInFlightTest(Base):
         self.addCleanup(d4.attempt.release)
         self.assertIsNotNone(d4.attempt)
 
+    def test_a_merge_keeps_every_attempt_in_flight(self):
+        # Review round 3 of wave 7, row 22: two live attempts on different
+        # events are merged into one addressee; the holder of the window
+        # kept by the merge ends refused, and the other one is still in
+        # flight: no third attempt starts.
+        a = self.ledger("mon-a", ident([addr("orca", "t-1")]))
+        b = self.ledger("mon-b", ident([addr("codex", "th-9")]))
+        da = a.begin([ev("e1")], "c1")
+        self.clock.t += 1
+        db = b.begin([ev("e2")], "c2")
+        c = self.ledger("mon-c", ident([addr("orca", "t-1"), addr("codex", "th-9")]))
+        self.clock.t += 11
+        dc = c.begin([ev("e3")], "c1")
+        self.assertIsNone(dc.attempt)
+        for d in (da, db):
+            # The holder of the window the merge kept (the later one) ends
+            # refused before send and gives its window back.
+            if d is db:
+                d.attempt.note_call()
+                d.attempt.finish(RUNNER.OUTCOME_REFUSED)
+                d.attempt.release()
+        self.clock.t += 11
+        dc = c.begin([ev("e3")], "c1")
+        self.assertIsNone(dc.attempt, "a third attempt started while the first one is in flight")
+        da.attempt.release()
+
 
 @unittest.skipUnless(os.name == "posix", "the POSIX ledger")
 class UnusableLedgerTest(Base):

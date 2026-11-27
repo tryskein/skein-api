@@ -393,6 +393,20 @@ class Attempt(object):
             lock.release()
 
 
+def _attempt_in_flight(entry, window, attempts):
+    """Whether an attempt of the addressee is in flight: the one the window
+    names, or any one a record of its events is delivering for (merged
+    entries keep one window but every reservation)."""
+    keys = set()
+    if window.get("attempt"):
+        keys.add(window["attempt"])
+    for rec in entry["events"].values():
+        key = (rec.get("delivering") or {}).get("attempt")
+        if key:
+            keys.add(key)
+    return any(_attempt_live(attempts, key) for key in keys)
+
+
 def _withdrawn(lock):
     """Whether the attempt lock file holds WITHDRAWN_MARK."""
     try:
@@ -625,9 +639,11 @@ class Ledger(object):
                 if carry and now < (window.get("until") or 0):
                     decision.wait_until = window["until"]
                     carry = []
-                elif carry and window.get("attempt") and _attempt_live(attempts, window["attempt"]):
+                elif carry and _attempt_in_flight(entry, window, attempts):
                     # The window is held by an attempt still in flight (in
-                    # its checks, its idle wait or its call): its end sets
+                    # its checks, its idle wait or its call), or another
+                    # attempt of the addressee is in flight whose key a merge
+                    # of its records took out of the window: its end sets
                     # the window anew, so no other attempt of the addressee
                     # starts before it.
                     decision.pending.extend(str(ev["id"]) for ev in carry)
