@@ -48,7 +48,7 @@ _ENTRY = re.compile(r"(?P<key>[^\s\-?:,\[\]{}#&*!|>'\"%@`][^:#]*?) *:(?: +(?P<re
 # tag, reserved, sequence, complex key).
 _VALUE_INDICATORS = "[]{}|>&*!%@`,"
 # Line breaks YAML 1.1 knows beyond LF and CRLF.
-_OTHER_BREAKS = ("\r", "\x85", " ", " ")
+_OTHER_BREAKS = ("\r", "\x85", "\u2028", "\u2029")
 
 
 class _NotRead(Exception):
@@ -73,7 +73,7 @@ def read_yaml_scalar(text, keys):
 
 def _significant_lines(text):
     """(indent, content) of every line that is not blank or a comment."""
-    if text.startswith("﻿"):
+    if text.startswith("\ufeff"):
         text = text[1:]
     out = []
     for raw in text.split("\n"):

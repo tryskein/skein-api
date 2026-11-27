@@ -139,7 +139,7 @@ class YamlSettingTest(unittest.TestCase):
                 ("a comment after the section's colon", "display:  # shown\n  busy_input_mode: queue\n", "queue"),
                 ("CRLF and spaces", "display:  \r\n  busy_input_mode:  queue  \r\n", "queue"),
                 ("CRLF after an empty value", "display:\r\n  busy_input_mode:  \r\n", None),
-                ("a BOM before the first key", "﻿display:\n  busy_input_mode: queue\n", "queue"),
+                ("a BOM before the first key", "\ufeffdisplay:\n  busy_input_mode: queue\n", "queue"),
                 ("the last line without a line break", "display:\n  busy_input_mode:  ", None)):
             with self.subTest(case=name):
                 self.assert_read(text, key, expected)
