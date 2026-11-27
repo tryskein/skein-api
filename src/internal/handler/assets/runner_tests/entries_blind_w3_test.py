@@ -183,7 +183,7 @@ class DirectChannel(object):
 
     def page(self, notes, cursor=None):
         for n in notes:
-            text = RUNNER.plain_text(n, "")
+            text, _ = RUNNER.plain_text(n, "")
             outcome, _ = RUNNER.channel_driver(self.channel, self.executor).send(text, OpenGuard())
             self.out.append((n["id"], outcome))
 

@@ -339,7 +339,7 @@ class BlindBindingTest(unittest.TestCase):
         settings = r.Settings(record=record, platform="posix")
         detector = r.RegistryDetector()
         ctx = r.Context(box.reg, settings, box.env, pl, detector, r.ProbeRunner())
-        binding = detector.binding(ctx, box.reg.channel("mux"))
+        binding, = [b for b in detector.bindings(ctx) if b.channel["id"] == "mux"]
         self.assertFalse(binding.confirmed)
         self.assertIn("terminal of its pane", binding.cause)
 

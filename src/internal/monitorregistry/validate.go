@@ -756,7 +756,7 @@ func placeholderShaped(a string) bool {
 
 // placeholderShape is "{name}" or "{name:...}" without quotes or braces
 // inside: a placeholder, known or not, never a literal.
-var placeholderShape = regexp.MustCompile(`^\{[A-Za-z][A-Za-z0-9]*(:[^{}"]*)?\}$`)
+var placeholderShape = regexp.MustCompile(`^\{[A-Za-z][A-Za-z0-9_]*(:[^{}"]*)?\}$`)
 
 // blindCalls validates the calls of a blind channel besides its insert: the
 // stage, the unstage and the submit, and the multiplexer mark.

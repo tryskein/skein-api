@@ -378,6 +378,11 @@ class SharedDeadlineTest(unittest.TestCase):
             if self.change:
                 self.pipeline.changed = True
 
+        def still_ours(self):
+            # The non-blocking look after the last check: the record is
+            # still this attempt's.
+            pass
+
     def guard(self, wait_takes=0, window=1800, channel=None, check_takes=0, confirm_takes=0, change=False):
         runner = harness.load_runner()
         channel = channel or self.CHANNEL
