@@ -1022,11 +1022,6 @@ func (v *validator) value(path, s string, allowText bool) {
 	}
 }
 
-// url checks the URL template of an http executor: literals and
-// "{env:NAME}" placeholders; a template that does not start with a
-// placeholder starts with "https://", or with "http://" for localhost or
-// 127.0.0.1 (the runner checks the scheme of a placeholder base when it
-// expands it).
 // endpointURL checks the URL template of a request whose base comes from its
 // endpoint file: {endpoint}, then a path checked as that of a literal base.
 func (v *validator) endpointURL(path, s string) {
@@ -1056,6 +1051,11 @@ func (v *validator) httpGetURL(path, s string, e Executor) {
 	v.url(path, s)
 }
 
+// url checks the URL template of an http executor: literals and
+// "{env:NAME}" placeholders; a template that does not start with a
+// placeholder starts with "https://", or with "http://" for localhost or
+// 127.0.0.1 (the runner checks the scheme of a placeholder base when it
+// expands it).
 func (v *validator) url(path, s string) {
 	if s == "" {
 		v.add(RuleInvalid, path, "value is empty")
