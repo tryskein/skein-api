@@ -131,6 +131,10 @@ class RegistryDetector(Detector):
         conds = channel.get("detect") or {}
         if not conds.get("env") or not all(env_holds(c, ctx.env) for c in conds["env"]):
             return False
+        if not records_hold(conds, ctx.settings.record):
+            # Another channel of the same host serves this record: the two
+            # are one terminal environment, not an ambiguity.
+            return False
         identity = ctx.identity
         if identity is not None and identity.terminal is not None:
             return channel["id"] == identity.terminal
@@ -153,7 +157,7 @@ class RegistryDetector(Detector):
         for step in (3, 5, 6, 7):
             for c in self._channels(ctx, step):
                 a = c.get("address")
-                if not a:
+                if not a or not records_hold(c.get("detect"), record):
                     continue
                 per_process = bool(a.get("perProcess"))
                 if step == 3:

@@ -9,6 +9,9 @@ the records that need them (Orca, Paseo):
   (registry.go#AddresseeCommand.Capture): the preflight saves them, and a
   transfer goes only while the check gives them again;
 - a program named by a variable ("{env:NAME}" in binaries);
+- a channel that serves only some agent records
+  (registry.go#Conditions.Records), and a literal phrase on stderr as an
+  answer sign (registry.go#Match.StderrContains);
 - a host that launches agents (registry.go#Channel.Launcher): an agent it
   launched skips its own methods but the kept ones and the host goes first
   at step 5; a nested agent, the host's own terminal and the variables
@@ -65,6 +68,14 @@ REGISTRY = {
          "detect": {"env": [{"name": "HOST_AGENT_ID"}]}, "probes": PROBE, "binaries": SH,
          "addressee": {"process": "none", "command": SHOW}, "address": {"env": "HOST_AGENT_ID"},
          "launcher": {"process": {"executables": ["host-daemon"]}, "keeps": {"alpha": ["stream"]}}},
+        # One terminal environment with a channel for gamma and one for the
+        # other records (cmux: agent message for Claude, paste for others).
+        {"id": "msg6", "step": 6, "order": 1, "kind": "addressed", "blind": False,
+         "detect": {"env": [{"name": "HOST6_ID"}], "records": ["gamma"]}, "probes": PROBE, "binaries": SH,
+         "addressee": {"process": "none"}, "address": {"env": "HOST6_ID"}},
+        {"id": "paste6", "step": 6, "order": 2, "kind": "addressed", "blind": False,
+         "detect": {"env": [{"name": "HOST6_ID"}], "recordsAbsent": ["gamma"]}, "probes": PROBE,
+         "binaries": SH, "addressee": {"process": "none"}, "address": {"env": "HOST6_ID"}},
     ],
     "shells": {"source": "test", "names": ["sh", "bash"]},
     "zavodEngines": {},
@@ -403,6 +414,70 @@ class LauncherTest(unittest.TestCase):
         self.assertEqual(ctx.identity.terminal, "launch")
         self.assertIsNone(ctx.detector.under_host(ctx))
         self.assertEqual(RUNNER.choose(ctx).channel, "launch")
+
+
+class RecordsConditionTest(unittest.TestCase):
+    """A channel that serves only some agent records
+    (registry.go#Conditions.Records, RecordsAbsent): of two channels of one
+    environment exactly one is detected for a record, so they are not an
+    ambiguity, and the other is unavailable for it."""
+
+    ENV = {"PATH": os.environ.get("PATH", os.defpath), "HOST6_ID": "surface-1"}
+
+    def choose(self, procs, client):
+        ctx = context(procs, client, self.ENV)
+        choice = RUNNER.choose(ctx)
+        self.assertNotIn(RUNNER.AMBIGUOUS_TERMINAL, json.dumps(list(ctx.detector.warnings)))
+        return ctx, choice
+
+    def test_the_named_record_gets_its_channel(self):
+        ctx, choice = self.choose(["bash", "gamma", "bash"], "gamma")
+        self.assertEqual((choice.method, choice.channel), (RUNNER.METHOD_DETACHED, "msg6"))
+        self.assertNotIn("paste6", choice.fallbacks)
+        self.assertEqual([a.channel for a in ctx.identity.addresses], ["msg6"])
+
+    def test_every_other_record_gets_the_other_channel(self):
+        for procs, client in ((["bash", "beta", "bash"], "beta"), (["bash", "zeta", "bash"], "zeta")):
+            with self.subTest(client=client):
+                ctx, choice = self.choose(procs, client)
+                self.assertEqual((choice.method, choice.channel), (RUNNER.METHOD_DETACHED, "paste6"))
+                self.assertNotIn("msg6", choice.fallbacks)
+                ok, cause = RUNNER.channel_available(ctx, "msg6")
+                self.assertFalse(ok)
+                self.assertIn("does not serve the record", cause)
+
+
+class StderrPhraseSignTest(unittest.TestCase):
+    """A literal phrase on the stderr of a CLI that reports its errors only
+    as text (registry.go#Match.StderrContains)."""
+
+    ROWS = [{"match": {"exitCode": 1, "stderrContains": "so nothing was sent"}, "outcome": "refused-before-send"},
+            {"match": {"exitCode": 1, "stderrContains": "(SESSION_COMPOSER_BUSY)"}, "outcome": "refused-before-send"},
+            {"match": {"exitCode": 0}, "outcome": "input-written"}]
+
+    def outcome(self, exit_code, stderr, doc=None):
+        return RUNNER.classify(self.ROWS, exit_code=exit_code, doc=doc, stderr=stderr)[0]
+
+    def test_the_phrase_on_stderr_is_the_sign(self):
+        self.assertEqual(self.outcome(1, b"Error: paste: the agent prompt in s:1 holds text someone is typing, "
+                                         b"so nothing was sent. Retry when the prompt is clear.\n"),
+                         "refused-before-send")
+        self.assertEqual(self.outcome(1, b"send s-1: composer (SESSION_COMPOSER_BUSY) [request r-1]\n"),
+                         "refused-before-send")
+
+    def test_other_answers_are_unknown(self):
+        cases = {
+            "another text": (1, b"Error: the socket closed\n"),
+            "the phrase under another exit code": (2, b"so nothing was sent"),
+            "no stderr": (1, b""),
+            "both phrases at once": (1, b"so nothing was sent (SESSION_COMPOSER_BUSY)"),
+            "the phrase in other words": (1, b"nothing was sent so"),
+        }
+        for name, (code, err) in cases.items():
+            with self.subTest(case=name):
+                self.assertEqual(self.outcome(code, err), "unknown")
+        # Without a program there is no stderr: the phrase is no sign.
+        self.assertEqual(self.outcome(1, None), "unknown")
 
 
 if __name__ == "__main__":

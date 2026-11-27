@@ -168,6 +168,11 @@ def outcome_sign_matches(match, exit_code=None, doc=None, http_status=None, stde
         stated = True
         if doc is None or json_path_value(doc, path) != want:
             return False
+    if match.get("stderrContains"):
+        # A literal phrase of a CLI that reports its errors as text.
+        stated = True
+        if stderr is None or match["stderrContains"] not in stderr.decode("utf-8", "replace"):
+            return False
     if match.get("stderrJson"):
         # The JSON document of stderr (a CLI that reports its errors there).
         stated = True

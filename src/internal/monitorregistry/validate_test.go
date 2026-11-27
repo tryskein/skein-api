@@ -144,6 +144,32 @@ func TestValidate_RejectsEachRule(t *testing.T) {
 				HTTP: &HTTPRequest{Method: "POST", URL: "{env:HOST_URL}", BodyField: "text"}}
 		}, RuleInvalid},
 		{"Windows shell outside the closed set", func(r *Registry) { r.Agents[0].WindowsShell = "gitbash" }, RuleInvalid},
+		{"records on a method of an agent", func(r *Registry) {
+			r.Agents[0].Methods[1].Conditions.Records = []string{"alpha"}
+		}, RuleInvalid},
+		{"records and recordsAbsent together", func(r *Registry) {
+			r.Channels[1].Detect.Records = []string{"alpha"}
+			r.Channels[1].Detect.RecordsAbsent = []string{"alpha"}
+		}, RuleInvalid},
+		{"a record the registry does not have", func(r *Registry) {
+			r.Channels[1].Detect.RecordsAbsent = []string{"omega"}
+		}, RuleInvalid},
+		{"stderr phrase in the table of an http channel", func(r *Registry) {
+			httpHost(r)
+			r.Channels[1].Outcomes[0].Match.StderrContains = "busy"
+		}, RuleInvalid},
+		{"stderr phrase of two lines", func(r *Registry) {
+			r.Channels[1].Outcomes[1].Match.StderrContains = "nothing\nwas sent"
+		}, RuleInvalid},
+		{"stderr phrase with an empty stderr", func(r *Registry) {
+			r.Channels[1].Outcomes[1].Match.StderrContains = "nothing was sent"
+			r.Channels[1].Outcomes[1].Match.StderrEmpty = boolp(true)
+		}, RuleInvalid},
+		{"stderr phrase and the same phrase", func(r *Registry) {
+			r.Channels[0].Outcomes = append(r.Channels[0].Outcomes,
+				OutcomeRow{Match: Match{ExitCode: intp(1), StderrContains: "busy"}, Outcome: OutcomeRefused},
+				OutcomeRow{Match: Match{ExitCode: intp(1), StderrContains: "busy"}, Outcome: OutcomeUnknown})
+		}, RuleAmbiguousSign},
 		{"http channel that names programs", func(r *Registry) {
 			httpHost(r)
 			r.Channels[1].Binaries = map[string][]string{PlatformLinux: {"host"}}
@@ -592,5 +618,22 @@ func TestValidate_AcceptsAnHTTPChannel(t *testing.T) {
 		if err := r.Validate(); err != nil {
 			t.Fatalf("a correct http record with URL %q was refused: %v", url, err)
 		}
+	}
+}
+
+// TestValidate_AcceptsRecordsAndStderrPhrases — two channels of one
+// environment split by the agent record (records, recordsAbsent), and rows
+// told apart by a literal phrase on stderr, pass.
+func TestValidate_AcceptsRecordsAndStderrPhrases(t *testing.T) {
+	r := validRegistry()
+	r.Channels[1].Detect.Records = []string{"alpha"}
+	r.Channels[0].Detect.RecordsAbsent = []string{"alpha"}
+	r.Channels[0].Outcomes = append(r.Channels[0].Outcomes,
+		OutcomeRow{Match: Match{ExitCode: intp(4), StderrContains: "so nothing was sent"}, Outcome: OutcomeRefused},
+		OutcomeRow{Match: Match{ExitCode: intp(4), StderrContains: "(SESSION_COMPOSER_BUSY)"}, Outcome: OutcomeRefused},
+		OutcomeRow{Match: Match{ExitCode: intp(5), StderrEmpty: boolp(true)}, Outcome: OutcomeRefused},
+		OutcomeRow{Match: Match{ExitCode: intp(5), StderrContains: "usage"}, Outcome: OutcomeUnknown})
+	if err := r.Validate(); err != nil {
+		t.Fatalf("a correct record with records and stderr phrases was refused: %v", err)
 	}
 }

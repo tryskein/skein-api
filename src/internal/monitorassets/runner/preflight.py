@@ -394,11 +394,25 @@ def agent_options_absent(options, agent):
     return True, None
 
 
-def conditions_hold(conds, env, agent=None):
+def records_hold(conds, record):
+    """Whether a channel serves the agent record the monitor runs by
+    (registry.go#Conditions.Records): record is a registry Record or None,
+    the general record."""
+    conds = conds or {}
+    rid = record.id if record is not None else "general"
+    if conds.get("records") and rid not in conds["records"]:
+        return False
+    return rid not in (conds.get("recordsAbsent") or [])
+
+
+def conditions_hold(conds, env, agent=None, record=None):
     """(True, None) when every condition holds, else (False, cause). agent is
     the agent process (identity.Placement.agent) a method's condition on its
-    options reads."""
+    options reads; record is the agent record a channel's detection names
+    (records, recordsAbsent)."""
     conds = conds or {}
+    if not records_hold(conds, record):
+        return False, "the channel does not serve the record %s" % (record.id if record is not None else "general")
     if conds.get("agentOptionsAbsent"):
         ok, cause = agent_options_absent(conds["agentOptionsAbsent"], agent)
         if not ok:
@@ -430,7 +444,8 @@ def channel_available(ctx, channel_id):
         return False, "channel %s is not in the registry" % channel_id
     if not ctx.external:
         return False, "the ledger directory is not writable"
-    ok, cause = conditions_hold(channel.get("detect"), ctx.env)
+    record = ctx.settings.record if ctx.settings is not None else None
+    ok, cause = conditions_hold(channel.get("detect"), ctx.env, record=record)
     if not ok:
         return False, cause
     spec = channel.get("executor") or {}

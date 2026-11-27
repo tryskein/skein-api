@@ -181,6 +181,14 @@ func (r *Registry) Validate() error {
 	}
 
 	for i := range r.Channels {
+		d := r.Channels[i].Detect
+		for field, ids := range map[string][]string{"records": d.Records, "recordsAbsent": d.RecordsAbsent} {
+			for j, id := range ids {
+				if !seenAgents[id] {
+					v.add(RuleInvalid, fmt.Sprintf("channels[%d].detect.%s[%d]", i, field, j), "%q is not an agent record", id)
+				}
+			}
+		}
 		if l := r.Channels[i].Launcher; l != nil {
 			for _, agent := range slices.Sorted(maps.Keys(l.Keeps)) {
 				if !seenAgents[agent] {
@@ -306,6 +314,12 @@ func (v *validator) conditions(path string, c Conditions, agentOptions bool) {
 	v.names(path+".programs", c.Programs)
 	if len(c.AgentOptionsAbsent) > 0 && !agentOptions {
 		v.add(RuleInvalid, path+".agentOptionsAbsent", "only a method of an agent record reads the agent process's arguments")
+	}
+	if (len(c.Records) > 0 || len(c.RecordsAbsent) > 0) && agentOptions {
+		v.add(RuleInvalid, path+".records", "only a channel's detection names the agent records it serves")
+	}
+	if len(c.Records) > 0 && len(c.RecordsAbsent) > 0 {
+		v.add(RuleInvalid, path+".records", "records and recordsAbsent are not given together")
 	}
 	for i, o := range c.AgentOptionsAbsent {
 		if !longOptionPattern.MatchString(o) {
@@ -712,6 +726,12 @@ func (v *validator) criteriaOf(path string, rows []Match, executor string) {
 			v.add(RuleInvalid, rpath+".stderrEmpty", "an http answer has no stderr")
 		case executor == ExecutorHTTP && len(m.StderrJSON) > 0:
 			v.add(RuleInvalid, rpath+".stderrJson", "an http answer has no stderr")
+		case executor == ExecutorHTTP && m.StderrContains != "":
+			v.add(RuleInvalid, rpath+".stderrContains", "an http answer has no stderr")
+		case m.StderrContains != "" && strings.ContainsAny(m.StderrContains, "\r\n"):
+			v.add(RuleInvalid, rpath+".stderrContains", "the phrase is one line")
+		case m.StderrContains != "" && m.StderrEmpty != nil && *m.StderrEmpty:
+			v.add(RuleInvalid, rpath+".stderrContains", "an empty stderr contains no phrase")
 		}
 	}
 }
@@ -726,7 +746,7 @@ func (v *validator) jsonPath(path, p string) {
 // empty reports whether the sign states no criterion.
 func (m Match) empty() bool {
 	return m.ExitCode == nil && m.HTTPStatus == nil && len(m.JSON) == 0 && len(m.JSONAbsent) == 0 &&
-		m.StderrEmpty == nil && len(m.StderrJSON) == 0
+		m.StderrEmpty == nil && len(m.StderrJSON) == 0 && m.StderrContains == ""
 }
 
 // overlaps reports whether one answer can satisfy both signs: every
@@ -737,6 +757,13 @@ func (m Match) overlaps(o Match) bool {
 		return false
 	}
 	if m.StderrEmpty != nil && o.StderrEmpty != nil && *m.StderrEmpty != *o.StderrEmpty {
+		return false
+	}
+	if m.StderrContains != "" && o.StderrContains != "" && m.StderrContains != o.StderrContains {
+		return false
+	}
+	if (m.StderrContains != "" && o.StderrEmpty != nil && *o.StderrEmpty) ||
+		(o.StderrContains != "" && m.StderrEmpty != nil && *m.StderrEmpty) {
 		return false
 	}
 	if m.ExitCode != nil && o.ExitCode != nil && *m.ExitCode != *o.ExitCode {

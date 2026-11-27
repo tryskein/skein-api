@@ -164,6 +164,14 @@ type Conditions struct {
 	// does not hold. Only a method of an agent record states it: a channel's
 	// detection does not read the agent process.
 	AgentOptionsAbsent []string `json:"agentOptionsAbsent,omitempty"`
+	// Records are the ids of the agent records the channel serves: the
+	// record the monitor runs by must be one of them. Only a channel's
+	// detection states it, never together with RecordsAbsent.
+	Records []string `json:"records,omitempty"`
+	// RecordsAbsent are the ids of the agent records the channel does not
+	// serve: the record the monitor runs by (the general record included)
+	// must be none of them.
+	RecordsAbsent []string `json:"recordsAbsent,omitempty"`
 }
 
 // EnvCondition holds when the variable is set and non-empty and, when
@@ -492,6 +500,12 @@ type Match struct {
 	// StderrJSON is JSON for the JSON document an argv program wrote to its
 	// stderr (a CLI that reports its errors there).
 	StderrJSON map[string]string `json:"stderrJson,omitempty"`
+	// StderrContains is a literal phrase the stderr of an argv program must
+	// contain (a CLI that reports its errors only as text there). A CLI
+	// reports one error per call, so rows of two different phrases are
+	// taken as apart; an answer that carries both matches two rows and is
+	// unknown.
+	StderrContains string `json:"stderrContains,omitempty"`
 	// HTTPStatus is the status of an http response.
 	HTTPStatus *int `json:"httpStatus,omitempty"`
 	// StderrEmpty, when set, is whether the argv program wrote nothing to
