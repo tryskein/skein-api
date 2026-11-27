@@ -16,6 +16,7 @@ Standard library of Python 3.6 only.
 
 import json
 import os
+import subprocess
 import shutil
 import signal
 import sys
@@ -975,13 +976,26 @@ class StillOursTest(Base):
             attempt.still_ours()
 
     def test_a_ledger_held_right_now_is_busy_without_a_wait(self):
+        # The lock is held by another process that lets go after a few
+        # seconds: a look that waited would not hang the test, it would
+        # return, and the test fails.
         a = self.ledger("mon-a", ident([addr("orca", "t-1")]))
         attempt = a.begin([ev("e1")], "c1").attempt
         self.addCleanup(attempt.release)
-        held = RUNNER._FileLock(os.path.join(RUNNER.ledger_dir(self.env), RUNNER.LEDGER_LOCK_NAME))
-        self.addCleanup(held.release)
-        with self.assertRaises(RUNNER.LockBusy):
-            attempt.still_ours()
+        lock = os.path.join(RUNNER.ledger_dir(self.env), RUNNER.LEDGER_LOCK_NAME)
+        holder = subprocess.Popen([sys.executable, "-c",
+                                   "import fcntl, os, sys, time\n"
+                                   "fd = os.open(sys.argv[1], os.O_RDWR | os.O_CREAT, 0o600)\n"
+                                   "fcntl.flock(fd, fcntl.LOCK_EX)\n"
+                                   "print('held', flush=True)\n"
+                                   "time.sleep(3)\n", lock], stdout=subprocess.PIPE)
+        try:
+            self.assertEqual(holder.stdout.readline().strip(), b"held")
+            with self.assertRaises(RUNNER.LockBusy):
+                attempt.still_ours()
+        finally:
+            holder.wait()
+            holder.stdout.close()
 
 
 if __name__ == "__main__":

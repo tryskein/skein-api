@@ -1315,6 +1315,77 @@ class LastBoundaryTest(unittest.TestCase):
             guard.before_send()
         self.assertFalse(guard.handed)
 
+    class Recorder(object):
+        """The executor of a delivery that only records its calls."""
+
+        def __init__(self, runner):
+            self.runner = runner
+            self.calls = []
+
+        def call(self, spec, text, timeout):
+            self.calls.append(text)
+            return self.runner.CallResult(0, b"", b"", False)
+
+    def driver_with_last_check(self, at_last_check):
+        """An ArgvDriver of the channel whose second check (the last one,
+        right before the hand-over) runs at_last_check."""
+        r = self.world.runner
+        attempt = self.attempt()
+        guard = r.Guard(self.mon.sink, self.channel, attempt, 30)
+        checks = []
+
+        def check(channel, timeout=None):
+            checks.append(1)
+            if len(checks) == 2:
+                at_last_check()
+        self.mon.sink.check_addressee = check
+        self.mon.sink.wait_idle = lambda channel, timeout: None
+        recorder = self.Recorder(r)
+        return r.ArgvDriver(self.channel, recorder), guard, recorder
+
+    def test_a_reservation_merged_away_at_the_last_check_inserts_nothing(self):
+        # K2 of wave 13 round 1 on the path of a delivery (warning 5 of
+        # round 2): the records merged into another attempt during the last
+        # check - the driver hands nothing over.
+        def merge():
+            def change(entry):
+                entry["events"]["5"]["delivering"]["attempt"] = "another-attempt"
+            self.mon.sink.ledger._change(change)
+        driver, guard, recorder = self.driver_with_last_check(merge)
+        with self.assertRaises(self.world.runner.AttemptLost):
+            driver.send("event", guard)
+        self.assertEqual(recorder.calls, [])
+        self.assertFalse(guard.handed)
+
+    def test_a_ledger_held_by_another_process_at_the_last_check_inserts_nothing(self):
+        # The ledger's lock held by another monitor process right after the
+        # last check: a refusal before send, never a wait. The holder lets
+        # go after a few seconds, so a wait would not hang the test - it
+        # would insert, and the test fails.
+        r = self.world.runner
+        lock = os.path.join(self.mon.sink.ledger._root(), r.LEDGER_LOCK_NAME)
+        holder = []
+
+        def hold():
+            proc = subprocess.Popen([sys.executable, "-c",
+                                     "import fcntl, os, sys, time\n"
+                                     "fd = os.open(sys.argv[1], os.O_RDWR | os.O_CREAT, 0o600)\n"
+                                     "fcntl.flock(fd, fcntl.LOCK_EX)\n"
+                                     "print('held', flush=True)\n"
+                                     "time.sleep(3)\n", lock], stdout=subprocess.PIPE)
+            holder.append(proc)
+            self.assertEqual(proc.stdout.readline().strip(), b"held")
+        driver, guard, recorder = self.driver_with_last_check(hold)
+        try:
+            with self.assertRaises(r.RefusedBeforeSend):
+                driver.send("event", guard)
+        finally:
+            for proc in holder:
+                proc.wait()
+                proc.stdout.close()
+        self.assertEqual(recorder.calls, [])
+        self.assertFalse(guard.handed)
+
     def test_a_merge_during_the_last_poll_hands_nothing_over(self):
         # Review round 3 of wave 7, row 15: the poll of the last network
         # boundary may take long; a third monitor merging the addressee's
