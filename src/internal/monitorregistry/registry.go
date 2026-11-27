@@ -157,6 +157,10 @@ type ProcessSign struct {
 	// Argv are arguments any one of which marks the agent process (for an
 	// agent run by an interpreter, e.g. a script path).
 	Argv []string `json:"argv,omitempty"`
+	// ArgvBaseNames are file names any argument may end with, after its last
+	// "/" or "\\" (an entry point started by its path, wherever it is
+	// installed).
+	ArgvBaseNames []string `json:"argvBaseNames,omitempty"`
 }
 
 // Method kinds. They are the steps 2-4 of the method order.

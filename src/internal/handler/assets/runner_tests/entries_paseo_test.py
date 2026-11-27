@@ -344,6 +344,29 @@ class AgentUnderPaseoTest(unittest.TestCase):
         line = self.line("kimi", launched("kimi-code", self.agent.pid), PASEO_AGENT_ID=AGENT_ID)
         self.assertEqual((line["method"], line["channel"]), ("detached", "paseo"))
 
+    def test_the_daemon_known_by_its_entry_point_where_no_title_shows(self):
+        # macOS and Windows list the image name, not the title: the worker
+        # is told by the path of daemon-worker.js among its arguments
+        # (supervisor-entrypoint.ts#resolveWorkerEntry; supervisor.ts fork,
+        # or the packaged runner with "node-script").
+        for name, daemon in (
+                ("macOS, forked by node", ("node", ["/usr/local/bin/node",
+                                                   "/Applications/Paseo.app/Contents/Resources/app/node_modules/"
+                                                   "@getpaseo/server/server/server/daemon-worker.js"], None)),
+                ("Windows, the packaged runner", ("Paseo.exe", [
+                    "C:\\Program Files\\Paseo\\Paseo.exe", "C:\\Program Files\\Paseo\\dist\\daemon\\"
+                    "node-entrypoint-runner.js", "node-script",
+                    "C:\\Program Files\\Paseo\\server\\server\\daemon-worker.js"], None))):
+            with self.subTest(case=name):
+                procs = [("bash", None, None), ("kimi-code", ["kimi-code"], self.agent.pid), daemon]
+                line = self.line("kimi", procs, PASEO_AGENT_ID=AGENT_ID)
+                self.assertEqual((line["method"], line["channel"]), ("detached", "paseo"))
+        # A script of another name is no daemon: the agent is in a terminal.
+        other = ("node", ["/usr/local/bin/node", "/opt/tool/daemon-helper.js"], None)
+        line = self.line("kimi", [("bash", None, None), ("kimi-code", ["kimi-code"], self.agent.pid), other],
+                         PASEO_AGENT_ID=AGENT_ID)
+        self.assertEqual(line["method"], "exit-on-event")
+
     def test_the_acp_terminal_and_an_agent_nested_in_it(self):
         line = self.line("gemini", [("bash", None, None), DAEMON], PASEO_AGENT_ID=AGENT_ID)
         self.assertEqual((line["method"], line["channel"]), ("detached", "paseo"))

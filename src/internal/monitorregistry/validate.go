@@ -289,10 +289,11 @@ func (v *validator) agent(path string, a *Agent, channelSteps map[string]int) {
 	v.id(path+".id", a.ID)
 	v.text(RuleMissingAbout, path+".about", a.About)
 	v.text(RuleMissingSource, path+".source", a.Source)
-	if len(a.Process.Executables) == 0 && len(a.Process.Argv) == 0 {
+	if len(a.Process.Executables) == 0 && len(a.Process.Argv) == 0 && len(a.Process.ArgvBaseNames) == 0 {
 		v.add(RuleInvalid, path+".process", "the agent record has no process sign")
 	}
 	v.names(path+".process.executables", a.Process.Executables)
+	v.names(path+".process.argvBaseNames", a.Process.ArgvBaseNames)
 	for i, arg := range a.Process.Argv {
 		if strings.TrimSpace(arg) == "" {
 			v.add(RuleInvalid, fmt.Sprintf("%s.process.argv[%d]", path, i), "argument sign is empty")
@@ -458,10 +459,11 @@ func (v *validator) channel(path string, c *Channel) {
 		if c.Step != StepHost || c.Address == nil {
 			v.add(RuleInvalid, path+".launcher", "only a host of step 5 with an address launches agents")
 		}
-		if len(l.Process.Executables) == 0 && len(l.Process.Argv) == 0 {
+		if len(l.Process.Executables) == 0 && len(l.Process.Argv) == 0 && len(l.Process.ArgvBaseNames) == 0 {
 			v.add(RuleInvalid, path+".launcher.process", "the launcher has no process sign")
 		}
 		v.names(path+".launcher.process.executables", l.Process.Executables)
+		v.names(path+".launcher.process.argvBaseNames", l.Process.ArgvBaseNames)
 		for i, arg := range l.Process.Argv {
 			if strings.TrimSpace(arg) == "" {
 				v.add(RuleInvalid, fmt.Sprintf("%s.launcher.process.argv[%d]", path, i), "argument sign is empty")

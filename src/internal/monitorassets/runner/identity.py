@@ -41,7 +41,12 @@ def sign_matches(proc, sign):
     if proc.names() & set(sign.get("executables") or []):
         return True
     wanted = sign.get("argv") or []
-    return bool(proc.argv) and any(a in proc.argv for a in wanted)
+    if proc.argv and any(a in proc.argv for a in wanted):
+        return True
+    # An entry point started by its path, wherever it is installed.
+    bases = sign.get("argvBaseNames") or []
+    return bool(proc.argv) and bool(bases) and any(
+        a.replace("\\", "/").rsplit("/", 1)[-1] in bases for a in proc.argv)
 
 
 def record_of(proc, registry):
