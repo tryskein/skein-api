@@ -472,10 +472,17 @@ class DeliverySink(object):
                                             stderr=result.stderr):
                         verdict = row.get("result")
                         break
+            # Only "same" hands over (INV-4): "changed" is another
+            # addressee, "gone" an addressee that ended (a stop); a timeout,
+            # a failed check or an answer the table does not know proves
+            # neither, and nothing was sent: a refusal before send, within
+            # the budget of INV-8.
             if verdict == "gone":
                 raise AddresseeGone()
-            if verdict == "changed" or (verdict is None and channel.get("kind") == "terminal"):
+            if verdict == "changed":
                 raise AddresseeChanged()
+            if verdict != "same":
+                raise RefusedBeforeSend("the addressee check gave no answer of its table")
             # The values the preflight saw (its process incarnation), a path
             # it saw absent absent again: anything else, or no saved value,
             # is another addressee.

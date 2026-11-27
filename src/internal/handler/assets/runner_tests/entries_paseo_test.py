@@ -198,6 +198,37 @@ class PaseoRecordTest(unittest.TestCase):
                 self.assertEqual(mon.statuses(), [(i + 1, outcome)])
                 self.assertEqual(len(self.paseo.calls("send")), 1)
 
+    def test_only_the_same_agent_gets_the_event(self):
+        # INV-4, the check before each transfer: an archived agent and one
+        # the daemon does not know have ended (the stop addressee_gone, as
+        # Zavod's caller_not_in_roster); nothing is sent to them.
+        for name, answer in (("archived", inspected(archived=True)), ("not found", error("AGENT_NOT_FOUND"))):
+            with self.subTest(case=name):
+                self.fresh()
+                mon = self.mon()
+                self.paseo.respond(inspect=[answer])
+                with self.assertRaises(RUNNER.Stop) as caught:
+                    mon.page([ft.note(1)])
+                self.assertEqual(caught.exception.reason, "addressee_gone")
+                self.assertEqual(self.paseo.calls("send"), [])
+
+    def test_a_check_that_proves_nothing_is_a_refusal_before_send(self):
+        # A check that fails, times out or answers outside its table proves
+        # neither the same agent nor another: nothing is sent, and the
+        # delivery is called again within the budget of INV-8.
+        cases = [("the daemon unreachable", error("DAEMON_UNREACHABLE")),
+                 ("no JSON", {"exit": 0, "stdout": "agent 3f6c\n"}),
+                 ("an exit code of another version", {"exit": 3, "stdout": inspected()["stdout"]})]
+        for name, answer in cases:
+            with self.subTest(case=name):
+                self.fresh()
+                mon = self.mon()
+                self.paseo.respond(inspect=[answer, inspected()])
+                mon.page([ft.note(1)])
+                self.assertEqual(mon.statuses(), [(1, "queued")])
+                self.assertEqual(len(self.paseo.calls("send")), 1)
+                self.assertGreaterEqual(len(self.paseo.calls("inspect")), 2)
+
     def test_a_refusal_while_connecting_is_repeated(self):
         for code in ("DAEMON_UNREACHABLE", "AUTH_REQUIRED"):
             with self.subTest(code=code):
