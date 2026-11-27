@@ -147,6 +147,10 @@ def _read(lines, start, end, indent, keys):
     has_children = child_start < child_end
     if len(keys) > 1:
         if rest is not None:
+            if has_children:
+                # The scalar goes on below its key (a multi-line scalar) or
+                # the lines below are no value of it: not read either way.
+                raise _NotRead()
             # A scalar where the path needs a block mapping: no such key
             # below it. Any other form (flow, anchor, tag) is not read.
             _scalar(rest)

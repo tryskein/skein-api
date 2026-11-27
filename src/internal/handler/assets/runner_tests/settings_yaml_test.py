@@ -188,6 +188,10 @@ class YamlSettingTest(unittest.TestCase):
                 ("a literal block scalar", "display:\n  busy_input_mode: |\n    queue\n"),
                 ("a folded block scalar", "display:\n  busy_input_mode: >-\n    queue\n"),
                 ("a plain scalar over two lines", "display:\n  busy_input_mode: queue\n    mode\n"),
+                # A key on the path with a scalar and lines below it: a
+                # multi-line scalar or no YAML at all, never "no such key".
+                ("a section key with a scalar and lines below", "display: shown\n  busy_input_mode: queue\n"),
+                ("a section key with a quoted scalar and lines below", "display: 'shown'\n  busy_input_mode: queue\n"),
                 ("a quoted scalar over two lines", "display:\n  busy_input_mode: \"queue\n    \"\n"),
                 ("a tab in the indentation", "display:\n\tbusy_input_mode: queue\n"),
                 ("a tab after spaces", "display:\n  \tbusy_input_mode: queue\n"),
