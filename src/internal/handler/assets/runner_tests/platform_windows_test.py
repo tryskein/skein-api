@@ -407,6 +407,49 @@ class LockTest(unittest.TestCase):
             self.runner_lock(OSError(errno.EIO, "I/O error"))
 
 
+class SuccessfulPathsTest(unittest.TestCase):
+    """The successful paths of the Windows layer on the fake security
+    source and CRT: a private directory with its missing parents, an atomic
+    write and the read that follows it. process_info, spawn_detached,
+    _run_polled on Windows pipes and the ctypes code of WinSecurity need
+    Windows itself: smoke of SC-007."""
+
+    def test_missing_directories_are_made_private_and_checked(self):
+        world = WindowsWorld(self)
+        target = os.path.join(world.root, "skein-monitor", "locks")
+        with world.active(RUNNER.__dict__):
+            RUNNER.WindowsPlatform.ensure_private_dir(target)
+        self.assertEqual(world.fake.made, [os.path.dirname(target), target])
+        self.assertTrue(os.path.isdir(target))
+
+    def test_an_existing_directory_that_is_not_private_is_refused_not_repaired(self):
+        world = WindowsWorld(self, dir_view=private_dir_view([FOREIGN_READ]))
+        with world.active(RUNNER.__dict__):
+            with self.assertRaises(RUNNER.PlatformRefusal) as ctx:
+                RUNNER.WindowsPlatform.ensure_private_dir(world.token_dir)
+        self.assertEqual(ctx.exception.reason, "open_to_others")
+        self.assertEqual(world.fake.made, [])
+
+    def test_an_atomic_write_replaces_the_file_and_leaves_no_temporary_one(self):
+        world = WindowsWorld(self)
+        path = os.path.join(world.token_dir, "state.json")
+        with world.active(RUNNER.__dict__):
+            RUNNER.WindowsPlatform.atomic_write(path, b'{"version": 1}')
+            world.fake.views[path] = private_file_view()
+            self.assertEqual(RUNNER.WindowsPlatform.read_own_file(path), b'{"version": 1}')
+            RUNNER.WindowsPlatform.atomic_write(path, b'{"version": 2}')
+            self.assertEqual(RUNNER.WindowsPlatform.read_own_file(path), b'{"version": 2}')
+        self.assertEqual(sorted(n for n in os.listdir(world.token_dir) if n.startswith(".")), [])
+
+    def test_an_atomic_write_into_a_directory_open_to_others_is_refused(self):
+        world = WindowsWorld(self, dir_view=private_dir_view([FOREIGN_READ]))
+        path = os.path.join(world.token_dir, "state.json")
+        with world.active(RUNNER.__dict__):
+            with self.assertRaises(RUNNER.PlatformRefusal):
+                RUNNER.WindowsPlatform.atomic_write(path, b"{}")
+        self.assertFalse(os.path.exists(path))
+
+
 class BatchProgramTest(unittest.TestCase):
     """Row #91: a .cmd/.bat program of Windows and the Codex executable."""
 
