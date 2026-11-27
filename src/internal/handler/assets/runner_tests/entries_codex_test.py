@@ -130,7 +130,8 @@ class CodexQueueTest(unittest.TestCase):
         os.remove(os.path.join(world.bin, "codex"))
         mon.page([ft.note(1)])
         self.assertEqual(codex_calls(world), [])
-        self.assertNotIn((1, "queued"), mon.statuses())
+        # No program: nothing was handed over, a refusal before send.
+        self.assertEqual(mon.statuses(), [(1, "refused-before-send")])
 
     def test_no_thread_or_remote_takes_the_next_method(self):
         world = ft.World(self)
@@ -288,6 +289,38 @@ class AgentExecutableTest(unittest.TestCase):
         line, env = self.preflight(world, other)
         self.assertEqual((line["method"], line["channel"]), ("journal", None))
         self.assertEqual(RUNNER.load_preflight(env["SKEIN_TOKEN_FILE"])["programs"], {})
+
+
+@unittest.skipUnless(sys.platform.startswith("linux"), "the POSIX preflight")
+class UnreadableTest(unittest.TestCase):
+    """Rows #75, #76: what cannot be read decides nothing in favour of the
+    channel. Arguments of the agent process that cannot be read do not show
+    the absence of --remote; a probe whose paths none resolves (no
+    CODEX_SQLITE_HOME, no CODEX_HOME, no HOME for ~/.codex) closes the
+    boundary."""
+
+    def test_unreadable_arguments_do_not_hold(self):
+        class Agent(object):
+            argv = None
+
+        ok, cause = RUNNER.agent_options_absent(["--remote"], Agent())
+        self.assertFalse(ok)
+        self.assertTrue(cause)
+        self.assertEqual(RUNNER.agent_options_absent(["--remote"], None)[0], False)
+
+    def test_no_path_of_the_probe_resolves(self):
+        channel = REG.channel("codex-queue")
+        probe = channel["probes"][0]
+        with self.assertRaises(RUNNER.ExecutorRefusal):
+            RUNNER.probe_path(probe, {})
+        world = ft.World(self)
+        fake_codex(world, [{"exit": 0, "stdout": QUEUED_OUT}])
+        saved = world.base_env.pop("CODEX_HOME")
+        self.addCleanup(world.base_env.__setitem__, "CODEX_HOME", saved)
+        line, _ = world.preflight("tok", "codex", "codex", prober=RUNNER.SystemProbeRunner(), HOME="",
+                                  CODEX_THREAD_ID=THREAD)
+        self.assertNotEqual(line["channel"], "codex-queue", line)
+        self.assertIn("codex-queue: probe dir-writable", line["reason"])
 
 
 @unittest.skipUnless(sys.platform.startswith("linux"), "the POSIX preflight")

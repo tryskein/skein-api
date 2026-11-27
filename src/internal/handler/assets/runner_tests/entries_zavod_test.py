@@ -159,6 +159,32 @@ class SendTest(unittest.TestCase):
         text, _ = RUNNER.plain_text(deleted, "", minimal=True)
         self.assertIn("commentDeleted=true", text)
 
+    def test_a_minimal_form_refused_too_stays_in_the_budget(self):
+        """Row #78: the minimal form refused as too long as well: the
+        delivery takes at most the three calls of INV-8, no letter is
+        accepted, and the event ends as a refusal before send."""
+        world, mon = zavod_monitor(self, [envelope(11, "letter_too_large")])
+        mon.page([ft.note(1)])
+        calls = world.calls("zavod")
+        self.assertEqual(len(calls), 3)
+        self.assertIn(ft.PREVIEW, calls[0]["stdin"])
+        for call in calls[1:]:
+            self.assertNotIn(ft.PREVIEW, call["stdin"])
+        self.assertEqual(mon.statuses(), [(1, "refused-before-send")])
+
+    def test_a_minimal_form_over_the_limit_is_no_text(self):
+        note = ft.note(1)
+        full, _ = RUNNER.plain_text(note, "", minimal=True)
+        self.assertEqual(RUNNER.plain_text(note, "", limit=len(full) // 4, minimal=True), (None, False))
+
+    def test_the_stop_receipt_carries_the_notes_of_the_channel(self):
+        world, mon = zavod_monitor(self, [envelope(0, outcome="ok")])
+        mon.sink.receipt("The monitor of sk-86 stopped.")
+        calls = world.calls("zavod")
+        self.assertEqual(len(calls), 1)
+        for part in ("The monitor of sk-86 stopped.", NO_REPLY, NO_CLEAR):
+            self.assertIn(part, calls[0]["stdin"])
+
     def test_a_letter_keeps_to_the_own_limit(self):
         world, mon = zavod_monitor(self, [envelope(0, outcome="ok")])
         preview = ("Предпросмотр с юникодом ✓ " * 50)[:1024]
