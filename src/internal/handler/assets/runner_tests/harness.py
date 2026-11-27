@@ -24,13 +24,14 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 # The directory of the runner parts and of their manifest.
 RUNNER_DIR = os.path.join(HERE, "..", "..", "..", "monitorassets", "runner")
 PARTS_MANIFEST = os.path.join(RUNNER_DIR, "parts.txt")
-# The core part; tracebacks of an in-process runner name this file.
-RUNNER_SRC = os.path.join(RUNNER_DIR, "core.py")
 # The module name a mutation tool derives from the path of the core part
 # (src/internal/monitorassets/runner/core.py). The in-process runner is
 # loaded under this name so the tool attributes the runner's functions to
 # the file it mutated.
 RUNNER_MODULE = "internal.monitorassets.runner.core"
+# The module of each part as mutmut names it from its path: this prefix and
+# the part's file name without .py.
+PART_MODULE_PREFIX = "internal.monitorassets.runner."
 # The registry the server embeds into the body.
 REGISTRY_JSON = os.path.join(HERE, "..", "..", "..", "monitorregistry", "registry.json")
 # Shared interpreter hooks for runner subprocesses (virtual clock, pinned
@@ -107,45 +108,65 @@ def part_names():
     return names
 
 
-def assemble_template():
-    """The parts joined in manifest order, placeholders still in place."""
-    chunks = []
-    for name in part_names():
-        with open(os.path.join(RUNNER_DIR, name), "r") as fh:
-            text = fh.read()
-        if text and not text.endswith("\n"):
-            text += "\n"
-        chunks.append(text)
-    return "".join(chunks)
-
-
 def registry_b64(path=REGISTRY_JSON):
     with open(path, "rb") as fh:
         return base64.b64encode(fh.read()).decode("ascii")
 
 
-def render_runner(poll_sec=1, ceiling_sec=10, limit_sec=15, stall_sec=180,
-                  idle_sec=DEFAULT_TOKEN_IDLE_SEC, registry=None):
+def render_runner(**substitutions):
     """The served body: substitute every placeholder the way agent_script.go
-    does. registry is the base64 registry document; the server's
-    registry.json by default."""
-    body = assemble_template()
+    does (render_parts). registry is the base64 registry document; the
+    server's registry.json by default."""
+    return "".join(text for _, text in render_parts(**substitutions))
+
+
+def render_parts(poll_sec=1, ceiling_sec=10, limit_sec=15, stall_sec=180,
+                 idle_sec=DEFAULT_TOKEN_IDLE_SEC, registry=None):
+    """[(part file name, its text with every placeholder substituted)] in
+    manifest order; joined, they are the served body."""
+    registry = registry if registry is not None else registry_b64()
+    out = []
+    for name in part_names():
+        with open(os.path.join(RUNNER_DIR, name), "r") as fh:
+            text = fh.read()
+        if text and not text.endswith("\n"):
+            text += "\n"
+        out.append((name, _substitute(text, poll_sec, ceiling_sec, limit_sec, stall_sec, idle_sec, registry)))
+    if any("__SKEIN_" in text for _, text in out):
+        raise AssertionError("placeholder left unsubstituted in rendered runner")
+    return out
+
+
+def _substitute(body, poll_sec, ceiling_sec, limit_sec, stall_sec, idle_sec, registry):
     body = body.replace("__SKEIN_POLL_INTERVAL_SEC__", str(poll_sec))
     body = body.replace("__SKEIN_BACKOFF_CEILING_SEC__", str(ceiling_sec))
     body = body.replace("__SKEIN_REQUEST_LIMIT_SEC__", str(limit_sec))
     body = body.replace("__SKEIN_STALL_THRESHOLD_SEC__", str(stall_sec))
     body = body.replace("__SKEIN_TOKEN_IDLE_SEC__", str(idle_sec))
-    body = body.replace("__SKEIN_REGISTRY_B64__", registry if registry is not None else registry_b64())
-    if "__SKEIN_" in body:
-        raise AssertionError("placeholder left unsubstituted in rendered runner")
+    body = body.replace("__SKEIN_REGISTRY_B64__", registry)
     return body
 
 
-def load_runner(**substitutions):
+def load_runner(namespace=None, **substitutions):
     """Execute the rendered body in a fresh module named RUNNER_MODULE (so
-    `__name__ != "__main__"` and main() does not run) and return it."""
+    `__name__ != "__main__"` and main() does not run) and return it.
+    namespace: names put into it before the body runs (the loader's mode
+    marker).
+
+    The parts run in manifest order in the one namespace the served body
+    has, each compiled under its own file and run with `__name__` set to the
+    module of its file (PART_MODULE_PREFIX + its name), so every function
+    and class carries the module of the part it is written in: a mutation
+    tool that keys a function by its `__module__` (mutmut) finds the part it
+    mutated. `__name__` is RUNNER_MODULE again at the end. The runner reads
+    no `__name__` of its own but the `__main__` guard of its core part."""
     mod = types.ModuleType(RUNNER_MODULE)
-    exec(compile(render_runner(**substitutions), RUNNER_SRC, "exec"), mod.__dict__)
+    g = mod.__dict__
+    g.update(namespace or {})
+    for name, text in render_parts(**substitutions):
+        g["__name__"] = PART_MODULE_PREFIX + os.path.splitext(name)[0]
+        exec(compile(text, os.path.join(RUNNER_DIR, name), "exec"), g)
+    g["__name__"] = RUNNER_MODULE
     return mod
 
 

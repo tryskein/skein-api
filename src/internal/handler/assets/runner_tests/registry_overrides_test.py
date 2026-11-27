@@ -13,7 +13,6 @@ import base64
 import json
 import os
 import sys
-import types
 import unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -54,11 +53,8 @@ def this_platform():
 def load_body(mode, registry=None):
     """The body run the way a loader runs it: the loader mode marker put into
     its namespace before it executes."""
-    mod = types.ModuleType(harness.RUNNER_MODULE)
-    if mode is not None:
-        mod.__dict__["_SKEIN_LOADER_MODE"] = mode
-    exec(compile(harness.render_runner(registry=registry), harness.RUNNER_SRC, "exec"), mod.__dict__)
-    return mod
+    return harness.load_runner(namespace={"_SKEIN_LOADER_MODE": mode} if mode is not None else None,
+                               registry=registry)
 
 
 class OverridesTest(unittest.TestCase):
