@@ -72,6 +72,11 @@ class FakeCancel(object):
     def check(self):
         return self.answers.pop(0) if self.answers else None
 
+    def known(self):
+        # A stop answer received earlier: this fake answers only when asked
+        # with check(), so it knows none in between.
+        return None
+
     def may_send(self):
         return True
 
@@ -87,6 +92,9 @@ class FlagCancel(object):
         self.stale_once = False
 
     def check(self):
+        return self.stop
+
+    def known(self):
         return self.stop
 
     def may_send(self):
@@ -1032,6 +1040,66 @@ class LastBoundaryTest(unittest.TestCase):
         with self.assertRaises(r.AttemptLost):
             guard.before_send()
         self.assertFalse(guard.handed)
+
+    def test_a_merge_during_the_last_poll_hands_nothing_over(self):
+        # Review round 3 of wave 7, row 15: the poll of the last network
+        # boundary may take long; a third monitor merging the addressee's
+        # records meanwhile takes the reservation. The reservation is
+        # checked after that poll, so nothing is handed over (INV-1).
+        r = self.world.runner
+        attempt = self.attempt()
+        sink = self.mon.sink
+        guard = r.Guard(sink, self.channel, attempt, 30)
+        sink.check_addressee = lambda channel, timeout=None: None
+        sink.wait_idle = lambda channel, timeout: None
+        polls = []
+
+        class SlowPoll(object):
+            def check(self):
+                polls.append(1)
+                if len(polls) == 2:
+                    def change(entry):
+                        entry["events"]["5"]["delivering"]["attempt"] = "another-attempt"
+                    sink.ledger._change(change)
+                return None
+
+            def known(self):
+                return None
+
+            def may_send(self):
+                return True
+
+        sink.cancel = SlowPoll()
+        with self.assertRaises(r.AttemptLost):
+            guard.before_send()
+        self.assertFalse(guard.handed)
+        self.assertEqual(len(polls), 2)
+
+    def test_the_addressee_is_checked_after_the_last_poll_before_enter(self):
+        # Row 20: the agent ends while the poll before Enter is in flight;
+        # the addressee check comes after that poll and withholds Enter.
+        r = self.world.runner
+        guard = r.Guard(self.mon.sink, self.channel, self.attempt(), 30)
+        state = {"ended": False}
+
+        class EndingPoll(object):
+            def check(self):
+                state["ended"] = True
+                return None
+
+            def known(self):
+                return None
+
+            def may_send(self):
+                return True
+
+        def check(channel, timeout=None):
+            if state["ended"]:
+                raise r.AddresseeChanged()
+        self.mon.sink.cancel = EndingPoll()
+        self.mon.sink.check_addressee = check
+        self.assertFalse(guard.before_commit())
+        self.assertTrue(guard.changed)
 
 
 @unittest.skipUnless(os.name == "posix", "the POSIX pipeline")

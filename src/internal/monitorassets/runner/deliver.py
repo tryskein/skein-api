@@ -95,6 +95,9 @@ class NoCancel(object):
     def check(self):
         return None
 
+    def known(self):
+        return None
+
     def may_send(self):
         return True
 
@@ -172,23 +175,38 @@ class Guard(object):
         self.count_call()
         self.pipeline.check_addressee(self.channel, self.remaining())
         self.pipeline.wait_idle(self.channel, self.remaining())
-        # After the wait: the addressee it waited for, and the reservation
-        # of every event (a merge of the addressee's records may have taken
-        # one meanwhile), are checked again.
+        # After the wait: the access boundary, which may poll the server -
+        # the last step that may take time on the network - then the
+        # addressee it waited for and the reservation of every event (a
+        # merge of the addressee's records may have taken one meanwhile).
+        self.boundary()
         self.pipeline.check_addressee(self.channel, self.remaining())
         self.attempt.confirm()
-        # Last, right before the hand-over: a stop or a stale poll that came
-        # during the checks and the wait still wins.
-        self.boundary()
+        # Last, right before the hand-over and without the network: what is
+        # already known of access (a stop answer, the age of the last poll).
+        self.local_boundary()
         self.remaining()
         self.handed = True
         self.attempt.handed = True
+
+    def local_boundary(self):
+        """The access boundary from what is known now, without a poll:
+        DeliveryCancelled for a stop answer already received, PollStale
+        while the last successful poll is too old."""
+        known = getattr(self.pipeline.cancel, "known", None)
+        reason = known() if known is not None else None
+        if reason is not None:
+            raise DeliveryCancelled(reason)
+        if not self.pipeline.cancel.may_send():
+            raise PollStale()
 
     def count_call(self):
         self.attempt.note_call()
 
     def before_commit(self):
-        if not self._commit_boundary():
+        # The boundary that may poll the server first, then the addressee,
+        # so no network wait comes between the addressee check and Enter.
+        if not self._commit_boundary(self.pipeline.cancel.check):
             return False
         try:
             self.pipeline.check_addressee(self.channel, self.remaining())
@@ -200,12 +218,12 @@ class Guard(object):
             return False
         except RefusedBeforeSend:
             return False
-        # Last, right before the final step: a stop or a stale poll that
-        # came during the addressee check withholds it.
-        return self._commit_boundary()
+        # Last, right before the final step and without the network: a stop
+        # answer already received or a poll grown stale withholds it.
+        return self._commit_boundary(getattr(self.pipeline.cancel, "known", None))
 
-    def _commit_boundary(self):
-        reason = self.pipeline.cancel.check()
+    def _commit_boundary(self, ask):
+        reason = ask() if ask is not None else None
         if reason is not None:
             self.access_lost = True
             self.cancel_reason = reason

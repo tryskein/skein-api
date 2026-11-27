@@ -103,6 +103,11 @@ class PollCancel(object):
                 self.next_poll = self.clock.now() + wait
         return self.stop[0] if self.stop is not None else None
 
+    def known(self):
+        """The stop answer already received, without a poll (None when
+        there is none)."""
+        return self.stop[0] if self.stop is not None else None
+
     def may_send(self):
         """A send is allowed: no stop answer, and the last successful poll at
         most two intervals old."""
