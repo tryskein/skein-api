@@ -589,17 +589,20 @@ class DeliverySink(object):
                     pending.pop(0)
                 continue
             batch = group[:count]
+            # The attempt begin publishes is owned from the moment begin hands
+            # it over (owner) to its release, on every path - a stop signal
+            # right after begin returns included: one that ends before the
+            # text was handed over and before its end was written is
+            # withdrawn (P-11).
+            owner = []
             try:
-                decision = self.ledger.begin([{"id": str(n["id"]), "session": n.get("actorSessionId")}
-                                              for n in batch], channel_id)
-            except LedgerUnavailable:
-                self._ledger_down()
-                continue
-            # The attempt begin published is owned from here to its release on
-            # every path: one that ends before the text was handed over and
-            # before its end was written is withdrawn (P-11).
-            attempt = decision.attempt
-            try:
+                try:
+                    decision = self.ledger.begin([{"id": str(n["id"]), "session": n.get("actorSessionId")}
+                                                  for n in batch], channel_id, owner=owner)
+                except LedgerUnavailable:
+                    self._ledger_down()
+                    continue
+                attempt = decision.attempt
                 done = set()
                 for eid, status in decision.closed.items():
                     self._close(cursor, outcomes, journaled, byid[eid], status, channel_id, None)
@@ -625,15 +628,16 @@ class DeliverySink(object):
                     self._ledger_down()
                 pending = [n for n in pending if str(n["id"]) not in outcomes]
             except BaseException:
-                if attempt is not None and not attempt.settled and not attempt.handed:
+                held = owner[0] if owner else None
+                if held is not None and not held.settled and not held.handed:
                     try:
-                        attempt.abandon()
+                        held.abandon()
                     except LedgerUnavailable:
                         pass
                 raise
             finally:
-                if attempt is not None:
-                    attempt.release()
+                if owner:
+                    owner[0].release()
 
     def _own_echo(self, cursor, outcomes, journaled, pending):
         """Give the events of the excluded session among those not yet handed

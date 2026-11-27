@@ -576,19 +576,24 @@ class Ledger(object):
 
     # --- an attempt ----------------------------------------------------------
 
-    def begin(self, events, channel):
+    def begin(self, events, channel, owner=None):
         """Steps 1-2 of an attempt for a batch: events are [{"id", "session"}]
         in order. Returns a Decision. Raises LedgerUnavailable (full or not
-        writable): no external delivery."""
+        writable): no external delivery. owner, a list, receives the Attempt
+        the moment it exists: appending it is the hand-over, so a stop at any
+        point leaves the published attempt either with the owner or
+        withdrawn here."""
         root = self._root()
         attempts = os.path.join(root, ATTEMPTS_DIR_NAME)
         _private_dir(attempts)
         key, lock = _new_attempt_lock(attempts)
         decision = Decision()
         # The attempt lock goes back unless an Attempt that holds it is
-        # returned: any exception before that (a save refused, a full
-        # ledger) releases the lock and its file.
+        # handed over: any exception before that (a save refused, a full
+        # ledger, a stop signal) withdraws what was published and releases
+        # the lock and its file.
         handed = False
+        attempt = None
         try:
             with self._locked():
                 doc = self._load()
@@ -647,16 +652,35 @@ class Ledger(object):
                                        "prev": window.get("until") or 0}
                     published = [str(ev["id"]) for ev in carry]
                 _prune_doc(doc, now, keep=entry)
-                self._save(doc)
                 if carry:
+                    attempt = Attempt(self, key, lock, published, channel, calls, last, first)
+                self._save(doc)
+                if attempt is not None:
                     decision.published = published
-                    decision.attempt = Attempt(self, key, lock, published, channel, calls, last, first)
+                    decision.attempt = attempt
+                    if owner is not None:
+                        # The hand-over: from here the owner withdraws and
+                        # releases it.
+                        owner.append(attempt)
                     handed = True
+        except BaseException:
+            if attempt is not None and not self._handed_over(attempt, owner, handed):
+                # Published (or perhaps published) and not handed over: the
+                # reservation is withdrawn while its lock is still held.
+                try:
+                    attempt.abandon()
+                except LedgerUnavailable:
+                    pass
+            raise
         finally:
-            if not handed:
+            if not self._handed_over(attempt, owner, handed):
                 _remove_quietly(lock.path)
                 lock.release()
         return decision
+
+    @staticmethod
+    def _handed_over(attempt, owner, handed):
+        return handed or (attempt is not None and bool(owner) and owner[-1] is attempt)
 
     def _recover(self, rec, attempts, now):
         """A "delivering" record found under ledger.lock: True when its owner

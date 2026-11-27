@@ -978,6 +978,73 @@ class AttemptOwnershipTest(unittest.TestCase):
 
 
 @unittest.skipUnless(os.name == "posix", "the POSIX pipeline")
+class OwnershipWindowTest(unittest.TestCase):
+    """Review round 3 of wave 7, rows 16 and 19: a stop signal between the
+    publish of an attempt and its owner, and a withdrawal the ledger
+    refuses, leave no reservation that a later monitor turns into
+    "unknown"."""
+
+    def test_a_signal_right_after_begin_returns_withdraws_the_attempt(self):
+        world = World(self, two_channels())
+        mon = world.monitor("tok-a")
+        r = world.runner
+        real = mon.sink.ledger.begin
+
+        def begin_then_signal(*args, **kw):
+            decision = real(*args, **kw)
+            raise r.StopSignal()
+        mon.sink.ledger.begin = begin_then_signal
+        with self.assertRaises(r.StopSignal):
+            mon.page([note(1)])
+        again = world.monitor("tok-b").sink.ledger.begin([{"id": "1", "session": "s-1"}], "A")
+        self.addCleanup(lambda: again.attempt and again.attempt.release())
+        self.assertEqual(again.closed, {})
+        self.assertIsNotNone(again.attempt)
+
+    def test_a_signal_inside_begin_after_the_save_withdraws_the_attempt(self):
+        world = World(self, two_channels())
+        mon = world.monitor("tok-a")
+        r = world.runner
+        ledger = mon.sink.ledger
+        real = ledger._save
+        state = {"armed": True}
+
+        def save_then_signal(doc):
+            real(doc)
+            if state["armed"]:
+                state["armed"] = False
+                raise r.StopSignal()
+        ledger._save = save_then_signal
+        with self.assertRaises(r.StopSignal):
+            ledger.begin([{"id": "1", "session": "s-1"}], "A")
+        again = world.monitor("tok-b").sink.ledger.begin([{"id": "1", "session": "s-1"}], "A")
+        self.addCleanup(lambda: again.attempt and again.attempt.release())
+        self.assertEqual(again.closed, {})
+        self.assertIsNotNone(again.attempt)
+
+    def test_a_refused_withdrawal_is_not_recovered_as_unknown(self):
+        world = World(self, two_channels())
+        r = world.runner
+        ledger = world.monitor("tok-a").sink.ledger
+        attempt = ledger.begin([{"id": "1", "session": "s-1"}], "A").attempt
+        real = ledger._change
+
+        def refuse(change):
+            raise r.LedgerUnavailable("write_failed")
+        ledger._change = refuse
+        with self.assertRaises(r.LedgerUnavailable):
+            attempt.abandon()
+        ledger._change = real
+        attempt.release()
+        again = world.monitor("tok-b").sink.ledger.begin([{"id": "1", "session": "s-1"}], "A")
+        self.addCleanup(lambda: again.attempt and again.attempt.release())
+        # The owner withdrew the reservation without a call: the event has
+        # no outcome and goes out again, it is not "unknown".
+        self.assertEqual(again.closed, {})
+        self.assertIsNotNone(again.attempt)
+
+
+@unittest.skipUnless(os.name == "posix", "the POSIX pipeline")
 class LastBoundaryTest(unittest.TestCase):
     """Review round 2 of wave 7, K2 and rows 13, 14, 16: what a blocking
     check or wait may change is checked again, and the access boundary is
