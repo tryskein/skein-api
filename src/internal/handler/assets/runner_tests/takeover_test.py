@@ -33,6 +33,7 @@ import shutil
 import sys
 import tempfile
 import threading
+import types
 import time
 import unittest
 from unittest import mock
@@ -73,9 +74,27 @@ class Start(threading.Thread):
         return getattr(err, "reason", "config_invalid")
 
 
+class FakeClock(object):
+    """Virtual seconds for the hand-over wait; each sleep also yields a
+    little real time to the other threads of the test."""
+
+    def __init__(self):
+        self.t = 1000.0
+
+    def now(self):
+        return self.t
+
+    def sleep(self, sec):
+        self.t += sec
+        time.sleep(0.01)
+
+
 class OldRunner(threading.Thread):
-    """The runner whose addressee changed: it writes only the journal and
-    hands over when a successor asks (between pages: its cursor written)."""
+    """The runner whose addressee changed, on the product path: its wait
+    between pages (sleep_or_hand_over) asks the product's
+    DeliverySink.taken_over, and on TakenOver it writes its cursor and
+    hands over with the product's hand_over on a virtual clock; it goes on
+    when the successor does not take the monitor."""
 
     def __init__(self, world, held, end_on_its_own=False):
         threading.Thread.__init__(self, daemon=True)
@@ -84,20 +103,35 @@ class OldRunner(threading.Thread):
         self.end_on_its_own = end_on_its_own
         self.handed = threading.Event()
         self.stop = threading.Event()
+        self.results = []
+        self.clock = FakeClock()
 
     def run(self):
         r = self.world.runner
+        sink = types.SimpleNamespace(journal_only=True, token_file=self.world.token, doc={"preflightId": 1})
+        waits = types.SimpleNamespace(taken_over=lambda: r.DeliverySink.taken_over(sink))
         while not self.stop.is_set():
-            if r.takeover_requested(self.world.token, 1):
-                if self.end_on_its_own:
-                    # root_closed meanwhile: the token goes with its files.
-                    r.apply_file_fate(self.world.token, True)
-                else:
-                    r.save_cursor(self.world.token, CURSOR)
+            try:
+                r.sleep_or_hand_over(0.05, waits)
+                continue
+            except r.TakenOver:
+                pass
+            if self.end_on_its_own:
+                # root_closed meanwhile: the token goes with its files.
+                r.apply_file_fate(self.world.token, True)
                 self.held.release()
                 self.handed.set()
                 return
-            time.sleep(0.02)
+            r.save_cursor(self.world.token, CURSOR)
+
+            def release():
+                self.held.release()
+                self.handed.set()
+            ended = r.hand_over(self.world.token, self.world.env, release, lambda: self.held.retake(self.world.env),
+                                clock=self.clock.now, sleep=self.clock.sleep)
+            self.results.append(ended)
+            if ended:
+                return
 
 
 class World(object):
@@ -189,8 +223,12 @@ class TakeoverTest(unittest.TestCase):
         # The successor sees the final cursor of the old runner.
         self.assertEqual(world.runner.load_cursor(world.token), CURSOR)
         self.assertNotIn("taken_over", world.journal_events())
+        # The old runner has released the lock and waits for the mark.
+        self.assertTrue(loop.is_alive())
         start.held.started(world.journal())
         self.assertEqual(world.journal_events().count("taken_over"), 1)
+        loop.join(30)
+        self.assertEqual(loop.results, [True])
         self.assertFalse(world.request_file())
         # The new runner starts with its own addressee: a further preflight
         # is refused while it lives.
@@ -286,9 +324,14 @@ class TakeoverTest(unittest.TestCase):
         start = Start(world, 2)
         start.run()
         self.assertIsNone(start.error)
-        # The successor dies before its monitor_started.
+        # The successor dies before its monitor_started: the old runner
+        # takes the lock back and goes on (review of wave 8, row 8).
         start.held.failed(world.runner.Stop("internal_error"))
         start.held.release()
+        deadline = time.time() + 30
+        while not loop.results and time.time() < deadline:
+            time.sleep(0.02)
+        self.assertEqual(loop.results, [False])
         self.assertIn("takeover_incomplete", world.journal_events())
         self.assertTrue(os.path.exists(world.token))
         self.assertEqual(world.runner.load_cursor(world.token), CURSOR)
@@ -317,6 +360,37 @@ class TakeoverTest(unittest.TestCase):
         fresh.run()
         self.addCleanup(fresh.held.release)
         self.assertIsNone(fresh.error)
+
+    def test_a_signal_during_the_wait_withdraws_the_request(self):
+        # Review of wave 8, row 8: the successor stopped by a signal while it
+        # waits for the lock leaves no request, so the old runner does not
+        # hand over to nobody.
+        world = World(self)
+        world.old_runner()
+        self.assertEqual(world.preflight(), 2)
+        r = world.runner
+        held = r.WorkingStart()
+        with mock.patch.object(r, "wait_runner_lock", mock.Mock(side_effect=r.StopSignal())):
+            with self.assertRaises(r.StopSignal):
+                r.take_over(world.token, dict(world.env, SKEIN_MONITOR_PREFLIGHT="2"), world.settings, held=held)
+        self.assertFalse(world.request_file())
+        self.assertIsNone(held.takeover)
+
+    def test_the_old_runner_goes_on_when_no_successor_comes(self):
+        # A request whose successor never takes the lock (it died after
+        # writing it): after the wait the old runner takes the lock back.
+        world = World(self)
+        old = world.old_runner()
+        self.assertEqual(world.preflight(), 2)
+        r = world.runner
+        r.request_takeover(world.token, 2)
+        clock = FakeClock()
+        ended = r.hand_over(world.token, world.env, old.release, lambda: old.retake(world.env),
+                            clock=clock.now, sleep=clock.sleep)
+        self.assertFalse(ended)
+        self.assertIsNotNone(old.lock)
+        self.assertFalse(world.request_file())
+        self.assertGreaterEqual(clock.t - 1000.0, r.TAKEOVER_WAIT_SEC)
 
     def test_the_old_runner_hands_over_from_its_wait_between_pages(self):
         world = World(self)

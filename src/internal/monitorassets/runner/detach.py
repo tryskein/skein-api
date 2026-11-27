@@ -154,7 +154,7 @@ class WorkingStart(object):
         try:
             self.lock = take_runner_lock(token_file, env)
         except LockBusy:
-            self.lock, self.takeover = take_over(token_file, env, settings)
+            self.lock, self.takeover = take_over(token_file, env, settings, held=self)
         except PlatformRefusal as exc:
             raise ConfigInvalid(runner_lock_path(token_file, env),
                                 "the runner lock cannot be taken (%s)" % exc.reason)
@@ -189,7 +189,8 @@ class WorkingStart(object):
             journal.lifecycle("taken_over", preflightId=self.doc["preflightId"])
         except JournalUnavailable:
             pass
-        withdraw_takeover(self.token_file)
+        # The old runner ends once it sees the mark (it removes the request).
+        confirm_takeover(self.token_file, self.takeover)
         self.takeover = None
 
     def failed(self, outcome, journal=None):
@@ -209,6 +210,15 @@ class WorkingStart(object):
                 pass
         withdraw_takeover(self.token_file, self.takeover)
         self.takeover = None
+
+    def retake(self, env):
+        """Take the one-runner lock back after a takeover that did not come;
+        True when taken."""
+        try:
+            self.lock = current_platform().acquire_runner_lock(self.token_file, 0, env)
+        except (LockBusy, PlatformRefusal):
+            return False
+        return True
 
     def release(self):
         lock, self.lock = self.lock, None
@@ -498,17 +508,20 @@ def run_detached_child():
                                    exclusion=exclusion)
             _send_receipt(held.line)
             held.started(journal)
-            work(executor, base, held.token, issue, exclusion, token_file, sink=sink,
-                 root=RootClosed(token_file))
+            while True:
+                try:
+                    work(executor, base, held.token, issue, exclusion, token_file, sink=sink,
+                         root=RootClosed(token_file))
+                except TakenOver:
+                    # A successor waits for the lock: every outcome, the
+                    # cursor and the journal lines are written. Release the
+                    # lock and end once the successor's monitor is out; go on
+                    # if it did not come (P-12, takeover.py).
+                    if hand_over(token_file, env, held.release, lambda: held.retake(env)):
+                        executor.stop()
+                        return 0
         except ConfigInvalid as exc:
             raise Stop("config_invalid", detail="%s (%s)" % (exc.variable, exc.detail))
-    except TakenOver:
-        # A successor waits for the lock: every outcome, the cursor and the
-        # journal lines are written; release the lock as the last step and
-        # touch nothing more (P-12, takeover.py).
-        executor.stop()
-        held.release()
-        return 0
     except Stop as stop:
         outcome = stop
     except StopSignal:
