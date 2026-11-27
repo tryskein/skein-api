@@ -141,16 +141,26 @@ def _transfer_seconds(channel, fallback):
     return _call_seconds(channel, fallback) + stage + submit
 
 
-# The time an attempt keeps for its two addressee checks besides the wait
-# and the call.
-_CHECKS_SEC = 2 * 10
+# The time one check of the addressee may take; an attempt keeps two of
+# them besides the wait and the call.
+_CHECK_SEC = 10
+_CHECKS_SEC = 2 * _CHECK_SEC
+# What the transport of a call takes past the call's own timeout (the end of
+# a program after its timeout, the close of a request).
+_CALL_SLACK_SEC = 2
+
+
+def _reserve_seconds(channel, fallback):
+    """The time kept for the call: the own timeouts of every call of one
+    transfer and the slack of the transport."""
+    return _transfer_seconds(channel, fallback) + _CALL_SLACK_SEC
 
 
 def _attempt_seconds(channel, fallback):
-    """The time of one attempt: the idle wait's own, the call's own and the
-    checks around them."""
-    idle = _idle_seconds(channel)
-    return _transfer_seconds(channel, fallback) + (idle + _CHECKS_SEC if idle else 0)
+    """The time of one attempt, one formula for every channel: the idle
+    wait's own (0 without an argv wait), the two checks and the time kept
+    for the call."""
+    return _idle_seconds(channel) + _CHECKS_SEC + _reserve_seconds(channel, fallback)
 
 
 def _idle_seconds(channel):
@@ -217,45 +227,50 @@ class Guard(object):
         return min(self.remaining(), _call_seconds(self.channel, self.remaining()))
 
     def reserve(self):
-        """The time kept for the call: its own timeout, less when the
-        attempt is shorter than the wait, the checks and the call together
-        (a short idle window)."""
-        return max(min(_transfer_seconds(self.channel, 0),
-                       self.total - _idle_seconds(self.channel) - _CHECKS_SEC), 0)
+        """The time kept for the call: its own timeouts and the slack of the
+        transport (_reserve_seconds)."""
+        return _reserve_seconds(self.channel, 0)
+
+    def check(self):
+        """One check of the addressee, within its own time."""
+        self.pipeline.check_addressee(self.channel, min(_CHECK_SEC, self.remaining()))
 
     def wait_and_keep_the_call(self):
         """The idle wait within its own timeout and never into the time kept
-        for the call."""
+        for the second check and the call; an argv wait with no time left
+        is not started (a refusal before send)."""
         idle = _idle_seconds(self.channel)
-        room = self.remaining() - self.reserve()
+        room = self.remaining() - self.reserve() - _CHECK_SEC
+        if idle and room <= 0:
+            raise RefusedBeforeSend("no time is left for the idle wait")
         self.pipeline.wait_idle(self.channel, max(min(room, idle) if idle else room, 0.001))
 
     def keep_the_call(self):
         """After the last check: the time kept for the call must be left, or
-        nothing is sent (a refusal before send)."""
+        nothing is sent (a refusal before send, no call)."""
         if self.remaining() < self.reserve():
-            raise RefusedBeforeSend("the idle wait left the call too little of its time")
+            raise RefusedBeforeSend("the call would get less than its own time")
 
     def before_send(self):
         self.boundary()
         # Counted first: a refusal of the checks below spends the budget of
         # INV-8 like a refusal of the channel.
         self.count_call()
-        self.pipeline.check_addressee(self.channel, self.remaining())
+        self.check()
         self.wait_and_keep_the_call()
-        # After the wait: the access boundary, which may poll the server -
-        # the last step that may take time on the network - then the
-        # addressee it waited for and the reservation of every event (a
-        # merge of the addressee's records may have taken one meanwhile).
+        # After the wait: the access boundary, which may poll the server,
+        # one's own echo, then the reservation of every event (the ledger's
+        # lock and its journal: a merge of the addressee's records may have
+        # taken one meanwhile). Everything that may wait comes before the
+        # last check of the addressee.
         self.boundary()
-        self.pipeline.check_addressee(self.channel, self.remaining())
-        self.keep_the_call()
         self.check_echo()
         self.attempt.confirm()
-        # Last, right before the hand-over and without the network: what is
-        # already known of access (a stop answer, the age of the last poll).
+        self.check()
+        # After the last check only what is local: the time kept for the
+        # call, what is already known of access, the hand-over.
+        self.keep_the_call()
         self.local_boundary()
-        self.remaining()
         self.handed = True
         self.attempt.handed = True
 
@@ -290,7 +305,7 @@ class Guard(object):
         if not self._commit_boundary(self.pipeline.cancel.check):
             return False
         try:
-            self.pipeline.check_addressee(self.channel, self.remaining())
+            self.check()
         except AddresseeChanged:
             self.changed = True
             return False
@@ -321,17 +336,17 @@ class _ReceiptGuard(Guard):
         Guard.__init__(self, pipeline, channel, None, timeout)
 
     def before_send(self):
-        # The order of every transfer: the check, the wait, the check again
+        # The order of every transfer: the check, the wait, the last check
         # (the agent of a PTY may change during the wait), then nothing that
         # waits or goes to the network before the hand-over.
-        self.pipeline.check_addressee(self.channel, self.remaining())
+        self.check()
         self.wait_and_keep_the_call()
-        self.pipeline.check_addressee(self.channel, self.remaining())
+        self.check()
         self.keep_the_call()
 
     def before_commit(self):
         try:
-            self.pipeline.check_addressee(self.channel, self.remaining())
+            self.check()
         except (AddresseeChanged, AddresseeGone, RefusedBeforeSend):
             return False
         return True
@@ -566,8 +581,7 @@ class DeliverySink(object):
             try:
                 env = child_env(self.env, self.executor.secrets, getattr(self.executor, "drop", ()))
                 argv = self._program(expand_argv(command.get("argv") or [], env))
-                limit = (channel.get("executor") or {}).get("timeoutSec") or PROBE_TIMEOUT_SEC
-                result = run_program(argv, env, None, limit if timeout is None else min(limit, timeout),
+                result = run_program(argv, env, None, _CHECK_SEC if timeout is None else min(_CHECK_SEC, timeout),
                                      self.executor.secrets)
             except ExecutorRefusal as exc:
                 raise RefusedBeforeSend(exc.reason)

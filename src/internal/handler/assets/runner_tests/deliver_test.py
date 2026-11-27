@@ -323,24 +323,38 @@ class IdOnlyBatchTest(unittest.TestCase):
 
 
 class SharedDeadlineTest(unittest.TestCase):
-    """The idle wait and the call share one attempt explicitly: the wait
-    takes its own timeout and never the time kept for the call; a wait that
-    left the call less than its timeout sends nothing (a refusal before
-    send, no call)."""
+    """The idle wait, the two checks and the call share one attempt by one
+    formula for every channel: the wait takes its own timeout and never the
+    time kept for the last check and the call; the call keeps its own
+    timeout and the slack of the transport, else nothing is sent (a refusal
+    before send, no call). The booking of the events (the ledger's lock and
+    journal) comes before the last check of the addressee; after it only the
+    time kept for the call, what is known of access and the hand-over."""
 
     CHANNEL = {"id": "T", "executor": {"type": "argv", "argv": ["t"], "feed": "arg", "timeoutSec": 60},
                "idle": {"type": "argv", "argv": ["t", "wait"], "timeoutSec": 70}}
+    # A channel without an argv wait (Paseo: its CLI waits by itself).
+    PLAIN = {"id": "P", "executor": {"type": "argv", "argv": ["p"], "feed": "arg", "timeoutSec": 30},
+             "idle": {"type": "builtin"}}
 
     class Pipeline(object):
-        def __init__(self, test, wait_takes):
+        def __init__(self, runner, wait_takes, check_takes=0):
+            self.runner = runner
             self.clock = Clock()
             self.cancel = FakeCancel()
             self.wait_takes = wait_takes
+            self.check_takes = check_takes
             self.waits = []
+            self.checks = []
             self.exclusion = None
+            # Set by the booking: the addressee the next check sees.
+            self.changed = False
 
         def check_addressee(self, channel, timeout):
-            pass
+            self.checks.append(timeout)
+            self.clock.t += min(self.check_takes, timeout)
+            if self.changed:
+                raise self.runner.AddresseeChanged()
 
         def wait_idle(self, channel, timeout):
             self.waits.append(timeout)
@@ -349,17 +363,28 @@ class SharedDeadlineTest(unittest.TestCase):
     class Attempt(object):
         handed = False
 
+        def __init__(self, pipeline, confirm_takes=0, change=False):
+            self.pipeline = pipeline
+            self.confirm_takes = confirm_takes
+            self.change = change
+
         def note_call(self):
             pass
 
         def confirm(self):
-            pass
+            # The ledger's lock held by another monitor for a while; the
+            # agent of the pane may change meanwhile.
+            self.pipeline.clock.t += self.confirm_takes
+            if self.change:
+                self.pipeline.changed = True
 
-    def guard(self, wait_takes, window=1800):
+    def guard(self, wait_takes=0, window=1800, channel=None, check_takes=0, confirm_takes=0, change=False):
         runner = harness.load_runner()
-        pipeline = self.Pipeline(self, wait_takes)
-        timeout = min(runner._attempt_seconds(self.CHANNEL, window), window)
-        return runner, pipeline, runner.Guard(pipeline, self.CHANNEL, self.Attempt(), timeout)
+        channel = channel or self.CHANNEL
+        pipeline = self.Pipeline(runner, wait_takes, check_takes)
+        timeout = min(runner._attempt_seconds(channel, window), window)
+        attempt = self.Attempt(pipeline, confirm_takes, change)
+        return runner, pipeline, runner.Guard(pipeline, channel, attempt, timeout)
 
     def test_the_call_keeps_its_timeout_after_a_long_wait(self):
         runner, pipeline, guard = self.guard(wait_takes=70)
@@ -373,11 +398,40 @@ class SharedDeadlineTest(unittest.TestCase):
             guard.before_send()
         self.assertFalse(guard.handed)
 
-    def test_a_short_window_keeps_no_more_than_it_has(self):
+    def test_a_short_window_sends_nothing(self):
+        # The window is shorter than the wait, the checks and the call: the
+        # wait is not started and nothing is sent.
         runner, pipeline, guard = self.guard(wait_takes=1, window=30)
+        with self.assertRaises(runner.RefusedBeforeSend):
+            guard.before_send()
+        self.assertEqual(pipeline.waits, [])
+        self.assertFalse(guard.handed)
+
+    def test_a_channel_without_an_argv_wait_keeps_its_call(self):
+        # Two slow checks (10 s each, their own limit) and a booking that
+        # waited: the call still gets its 30 s.
+        runner, pipeline, guard = self.guard(channel=self.PLAIN, check_takes=10)
         guard.before_send()
-        self.assertLessEqual(guard.call_timeout(), 29)
+        self.assertEqual(pipeline.checks, [10, 10])
+        self.assertEqual(guard.call_timeout(), 30)
         self.assertTrue(guard.handed)
+
+    def test_a_booking_that_ate_the_call_s_time_sends_nothing(self):
+        runner, pipeline, guard = self.guard(channel=self.PLAIN, check_takes=10, confirm_takes=5)
+        with self.assertRaises(runner.RefusedBeforeSend):
+            guard.before_send()
+        self.assertFalse(guard.handed)
+
+    def test_another_addressee_while_the_booking_waits_hands_nothing_over(self):
+        # The last check comes after the booking: an agent that changed
+        # while the booking waited for the ledger's lock gets nothing.
+        for channel in (self.CHANNEL, self.PLAIN):
+            with self.subTest(channel=channel["id"]):
+                runner, pipeline, guard = self.guard(channel=channel, confirm_takes=3, change=True)
+                with self.assertRaises(runner.AddresseeChanged):
+                    guard.before_send()
+                self.assertFalse(guard.handed)
+                self.assertEqual(len(pipeline.checks), 2)
 
 
 class UnknownTest(unittest.TestCase):
@@ -681,8 +735,8 @@ class AccessBoundaryAtHandOverTest(unittest.TestCase):
 
     def test_the_steps_of_an_attempt_share_one_deadline(self):
         # Review finding 20 of wave 7 (INV-8: every call within the idle
-        # window): the idle wait spends of the attempt's time, the call gets
-        # what is left, not a whole timeout again.
+        # window): the attempt is bounded by the window, and the call gets
+        # its own timeout, not a whole attempt.
         world = World(self, two_channels())
         mon = world.monitor()
         timeouts = []
@@ -697,9 +751,11 @@ class AccessBoundaryAtHandOverTest(unittest.TestCase):
             world.clock.t += 1.5
         with mock.patch.object(world.runner.DeliverySink, "wait_idle", idle):
             mon.page([note(1)])
-        # The channel's timeout is 2 s (chan()).
+        # The channel's timeout is 2 s (chan()): the attempt keeps it for the
+        # call whatever the wait took (round 2 of wave 11: the call gets no
+        # less than its own timeout, and no more).
         self.assertEqual(len(timeouts), 1)
-        self.assertLessEqual(timeouts[0], 0.5 + 1e-9)
+        self.assertEqual(timeouts[0], 2)
 
     def test_a_poll_gone_stale_after_the_insert_withholds_enter(self):
         world = World(self, two_channels())
