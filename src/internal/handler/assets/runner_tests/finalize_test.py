@@ -676,9 +676,10 @@ class StopReceiptByDetachedCallTest(unittest.TestCase):
     # unknown.
     ROWS = TABLE + [{"match": {"stillRunning": True}, "outcome": "unknown"}]
 
-    def child_stop(self, end):
-        """Run the detached child of a fresh world until end(runner), what
-        its poll raises; returns the world and its detached calls."""
+    def child_stop(self, end, events=()):
+        """Run the detached child of a fresh world: its poll delivers the
+        notes events, then raises end(runner); returns the world and its
+        detached calls."""
         rec = chan("A", "chan-a", table=self.ROWS)
         rec["executor"].update({"timeoutSec": 1, "detach": True})
         world = World(self, [rec])
@@ -690,6 +691,8 @@ class StopReceiptByDetachedCallTest(unittest.TestCase):
         calls = r.DetachedCalls()
 
         def work(*args, **kw):
+            if events:
+                kw["sink"].page(CURSOR, list(events))
             raise end(r)
         environ = {"SKEIN_ISSUE": ISSUE, "SKEIN_TOKEN_FILE": mon.token, "SKEIN_PUBLIC_URL": "http://127.0.0.1:9",
                    "PATH": os.environ.get("PATH", os.defpath)}
@@ -716,6 +719,18 @@ class StopReceiptByDetachedCallTest(unittest.TestCase):
                 self.assertIn("reason=" + reason, receipt["stdin"])
                 self.assertEqual(calls.running(), [])
                 self.assertFalse(alive(receipt["pid"]), "the program of the receipt outlived the monitor")
+
+    def test_no_program_of_an_event_outlives_the_monitor(self):
+        # Review round 2 of wave 14, row 4: the call of an event left to run
+        # past its window is ended by the stop itself, not by the test.
+        world, calls = self.child_stop(lambda r: r.access_stop("token_expired"), events=[note(1)])
+        event, = world.prog("chan-a").calls()
+        self.assertIn("hello there", event["stdin"])
+        self.assertEqual(calls.running(), [])
+        self.assertFalse(alive(event["pid"]), "the program of an event outlived the monitor")
+        # Reaped by the monitor: no zombie of it is left.
+        with self.assertRaises(ChildProcessError):
+            os.waitpid(event["pid"], os.WNOHANG)
 
 
 def alive(pid):

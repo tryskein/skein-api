@@ -138,34 +138,33 @@ class DetachedCallTest(unittest.TestCase):
         self.fail("no pids written")
 
     def test_a_hung_program_is_killed_with_its_tree_at_its_deadline(self):
+        # Review round 2 of wave 14, row 4: the watcher of the call reaps it
+        # on its own; the test only moves the clock and waits for the
+        # watcher's next looks.
         now = [1000.0]
-        calls = RUNNER.DetachedCalls(clock=lambda: now[0])
-        self.addCleanup(calls.end_all)
-        result = self.detached("tree", calls)
-        self.assertTrue(result.still_running)
-        program, child = self.pids()
-        # One second before the window plus the grace: it runs on.
-        now[0] = 1000.0 + 0.2 + RUNNER.DETACHED_GRACE_SEC - 1
-        calls.reap()
-        self.assertTrue(alive(program) and alive(child))
-        self.assertEqual(calls.running(), ["channel"])
-        # At the deadline: the program and its descendant are gone.
-        now[0] = 1000.0 + 0.2 + RUNNER.DETACHED_GRACE_SEC
-        calls.reap()
-        self.assertEqual(calls.running(), [])
-        self.assertTrue(gone(program) and gone(child), "the tree of the hung call outlived its deadline")
+        looks = [0]
 
-    def test_the_stop_of_the_monitor_leaves_no_descendant(self):
-        calls = RUNNER.DetachedCalls(clock=lambda: 0.0)
-        result = self.detached("tree", calls)
-        self.assertTrue(result.still_running)
-        program, child = self.pids()
-        calls.end_all()
-        self.assertEqual(calls.running(), [])
-        self.assertTrue(gone(program) and gone(child), "a detached call outlived the monitor")
-        # Reaped: no zombie of it is left.
-        with self.assertRaises(ChildProcessError):
-            os.waitpid(program, os.WNOHANG)
+        def clock():
+            looks[0] += 1
+            return now[0]
+        calls = RUNNER.DetachedCalls(clock=clock)
+        self.addCleanup(calls.end_all)
+        with mock.patch.object(RUNNER, "_DETACHED_WATCH_STEP_SEC", 0.02):
+            result = self.detached("tree", calls)
+            self.assertTrue(result.still_running)
+            program, child = self.pids()
+            # One second before the window plus the grace: it runs on
+            # through two more looks of the watcher.
+            now[0] = 1000.0 + 0.2 + RUNNER.DETACHED_GRACE_SEC - 1
+            seen = looks[0]
+            self.assertTrue(wait_until(lambda: looks[0] >= seen + 2), "the watcher does not look")
+            self.assertTrue(alive(program) and alive(child))
+            self.assertEqual(calls.running(), ["channel"])
+            # At the deadline: the watcher kills the program and its
+            # descendant.
+            now[0] = 1000.0 + 0.2 + RUNNER.DETACHED_GRACE_SEC
+            self.assertTrue(wait_until(lambda: calls.running() == []), "the watcher did not end the call")
+        self.assertTrue(gone(program) and gone(child), "the tree of the hung call outlived its deadline")
 
     def test_one_call_of_a_channel_runs_at_a_time(self):
         calls = RUNNER.DetachedCalls(clock=lambda: 0.0)
@@ -219,17 +218,22 @@ class DetachedCallTest(unittest.TestCase):
     def test_a_program_left_to_run_is_reaped_once_it_ends(self):
         calls = RUNNER.DetachedCalls(clock=lambda: 0.0)
         self.addCleanup(calls.end_all)
-        self.assertTrue(self.detached("slow", calls).still_running)
-        self.release()
-        self.assertTrue(self.wait_for(self.mark + ".done"))
-        for _ in range(400):
-            calls.reap()
-            if not calls.running():
-                break
-            time.sleep(0.05)
-        self.assertEqual(calls.running(), [])
+        with mock.patch.object(RUNNER, "_DETACHED_WATCH_STEP_SEC", 0.02):
+            self.assertTrue(self.detached("slow", calls).still_running)
+            self.release()
+            self.assertTrue(self.wait_for(self.mark + ".done"))
+            # Its watcher reaps it.
+            self.assertTrue(wait_until(lambda: calls.running() == []), "the ended program was not reaped")
         # The channel takes a call again.
         self.assertFalse(self.detached("ok", calls).still_running)
+
+
+def wait_until(pred):
+    for _ in range(600):
+        if pred():
+            return True
+        time.sleep(0.05)
+    return False
 
 
 def _state(pid):
