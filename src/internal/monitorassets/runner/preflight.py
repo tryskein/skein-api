@@ -86,7 +86,8 @@ MINT_PARAM_VARS = ("SKEIN_SUBTREE", "SKEIN_EVENT_TYPES")
 INSTRUCTION_DETACHED = ("Run `command` once in a shell: it returns after the line "
                         "{\"event\":\"monitor_started\",...} and the monitor keeps running on its own.")
 INSTRUCTION_JOURNAL = (INSTRUCTION_DETACHED + " No channel wakes you: events go only to the journal "
-                       "(the `journal` field), read it yourself.")
+                       "(the `journal` field), one JSON object per line; it rotates at %d MiB, keeping %d files. "
+                       "Read it yourself when you choose to." % (JOURNAL_MAX_BYTES >> 20, JOURNAL_KEEP_FILES))
 INSTRUCTION_RESTART = "Every restart runs the same `command`: no new preflight, no new mint."
 
 PROBE_AVAILABLE = "available"
