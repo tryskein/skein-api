@@ -413,8 +413,10 @@ class TmuxBuffersTest(TmuxCase):
             return result
         with mock.patch.object(RUNNER, "run_program", watched):
             mon.page([ft.note(1)])
-        self.assertEqual(self.argvs("paste-buffer"), [])
-        self.assertEqual(len(self.argvs("delete-buffer")), 1)
+        # The stateful fake keeps buffers, not a log of calls: the staged
+        # text is still there (no paste took it, the delete failed).
+        self.assertEqual(len(self.buffers()), 1)
+        self.assertEqual(mon.statuses(), [(1, "unknown")])
         left = [l for l in mon.lines() if l.get("event") == "staged_text_left"]
         self.assertEqual([(l["channel"], l["cause"]) for l in left], [("tmux", "AddresseeChanged")])
 
