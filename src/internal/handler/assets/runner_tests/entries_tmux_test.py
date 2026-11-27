@@ -53,12 +53,12 @@ RUNNER_PID, AGENT_PID, PANE_PID, SERVER_PID = 5000, 4998, 4997, 4996
 ZAVOD_UUID = "0f4c2a8e-3b1d-4e57-9a62-5d8b7c1e2f30"
 
 
-def processes(agent, foreground=True):
+def processes(agent, foreground=True, agent_pid=AGENT_PID):
     source = fake_proc.FakeProcesses()
-    fg = AGENT_PID if foreground else PANE_PID
+    fg = agent_pid if foreground else PANE_PID
     source.add(RUNNER_PID, 4999, "python3", ft.RUNNER_PROC_ARGV)
-    source.add(4999, AGENT_PID, "bash")
-    source.add(AGENT_PID, PANE_PID, agent, [agent], pgid=AGENT_PID, tpgid=fg)
+    source.add(4999, agent_pid, "bash")
+    source.add(agent_pid, PANE_PID, agent, [agent], pgid=agent_pid, tpgid=fg)
     source.add(PANE_PID, SERVER_PID, "bash", pgid=PANE_PID, tpgid=fg)
     source.add(SERVER_PID, 1, "tmux: server", ["tmux"])
     return source
@@ -94,10 +94,11 @@ class TmuxCase(unittest.TestCase):
         env = self.world.env(name, client, **change)
         return dict((k, v) for k, v in env.items() if v is not None)
 
-    def preflight(self, name="tok", client="aider", agent="aider", foreground=True, prober=None, **extra):
+    def preflight(self, name="tok", client="aider", agent="aider", foreground=True, prober=None, agent_pid=AGENT_PID,
+                  **extra):
         """The preflight line of the agent agent under tmux; the platform
         layer answers by the fake chain from here on."""
-        source = processes(agent, foreground)
+        source = processes(agent, foreground, agent_pid)
         patch = mock.patch.object(RUNNER.PosixPlatform, "process_info", staticmethod(source.info))
         patch.start()
         self.addCleanup(patch.stop)
@@ -238,10 +239,12 @@ class TmuxEpicMatrixTest(TmuxCase):
         self.assertIn(RUNNER.BLIND_WARNING, started["warnings"])
 
     def test_one_pane_id_under_two_servers_is_two_addressees(self):
+        # Two agents, one in pane %1 of each server (one process has one
+        # TMUX: monitors of one agent process are one addressee).
         self.fresh()
         a = self.mon("tok-a", TMUX=SERVER_A)
-        b = self.mon("tok-b", TMUX=SERVER_B)
         a.page([ft.note(1)])
+        b = self.mon("tok-b", TMUX=SERVER_B, agent_pid=4988)
         b.page([ft.note(1)])
         self.assertEqual(len(self.argvs("paste-buffer")), 2)
         self.assertEqual([a.statuses(), b.statuses()], [[(1, "input-written")], [(1, "input-written")]])
