@@ -16,7 +16,7 @@ import (
 // monitorAssets holds the parts of the served loader, their manifest and the
 // prepare script of a call with `client`.
 //
-//go:embed assets/monitor_loader.py assets/monitor_prepare.py assets/loader_parts.txt
+//go:embed assets/monitor_loader.py assets/monitor_prepare.py assets/monitor_prepare_windows.py assets/loader_parts.txt
 var monitorAssets embed.FS
 
 // monitorStarterSource is the starter of every monitor start command (R-10):
@@ -104,7 +104,12 @@ func ServedLoader() string {
 
 // monitorPrepareScript is the prepare script of a call with `client` on
 // POSIX, with the starter of such a call in it as a Python string literal.
-var monitorPrepareScript = mustPrepareScript()
+var monitorPrepareScript = mustPrepareScript("assets/monitor_prepare.py")
+
+// monitorPrepareScriptWindows is the prepare script of a call with `client`
+// on Windows: it checks the Python version and runs the starter in prepare
+// mode; the loader creates and checks the token directory (R-10).
+var monitorPrepareScriptWindows = mustPrepareScript("assets/monitor_prepare_windows.py")
 
 // starterPlaceholder is replaced in monitor_prepare.py by the starter of a
 // call with `client` as a Python string literal.
@@ -145,9 +150,10 @@ func mustAssembleAssets(fsys fs.FS, dir, manifest string) string {
 // mustPrepareScript substitutes the starter of a call with `client` into the
 // prepare script as a JSON string, which is also a valid Python string
 // literal (the encoder escapes quotes, backslashes and control characters and
-// emits no "\/"). prepare writes it as starter.py byte for byte.
-func mustPrepareScript() string {
-	script, err := fs.ReadFile(monitorAssets, "assets/monitor_prepare.py")
+// emits no "\/"). prepare (on Windows, the loader it hands the text to)
+// writes it as starter.py byte for byte.
+func mustPrepareScript(name string) string {
+	script, err := fs.ReadFile(monitorAssets, name)
 	if err != nil {
 		panic(fmt.Sprintf("monitor loader: reading the prepare script: %v", err))
 	}

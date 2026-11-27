@@ -6,6 +6,7 @@
 # lines and lines starting with "#" are ignored.
 ../runner/platform.py
 ../runner/platform_posix.py
+../runner/winsec.py
 ../runner/platform_windows.py
 ../runner/stops.py
 ../runner/state.py

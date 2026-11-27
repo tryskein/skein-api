@@ -28,6 +28,7 @@
 # fate.
 
 import hashlib
+import ntpath
 import traceback
 import os
 import signal
@@ -238,9 +239,107 @@ def loader_client_action(reason, issue):
             "refused the download. Run %s again later; the token and the state are kept." % (issue, command))
 
 
+# --- prepare mode (R-10, US-11 "До записи токена") ---------------------------
+# The Windows prepare runs the starter with SKEIN_MONITOR_MODE=prepare and
+# the starter text in SKEIN_PREPARE_STARTER (its own process only). Here the
+# loader creates the token directory new and private in one call (P-9 (a)),
+# checks that a file can be created in it, opens every component of the path
+# from the root of the drive down to it and checks criterion (b) of P-9 on
+# their descriptors, then writes starter.py byte for byte and prints the
+# ready line. The handles stay open (no FILE_SHARE_DELETE) until the process
+# ends, after the ready line, so between the check and the Write no other
+# account deletes, renames or rechanges a component. Every refusal is one
+# prepare_failed line {reason, action}; no line repeats a path (INV-17).
+
+LOADER_PREPARE_MINT = " Mint a new monitor with skein_get_monitor_script and the same parameters."
+LOADER_PREPARE_FIX = (" Fix the cause, then mint a new monitor with skein_get_monitor_script and the"
+                      " same parameters.")
+
+
+class PrepareRefused(Exception):
+    def __init__(self, reason, action):
+        Exception.__init__(self, reason)
+        self.reason = reason
+        self.action = action
+
+
+def loader_client_prepare(env, source):
+    """Prepare the token directory; returns the exit code after printing the
+    ready line or the refusal. source is the security source (winsec
+    WinSecurity, or a fake in the tests)."""
+    try:
+        held = loader_client_prepare_dir(env, source)
+    except PrepareRefused as exc:
+        emit({"event": "prepare_failed", "reason": exc.reason, "action": exc.action})
+        return 1
+    emit({"event": "prepare_ready"})
+    return 0
+
+
+def loader_client_prepare_dir(env, source):
+    """Create and check the token directory and write starter.py; returns
+    the open handles of the path. Raises PrepareRefused."""
+    token_dir = env.get("SKEIN_TOKEN_DIR", "")
+    starter = env.get("SKEIN_PREPARE_STARTER", "")
+    if not ntpath.isabs(token_dir) or not starter:
+        raise PrepareRefused("misconfigured", "The prepare command is broken (no absolute token directory "
+                             "or no starter)." + LOADER_PREPARE_MINT)
+    try:
+        source.make_private_dir(token_dir)
+    except FileExistsError:
+        raise PrepareRefused("token_dir_exists", "The token directory already exists, so it is not used."
+                             + LOADER_PREPARE_MINT)
+    except OSError as exc:
+        raise PrepareRefused("token_dir_failed", "The token directory could not be created (%s)."
+                             % exc.strerror + LOADER_PREPARE_FIX)
+    probe = os.path.join(token_dir, ".skein-probe")
+    try:
+        os.close(os.open(probe, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600))
+        os.remove(probe)
+    except OSError as exc:
+        raise PrepareRefused("token_dir_failed", "No file can be created in the token directory (%s)."
+                             % exc.strerror + LOADER_PREPARE_FIX)
+    held, views = [], []
+    try:
+        for path in path_components(token_dir):
+            handle = source.open(path)
+            held.append(handle)
+            views.append((path, source.view(handle)))
+        cause = chain_refusal(views, source.me())
+    except OSError as exc:
+        raise PrepareRefused("token_dir_insecure", "The path of the token directory could not be checked "
+                             "(%s)." % exc.strerror + LOADER_PREPARE_FIX)
+    if cause is not None:
+        raise PrepareRefused("token_dir_insecure", "Another account could replace the path of the token "
+                             "directory (%s)." % cause + LOADER_PREPARE_FIX)
+    tmp = os.path.join(token_dir, ".starter.py.tmp")
+    try:
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0), 0o600)
+        try:
+            os.write(fd, starter.encode("ascii"))
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+        os.rename(tmp, os.path.join(token_dir, CLIENT_STARTER_FILE))
+    except (OSError, UnicodeEncodeError) as exc:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        raise PrepareRefused("starter_write_failed", "The starter could not be written into the token "
+                             "directory (%s)." % getattr(exc, "strerror", exc) + LOADER_PREPARE_FIX)
+    return held
+
+
 def loader_client_main():
     """The client branch of the loader; never returns."""
     global _stopping
+    if os.environ.get("SKEIN_MONITOR_MODE") == "prepare":
+        if sys.platform != "win32":
+            emit({"event": "prepare_failed", "reason": "misconfigured",
+                  "action": "Prepare mode is for Windows only." + LOADER_PREPARE_MINT})
+            sys.exit(1)
+        sys.exit(loader_client_prepare(dict(os.environ), WinSecurity()))
     issue = os.environ.get("SKEIN_ISSUE", "")
     token_file = os.environ.get("SKEIN_TOKEN_FILE", "")
     env = dict(os.environ)

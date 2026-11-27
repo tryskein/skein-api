@@ -5,7 +5,7 @@ M=" Mint a new monitor with the same parameters."
 R=" Run the same command again"
 def o(r,e,x,a):
  q.append(1)
- sys.stdout.write(json.dumps({"event":e,"reason":r,"action":"Loader download: "+a},separators=(",",":"))+"\n")
+ sys.stdout.write(json.dumps({"event":globals().get("E",e),"reason":r,"action":"Loader download: "+a},separators=(",",":"))+"\n")
  sys.stdout.flush()
  sys.exit(x)
 m=(3,12,4) if C and sys.platform=="win32" else (3,6)

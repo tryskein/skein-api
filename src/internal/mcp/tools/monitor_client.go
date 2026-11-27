@@ -322,10 +322,13 @@ func windowsTokenDir(tokenFilePath string) string {
 
 // buildWindowsClientCommands builds prepare and preflight of a call with
 // `client` on Windows, in the shell of the record (windowsCommandShell).
-// prepare runs monitor_prepare.py with SKEIN_TOKEN_DIR: in Git Bash as an
-// argument of -c; in PowerShell on the standard input of Python, because
-// Windows PowerShell 5.1 drops the double quotes inside an argument it
-// passes to a native program, while it pipes the ASCII text unchanged.
+// prepare runs monitor_prepare_windows.py, which checks the Python version
+// and runs the starter in prepare mode (R-10): the downloaded loader
+// creates and checks the token directory and writes starter.py. It goes in
+// Git Bash as an argument of -c; in PowerShell on the standard input of
+// Python, because Windows PowerShell 5.1 drops the double quotes inside an
+// argument it passes to a native program, while it pipes the ASCII text
+// unchanged.
 // preflight runs starter.py of the token directory with the same variables
 // as on POSIX. Every value is quoted for the shell, so a path with spaces,
 // Unicode or an apostrophe reaches Python literally; the token is in none
@@ -346,15 +349,18 @@ func buildWindowsClientCommands(in clientCommandInput, recordShell string) clien
 		{"SKEIN_PLATFORM", in.platform},
 	}
 	vars = append(vars, mintParamPairs(in.subtree, in.eventTypes)...)
-	prepareVars := []startVar{{"SKEIN_TOKEN_DIR", dir}}
+	// The starter that prepare runs in prepare mode downloads the loader
+	// from the server and checks it like on every start.
+	prepareVars := []startVar{{"SKEIN_TOKEN_DIR", dir}, {"SKEIN_PUBLIC_URL", in.publicURL},
+		{"SKEIN_LOADER_SHA256", in.loaderSHA256}}
 	if shell == monitorregistry.WindowsShellGitBash {
 		return clientCommands{
-			prepare:   windowsAssignments(shell, prepareVars) + windowsPython + " -c " + shellSingleQuote(monitorPrepareScript),
+			prepare:   windowsAssignments(shell, prepareVars) + windowsPython + " -c " + shellSingleQuote(monitorPrepareScriptWindows),
 			preflight: windowsAssignments(shell, vars) + windowsPython + " " + shellSingleQuote(starter),
 		}
 	}
 	return clientCommands{
-		prepare: windowsAssignments(shell, prepareVars) + powerShellSingleQuote(monitorPrepareScript) +
+		prepare: windowsAssignments(shell, prepareVars) + powerShellSingleQuote(monitorPrepareScriptWindows) +
 			" | " + windowsPython + " -",
 		preflight: windowsAssignments(shell, vars) + windowsPython + " " + powerShellSingleQuote(starter),
 	}
