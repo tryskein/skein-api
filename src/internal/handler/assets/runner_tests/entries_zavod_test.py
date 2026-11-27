@@ -108,8 +108,9 @@ class SendTest(unittest.TestCase):
                   "unknown", 1),
                  ("0 with the envelope of a refusal", [dict(envelope(11, "letter_rejected"), exit=0)], "unknown", 1),
                  ("12 with a corrupt envelope", [{"exit": 12, "stdout": "{not json"}], "unknown", 1),
-                 # INV-8: a delivery takes at most three calls.
-                 ("12", [envelope(12, "no_connection")], "refused-before-send", 3)]
+                 # INV-8: the first call and up to three repeats, at most
+                 # four calls.
+                 ("12", [envelope(12, "no_connection")], "refused-before-send", 4)]
         for name, answers, status, calls in cases:
             with self.subTest(code=name):
                 world, mon = zavod_monitor(self, answers)
@@ -180,12 +181,12 @@ class SendTest(unittest.TestCase):
 
     def test_a_minimal_form_refused_too_stays_in_the_budget(self):
         """Row #78: the minimal form refused as too long as well: the
-        delivery takes at most the three calls of INV-8, no letter is
+        delivery takes at most the four calls of INV-8, no letter is
         accepted, and the event ends as a refusal before send."""
         world, mon = zavod_monitor(self, [envelope(11, "letter_too_large")])
         mon.page([ft.note(1)])
         calls = world.calls("zavod")
-        self.assertEqual(len(calls), 3)
+        self.assertEqual(len(calls), 4)
         self.assertIn(ft.PREVIEW, calls[0]["stdin"])
         for call in calls[1:]:
             self.assertNotIn(ft.PREVIEW, call["stdin"])
@@ -242,8 +243,9 @@ class RecreatedAddresseeTest(unittest.TestCase):
         root = ft.Sleeper(self)
         world = ft.World(self)
         world.progs["zavod"].respond([envelope(0, outcome="ok")])
-        mon = world.monitor("tok", "claude", "claude", SKEIN_MONITOR_CHANNEL="zavod",
+        mon = world.monitor("tok", "claude", "claude", agent_pid=root.pid, SKEIN_MONITOR_CHANNEL="zavod",
                             **world.zavod_env("claude", root_pid=root.pid))
+        self.assertEqual(mon.doc["channel"], "zavod")
         root.end()
         mon.page([ft.note(1)])
         self.assertEqual(world.calls("zavod"), [])
