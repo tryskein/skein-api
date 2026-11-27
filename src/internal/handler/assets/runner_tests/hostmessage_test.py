@@ -85,7 +85,8 @@ class HostMessageTest(unittest.TestCase):
     def test_the_line_carries_the_key_host_message_only_with_an_environment(self):
         # C1 ("Runner stdout lines"): preflight {event, preflightId, client,
         # method, channel, reason, warnings[], journal, command, instruction,
-        # hostMessage?}; the first full monitor_started repeats it.
+        # hostMessage?}; the first full monitor_started carries the message
+        # among its warnings only, not as a key of its own (INV-17).
         keys = {"event", "preflightId", "client", "method", "channel", "reason", "warnings", "journal", "command",
                 "instruction"}
         line, started = self.preflight()
@@ -94,7 +95,8 @@ class HostMessageTest(unittest.TestCase):
         line, started = self.preflight(ENV_WAKE_ID="w-1")
         self.assertEqual(set(line), keys | {"hostMessage"})
         self.assertEqual(codes([line["hostMessage"]]), ["host_cannot_wake"])
-        self.assertEqual(started["hostMessage"], line["hostMessage"])
+        self.assertNotIn("hostMessage", started)
+        self.assertIn(line["hostMessage"], started["warnings"])
 
     def test_the_choice_is_the_one_without_the_environment(self):
         for name, method in (("own stream", {}), ("exit-on-event", {"ALPHA_STREAM": None})):

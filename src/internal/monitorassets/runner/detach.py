@@ -120,8 +120,8 @@ def monitor_started_line(doc, issue, full):
     if full:
         line.update({"issue": issue, "pollIntervalSec": POLL_INTERVAL_SEC, "reason": doc.get("reason"),
                      "warnings": doc.get("warnings") or [], "journal": doc.get("journal")})
-        if doc.get("hostMessage"):
-            line["hostMessage"] = doc["hostMessage"]
+        # A host message is a key of the preflight line only ("Runner
+        # stdout lines"); here it is one of the warnings (INV-17).
     return line
 
 
