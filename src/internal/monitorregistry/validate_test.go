@@ -3,6 +3,7 @@ package monitorregistry
 import (
 	"encoding/json"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -10,6 +11,8 @@ import (
 func intp(v int) *int { return &v }
 
 func boolp(v bool) *bool { return &v }
+
+func strp(v string) *string { return &v }
 
 // validRegistry is a registry that passes Validate: an agent with a stream
 // and a delivery method, its own delivery channel (step 3), a host (step 5)
@@ -156,19 +159,19 @@ func TestValidate_RejectsEachRule(t *testing.T) {
 		}, RuleInvalid},
 		{"stderr phrase in the table of an http channel", func(r *Registry) {
 			httpHost(r)
-			r.Channels[1].Outcomes[0].Match.StderrContains = "busy"
+			r.Channels[1].Outcomes[0].Match.StderrContains = strp("busy")
 		}, RuleInvalid},
 		{"stderr phrase of two lines", func(r *Registry) {
-			r.Channels[1].Outcomes[1].Match.StderrContains = "nothing\nwas sent"
+			r.Channels[1].Outcomes[1].Match.StderrContains = strp("nothing\nwas sent")
 		}, RuleInvalid},
 		{"stderr phrase with an empty stderr", func(r *Registry) {
-			r.Channels[1].Outcomes[1].Match.StderrContains = "nothing was sent"
+			r.Channels[1].Outcomes[1].Match.StderrContains = strp("nothing was sent")
 			r.Channels[1].Outcomes[1].Match.StderrEmpty = boolp(true)
 		}, RuleInvalid},
 		{"stderr phrase and the same phrase", func(r *Registry) {
 			r.Channels[0].Outcomes = append(r.Channels[0].Outcomes,
-				OutcomeRow{Match: Match{ExitCode: intp(1), StderrContains: "busy"}, Outcome: OutcomeRefused},
-				OutcomeRow{Match: Match{ExitCode: intp(1), StderrContains: "busy"}, Outcome: OutcomeUnknown})
+				OutcomeRow{Match: Match{ExitCode: intp(1), StderrContains: strp("busy")}, Outcome: OutcomeRefused},
+				OutcomeRow{Match: Match{ExitCode: intp(1), StderrContains: strp("busy")}, Outcome: OutcomeUnknown})
 		}, RuleAmbiguousSign},
 		{"empty stderr and a stderr JSON in one row", func(r *Registry) {
 			r.Channels[1].Outcomes[1].Match = Match{ExitCode: intp(1), StderrEmpty: boolp(true),
@@ -641,10 +644,10 @@ func TestValidate_AcceptsRecordsAndStderrPhrases(t *testing.T) {
 	r.Channels[1].Detect.Records = []string{"alpha"}
 	r.Channels[0].Detect.RecordsAbsent = []string{"alpha"}
 	r.Channels[0].Outcomes = append(r.Channels[0].Outcomes,
-		OutcomeRow{Match: Match{ExitCode: intp(4), StderrContains: "so nothing was sent"}, Outcome: OutcomeRefused},
-		OutcomeRow{Match: Match{ExitCode: intp(4), StderrContains: "(SESSION_COMPOSER_BUSY)"}, Outcome: OutcomeRefused},
+		OutcomeRow{Match: Match{ExitCode: intp(4), StderrContains: strp("so nothing was sent")}, Outcome: OutcomeRefused},
+		OutcomeRow{Match: Match{ExitCode: intp(4), StderrContains: strp("(SESSION_COMPOSER_BUSY)")}, Outcome: OutcomeRefused},
 		OutcomeRow{Match: Match{ExitCode: intp(5), StderrEmpty: boolp(true)}, Outcome: OutcomeRefused},
-		OutcomeRow{Match: Match{ExitCode: intp(5), StderrContains: "usage"}, Outcome: OutcomeUnknown})
+		OutcomeRow{Match: Match{ExitCode: intp(5), StderrContains: strp("usage")}, Outcome: OutcomeUnknown})
 	if err := r.Validate(); err != nil {
 		t.Fatalf("a correct record with records and stderr phrases was refused: %v", err)
 	}
@@ -940,6 +943,32 @@ func TestValidate_RejectsAURLOutOfItsRules(t *testing.T) {
 		for _, got := range rulesOf(t, err) {
 			if got != RuleInvalid {
 				t.Fatalf("URL %q: %v, want only %s", u, err, RuleInvalid)
+			}
+		}
+	}
+}
+
+// TestValidate_APhraseInsideAnotherOverlapsIt — one stderr that holds a
+// phrase holds every phrase inside it, so rows of "busy" and "session busy"
+// can match one answer; an empty phrase or one of spaces says nothing.
+func TestValidate_APhraseInsideAnotherOverlapsIt(t *testing.T) {
+	r := validRegistry()
+	r.Channels[1].Outcomes = append(r.Channels[1].Outcomes,
+		OutcomeRow{Match: Match{ExitCode: intp(4), StderrContains: strp("busy")}, Outcome: OutcomeRefused},
+		OutcomeRow{Match: Match{ExitCode: intp(4), StderrContains: strp("session busy")}, Outcome: OutcomeUnknown})
+	if got := rulesOf(t, r.Validate()); !slices.Contains(got, RuleAmbiguousSign) {
+		t.Fatalf("nested phrases were taken as apart: %v", got)
+	}
+	for _, phrase := range []string{"", "   "} {
+		r := validRegistry()
+		r.Channels[1].Outcomes[0].Match.StderrContains = strp(phrase)
+		err := r.Validate()
+		if err == nil {
+			t.Fatalf("phrase %q was accepted", phrase)
+		}
+		for _, got := range rulesOf(t, err) {
+			if got != RuleInvalid {
+				t.Fatalf("phrase %q: %v, want only %s", phrase, err, RuleInvalid)
 			}
 		}
 	}

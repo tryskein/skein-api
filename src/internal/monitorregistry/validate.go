@@ -900,11 +900,13 @@ func (v *validator) criteriaOf(path string, rows []Match, executor string) {
 			v.add(RuleInvalid, rpath+".stderrJson", "an http answer has no stderr")
 		case m.StderrEmpty != nil && *m.StderrEmpty && len(m.StderrJSON) > 0:
 			v.add(RuleInvalid, rpath+".stderrJson", "an empty stderr holds no JSON document")
-		case executor == ExecutorHTTP && m.StderrContains != "":
+		case m.StderrContains != nil && strings.TrimSpace(*m.StderrContains) == "":
+			v.add(RuleInvalid, rpath+".stderrContains", "the phrase is empty")
+		case executor == ExecutorHTTP && m.StderrContains != nil:
 			v.add(RuleInvalid, rpath+".stderrContains", "an http answer has no stderr")
-		case m.StderrContains != "" && strings.ContainsAny(m.StderrContains, "\r\n"):
+		case m.StderrContains != nil && strings.ContainsAny(*m.StderrContains, "\r\n"):
 			v.add(RuleInvalid, rpath+".stderrContains", "the phrase is one line")
-		case m.StderrContains != "" && m.StderrEmpty != nil && *m.StderrEmpty:
+		case m.StderrContains != nil && m.StderrEmpty != nil && *m.StderrEmpty:
 			v.add(RuleInvalid, rpath+".stderrContains", "an empty stderr contains no phrase")
 		}
 	}
@@ -958,7 +960,7 @@ func (v *validator) noEnvRefs(path string, rows []Match) {
 // empty reports whether the sign states no criterion.
 func (m Match) empty() bool {
 	return m.ExitCode == nil && m.HTTPStatus == nil && len(m.JSON) == 0 && len(m.JSONAbsent) == 0 &&
-		m.StderrEmpty == nil && len(m.StderrJSON) == 0 && m.StderrContains == ""
+		m.StderrEmpty == nil && len(m.StderrJSON) == 0 && m.StderrContains == nil
 }
 
 // overlaps reports whether one answer can satisfy both signs: every
@@ -971,7 +973,10 @@ func (m Match) overlaps(o Match) bool {
 	if m.StderrEmpty != nil && o.StderrEmpty != nil && *m.StderrEmpty != *o.StderrEmpty {
 		return false
 	}
-	if m.StderrContains != "" && o.StderrContains != "" && m.StderrContains != o.StderrContains {
+	// One stderr holds a phrase and every phrase inside it: two phrases are
+	// apart only when neither holds the other.
+	if m.StderrContains != nil && o.StderrContains != nil &&
+		!strings.Contains(*m.StderrContains, *o.StderrContains) && !strings.Contains(*o.StderrContains, *m.StderrContains) {
 		return false
 	}
 	// An empty stderr holds no JSON document.
@@ -979,8 +984,8 @@ func (m Match) overlaps(o Match) bool {
 		(len(o.StderrJSON) > 0 && m.StderrEmpty != nil && *m.StderrEmpty) {
 		return false
 	}
-	if (m.StderrContains != "" && o.StderrEmpty != nil && *o.StderrEmpty) ||
-		(o.StderrContains != "" && m.StderrEmpty != nil && *m.StderrEmpty) {
+	if (m.StderrContains != nil && o.StderrEmpty != nil && *o.StderrEmpty) ||
+		(o.StderrContains != nil && m.StderrEmpty != nil && *m.StderrEmpty) {
 		return false
 	}
 	if m.ExitCode != nil && o.ExitCode != nil && *m.ExitCode != *o.ExitCode {

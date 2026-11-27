@@ -559,7 +559,7 @@ type Match struct {
 	// reports one error per call, so rows of two different phrases are
 	// taken as apart; an answer that carries both matches two rows and is
 	// unknown.
-	StderrContains string `json:"stderrContains,omitempty"`
+	StderrContains *string `json:"stderrContains,omitempty"`
 	// HTTPStatus is the status of an http response.
 	HTTPStatus *int `json:"httpStatus,omitempty"`
 	// StderrEmpty, when set, is whether the argv program wrote nothing to
