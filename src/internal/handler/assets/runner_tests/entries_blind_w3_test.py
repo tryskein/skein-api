@@ -266,6 +266,18 @@ class KittyRecordTest(BlindCase):
         line = self.preflight(above=[(et.PANE_PID, "bash")], **KITTY)
         self.assertEqual(line["channel"], None)
 
+    def test_only_a_window_id_of_digits_is_a_window(self):
+        # Warning 6 of wave 13 round 2: --match id:<value> is a kitty
+        # match expression (kitty/rc/base.py); a value other than one
+        # integer could name several windows, or another field. Only
+        # digits detect the channel.
+        for value in ("3 or id:4", "3,4", "id:3", "x", " 3"):
+            with self.subTest(value=value):
+                self.fresh()
+                line = self.preflight(above=[(et.PANE_PID, "bash")], **dict(KITTY, KITTY_WINDOW_ID=value))
+                self.assertNotEqual(line["channel"], "kitty", line)
+                self.assertEqual([c for c in self.calls("kitten") if "--match" in c], [])
+
     def test_the_text_and_enter_and_every_sign(self):
         self.fresh()
         mon = self.mon("kitty", "kitten", KITTY)
