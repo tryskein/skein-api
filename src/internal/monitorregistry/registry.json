@@ -22,7 +22,7 @@
         {
           "kind": "stream",
           "conditions": {},
-          "instruction": "Run `command` with the Monitor tool, timeout_ms 1800000 (its maximum, 30 minutes). Each stdout line is an event of the monitor. When Monitor reports the command ended at its deadline, run the same `command` with Monitor again: the cursor is kept, no event is lost."
+          "instruction": "Run `command` with the Monitor tool, timeout_ms 1800000 (its maximum, 30 minutes). Each stdout line is an event of the monitor. When Monitor reports the command ended at its deadline, start it with Monitor again: the cursor is kept, no event is lost."
         }
       ],
       "windowsShell": "git-bash"
