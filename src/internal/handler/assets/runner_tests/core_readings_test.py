@@ -211,6 +211,10 @@ class ProgramFromVariableTest(unittest.TestCase):
                 "binaries": {"linux": ["host", "{env:HOST_CLI}"], "macos": ["host", "{env:HOST_CLI}"]}}
         env = {"PATH": "/nonexistent", "HOST_CLI": self.program}
         self.assertEqual(RUNNER.channel_programs(chan, env, None), {"host": self.program})
+        # A name the variable gives runs by the path PATH finds for it: the
+        # executor takes only a path.
+        env = {"PATH": self.root, "HOST_CLI": "host-cli"}
+        self.assertEqual(RUNNER.channel_programs(chan, env, None), {"host": self.program})
 
     def test_an_unset_variable_is_named_in_the_cause(self):
         cause = RUNNER._missing_programs_cause("host", ["host", "{env:HOST_CLI}"], {"PATH": self.root})
