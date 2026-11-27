@@ -136,6 +136,29 @@ class SendTest(unittest.TestCase):
         self.assertLess(len(calls[1]["stdin"]), len(calls[0]["stdin"]))
         self.assertEqual(mon.statuses(), [(1, "queued")])
 
+    def test_the_minimal_form_mark_is_the_event_s(self):
+        """Review findings (lines 16, 20) of wave 9: the minimal form is for
+        the event the channel refused; a later event goes in full."""
+        world, mon = zavod_monitor(self, [envelope(11, "letter_too_large"), envelope(0, outcome="ok"),
+                                          envelope(0, outcome="ok")])
+        mon.page([ft.note(1)])
+        mon.page([ft.note(2)], cursor={"ts": "t", "id": 2})
+        calls = world.calls("zavod")
+        self.assertEqual(len(calls), 3)
+        self.assertNotIn(ft.PREVIEW, calls[1]["stdin"])
+        self.assertIn(ft.PREVIEW, calls[2]["stdin"])
+        self.assertEqual(mon.statuses(), [(1, "queued"), (2, "queued")])
+
+    def test_the_minimal_form_says_where_to_read_and_what_was_deleted(self):
+        cut, _ = RUNNER.plain_text(ft.note(1), "", minimal=True)
+        self.assertIn("deliveryCut=true", cut)
+        self.assertIn('skein_comment_get(commentId="c1")', cut)
+        self.assertNotIn(ft.PREVIEW, cut)
+        deleted = dict(ft.note(2))
+        del deleted["bodyPreview"]
+        text, _ = RUNNER.plain_text(deleted, "", minimal=True)
+        self.assertIn("commentDeleted=true", text)
+
     def test_a_letter_keeps_to_the_own_limit(self):
         world, mon = zavod_monitor(self, [envelope(0, outcome="ok")])
         preview = ("Предпросмотр с юникодом ✓ " * 50)[:1024]

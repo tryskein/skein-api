@@ -238,14 +238,19 @@ def plain_text(notification, exclude_file, limit=None, unit=UNIT_CHARS, framed=T
         return " ".join(parts)
 
     if minimal:
-        # The minimal form only: the label, the mandatory fields and the
-        # compact mark when anything else was left out.
+        # The minimal form only: the label, the mandatory fields, the mark of
+        # a deleted comment, and the compact mark when anything else was
+        # left out, with where to read the comment when it fits.
         short = " ".join(label + head)
+        if "commentId" in n and not has_preview:
+            short += " " + PLAIN_DELETED_MARK
+        forms = [short]
         if preview is not None or summary or author:
-            short += " " + PLAIN_CUT_MARK
-        if limit is not None and measure(short, unit) > limit:
-            return None, False
-        return short, preview is not None
+            forms = [short + " " + PLAIN_CUT_MARK + (" " + read + "." if read else ""), short + " " + PLAIN_CUT_MARK]
+        for form in forms:
+            if limit is None or measure(form, unit) <= limit:
+                return form, preview is not None
+        return None, False
     full = build(preview, False, True, True)
     if limit is None or measure(full, unit) <= limit:
         return full, False

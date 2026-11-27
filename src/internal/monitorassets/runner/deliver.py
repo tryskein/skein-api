@@ -355,8 +355,9 @@ class DeliverySink(object):
         self.exclusion = as_exclusion(exclusion) if exclusion is not None else None
         # Channels whose budget ran out: a delivery by one writes recovered.
         self.failing = set()
-        # Ids of events a channel refused as too long (a shortening row of
-        # its table): their next call carries the minimal form.
+        # (event id, channel id) of events a channel refused as too long (a
+        # shortening row of its table): that channel's next call carries
+        # them, and the events that join them, in the minimal form.
         self._shorten = set()
         # After "addressee changed" the process writes only the journal.
         self.journal_only = False
@@ -731,7 +732,9 @@ class DeliverySink(object):
         if len(batch) < len(attempt.events):
             batch = [n for n in batch if str(n["id"]) in attempt.events]
         limit, unit = _line_limit(channel)
-        minimal = all(str(n["id"]) in self._shorten for n in batch)
+        # A channel that refused an event as too long gets it, and the
+        # events that join it in a batch, in the minimal form.
+        minimal = any((str(n["id"]), channel_id) in self._shorten for n in batch)
         if channel_takes_ids_only(channel, self.doc.get("programs"), self.env):
             # A batch program of Windows gets no untrusted text (US-11): the
             # id-only form, or no text at all (a refusal before send).
@@ -806,7 +809,7 @@ class DeliverySink(object):
             if any(row.get("shorten") and row.get("match") == sign for row in channel.get("outcomes") or []):
                 # Too long for the channel: the next call carries the
                 # minimal form; refused again, the budget goes on (INV-8).
-                self._shorten.update(str(n["id"]) for n in batch)
+                self._shorten.update((str(n["id"]), channel_id) for n in batch)
             return
         if guard.cancel_reason is not None:
             # A stop answer withheld the final step: it wins over the rest of
@@ -931,6 +934,8 @@ class DeliverySink(object):
         """The outcome of one event: into the state, then the journal."""
         eid = str(n["id"])
         outcomes[eid] = status
+        # A closed event is never sent again: its minimal-form marks go.
+        self._shorten = set(k for k in self._shorten if k[0] != eid)
         if not with_preview:
             self._redacted.add(eid)
         save_page_outcomes(self.token_file, cursor, outcomes, journaled, self._redacted)
