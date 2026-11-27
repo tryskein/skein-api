@@ -1117,16 +1117,26 @@ MIN_SECRET_CHARS = 16
 
 
 def http_key_secrets(registry, env):
-    """The key each http channel of the registry would send in this
-    environment (the first variable of its keyEnv that is set), when it is
-    at least MIN_SECRET_CHARS long: secrets of the monitor."""
+    """Secrets of the monitor from the http channels of the registry: the
+    key each would send in this environment (the first variable of its
+    keyEnv that is set) whatever its length - it goes into Authorization;
+    and the value of every other set key variable when it is at least
+    MIN_SECRET_CHARS long (a short value would wipe ordinary words of a
+    text; its variable leaves every program environment by name)."""
     keys = []
+    env = env or {}
     for channel in (registry.channels.values() if registry is not None else []):
         spec = channel.get("executor") or {}
-        if spec.get("type") == "http":
-            key = http_key(spec.get("http") or {}, env or {})
-            if key and len(key) >= MIN_SECRET_CHARS and key not in keys:
-                keys.append(key)
+        if spec.get("type") != "http":
+            continue
+        http = spec.get("http") or {}
+        selected = http_key(http, env)
+        if selected and selected not in keys:
+            keys.append(selected)
+        for name in http.get("keyEnv") or []:
+            value = env.get(name, "")
+            if value and value != selected and len(value) >= MIN_SECRET_CHARS and value not in keys:
+                keys.append(value)
     return keys
 
 

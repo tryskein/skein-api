@@ -30,7 +30,9 @@ sys.path.insert(0, HERE)
 import harness  # noqa: E402
 import start_test as st  # noqa: E402
 
-KEY = "kk_" + "Q" * 30
+# The selected key of a record is a secret whatever its length (K5 of wave
+# 12 round 2): every mode below is run with a key of 8 characters.
+KEY = "kQ7zP2xW"
 SHORT = "kk_short"
 KEYED = {"id": "keyed", "about": "keyed", "source": "test", "step": 3, "order": 1, "kind": "addressed",
          "blind": False, "detect": {"env": [{"name": "KEYED_ID"}]},
@@ -170,12 +172,25 @@ class KeyInEveryModeTest(unittest.TestCase):
         self.assertNotIn(KEY, text)
         self.assertIn(RUNNER.REDACTED, text)
 
-    def test_a_short_key_is_not_a_secret_of_texts(self):
-        # Below the lower bound the value is ordinary text: it is not cut
-        # out of previews and lines.
-        self.assertEqual(RUNNER.monitor_secrets("tok", {"KEYED_KEY": SHORT}, REG), ["tok"])
-        self.assertEqual(RUNNER.monitor_secrets("tok", {"KEYED_KEY": KEY}, REG), ["tok", KEY])
+    def test_the_selected_key_is_a_secret_whatever_its_length(self):
+        self.assertEqual(RUNNER.monitor_secrets("tok", {"KEYED_KEY": SHORT}, REG), ["tok", SHORT])
+        # A key variable the record would not send this time (another of
+        # its keyEnv set too): a secret of texts only when long enough;
+        # every key variable leaves the environment of a program by name.
+        two = copy.deepcopy(KEYED)
+        two["executor"]["http"]["keyEnv"] = ["KEYED_KEY", "KEYED_KEY_OLD"]
+        reg = mock.Mock()
+        reg.channels = {"keyed": two}
+        long_old = "kk_" + "O" * 30
+        self.assertEqual(RUNNER.monitor_secrets("tok", {"KEYED_KEY": SHORT, "KEYED_KEY_OLD": "old12345"}, reg),
+                         ["tok", SHORT])
+        self.assertEqual(RUNNER.monitor_secrets("tok", {"KEYED_KEY": SHORT, "KEYED_KEY_OLD": long_old}, reg),
+                         ["tok", SHORT, long_old])
 
+    def test_no_key_reaches_the_environment_of_another_channel(self):
+        env = {"KEYED_KEY": KEY, "PATH": "/usr/bin", "COPY_OF_IT": "x" + KEY}
+        clean = RUNNER.child_env(env, RUNNER.monitor_secrets("tok", env, REG), RUNNER.http_key_names(REG))
+        self.assertEqual(set(clean), {"PATH"})
 
 if __name__ == "__main__":
     unittest.main()
