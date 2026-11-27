@@ -142,6 +142,59 @@ func TestGetMonitorScriptClient_RefusedBeforeSideEffects(t *testing.T) {
 	}
 }
 
+// TestGetMonitorScriptClient_TokenDirCharacters — SC-008 (row #12, review of
+// the gate T051): a tokenDir with a control character - C0 (below U+0020),
+// DEL (U+007F) or C1 (U+0080..U+009F), each bound of the ranges - or with a
+// character Windows reserves in a name after the drive (< > : " | ? *,
+// learn.microsoft.com "Naming Files, Paths, and Namespaces") is refused
+// before any side effect; the characters right outside those ranges are
+// accepted and the token file lies under that very directory.
+func TestGetMonitorScriptClient_TokenDirCharacters(t *testing.T) {
+	refused := map[string]string{
+		"U+001F": "C:\\Users\\me\x1f",
+		"U+007F": "C:\\Users\\me\x7f",
+		"U+0080": "C:\\Users\\me\u0080",
+		"U+009F": "C:\\Users\\me\u009f",
+	}
+	for _, c := range `<>:"|?*` {
+		refused["reserved "+string(c)] = `C:\Users\me` + string(c) + "x"
+	}
+	for name, dir := range refused {
+		t.Run("refused "+name, func(t *testing.T) {
+			u := newGMSUnit(gmsUnitRegistry(t))
+			res := u.call(t, map[string]any{"id": "sk-42", "client": "x", "platform": "windows", "tokenDir": dir})
+			if !res.IsError {
+				t.Fatalf("tokenDir %q accepted", dir)
+			}
+			body := extractToolJSON(t, res)
+			if body["error"] != ErrCodeValidationError || body["code"] != monitorCodeTokenDirInvalid {
+				t.Fatalf("error = %v code = %v, want %s %s", body["error"], body["code"], ErrCodeValidationError, monitorCodeTokenDirInvalid)
+			}
+			if u.issues.calls+u.watcher.calls+u.minter.calls != 0 {
+				t.Fatalf("refusal reached the sides: issue lookup %d, watch %d, mint %d",
+					u.issues.calls, u.watcher.calls, u.minter.calls)
+			}
+		})
+	}
+	for name, dir := range map[string]string{
+		"U+0020": `C:\Users\me x`,
+		"U+007E": `C:\Users\me~x`,
+		"U+00A0": "C:\\Users\\me\u00a0x",
+	} {
+		t.Run("accepted "+name, func(t *testing.T) {
+			u := newGMSUnit(gmsUnitRegistry(t))
+			res := u.call(t, map[string]any{"id": "sk-42", "client": "x", "platform": "windows", "tokenDir": dir})
+			if res.IsError {
+				t.Fatalf("tokenDir %q refused: %v", dir, extractToolJSON(t, res))
+			}
+			tokenFile, _ := extractToolJSON(t, res)["tokenFilePath"].(string)
+			if !strings.HasPrefix(tokenFile, dir+`\`) {
+				t.Fatalf("tokenFilePath = %q, want it under %q", tokenFile, dir)
+			}
+		})
+	}
+}
+
 // TestGetMonitorScriptClient_WithoutClientUnchanged — US-1, SC-004, INV-7
 // (rows #13, #138): without client, platform and tokenDir the response has
 // exactly the fields it had before them, the bootstrap runs the starter with
