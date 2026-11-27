@@ -294,6 +294,225 @@
           }
         }
       ]
+    },
+    {
+      "id": "gemini",
+      "about": "Gemini CLI: the runner exits after a batch of events, and the completion of the background command, injected into the session, starts a turn; only with model steering on and background completions injected.",
+      "source": "github.com/google-gemini/gemini-cli 03862c4 (0.73.0-nightly.20261123): packages/core/src/tools/shell.ts#ShellToolInvocation (run_shell_command, is_background), packages/core/src/services/executionLifecycleService.ts and packages/core/src/config/injectionService.ts (a backgrounded command's completion is injected as background_completion), packages/cli/src/config/settingsSchema.ts (tools.shell.backgroundCompletionBehavior: silent by default, inject carries up to 5000 characters of output, notify only the log path), packages/cli/src/ui/AppContainer.tsx (an idle session submits the pending hints only with experimental.modelSteering); settings in ~/.gemini/settings.json; npm @google/gemini-cli bin gemini (bundle/gemini.js under Node).",
+      "process": {
+        "executables": [
+          "gemini"
+        ],
+        "argvBaseNames": [
+          "gemini",
+          "gemini.js"
+        ]
+      },
+      "methods": [
+        {
+          "kind": "exit-on-event",
+          "conditions": {
+            "settings": [
+              {
+                "path": "~/.gemini/settings.json",
+                "format": "json",
+                "key": "experimental.modelSteering",
+                "equals": true
+              },
+              {
+                "path": "~/.gemini/settings.json",
+                "format": "json",
+                "key": "tools.shell.backgroundCompletionBehavior",
+                "equals": "inject"
+              }
+            ]
+          },
+          "instruction": "Run `command` with the run_shell_command tool, is_background: true. It ends after a batch of events with a stop line; its completion comes to you with its output. Handle the events, then follow the action of that line.",
+          "limits": {
+            "batch": {
+              "max": 5000,
+              "unit": "utf16"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "openclaude",
+      "about": "OpenClaude: the runner exits after a batch of events, and the end of the background Bash command starts a turn.",
+      "source": "github.com/Twigpine/openclaude 9b92b89 (@twigpine/openclaude 0.37.0): src/tasks/LocalShellTask/LocalShellTask.tsx#enqueueShellNotification (a finished background command queues a task notification), src/hooks/useQueueProcessor.ts (an idle session processes the queue and starts a turn); src/tools/MonitorTool/MonitorTool.ts promises a line by line stream, but src/utils/task/framework.ts#generateTaskAttachments sends no lines, so Monitor reports only the end; npm bin openclaude.",
+      "process": {
+        "executables": [
+          "openclaude"
+        ],
+        "argvBaseNames": [
+          "openclaude"
+        ]
+      },
+      "methods": [
+        {
+          "kind": "exit-on-event",
+          "conditions": {},
+          "instruction": "Run `command` with the Bash tool, run_in_background: true (not with Monitor: it reports only the end of a command). It ends after a batch of events with a stop line, and its end wakes you: read its output, handle the events, then follow the action of that line."
+        }
+      ]
+    },
+    {
+      "id": "zcode",
+      "about": "ZCode: the runner exits after a batch of events, and the end of the background Bash command re-invokes the agent.",
+      "source": "github.com/zai-org/ZCode a4b44451 (Agent CLI 0.18.0): apps/zcode-cli/packages/core/src/tool/handlers/bash-prompt.ts (run_in_background runs the command detached and re-invokes the agent when it exits; a foreground sleep is blocked), runtime/methods/background-notifications.ts#enqueueBackgroundTaskNotification and runtime/methods/runtime-command-queue.ts#drainRuntimeCommandQueue (the notice starts a turn), tool/handlers/task-output.ts (TaskOutput); apps/zcode-cli/packages/cli/package.json bin zcode (dist/zcode.cjs).",
+      "process": {
+        "executables": [
+          "zcode"
+        ],
+        "argvBaseNames": [
+          "zcode",
+          "zcode.cjs"
+        ]
+      },
+      "methods": [
+        {
+          "kind": "exit-on-event",
+          "conditions": {},
+          "instruction": "Run `command` with the Bash tool, run_in_background: true; do not wait for it with a foreground sleep. It ends after a batch of events with a stop line, and its end re-invokes you: read its output with TaskOutput, handle the events, then follow the action of that line."
+        }
+      ]
+    },
+    {
+      "id": "dsh",
+      "about": "DeepSeek Harness: the runner exits after a batch of events, and the settlement of the background job starts a turn with its output inline.",
+      "source": "github.com/deepseek-ai/deepseek-harness 4b399c39 (0.2.3-alpha.2): packages/shell/tool-bash/src/index.ts#run_in_background (bash and pwsh), packages/jobs/tool-jobs/src/index.ts#deliverSettlement (a settled job wakes an idle owner when completionDelivery is wakeup, the default; its output goes inline up to inlineOutputBytes 2048, else the agent reads job_output; with maxConsecutiveWakes set, wakes past it turn into silent injections); npm @deepseek-ai/dsh bin dsh (lib/bin.js).",
+      "process": {
+        "executables": [
+          "dsh"
+        ],
+        "argvBaseNames": [
+          "dsh"
+        ]
+      },
+      "methods": [
+        {
+          "kind": "exit-on-event",
+          "conditions": {},
+          "instruction": "Run `command` with the bash tool (pwsh on Windows), run_in_background: true; do not wait for it with job_output wait:true, and keep completionDelivery wakeup. It ends after a batch of events with a stop line, and its settlement wakes you with its output (job_output <job id> when it is not inline). Handle the events, then follow the action of that line.",
+          "limits": {
+            "line": {
+              "max": 2048,
+              "unit": "bytes"
+            },
+            "batch": {
+              "max": 2048,
+              "unit": "bytes"
+            }
+          }
+        }
+      ],
+      "windowsShell": "pwsh"
+    },
+    {
+      "id": "cursor",
+      "about": "Cursor CLI: the runner exits after a batch of events, and the follow-up of the finished background task starts a turn.",
+      "source": "cursor.com/docs/cli (closed source): changelog v2026.08.11 (completion follow-ups for finished background tasks fire in interactive and headless sessions), March 2026 (Ctrl+B twice sends a running shell to the background); the executable is agent (cursor-agent); the tool's name and parameters are not documented.",
+      "process": {
+        "executables": [
+          "agent",
+          "cursor-agent",
+          "agent.exe",
+          "cursor-agent.exe"
+        ]
+      },
+      "methods": [
+        {
+          "kind": "exit-on-event",
+          "conditions": {},
+          "instruction": "Run `command` as a background task (or send it to the background with Ctrl+B twice). It ends after a batch of events with a stop line, and its completion follow-up wakes you: handle the events, then follow the action of that line."
+        }
+      ]
+    },
+    {
+      "id": "antigravity",
+      "about": "Antigravity CLI: the runner exits after a batch of events, and the completion of the background shell task wakes the agent.",
+      "source": "antigravity.google/docs (closed source, CLI v1.5.16): cli/using (background shell tasks, /tasks, manage_task), changelog v1.5.8 (background task completions reach the agent again), v1.5.10 (a finished background task wakes the agent), v1.5.15 (PowerShell and Command Prompt on Windows); the executable is agy.",
+      "process": {
+        "executables": [
+          "agy",
+          "agy.exe"
+        ]
+      },
+      "methods": [
+        {
+          "kind": "exit-on-event",
+          "conditions": {},
+          "instruction": "Run `command` as a background shell task, not in the foreground. It ends after a batch of events with a stop line, and its completion wakes you: handle the events, then follow the action of that line."
+        }
+      ]
+    },
+    {
+      "id": "command-code",
+      "about": "Command Code: the runner exits after a batch of events under monitor_command, and the exit of the process wakes the agent.",
+      "source": "commandcode.ai/docs (closed source; npm command-code 1.93.2): background-tasks and reference/tools (monitor_command wakes the agent once at checkAfterMs, 45000 by default and at most 24 h, with no output, and once when the process exits; notify scheduled by default, never is silent; maxDurationMs ends the process with SIGTERM; output is read with monitor_events or shell_output; shell_command run_in_background does not wake); npm bin cmd, cmdc, commandcode, command-code (dist/index.mjs).",
+      "process": {
+        "executables": [
+          "command-code",
+          "commandcode",
+          "cmdc"
+        ],
+        "argvBaseNames": [
+          "cmd",
+          "cmdc",
+          "commandcode",
+          "command-code"
+        ]
+      },
+      "methods": [
+        {
+          "kind": "exit-on-event",
+          "conditions": {},
+          "instruction": "Run `command` with monitor_command, checkAfterMs 86400000, notify \"scheduled\", and no maxDurationMs. It ends after a batch of events with a stop line, and its exit wakes you: read its output with monitor_events or shell_output, handle the events, then follow the action of that line. A scheduled check without the exit is no event: do not start the command again then."
+        }
+      ]
+    },
+    {
+      "id": "copilot",
+      "about": "GitHub Copilot CLI: the runner exits after a batch of events as a detached background shell command, and its completion notice wakes the agent.",
+      "source": "docs.github.com copilot-cli-reference/cli-command-reference (closed source; npm @github/copilot 1.0.115): shell tools bash/powershell, read_bash, stop_bash; changelog 0.0.422 (notifications when background shell commands complete), 1.0.66 (detached background shell commands), 1.0.71 (a detached command's completion notification is no longer lost); that a completion starts a turn in an idle session is assumed; npm bin copilot (npm-loader.js starting the platform binary).",
+      "process": {
+        "executables": [
+          "copilot",
+          "copilot.exe"
+        ],
+        "argvBaseNames": [
+          "copilot"
+        ]
+      },
+      "methods": [
+        {
+          "kind": "exit-on-event",
+          "conditions": {},
+          "instruction": "Run `command` with the bash tool (powershell on Windows) as a detached background command. It ends after a batch of events with a stop line, and its completion notice wakes you: read its output with read_bash, handle the events, then follow the action of that line."
+        }
+      ]
+    },
+    {
+      "id": "droid",
+      "about": "Factory Droid: a background Task subagent runs the runner, which exits after a batch of events; the Task's result comes to the agent as a turn.",
+      "source": "docs.factory.ai (closed source; CLI v1.19.0): harness/hooks.md (UserPromptSubmit does not fire for the turn that delivers a background Task's result: that result is a turn of its own), changelog/release-notes.md (background processes; whether a background command's end wakes the agent is not documented, so the Task is used); npm droid bin droid.",
+      "process": {
+        "executables": [
+          "droid",
+          "droid.exe"
+        ],
+        "argvBaseNames": [
+          "droid"
+        ]
+      },
+      "methods": [
+        {
+          "kind": "exit-on-event",
+          "conditions": {},
+          "instruction": "Start a background Task subagent that runs `command` in the foreground and returns its output. It ends after a batch of events with a stop line; the Task ends and its result comes to you as a turn. Handle the events, then follow the action of that line by starting such a Task again."
+        }
+      ]
     }
   ],
   "channels": [
