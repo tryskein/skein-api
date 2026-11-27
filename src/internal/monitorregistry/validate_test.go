@@ -1702,3 +1702,44 @@ func TestValidate_AnOutcomeRowComparesOnlyTheAddress(t *testing.T) {
 		}
 	}
 }
+
+// TestValidate_AStderrLine — stderrLinePrefix names the start of a whole
+// line of an argv program's stderr, followed by one token (an id a CLI prints
+// on a line of its own; review round 2 of wave 14, row 11): a non-empty
+// prefix of one line, never on an http answer or with an empty stderr; one
+// stderr may hold any line and phrase besides, so only an empty stderr sets
+// it apart.
+func TestValidate_AStderrLine(t *testing.T) {
+	r := validRegistry()
+	r.Channels[1].Outcomes[0].Match.StderrLinePrefix = strp("session_id: ")
+	if err := r.Validate(); err != nil {
+		t.Fatalf("a line prefix was refused: %v", err)
+	}
+	for name, m := range map[string]Match{
+		"an empty prefix":       {ExitCode: intp(9), StderrLinePrefix: strp(" ")},
+		"a prefix of two lines": {ExitCode: intp(9), StderrLinePrefix: strp("a\nb: ")},
+		"a line of no stderr":   {ExitCode: intp(9), StderrLinePrefix: strp("id: "), StderrEmpty: boolp(true)},
+	} {
+		r := validRegistry()
+		r.Channels[1].Outcomes = append(r.Channels[1].Outcomes, OutcomeRow{Match: m, Outcome: OutcomeUnknown})
+		err := r.Validate()
+		if err == nil {
+			t.Fatalf("%s was accepted", name)
+		}
+		for _, got := range rulesOf(t, err) {
+			if got != RuleInvalid {
+				t.Fatalf("%s: %v, want only %s", name, err, RuleInvalid)
+			}
+		}
+	}
+	line := Match{ExitCode: intp(0), StderrLinePrefix: strp("session_id: ")}
+	if !line.overlaps(Match{ExitCode: intp(0), StderrContains: strp("hint")}) {
+		t.Fatal("a line and a phrase of one stderr were taken as apart")
+	}
+	if !line.overlaps(Match{ExitCode: intp(0), StderrLinePrefix: strp("other: ")}) {
+		t.Fatal("two lines of one stderr were taken as apart")
+	}
+	if line.overlaps(Match{ExitCode: intp(0), StderrEmpty: boolp(true)}) {
+		t.Fatal("a line and an empty stderr were taken as overlapping")
+	}
+}

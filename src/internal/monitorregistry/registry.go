@@ -712,6 +712,12 @@ type Match struct {
 	// taken as apart; an answer that carries both matches two rows and is
 	// unknown.
 	StderrContains *string `json:"stderrContains,omitempty"`
+	// StderrLinePrefix is a literal a whole line of the stderr of an argv
+	// program starts with, followed by one token and nothing else (a
+	// non-empty run without white space): an id a CLI prints on a line of
+	// its own ("session_id: " and the id), never a phrase inside another
+	// line.
+	StderrLinePrefix *string `json:"stderrLinePrefix,omitempty"`
 	// HTTPStatus is the status of an http response.
 	HTTPStatus *int `json:"httpStatus,omitempty"`
 	// StderrEmpty, when set, is whether the argv program wrote nothing to

@@ -230,6 +230,15 @@ class ResumeOutcomeTest(unittest.TestCase):
                 # no id line, so no sign the text was taken.
                 (0, b"Session: 20261127_091500_ab12cd\n", "unknown"),
                 (0, b"", "unknown"),
+                # Review round 2 of wave 14, row 11: the id is a line of its
+                # own, "session_id: " and the id; the prefix with no id, an id
+                # with more after it, or the words inside another line (a hint
+                # before the submit) name no finished turn.
+                (0, b"\nsession_id: 20261127_091500_ab12cd\r\n", "queued"),
+                (0, b"\nsession_id: \n", "unknown"),
+                (0, b"\nsession_id: 20261127_091500_ab12cd and more\n", "unknown"),
+                (0, b"hint: resume with session_id: 20261127_091500_ab12cd\n", "unknown"),
+                (0, b" session_id: 20261127_091500_ab12cd\n", "unknown"),
                 (1, b"Error: No session found matching 'x'. Use 'hermes sessions list' to see available sessions\n",
                  "refused-before-send"),
                 (2, b"Error: Resume retains gateway session policy; creation overrides are unsupported\n",

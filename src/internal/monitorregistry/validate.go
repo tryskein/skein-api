@@ -1342,6 +1342,14 @@ func (v *validator) criteriaOf(path string, rows []Match, executor string, detac
 			v.add(RuleInvalid, rpath+".stderrContains", "the phrase is one line")
 		case m.StderrContains != nil && m.StderrEmpty != nil && *m.StderrEmpty:
 			v.add(RuleInvalid, rpath+".stderrContains", "an empty stderr contains no phrase")
+		case m.StderrLinePrefix != nil && strings.TrimSpace(*m.StderrLinePrefix) == "":
+			v.add(RuleInvalid, rpath+".stderrLinePrefix", "the prefix is empty")
+		case executor == ExecutorHTTP && m.StderrLinePrefix != nil:
+			v.add(RuleInvalid, rpath+".stderrLinePrefix", "an http answer has no stderr")
+		case m.StderrLinePrefix != nil && strings.ContainsAny(*m.StderrLinePrefix, "\r\n"):
+			v.add(RuleInvalid, rpath+".stderrLinePrefix", "the prefix is one line")
+		case m.StderrLinePrefix != nil && m.StderrEmpty != nil && *m.StderrEmpty:
+			v.add(RuleInvalid, rpath+".stderrLinePrefix", "an empty stderr has no line")
 		}
 	}
 }
@@ -1415,7 +1423,8 @@ func addressEnv(a *AddressSpec) string {
 func (m Match) empty() bool {
 	return m.ExitCode == nil && m.HTTPStatus == nil && len(m.JSON) == 0 && len(m.JSONNot) == 0 && len(m.JSONAbsent) == 0 &&
 		len(m.JSONType) == 0 && len(m.JSONPrefix) == 0 &&
-		m.StderrEmpty == nil && len(m.StderrJSON) == 0 && m.StderrContains == nil && m.StillRunning == nil
+		m.StderrEmpty == nil && len(m.StderrJSON) == 0 && m.StderrContains == nil && m.StderrLinePrefix == nil &&
+		m.StillRunning == nil
 }
 
 // onlyStillRunning reports whether the row states no criterion but
@@ -1455,6 +1464,12 @@ func (m Match) overlaps(o Match) bool {
 	}
 	if (m.StderrContains != nil && o.StderrEmpty != nil && *o.StderrEmpty) ||
 		(o.StderrContains != nil && m.StderrEmpty != nil && *m.StderrEmpty) {
+		return false
+	}
+	// An empty stderr has no line; one stderr may hold a line of each
+	// prefix and any phrase besides, so nothing else sets them apart.
+	if (m.StderrLinePrefix != nil && o.StderrEmpty != nil && *o.StderrEmpty) ||
+		(o.StderrLinePrefix != nil && m.StderrEmpty != nil && *m.StderrEmpty) {
 		return false
 	}
 	if m.ExitCode != nil && o.ExitCode != nil && *m.ExitCode != *o.ExitCode {

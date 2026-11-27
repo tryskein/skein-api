@@ -250,6 +250,14 @@ def outcome_sign_matches(match, exit_code=None, doc=None, http_status=None, stde
         stated = True
         if stderr is None or match["stderrContains"] not in stderr.decode("utf-8", "replace"):
             return False
+    if match.get("stderrLinePrefix"):
+        # A whole line of stderr: the prefix, then one token and nothing
+        # else (an id a CLI prints on a line of its own).
+        stated = True
+        prefix = match["stderrLinePrefix"]
+        if stderr is None or not any(_line_holds_token(line, prefix) for line in
+                                     stderr.decode("utf-8", "replace").split("\n")):
+            return False
     if match.get("stderrJson"):
         # The JSON document of stderr (a CLI that reports its errors there).
         stated = True
@@ -277,6 +285,17 @@ def outcome_sign_matches(match, exit_code=None, doc=None, http_status=None, stde
         if doc is None or json_path_lookup(doc, path)[0]:
             return False
     return stated
+
+
+def _line_holds_token(line, prefix):
+    """Whether line (its CR dropped) is prefix and one non-empty run without
+    white space."""
+    if line.endswith("\r"):
+        line = line[:-1]
+    if not line.startswith(prefix):
+        return False
+    rest = line[len(prefix):]
+    return bool(rest) and rest.split() == [rest]
 
 
 # A literal prefix and one variable in one element (registry.go, argument
