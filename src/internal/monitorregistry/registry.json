@@ -188,6 +188,9 @@
         "qualifiers": [
           "CODEX_HOME"
         ],
+        "qualifierPaths": {
+          "CODEX_HOME": "~/.codex"
+        },
         "perProcess": true
       }
     },

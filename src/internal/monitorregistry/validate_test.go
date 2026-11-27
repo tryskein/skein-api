@@ -182,6 +182,14 @@ func TestValidate_RejectsEachRule(t *testing.T) {
 		{"address read from a variable of a bad name", func(r *Registry) {
 			r.Channels[0].Address = &AddressSpec{Env: "ALPHA_THREAD", Qualifiers: []string{"ALPHA HOME"}}
 		}, RuleInvalid},
+		{"path qualifier that is not a qualifier", func(r *Registry) {
+			r.Channels[0].Address = &AddressSpec{Env: "ALPHA_THREAD", Qualifiers: []string{"ALPHA_HOME"},
+				QualifierPaths: map[string]string{"ALPHA_DATA": "~/.alpha"}}
+		}, RuleInvalid},
+		{"path qualifier with a relative default", func(r *Registry) {
+			r.Channels[0].Address = &AddressSpec{Env: "ALPHA_THREAD", Qualifiers: []string{"ALPHA_HOME"},
+				QualifierPaths: map[string]string{"ALPHA_HOME": ".alpha"}}
+		}, RuleInvalid},
 		{"rows on different criteria that one answer can match", func(r *Registry) {
 			r.Channels[1].Outcomes = []OutcomeRow{
 				{Match: Match{JSON: map[string]string{"status": "queued"}}, Outcome: OutcomeQueued},
@@ -429,7 +437,8 @@ func TestValidate_AcceptsTheCodexReadings(t *testing.T) {
 	}
 	r.Channels[0].Probes = []Probe{{Type: ProbeDirWritable, Source: "fixture",
 		Paths: []string{"{env:ALPHA_SQLITE_HOME}", "{env:ALPHA_HOME}", "~/.alpha"}}}
-	r.Channels[0].Address = &AddressSpec{Env: "ALPHA_THREAD", Qualifiers: []string{"ALPHA_HOME"}, PerProcess: true}
+	r.Channels[0].Address = &AddressSpec{Env: "ALPHA_THREAD", Qualifiers: []string{"ALPHA_HOME"}, PerProcess: true,
+		QualifierPaths: map[string]string{"ALPHA_HOME": "~/.alpha"}}
 	r.Agents[0].Methods[1].Conditions.AgentOptionsAbsent = []string{"--remote"}
 	if err := r.Validate(); err != nil {
 		t.Fatalf("a correct record with the Codex readings was refused: %v", err)

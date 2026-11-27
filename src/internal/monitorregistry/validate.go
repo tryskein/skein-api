@@ -2,7 +2,10 @@ package monitorregistry
 
 import (
 	"fmt"
+	"maps"
+	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 )
 
@@ -425,6 +428,14 @@ func (v *validator) channel(path string, c *Channel) {
 		}
 		if a.RootPIDEnv != "" && !envNamePattern.MatchString(a.RootPIDEnv) {
 			v.add(RuleInvalid, path+".address.rootPidEnv", "%q is not an environment variable name", a.RootPIDEnv)
+		}
+		for _, q := range slices.Sorted(maps.Keys(a.QualifierPaths)) {
+			if !slices.Contains(a.Qualifiers, q) {
+				v.add(RuleInvalid, path+".address.qualifierPaths."+q, "%q is not one of the qualifiers", q)
+			}
+			if d := a.QualifierPaths[q]; !strings.HasPrefix(d, "~/") && !filepath.IsAbs(d) {
+				v.add(RuleInvalid, path+".address.qualifierPaths."+q, "the default %q is neither absolute nor under ~/", d)
+			}
 		}
 	}
 }

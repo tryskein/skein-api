@@ -290,5 +290,96 @@ class AgentExecutableTest(unittest.TestCase):
         self.assertEqual(RUNNER.load_preflight(env["SKEIN_TOKEN_FILE"])["programs"], {})
 
 
+@unittest.skipUnless(sys.platform.startswith("linux"), "the POSIX preflight")
+class ForcedAndNestedTest(unittest.TestCase):
+    """Review findings K1 and K2 of wave 9 (US-5, "Addressee and check" p. 2,
+    INV-1, INV-4). A forced codex-queue passes the conditions of the Codex
+    record's own delivery: a Codex with --remote, whose thread lives on a
+    server no variable names, gets the journal, not a local queue. The
+    thread address is the agent's only when its record owns the channel: an
+    agent of another record nested under Codex inherits it, and forcing the
+    channel is refused. A Codex whose own delivery cannot be used keys no
+    thread address. CODEX_HOME unset and set to its default are one
+    addressee (find_codex_home: ~/.codex)."""
+
+    def identity(self, world, name):
+        return RUNNER.load_preflight(world.env(name, "codex")["SKEIN_TOKEN_FILE"])["identity"]
+
+    def test_a_forced_queue_of_a_remote_codex_gets_the_journal(self):
+        world = ft.World(self)
+        fake_codex(world, [{"exit": 0, "stdout": QUEUED_OUT}])
+        line = preflight_with_argv(world, "tok", ["codex", "--remote", "ws://127.0.0.1:4500"],
+                                   CODEX_THREAD_ID=THREAD, CODEX_HOME=codex_home(world),
+                                   SKEIN_MONITOR_CHANNEL="codex-queue")
+        self.assertEqual((line["method"], line["channel"]), ("journal", None), line)
+        self.assertIn("--remote", line["reason"])
+        self.assertEqual(codex_calls(world), [])
+        # The remote thread is no address of this agent: the ledger cannot
+        # key it as a local thread.
+        self.assertEqual([a["channel"] for a in self.identity(world, "tok")["addresses"]], [])
+
+    def test_a_remote_codex_keys_no_thread_when_another_channel_is_chosen(self):
+        world = ft.World(self)
+        fake_codex(world, [{"exit": 0, "stdout": QUEUED_OUT}])
+        line = preflight_with_argv(world, "tok", ["codex", "--remote=ws://127.0.0.1:4500"],
+                                   CODEX_THREAD_ID=THREAD, CODEX_HOME=codex_home(world), **world.zavod_env("codex"))
+        self.assertEqual(line["channel"], "zavod", line)
+        channels = [a["channel"] for a in self.identity(world, "tok")["addresses"]]
+        self.assertNotIn("codex-queue", channels)
+
+    def nested_claude(self, world, name, **extra):
+        """Claude (this process) under a shell under a Codex process."""
+        env = world.env(name, "claude", CODEX_THREAD_ID=THREAD, CODEX_HOME=codex_home(world), **extra)
+        source = fake_proc.FakeProcesses()
+        source.add(ft.RUNNER_PID, ft.RUNNER_PID - 1, "python3", ft.RUNNER_PROC_ARGV)
+        source.add(ft.RUNNER_PID - 1, os.getpid(), "bash")
+        source.add(os.getpid(), ft.RUNNER_PID - 2, "claude", ["claude"], start=ft.start_of(os.getpid()))
+        source.add(ft.RUNNER_PID - 2, ft.RUNNER_PID - 3, "bash")
+        source.add(ft.RUNNER_PID - 3, 1, "codex", ["codex"])
+        pl = RUNNER.place(RUNNER.ancestry(source, ft.RUNNER_PID), REG, RUNNER.resolve_record(REG, "claude"),
+                          self_pid=ft.RUNNER_PID)
+        settings = RUNNER.read_settings(env, REG, mode="client")
+        return env, lambda: RUNNER.preflight(env["SKEIN_TOKEN_FILE"], env, REG, settings,
+                                             detector=RUNNER.RegistryDetector(), prober=ft.FakeProbe(),
+                                             placement=pl)
+
+    def test_a_nested_agent_of_another_record_inherits_the_thread(self):
+        world = ft.World(self)
+        fake_codex(world, [{"exit": 0, "stdout": QUEUED_OUT}])
+        env, run = self.nested_claude(world, "tok")
+        run()
+        identity = RUNNER.load_preflight(env["SKEIN_TOKEN_FILE"])["identity"]
+        self.assertNotIn("codex-queue", [a["channel"] for a in identity["addresses"]])
+        self.assertIn("codex-queue", identity["inherited"])
+
+    def test_forcing_the_outer_codex_thread_is_refused(self):
+        world = ft.World(self)
+        fake_codex(world, [{"exit": 0, "stdout": QUEUED_OUT}])
+        _, run = self.nested_claude(world, "tok", SKEIN_MONITOR_CHANNEL="codex-queue")
+        with self.assertRaises(RUNNER.ConfigInvalid):
+            run()
+        self.assertEqual(codex_calls(world), [])
+
+    def test_codex_home_unset_and_its_default_are_one_addressee(self):
+        world = ft.World(self)
+        fake_codex(world, [{"exit": 0, "stdout": QUEUED_OUT}])
+        default = os.path.join(world.root, ".codex")
+        os.mkdir(default, 0o700)
+        saved = world.base_env.pop("CODEX_HOME")
+        self.addCleanup(world.base_env.__setitem__, "CODEX_HOME", saved)
+        preflight_with_argv(world, "tok-unset", ["codex"], CODEX_THREAD_ID=THREAD)
+        preflight_with_argv(world, "tok-explicit", ["codex"], CODEX_THREAD_ID=THREAD, CODEX_HOME=default + "/")
+        preflight_with_argv(world, "tok-other", ["codex"], CODEX_THREAD_ID=THREAD, CODEX_HOME=codex_home(world))
+
+        def qualifiers(name):
+            addresses = self.identity(world, name)["addresses"]
+            self.assertEqual([a["channel"] for a in addresses], ["codex-queue"])
+            return addresses[0]["qualifiers"]
+
+        self.assertEqual(qualifiers("tok-unset"), [["CODEX_HOME", default]])
+        self.assertEqual(qualifiers("tok-explicit"), qualifiers("tok-unset"))
+        self.assertNotEqual(qualifiers("tok-other"), qualifiers("tok-unset"))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -331,6 +331,12 @@ type AddressSpec struct {
 	// agent: the address is the agent's only when its agent process is that
 	// root or the first agent process under it.
 	RootPIDEnv string `json:"rootPidEnv,omitempty"`
+	// QualifierPaths names the qualifiers whose value is a directory path,
+	// each with the path the harness uses when the variable is unset: the
+	// runner compares such a qualifier as that path made absolute and
+	// normal ("~/" from HOME), so an explicit default and an unset variable
+	// are one addressee.
+	QualifierPaths map[string]string `json:"qualifierPaths,omitempty"`
 }
 
 // Platforms of Channel.Binaries.

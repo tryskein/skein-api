@@ -148,14 +148,30 @@ class RegistryDetector(Detector):
         addressee holds every address the agent process owns. A host or
         terminal environment of steps 5-6 is never a nested agent's."""
         specs = []
+        record = ctx.settings.record
+        methods = ((record.agent if record is not None else None) or {}).get("methods") or []
         for step in (3, 5, 6, 7):
             for c in self._channels(ctx, step):
                 a = c.get("address")
                 if not a:
                     continue
+                per_process = bool(a.get("perProcess"))
+                if step == 3:
+                    own = [m for m in methods if m.get("kind") == "delivery" and m.get("channel") == c["id"]]
+                    if not own:
+                        # "Set on every agent process" speaks of the agent
+                        # processes of the channel's own record: another
+                        # agent nested under it inherits the address.
+                        per_process = False
+                    elif _delivery_refusal(ctx, own[0], c["id"]) is not None:
+                        # An own delivery this agent cannot use (Codex with
+                        # --remote) names no address of it: the ledger never
+                        # keys it as a local one.
+                        continue
                 specs.append(AddressSpec(c["id"], a["env"], qualifiers=a.get("qualifiers") or (),
-                                         per_process=bool(a.get("perProcess")), host=step in (5, 6),
-                                         root_pid_env=a.get("rootPidEnv") or None))
+                                         per_process=per_process, host=step in (5, 6),
+                                         root_pid_env=a.get("rootPidEnv") or None,
+                                         qualifier_paths=a.get("qualifierPaths")))
         return specs
 
     def addressee_holds(self, ctx, channel):
