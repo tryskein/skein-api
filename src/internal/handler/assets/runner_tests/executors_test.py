@@ -610,5 +610,28 @@ class PreflightProbeTest(unittest.TestCase):
         self.assertEqual(tcp.received, b"")
 
 
+class PolledWaitTest(unittest.TestCase):
+    """The polled wait (Windows, Python 3.12+): after its timeout the call
+    ends within one more grace even when the kill does not end the program
+    (its outcome is unknown, a timeout)."""
+
+    @unittest.skipUnless(sys.platform.startswith("linux"), "non-blocking pipes of POSIX")
+    def test_a_program_the_kill_does_not_end_does_not_hold_the_call(self):
+        box = {}
+
+        def call():
+            box["result"] = RUNNER._run_polled([sys.executable, "-c", "import time; time.sleep(8)"],
+                                               dict(os.environ), None, 0.3)
+
+        with mock.patch.object(RUNNER.PosixPlatform, "tree_kill", staticmethod(lambda proc, job: None)):
+            worker = threading.Thread(target=call)
+            worker.daemon = True
+            worker.start()
+            worker.join(6)
+        self.assertFalse(worker.is_alive(), "the call waits for a program it could not kill")
+        self.assertTrue(box["result"].timed_out)
+        self.assertIsNone(box["result"].exit_code)
+
+
 if __name__ == "__main__":
     unittest.main()

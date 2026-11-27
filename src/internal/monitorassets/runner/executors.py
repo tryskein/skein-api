@@ -602,7 +602,12 @@ def _run_polled(argv, env, stdin_data, timeout_sec):
             if ended_at is None and now >= deadline:
                 timed_out = True
                 tree.kill()
-                proc.wait()
+                try:
+                    # One grace: a program the kill did not end does not hold
+                    # the call longer (its outcome is unknown anyway).
+                    proc.wait(timeout=_READER_GRACE_SEC)
+                except subprocess.TimeoutExpired:
+                    pass
                 ended_at = time.monotonic()
             if ended_at is not None and (not reading or time.monotonic() >= ended_at + _READER_GRACE_SEC):
                 break
