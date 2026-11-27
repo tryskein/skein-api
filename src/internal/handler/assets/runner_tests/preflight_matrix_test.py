@@ -186,9 +186,19 @@ class Box(object):
     def zavod_env(self, engine, root_pid=None, **extra):
         """The variables Zavod sets on its agent's process, its root process
         being root_pid (this test process by default)."""
+        pid = os.getpid() if root_pid is None else root_pid
+        start, boot = "181027616", "boot-1"
+        try:
+            # A live root process gets its life as Zavod records it: field
+            # 22 of /proc/<pid>/stat and the boot id.
+            with open("/proc/%d/stat" % pid) as fh:
+                start = fh.read().rpartition(")")[2].split()[19]
+            with open("/proc/sys/kernel/random/boot_id") as fh:
+                boot = fh.read().strip()
+        except (OSError, IndexError):
+            pass
         values = {"ZAVOD_ME": ZAVOD_UUID, "ZAVOD_AGENT_ID": ZAVOD_UUID, "ZAVOD_AGENT_ENGINE_ID": engine,
-                  "ZAVOD_AGENT_ROOT_PID": str(os.getpid() if root_pid is None else root_pid),
-                  "ZAVOD_AGENT_ROOT_START": "181027616", "ZAVOD_AGENT_ROOT_BOOT_ID": "boot-1"}
+                  "ZAVOD_AGENT_ROOT_PID": str(pid), "ZAVOD_AGENT_ROOT_START": start, "ZAVOD_AGENT_ROOT_BOOT_ID": boot}
         values.update(extra)
         return values
 
