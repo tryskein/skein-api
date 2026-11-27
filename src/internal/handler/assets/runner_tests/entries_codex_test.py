@@ -227,5 +227,68 @@ class AddresseeTest(unittest.TestCase):
         self.assertEqual((a.statuses(), b.statuses()), ([(1, "queued")], [(1, "queued")]))
 
 
+@unittest.skipUnless(sys.platform.startswith("linux"), "the POSIX pipeline")
+class AgentExecutableTest(unittest.TestCase):
+    """sk-1112: the npm wrapper of Codex (bin/codex.js) execs the native
+    codex of its platform package, whose directory no PATH names, and the
+    login shell of the agent's commands rebuilds PATH without the wrapper's
+    directory. The program of codex-queue is then the executable of the
+    agent process itself."""
+
+    def world(self):
+        world = ft.World(self)
+        os.remove(os.path.join(world.bin, "codex"))
+        vendor = os.path.join(world.root, "vendor", "bin")
+        os.makedirs(vendor)
+        path = os.path.join(vendor, "codex")
+        with open(path, "w") as fh:
+            fh.write(_CODEX % {"python": sys.executable, "here": vendor})
+        os.chmod(path, stat.S_IRWXU)
+        with open(os.path.join(vendor, "codex.answers.json"), "w") as fh:
+            json.dump([{"exit": 0, "stdout": QUEUED_OUT}], fh)
+        return world, path
+
+    def preflight(self, world, executable):
+        env = world.env("tok", "codex", PATH=world.bin, CODEX_THREAD_ID=THREAD, CODEX_HOME=codex_home(world))
+        source = fake_proc.FakeProcesses()
+        source.add(ft.RUNNER_PID, ft.RUNNER_PID - 1, "python3", ft.RUNNER_PROC_ARGV)
+        source.add(ft.RUNNER_PID - 1, os.getpid(), "bash", ["-bash"])
+        source.add(os.getpid(), 1, "codex", [executable], start=ft.start_of(os.getpid()), executable=executable)
+        pl = RUNNER.place(RUNNER.ancestry(source, ft.RUNNER_PID), REG, RUNNER.resolve_record(REG, "codex"),
+                          self_pid=ft.RUNNER_PID)
+        settings = RUNNER.read_settings(env, REG, mode="client")
+        line = RUNNER.preflight(env["SKEIN_TOKEN_FILE"], env, REG, settings, detector=RUNNER.RegistryDetector(),
+                                prober=ft.FakeProbe(), placement=pl)
+        return line, env
+
+    def test_the_agent_executable_queues_the_event(self):
+        world, program = self.world()
+        line, env = self.preflight(world, program)
+        self.assertEqual((line["method"], line["channel"]), ("detached", "codex-queue"))
+        token = env["SKEIN_TOKEN_FILE"]
+        doc = RUNNER.load_preflight(token)
+        self.assertEqual(doc["programs"], {"codex": program})
+        journal = RUNNER.Journal(token, ft.ISSUE, secrets=[ft.TOKEN], env=env)
+        ledger = RUNNER.Ledger(ft.SERVER, "tok", RUNNER.identity_from_doc(doc["identity"]), env=env,
+                               clock=world.clock.now)
+        spy = ft.dt.Spy(RUNNER.ArgvExecutor(token, env, [ft.TOKEN], doc["programs"]), world.clock)
+        sink = RUNNER.DeliverySink(journal, token, doc, REG, env, ledger, spy, ft.ISSUE,
+                                   cancel=ft.dt.FakeCancel(), clock=world.clock)
+        mon = ft.Monitor(world, "tok", sink, journal, doc, spy)
+        mon.page([ft.note(1)])
+        with open(os.path.join(os.path.dirname(program), "codex.calls.jsonl")) as fh:
+            calls = [json.loads(l) for l in fh if l.strip()]
+        self.assertEqual([c["argv"][:3] for c in calls], [["queue", "--thread", THREAD]])
+        self.assertEqual(mon.statuses(), [(1, "queued")])
+
+    def test_an_executable_of_another_name_is_not_the_program(self):
+        world, program = self.world()
+        other = os.path.join(os.path.dirname(program), "node")
+        os.symlink(program, other)
+        line, env = self.preflight(world, other)
+        self.assertEqual((line["method"], line["channel"]), ("journal", None))
+        self.assertEqual(RUNNER.load_preflight(env["SKEIN_TOKEN_FILE"])["programs"], {})
+
+
 if __name__ == "__main__":
     unittest.main()

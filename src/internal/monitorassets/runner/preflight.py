@@ -273,6 +273,33 @@ def program_found(name, env):
     return shutil.which(name, path=env.get("PATH", os.defpath)) is not None
 
 
+def channel_program(name, env, agent):
+    """What the program of a channel named name runs as, or None when it is
+    not found: the executable of the agent process when its base name is
+    name, else name itself when the PATH of env finds it. The agent's own
+    executable comes first: a launcher such as the npm wrapper of Codex
+    execs a native program outside every PATH (bin/codex.js), and the login
+    shell of the agent's commands rebuilds its PATH without the wrapper's
+    directory, while the program is the build that owns the agent's thread."""
+    executable = agent.executable if agent is not None else None
+    if (not os.path.isabs(name) and executable and os.path.basename(executable) == name
+            and os.path.isfile(executable) and os.access(executable, os.X_OK)):
+        return executable
+    return name if program_found(name, env) else None
+
+
+def channel_programs(channel, env, agent):
+    """The programs of the channel on this platform that run from a path of
+    the agent process rather than by their name: {name: path}. The working
+    runner runs them by that path (preflight.json "programs")."""
+    programs = {}
+    for name in (channel.get("binaries") or {}).get(_platform_key()) or []:
+        path = channel_program(name, env, agent)
+        if path is not None and path != name:
+            programs[name] = path
+    return programs
+
+
 def agent_options_absent(options, agent):
     """(True, None) when the argument list of the agent process carries none
     of the long options, neither alone nor as "--name=value"; an agent
@@ -332,7 +359,7 @@ def channel_available(ctx, channel_id):
     binaries = (channel.get("binaries") or {}).get(_platform_key())
     if not binaries:
         return False, "channel %s has no program for this platform" % channel_id
-    if not any(program_found(b, ctx.env) for b in binaries):
+    if not any(channel_program(b, ctx.env, ctx.placement.agent) is not None for b in binaries):
         return False, "no program of channel %s found" % channel_id
     if channel.get("probeUndefined"):
         return True, None
@@ -672,6 +699,17 @@ def _binding_doc(binding):
             "depth": binding.depth, "pane": dict(binding.pane)}
 
 
+def _programs_doc(registry, channel_ids, env, agent):
+    """The programs of the chosen channel and its fallbacks that run from a
+    path of the agent process, as preflight.json keeps them."""
+    programs = {}
+    for channel_id in channel_ids:
+        channel = registry.channel(channel_id) if channel_id is not None else None
+        if channel is not None:
+            programs.update(channel_programs(channel, env, agent))
+    return programs
+
+
 def system_placement(registry, record):
     try:
         chain = ancestry(SystemProcesses, os.getpid())
@@ -733,6 +771,8 @@ def preflight(token_file, env, registry, settings, detector=None, prober=None, p
                               "SKEIN_MONITOR_BLIND": BLIND_OFF if settings.blind_off else None},
                 "identity": _identity_doc(ctx.identity),
                 "binding": binding,
+                "programs": _programs_doc(registry, [choice.channel] + list(choice.fallbacks), env,
+                                          placement.agent),
                 "degraded": detector.degraded,
             })
     except (PlatformRefusal, OSError) as exc:

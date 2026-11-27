@@ -1,10 +1,11 @@
 # --- the chain of ancestor processes (P-8) -----------------------------------
 # The preflight finds the agent process among the ancestors of the runner.
-# A process source answers two questions about a pid: what the platform knows
-# of it (ProcessInfo: parent, start, groups, name) and its argument list. The
-# system source asks the platform layer and the OS; the tests hand in a fake
-# source with synthetic chains.
+# A process source answers three questions about a pid: what the platform
+# knows of it (ProcessInfo: parent, start, groups, name), its argument list
+# and the path of its executable. The system source asks the platform layer
+# and the OS; the tests hand in a fake source with synthetic chains.
 
+import os
 import struct
 import sys
 
@@ -14,17 +15,19 @@ MAX_ANCESTRY = 256
 
 
 class Proc(object):
-    """One process of a chain: its ProcessInfo facts and its argument list
-    (None when it cannot be read)."""
+    """One process of a chain: its ProcessInfo facts, its argument list and
+    the absolute path of its executable (each None when it cannot be
+    read)."""
 
-    __slots__ = ("pid", "ppid", "start", "name", "argv", "info")
+    __slots__ = ("pid", "ppid", "start", "name", "argv", "executable", "info")
 
-    def __init__(self, info, argv):
+    def __init__(self, info, argv, executable=None):
         self.pid = info.pid
         self.ppid = info.ppid
         self.start = info.start
         self.name = info.name
         self.argv = argv
+        self.executable = executable
         self.info = info
 
     def names(self):
@@ -54,7 +57,25 @@ class SystemProcesses(object):
         if sys.platform.startswith("linux"):
             return _linux_argv(pid)
         if sys.platform == "darwin":
-            return _darwin_argv(pid)
+            procargs = _darwin_procargs(pid)
+            return None if procargs is None else procargs[1]
+        return None
+
+    @staticmethod
+    def executable(pid):
+        """The absolute path of the executable of a live process, or None
+        when it cannot be read (Windows: not read, no channel program there
+        is taken from the agent process)."""
+        if sys.platform.startswith("linux"):
+            try:
+                path = os.readlink("/proc/%d/exe" % pid)
+            except OSError:
+                return None
+            # A replaced or deleted executable is not the program to run.
+            return None if path.endswith(" (deleted)") or not os.path.isabs(path) else path
+        if sys.platform == "darwin":
+            procargs = _darwin_procargs(pid)
+            return None if procargs is None else procargs[0]
         return None
 
 
@@ -69,7 +90,7 @@ def ancestry(source, pid):
         info = source.info(pid)
         if info is None:
             break
-        chain.append(Proc(info, source.argv(pid)))
+        chain.append(Proc(info, source.argv(pid), source.executable(pid)))
         pid = info.ppid
     return chain
 
@@ -90,8 +111,9 @@ _CTL_KERN = 1
 _KERN_PROCARGS2 = 49
 
 
-def _darwin_argv(pid):
-    """KERN_PROCARGS2 holds argc (an int), the executable path, NUL padding
+def _darwin_procargs(pid):
+    """(executable path, argument list) of a live process, or None.
+    KERN_PROCARGS2 holds argc (an int), the executable path, NUL padding
     and then argc NUL-terminated arguments."""
     try:
         import ctypes
@@ -111,8 +133,10 @@ def _darwin_argv(pid):
     if len(raw) < width:
         return None
     argc = struct.unpack("i", raw[:width])[0]
-    rest = raw[width:].partition(b"\0")[2].lstrip(b"\0")
-    args = rest.split(b"\0")
+    path, _, rest = raw[width:].partition(b"\0")
+    args = rest.lstrip(b"\0").split(b"\0")
     if argc < 1 or len(args) < argc:
         return None
-    return [a.decode("utf-8", "replace") for a in args[:argc]]
+    executable = path.decode("utf-8", "replace")
+    return (executable if os.path.isabs(executable) else None,
+            [a.decode("utf-8", "replace") for a in args[:argc]])

@@ -1,7 +1,8 @@
 """A fake process source for the monitor runner tests: synthetic processes
 with a parent, a start, process groups, a name and an argument list, answered
 the way the runner's system source answers (proctree.SystemProcesses): info()
-gives a ProcessInfo-like object or None, argv() the argument list or None.
+gives a ProcessInfo-like object or None, argv() the argument list or None,
+executable() the path of the executable or None.
 
 Standard library of Python 3.6 only.
 """
@@ -30,18 +31,22 @@ class FakeProcesses(object):
     def __init__(self):
         self.procs = {}
         self.argvs = {}
+        self.executables = {}
 
-    def add(self, pid, ppid, name, argv=None, start=None, pgid=None, tpgid=-1):
-        """Add a process. argv defaults to [name]; start to "s<pid>"."""
+    def add(self, pid, ppid, name, argv=None, start=None, pgid=None, tpgid=-1, executable=None):
+        """Add a process. argv defaults to [name]; start to "s<pid>"; the
+        path of its executable to None (not read)."""
         self.procs[pid] = FakeInfo(pid, ppid, start if start is not None else "s%d" % pid,
                                    pgid if pgid is not None else pid, tpgid, name)
         self.argvs[pid] = list(argv) if argv is not None else [name]
+        self.executables[pid] = executable
         return pid
 
     def end(self, pid):
         """The process ends: it is no longer known."""
         self.procs.pop(pid, None)
         self.argvs.pop(pid, None)
+        self.executables.pop(pid, None)
 
     def info(self, pid):
         return self.procs.get(pid)
@@ -49,6 +54,9 @@ class FakeProcesses(object):
     def argv(self, pid):
         argv = self.argvs.get(pid)
         return None if argv is None else list(argv)
+
+    def executable(self, pid):
+        return self.executables.get(pid)
 
 
 def linear(*procs, **kwargs):

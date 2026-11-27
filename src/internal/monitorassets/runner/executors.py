@@ -617,10 +617,17 @@ _WINDOWS_JOBS = _WindowsJobs()
 class ArgvExecutor(object):
     """Delivers a text through the argv executor of a channel record."""
 
-    def __init__(self, token_file, env, secrets):
+    def __init__(self, token_file, env, secrets, programs=None):
         self.token_file = token_file
         self.env = env
         self.secrets = list(secrets)
+        # {name: absolute path}: programs of the preflight result that run
+        # from a path of the agent process (preflight.json "programs").
+        self.programs = {}
+        if isinstance(programs, dict):
+            for name, path in programs.items():
+                if isinstance(name, str) and isinstance(path, str) and os.path.isabs(path):
+                    self.programs[name] = path
 
     def call(self, executor, text, timeout_sec):
         """Hand text to the channel program by the record's feed. Returns a
@@ -642,6 +649,8 @@ class ArgvExecutor(object):
                 stdin_data = text.encode("utf-8")
             else:
                 raise ExecutorRefusal("feed %r is not one of stdin, file, arg" % feed)
+            if argv and argv[0] in self.programs:
+                argv[0] = self.programs[argv[0]]
             return run_program(argv, env, stdin_data, timeout_sec, self.secrets)
         finally:
             if text_file is not None:

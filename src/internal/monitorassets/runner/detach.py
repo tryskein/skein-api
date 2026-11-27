@@ -476,7 +476,7 @@ def delivery_sink(journal, token_file, doc, env, base, issue, token, executor, e
     clock = SystemClock()
     cancel = PollCancel(executor, base, token, exclusion, clock)
     return DeliverySink(journal, token_file, doc, load_registry(), env, ledger,
-                        ArgvExecutor(token_file, env, [token]), issue, cancel=cancel, clock=clock,
+                        ArgvExecutor(token_file, env, [token], doc.get("programs")), issue, cancel=cancel, clock=clock,
                         exclusion=exclusion)
 
 
