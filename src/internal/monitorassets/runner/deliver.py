@@ -483,7 +483,10 @@ class TwoStepDriver(object):
             first = self.executor.call(insert, text, guard.call_timeout())
         except ExecutorRefusal as exc:
             raise RefusedBeforeSend(exc.reason)
-        outcome, sign = classify_result(self.insert.get("outcomes"), first)
+        # The answers name the address the steps went to: the variables the
+        # executor ran with, as for one call (ArgvDriver).
+        env = getattr(self.executor, "env", None)
+        outcome, sign = classify_result(self.insert.get("outcomes"), first, env=env)
         state["taken"] = outcome in (OUTCOME_INPUT_WRITTEN, OUTCOME_INPUT_NO_RECEIPT)
         if not state["taken"] or not self.commit:
             # The sign the journal keeps; a failed unstage marks it.
@@ -496,7 +499,8 @@ class TwoStepDriver(object):
             second = self._call(commit, self.commit.get("text", ""), guard, own=True)
         except (ExecutorRefusal, RefusedBeforeSend):
             return OUTCOME_UNKNOWN, {"commit": "notStarted"}
-        return classify_result(self.commit.get("outcomes"), second, written=True)
+        return classify_result(self.commit.get("outcomes"), second, written=True,
+                               env=getattr(self.executor, "env", None))
 
     def _left_behind(self, guard, state, exc):
         """The staged text of this transfer could not be removed: the sign

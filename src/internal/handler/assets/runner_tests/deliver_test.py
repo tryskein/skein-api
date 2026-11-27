@@ -627,6 +627,41 @@ def harness_info(pid):
     return runner.PosixPlatform.process_info(pid)
 
 
+class _AnsweringExecutor(object):
+    """An executor whose every call answers exit 0 with doc as its JSON,
+    run with the variables env."""
+
+    def __init__(self, env, doc):
+        self.env = env
+        self.doc = doc
+        self.secrets = []
+
+    def call(self, spec, text, timeout):
+        return harness.load_runner().CallResult(0, json.dumps(self.doc).encode("utf-8"), b"", False)
+
+
+class TwoStepAddressTest(unittest.TestCase):
+    """Review round 3 of wave 14, row 18: a two-step channel classifies its
+    insert and its Enter with the variables of its calls, as one call does:
+    an outcome row may compare an answer with the channel's address."""
+
+    def test_the_steps_are_classified_with_the_variables_of_their_calls(self):
+        r = harness.load_runner()
+        step = {"executor": {"type": "argv", "argv": ["insert"], "feed": "stdin", "timeoutSec": 2},
+                "outcomes": [{"match": {"exitCode": 0, "json": {"pane": "{env:PANE}"}}, "outcome": "input-written"}]}
+        commit = {"executor": {"type": "argv", "argv": ["enter"], "feed": "stdin", "timeoutSec": 2},
+                  "outcomes": [{"match": {"exitCode": 0, "json": {"pane": "{env:PANE}"}}, "outcome": "turn-started"}]}
+        guard = mock.Mock()
+        guard.remaining.return_value = 10
+        guard.call_timeout.return_value = 10
+        guard.before_commit.return_value = True
+        for name, env, outcome in (("the address of the call", {"PANE": "p1"}, "turn-started"),
+                                   ("another address", {"PANE": "p2"}, "unknown")):
+            with self.subTest(case=name):
+                driver = r.TwoStepDriver({"id": "A"}, _AnsweringExecutor(env, {"pane": "p1"}), step, commit)
+                self.assertEqual(driver.send("text", guard)[0], outcome)
+
+
 @unittest.skipUnless(os.name == "posix", "the POSIX pipeline")
 class TwoStepCancelTest(unittest.TestCase):
     """Row #55: a cancel signal after a confirmed insert of a two-step
