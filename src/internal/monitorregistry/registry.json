@@ -589,7 +589,7 @@
             "result.terminal.agentIdentity"
           ]
         },
-        "limitation": "A terminal whose host gives no incarnationId (an older Orca) is checked by its agent process only."
+        "limitation": "A terminal whose host gives no incarnationId (an older Orca) is checked by its agent process only. orca terminal send takes no expected incarnation or agent identity (src/cli/specs/terminal-send.ts: its flags are terminal, text, enter, interrupt, wait-submit and retry-request): a change of the terminal's agent between the last check and the send is not seen by the host (B4)."
       },
       "binaries": {
         "linux": [
