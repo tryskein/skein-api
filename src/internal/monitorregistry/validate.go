@@ -915,6 +915,13 @@ func (v *validator) addressee(path string, c *Channel) {
 		}
 		v.signs(path+".command.results", rows)
 		v.criteriaOf(path+".command.results", rows, ExecutorArgv)
+		if len(a.Command.Capture) > 0 && !slices.ContainsFunc(a.Command.Results, func(r AddresseeResultRow) bool {
+			return r.Result == AddresseeSame
+		}) {
+			// The preflight captures only from an answer "same": without
+			// such a row the channel could never be used.
+			v.add(RuleInvalid, path+".command.capture", "a capture needs a row that answers same")
+		}
 		seen := map[string]bool{}
 		for i, p := range a.Command.Capture {
 			cpath := fmt.Sprintf("%s.command.capture[%d]", path, i)

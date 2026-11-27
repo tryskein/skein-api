@@ -174,6 +174,11 @@ func TestValidate_RejectsEachRule(t *testing.T) {
 			r.Channels[1].Outcomes[1].Match = Match{ExitCode: intp(1), StderrEmpty: boolp(true),
 				StderrJSON: map[string]string{"error.code": "X"}}
 		}, RuleInvalid},
+		{"a capture without a row that answers same", func(r *Registry) {
+			r.Channels[1].Addressee.Command = &AddresseeCommand{Argv: []string{"host", "show"},
+				Results: []AddresseeResultRow{{Match: Match{ExitCode: intp(1)}, Result: AddresseeGone}},
+				Capture: []string{"id"}}
+		}, RuleInvalid},
 		{"http channel that names programs", func(r *Registry) {
 			httpHost(r)
 			r.Channels[1].Binaries = map[string][]string{PlatformLinux: {"host"}}
