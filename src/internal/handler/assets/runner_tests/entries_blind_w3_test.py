@@ -11,9 +11,10 @@ The expected values come from the sources, not from the records:
 - WezTerm 0c655c1, wezterm/src/cli/send_text.rs#SendText: cli send-text
   --pane-id <id> reads stdin; --no-paste writes it as is (a carriage return
   is Enter); list.rs#CliListResultItem gives no PID;
-- kitty 121ef18 (0.51.1): send-text --match state:self --bracketed-paste
-  auto --stdin, send-key --match state:self enter, "errors are not reported"
-  (input without a receipt); ls --match state:self gives the window's pid at
+- kitty 121ef18 (0.51.1): send-text --match id:<KITTY_WINDOW_ID>
+  --bracketed-paste auto --stdin, send-key --match id:<KITTY_WINDOW_ID>
+  enter, "errors are not reported" (input without a receipt); ls --match
+  id:<KITTY_WINDOW_ID> (the probe and the pane PID) gives the window's pid at
   0.tabs.0.windows.0.pid;
 - Paseo c1b43ee5, packages/cli/src/commands/terminal/send-keys.ts: terminal
   send-keys <id> <text> Enter in one call, no receipt; no PID of a tab's
@@ -253,7 +254,7 @@ class WezTermRecordTest(BlindCase):
 
 
 class KittyRecordTest(BlindCase):
-    """Row #105: kitty - its own window by state:self, the window's PID by
+    """Row #105: kitty - its own window by id:<KITTY_WINDOW_ID>, the window's PID by
     ls, both steps input without a receipt."""
 
     def test_recognised_and_bound_by_its_window(self):
