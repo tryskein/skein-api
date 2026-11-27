@@ -881,6 +881,9 @@ func TestValidate_ThePlaceAndFoldReadingsRefuseTheirMisuse(t *testing.T) {
 		"another placeholder in a path":          {Settings: []SettingCondition{setting("~/.a{env:A}/c.yaml", `"off"`, "")}},
 		"a relative setting path":                {Settings: []SettingCondition{setting("c.yaml", `"off"`, "")}},
 		"a home that names no file":              {Settings: []SettingCondition{setting("~/", `"off"`, "")}},
+		// Review round 2 of wave 14, row 13: a JSON null is no string to
+		// fold.
+		"a fold of a null setting": {Settings: []SettingCondition{setting("~/.a/c.yaml", `null`, FoldStripLower)}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			r := validRegistry()

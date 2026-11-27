@@ -1,6 +1,7 @@
 package monitorregistry
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"maps"
@@ -463,7 +464,9 @@ func (v *validator) settings(path string, list []SettingCondition) {
 			switch {
 			case s.Fold != FoldStripLower:
 				v.add(RuleInvalid, spath+".fold", "fold %q is not %s", s.Fold, FoldStripLower)
-			case json.Unmarshal(s.Equals, &want) != nil:
+			// A JSON null reads into a string as nothing, without an error:
+			// it is no string all the same.
+			case string(bytes.TrimSpace(s.Equals)) == "null" || json.Unmarshal(s.Equals, &want) != nil:
 				v.add(RuleInvalid, spath+".fold", "only a string value is folded: equals is no string")
 			case want != foldStripLower(want):
 				v.add(RuleInvalid, spath+".equals", "%q is not folded: a folded value is compared with %q", want, foldStripLower(want))
