@@ -349,15 +349,17 @@ def channel_programs(channel, env, agent):
         if path is None:
             continue
         key = argv[0] if argv else name
-        if path == key:
-            return {}
         if not os.path.isabs(path):
-            # A program of another name than the executor's, found on PATH
-            # (orca-ide for orca): it runs by its path, the only form the
-            # executor takes (executors.py#ArgvExecutor).
-            path = shutil.which(path, path=env.get("PATH", os.defpath))
-            if path is None:
+            # A name found on PATH (orca-ide for orca, or the executor's own
+            # name) or a relative path (a relative component of PATH, a
+            # variable naming bin/x): it runs by the absolute path found
+            # here, from the runner's directory, so the working runner never
+            # runs another program by that name (on Linux a bare orca is the
+            # screen reader).
+            found = shutil.which(path, path=env.get("PATH", os.defpath))
+            if found is None:
                 continue
+            path = os.path.abspath(found)
         return {key: path}
     return {}
 

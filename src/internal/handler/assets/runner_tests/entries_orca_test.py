@@ -192,9 +192,6 @@ def monitor(world, name, client, procs, **extra):
                            clock=world.clock.now)
     executor = RUNNER.ArgvExecutor(token, env, [ft.TOKEN], doc.get("programs"))
     spy = dt.Spy(executor, world.clock)
-    # The detached runner hands the sink the executor itself; the spy keeps
-    # its programs for the addressee check and the idle wait.
-    spy.programs = executor.programs
     sink = RUNNER.DeliverySink(journal, token, doc, REG, env, ledger, spy, ft.ISSUE, cancel=dt.FakeCancel(),
                                clock=world.clock)
     mon = ft.Monitor(world, name, sink, journal, doc, spy)
@@ -367,6 +364,39 @@ class OrcaRecordTest(unittest.TestCase):
         self.assertIn("orca: probe argv: unavailable", line["reason"])
         self.assertEqual(self.orca.calls("send"), [])
         self.assertTrue(all(c[1] == "show" for c in self.orca.calls()))
+
+    def test_a_relative_program_runs_by_the_absolute_path_the_preflight_found(self):
+        # A variable naming bin/orca-wsl and a relative component of PATH:
+        # the preflight resolves them from the runner's directory, and the
+        # working runner runs that path, never a bare orca (on Linux the
+        # screen reader).
+        cwd = os.getcwd()
+        self.addCleanup(os.chdir, cwd)
+        os.chdir(self.world.root)
+        decoy_dir = os.path.join(self.world.root, "decoy")
+        os.mkdir(decoy_dir)
+        decoy = FakeOrca(decoy_dir, "orca")
+        wsl = FakeOrca(self.world.bin, "orca-wsl")
+        cases = [("a variable naming a relative path", "tok-var", {"ORCA_CLI_COMMAND": "bin/orca-wsl"}, wsl),
+                 ("a relative component of PATH", "tok-path",
+                  {"PATH": "bin" + os.pathsep + decoy_dir + os.pathsep + os.environ.get("PATH", os.defpath)},
+                  self.orca)]
+        for name, tok, env, program in cases:
+            with self.subTest(case=name):
+                mon = self.mon(tok, **env)
+                self.assertEqual(mon.doc["programs"], {"orca": program.path})
+                self.assertTrue(os.path.isabs(mon.doc["programs"]["orca"]))
+                mon.page([ft.note(1)])
+                self.assertEqual(len(program.calls("send")), 1)
+                self.assertEqual(decoy.calls(), [])
+
+    def test_the_working_runner_runs_no_name_the_preflight_did_not_find(self):
+        executor = RUNNER.ArgvExecutor(self.world.token("tok-strict"), self.world.env("tok-strict", "codex"),
+                                       [ft.TOKEN], {})
+        with self.assertRaises(RUNNER.ExecutorRefusal):
+            executor.call({"type": "argv", "argv": ["orca", "terminal", "send", "--text", "{text}"], "feed": "arg",
+                           "timeoutSec": 5}, "hello", 5)
+        self.assertEqual(self.orca.calls(), [])
 
     def test_the_program_of_each_platform(self):
         mon = self.mon()

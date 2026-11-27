@@ -470,7 +470,7 @@ def delivery_sink(journal, token_file, doc, env, base, issue, token, executor, e
     cancel = PollCancel(executor, base, token, exclusion, clock)
     registry = load_registry()
     return DeliverySink(journal, token_file, doc, registry, env, ledger,
-                        ChannelExecutor(token_file, env, [token], doc.get("programs"), registry), issue,
+                        ChannelExecutor(token_file, env, [token], doc.get("programs") or {}, registry), issue,
                         cancel=cancel, clock=clock, exclusion=exclusion)
 
 

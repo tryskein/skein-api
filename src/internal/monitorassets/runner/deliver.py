@@ -500,9 +500,15 @@ class DeliverySink(object):
         """argv with its program as the preflight found it (preflight.json
         "programs": a path under the home directory, the agent's own
         executable, the program a variable names)."""
-        programs = getattr(self.executor, "programs", None) or {}
+        programs = getattr(self.executor, "programs", None)
+        if programs is None:
+            # An executor without the programs of the preflight runs no
+            # check by a bare name.
+            raise RefusedBeforeSend("no programs of the preflight")
         if argv and argv[0] in programs:
             argv = [programs[argv[0]]] + list(argv[1:])
+        elif getattr(self.executor, "strict", False):
+            raise RefusedBeforeSend("program %s is not one the preflight found" % (argv[0] if argv else ""))
         return argv
 
     def _check_root_life(self, channel, life):

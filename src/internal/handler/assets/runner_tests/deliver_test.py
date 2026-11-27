@@ -112,6 +112,10 @@ class Spy(object):
         self.inner = inner
         self.clock = clock
         self.secrets = inner.secrets
+        # The programs of the preflight the executor runs by, for the
+        # addressee check and the idle wait of the pipeline.
+        self.programs = getattr(inner, "programs", None)
+        self.strict = getattr(inner, "strict", False)
         self.calls = []
         self.before = None
         self.after = None

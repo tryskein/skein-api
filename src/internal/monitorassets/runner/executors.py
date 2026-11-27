@@ -772,8 +772,11 @@ class ArgvExecutor(object):
         self.token_file = token_file
         self.env = env
         self.secrets = list(secrets)
-        # {name: absolute path}: programs of the preflight result that run
-        # from a path of the agent process (preflight.json "programs").
+        # {name: absolute path}: the programs of the preflight result
+        # (preflight.json "programs"). Given (the working runner), it is the
+        # only way a program runs: a name it does not hold is refused, never
+        # run bare. None (a test of the executor alone) runs names by PATH.
+        self.strict = programs is not None
         self.programs = {}
         if isinstance(programs, dict):
             for name, path in programs.items():
@@ -809,6 +812,8 @@ class ArgvExecutor(object):
                 raise ExecutorRefusal("feed %r is not one of stdin, file, arg" % feed)
             if argv and argv[0] in self.programs:
                 argv[0] = self.programs[argv[0]]
+            elif self.strict:
+                raise ExecutorRefusal("program %s is not one the preflight found" % (argv[0] if argv else ""))
             if batch:
                 if text_file is not None and not BATCH_SAFE_PATH.match(text_file):
                     raise ExecutorRefusal("the message path of a .cmd program is not ASCII")
@@ -977,6 +982,7 @@ class ChannelExecutor(object):
         self.argv = ArgvExecutor(token_file, env, self.secrets, programs)
         self.http = HTTPExecutor(env, self.secrets)
         self.programs = self.argv.programs
+        self.strict = self.argv.strict
 
     def call(self, executor, text, timeout_sec):
         if executor.get("type") == "http":
@@ -1013,8 +1019,9 @@ class SystemProbeRunner(ProbeRunner):
         # The program of the channel by the path it is found at (a path under
         # the home directory among them), as the working runner runs it.
         programs = channel_programs(channel, env, None)
-        if argv and argv[0] in programs:
-            argv[0] = programs[argv[0]]
+        if not argv or argv[0] not in programs:
+            raise ProbeError("program %s not found" % (argv[0] if argv else ""))
+        argv[0] = programs[argv[0]]
         result = run_program(argv, clean, None, timeout, self.secrets)
         if result.timed_out:
             raise ProbeError("timed out after %d s" % timeout)
@@ -1037,8 +1044,9 @@ class SystemProbeRunner(ProbeRunner):
         except ExecutorRefusal as exc:
             raise ProbeError(exc.reason)
         programs = channel_programs(channel, env, None)
-        if argv and argv[0] in programs:
-            argv[0] = programs[argv[0]]
+        if not argv or argv[0] not in programs:
+            raise ProbeError("program %s not found" % (argv[0] if argv else ""))
+        argv[0] = programs[argv[0]]
         result = run_program(argv, clean, None, timeout, self.secrets)
         if result.timed_out:
             raise ProbeError("timed out after %d s" % timeout)
