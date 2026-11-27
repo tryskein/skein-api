@@ -190,6 +190,11 @@ class BatchProgramTest(unittest.TestCase):
         self.root = tempfile.mkdtemp(prefix="skein-win-batch-")
         self.addCleanup(shutil.rmtree, self.root, True)
         self.calls = []
+        # Absolute paths of this system: the executor keeps only absolute
+        # program paths; the extension decides a batch program.
+        self.paseo_cmd = os.path.join(self.root, "npm", "paseo.cmd")
+        self.codex_cmd = os.path.join(self.root, "npm", "codex.cmd")
+        self.codex_exe = os.path.join(self.root, "vendor", "codex.exe")
 
     def run_call(self, token_dir, feed, argv, text, env=None, programs=None):
         os.makedirs(token_dir, exist_ok=True)
@@ -209,7 +214,7 @@ class BatchProgramTest(unittest.TestCase):
         text = 'preview: <<<SKEIN-DATA hi & del "x" %PATH% ^ | Иван SKEIN-DATA>>>'
         with self.assertRaises(RUNNER.ExecutorRefusal):
             self.run_call(os.path.join(self.root, "tok"), "arg", ["paseo", "send", "{text}"], text,
-                          programs={"paseo": "C:\\npm\\paseo.cmd"})
+                          programs={"paseo": self.paseo_cmd})
         self.assertEqual(self.calls, [])
 
     def test_the_message_path_rule(self):
@@ -232,7 +237,7 @@ class BatchProgramTest(unittest.TestCase):
         unicode_dir = os.path.join(self.root, "Иван", "tok")
         with mock.patch.dict(RUNNER.__dict__, {"BATCH_SAFE_PATH": rule}):
             self.run_call(unicode_dir, "file", ["paseo", "send", "--prompt-file", "{textFile}"], "body & more",
-                          env={"LOCALAPPDATA": ascii_root}, programs={"paseo": "C:\\npm\\paseo.cmd"})
+                          env={"LOCALAPPDATA": ascii_root}, programs={"paseo": self.paseo_cmd})
         self.assertEqual(len(self.calls), 1)
         path = self.calls[0][-1]
         self.assertEqual(os.path.dirname(path), os.path.join(ascii_root, "skein-monitor", "messages"))
@@ -245,20 +250,20 @@ class BatchProgramTest(unittest.TestCase):
         with self.assertRaises(RUNNER.ExecutorRefusal):
             self.run_call(os.path.join(unicode_root, "tok"), "file",
                           ["paseo", "send", "--prompt-file", "{textFile}"], "body",
-                          env={"LOCALAPPDATA": unicode_root}, programs={"paseo": "C:\\npm\\paseo.cmd"})
+                          env={"LOCALAPPDATA": unicode_root}, programs={"paseo": self.paseo_cmd})
         self.assertEqual(self.calls, [])
 
     def test_a_native_program_takes_the_full_text(self):
         text = 'preview: <<<SKEIN-DATA hi & "x" SKEIN-DATA>>>'
         self.run_call(os.path.join(self.root, "tok"), "arg", ["codex", "queue", "--message", "{text}"], text,
-                      programs={"codex": "C:\\vendor\\codex.exe"})
-        self.assertEqual(self.calls, [["C:\\vendor\\codex.exe", "queue", "--message", text]])
+                      programs={"codex": self.codex_exe})
+        self.assertEqual(self.calls, [[self.codex_exe, "queue", "--message", text]])
 
     def test_a_codex_shim_takes_the_id_only_text(self):
         channel = {"executor": {"feed": "arg", "argv": ["codex", "queue", "--message", "{text}"]}}
         with mock.patch.object(os, "name", "nt"):
-            self.assertTrue(RUNNER.channel_takes_ids_only(channel, {"codex": "C:\\npm\\codex.cmd"}, {}))
-            self.assertFalse(RUNNER.channel_takes_ids_only(channel, {"codex": "C:\\vendor\\codex.exe"}, {}))
+            self.assertTrue(RUNNER.channel_takes_ids_only(channel, {"codex": self.codex_cmd}, {}))
+            self.assertFalse(RUNNER.channel_takes_ids_only(channel, {"codex": self.codex_exe}, {}))
         note = {"id": 12, "type": "comment_added", "entity": {"type": "issue", "id": "sk-1-2"}, "commentId": "c5",
                 "actor": {"username": "Иван & co"}, "bodyPreview": "secret body & del", "summary": "x"}
         text, count, _ = RUNNER.ids_only_batch([note])
@@ -269,7 +274,7 @@ class BatchProgramTest(unittest.TestCase):
             self.assertIn(value, text)
         # Through the shim the text passes the argument rule of cmd.exe.
         self.run_call(os.path.join(self.root, "tok"), "arg", ["codex", "queue", "--message", "{text}"], text,
-                      programs={"codex": "C:\\npm\\codex.cmd"})
+                      programs={"codex": self.codex_cmd})
         self.assertEqual(len(self.calls), 1)
 
     def test_an_id_outside_its_pattern_has_no_id_only_form(self):
