@@ -278,7 +278,7 @@ def _read_token_windows(path):
     except PlatformRefusal as exc:
         if exc.reason == "not_found":
             raise Stop("token_file_missing", delete_token=True)
-        if exc.reason in ("open_to_others", "symlink"):
+        if exc.reason in ("open_to_others", "symlink", "foreign_owner"):
             raise Stop("token_file_insecure")
         raise Stop("token_file_missing")
     try:

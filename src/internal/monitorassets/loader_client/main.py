@@ -131,6 +131,9 @@ def loader_client_read_token_windows(path):
     except PlatformRefusal as exc:
         if exc.reason == "not_found":
             raise Stop("token_file_missing", delete_token=True)
+        if exc.reason == "foreign_owner":
+            # Another account's file: refused, never ours to delete.
+            raise Stop("token_file_insecure")
         if exc.reason in ("open_to_others", "symlink"):
             raise Stop("token_file_insecure", delete_token=loader_client_ours(path))
         raise Stop("token_file_missing")

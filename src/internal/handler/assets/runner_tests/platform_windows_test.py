@@ -169,6 +169,15 @@ class PrivateCriterionTest(unittest.TestCase):
             ("a file of the user, SYSTEM and the administrators", private_file_view(), False, None),
             ("a deny ACE of another account", private_dir_view([(fs.DENY, 0, fs.FILE_ALL_ACCESS, fs.USERS)]),
              True, None),
+            # The owner may open it to others whatever the DACL says.
+            ("a private DACL with another account as owner",
+             fs.View(owner=fs.USERS, dacl=fs.private_dacl(), protected=True), True, "foreign_owner"),
+            ("a private file of another owner", fs.View(owner=fs.USERS, dacl=private_file_view().dacl), False,
+             "foreign_owner"),
+            ("no owner read", fs.View(owner=None, dacl=fs.private_dacl(), protected=True), True, "foreign_owner"),
+            ("owned by SYSTEM", fs.View(owner=fs.SYSTEM, dacl=fs.private_dacl(), protected=True), True, None),
+            ("owned by the administrators", fs.View(owner=fs.ADMINS, dacl=fs.private_dacl(), protected=True), True,
+             None),
         ]
         for name, view, directory, want in cases:
             with self.subTest(name):

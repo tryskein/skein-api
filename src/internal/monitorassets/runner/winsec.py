@@ -58,10 +58,15 @@ class SecView(object):
 # only the user, SYSTEM and the administrators; a Creator Owner ACE is
 # allowed only as inherit-only; any other allow ACE, read-only too, refuses.
 # A NULL DACL and an ACE of an unknown type refuse; deny ACEs take nothing
-# away from the criterion. A reparse point is never followed.
+# away from the criterion. A reparse point is never followed. The owner is
+# the user or a trusted system account (as in criterion (b)): an owner has
+# READ_CONTROL and WRITE_DAC whatever the DACL says, so another owner could
+# open the object to others (decision of the lead on OST-2-7).
 def private_refusal(view, me, directory):
     if view.reparse:
         return "symlink"
+    if view.owner not in (me, SID_SYSTEM, SID_ADMINS, SID_TRUSTED_INSTALLER):
+        return "foreign_owner"
     if view.dacl is None or (directory and not view.protected):
         return "open_to_others"
     for kind, flags, mask, sid in view.dacl:
