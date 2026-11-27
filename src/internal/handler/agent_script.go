@@ -378,9 +378,10 @@ func wholeSecondsAtLeastOne(d time.Duration) int {
 // @Description  endpoint is gated by RequireMonitorToken purely for audit.
 // @Tags         agent-monitor
 // @Produce      text/x-python
-// @Security     ApiKeyAuth
+// @Security     InternalSecretAuth && MonitorTokenAuth
 // @Success      200  {string}  string  "Python runner source"
-// @Failure      401  {object}  map[string]any  "unauthenticated"
+// @Failure      401  {object}  map[string]any  "no internal secret, or a monitor token that is missing, expired or revoked"
+// @Failure      500  {object}  map[string]any  "the monitor token could not be looked up"
 // @Router       /agent/v1/monitor-script [get]
 func (h *AgentScriptHandler) Script(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/x-python; charset=utf-8")

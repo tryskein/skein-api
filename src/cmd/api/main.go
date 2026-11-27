@@ -454,6 +454,11 @@ func publicAPIServer(cfg *config.Config, pool *pgxpool.Pool, deps publicapi.Deps
 // @name X-Skein-Internal-Secret
 // @description Service secret shared by skein-web and skein-api. Every request to the internal API (/ui/v1 and the transitional /api/v1) must carry it; without it the answer is 401 on any path. The service routes (no user headers; called by skein-web's own calls only) also require ServiceCallMarker.
 //
+// @securityDefinitions.apikey MonitorTokenAuth
+// @in header
+// @name X-Skein-Api-Key
+// @description The skm_ monitor token a monitor command was minted with (skein_get_monitor_script), sent by the monitor's loader and runner on the routes of /agent/v1 that need it, together with InternalSecretAuth, which the proxy of skein-web adds. A token that expired, was revoked or was stopped is 401.
+//
 // @securityDefinitions.apikey ServiceCallMarker
 // @in header
 // @name X-Skein-Service-Call
