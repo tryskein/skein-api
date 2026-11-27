@@ -219,8 +219,8 @@ class Guard(object):
         """The idle wait within its own timeout and never into the time kept
         for the call."""
         idle = _idle_seconds(self.channel)
-        if idle:
-            self.pipeline.wait_idle(self.channel, max(min(self.remaining() - self.reserve(), idle), 0.001))
+        room = self.remaining() - self.reserve()
+        self.pipeline.wait_idle(self.channel, max(min(room, idle) if idle else room, 0.001))
 
     def keep_the_call(self):
         """After the last check: the time kept for the call must be left, or
