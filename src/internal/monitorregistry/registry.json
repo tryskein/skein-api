@@ -1725,6 +1725,145 @@
       "address": {
         "env": "CONDUCTOR_SESSION_ID"
       }
+    },
+    {
+      "id": "tmux",
+      "about": "tmux: the event is pasted into the agent's pane from a buffer of its own, then Enter is sent; blind, without a receipt of the turn.",
+      "source": "github.com/tmux/tmux dace7f5 (3.8): cmd-load-buffer.c#cmd_load_buffer_exec (load-buffer -b <name> - reads the buffer from the client's stdin; a read or buffer error fails the command, and nothing is pasted); cmd-paste-buffer.c#cmd_paste_buffer_exec (paste-buffer -b <name> -t <pane> writes the buffer into the pane, -p with the bracketed-paste codes when the application in the pane asked for them, -d deletes the buffer; exit 0 only says the bytes were written, never that a turn began); cmd-set-buffer.c (delete-buffer -b <name>); cmd-send-keys.c#cmd_send_keys_exec (send-keys -t <pane> Enter); cmd-display-message.c (display-message -p -t <pane> '#{pane_pid}' prints the PID of the pane's process, an empty line for a pane that is not found); cmd-new-session.c (has-session -t <pane> exits 0 only when the pane's session exists). TMUX_PANE is the pane of the process, TMUX the server's socket with its pid and session: one pane id under two servers is two panes. A buffer of its own on every delivery keeps two monitors from pasting each other's text. Claude Squad runs its agents in plain tmux sessions (claudesquad_*) without variables of its own: the same record. Linux and macOS; on Windows only under Cygwin or WSL.",
+      "step": 7,
+      "order": 1,
+      "kind": "terminal",
+      "blind": true,
+      "multiplexer": true,
+      "detect": {
+        "env": [
+          {
+            "name": "TMUX_PANE"
+          },
+          {
+            "name": "TMUX"
+          }
+        ]
+      },
+      "stage": {
+        "type": "argv",
+        "argv": [
+          "tmux",
+          "load-buffer",
+          "-b",
+          "{delivery}",
+          "-"
+        ],
+        "feed": "stdin",
+        "timeoutSec": 10
+      },
+      "executor": {
+        "type": "argv",
+        "argv": [
+          "tmux",
+          "paste-buffer",
+          "-p",
+          "-d",
+          "-b",
+          "{delivery}",
+          "-t",
+          "{env:TMUX_PANE}"
+        ],
+        "feed": "stdin",
+        "timeoutSec": 10
+      },
+      "unstage": {
+        "type": "argv",
+        "argv": [
+          "tmux",
+          "delete-buffer",
+          "-b",
+          "{delivery}"
+        ],
+        "feed": "stdin",
+        "timeoutSec": 10
+      },
+      "submit": {
+        "executor": {
+          "type": "argv",
+          "argv": [
+            "tmux",
+            "send-keys",
+            "-t",
+            "{env:TMUX_PANE}",
+            "Enter"
+          ],
+          "feed": "stdin",
+          "timeoutSec": 10
+        },
+        "outcomes": [
+          {
+            "match": {
+              "exitCode": 0
+            },
+            "outcome": "input-written"
+          }
+        ]
+      },
+      "idle": {
+        "type": "none"
+      },
+      "outcomes": [
+        {
+          "match": {
+            "exitCode": 0
+          },
+          "outcome": "input-written"
+        }
+      ],
+      "probes": [
+        {
+          "type": "argv",
+          "source": "github.com/tmux/tmux dace7f5 (3.8): cmd-new-session.c (has-session) and cmd-find.c#cmd_find_target (a %<id> target is a pane; a pane that is not found fails the command).",
+          "argv": [
+            "tmux",
+            "has-session",
+            "-t",
+            "{env:TMUX_PANE}"
+          ],
+          "results": [
+            {
+              "match": {
+                "exitCode": 0
+              },
+              "result": "available"
+            }
+          ]
+        }
+      ],
+      "addressee": {
+        "process": "foreground",
+        "limitation": "tmux reports no turn: exit 0 of the paste and of Enter only says the bytes were written into the pane."
+      },
+      "panePid": {
+        "argv": [
+          "tmux",
+          "display-message",
+          "-p",
+          "-t",
+          "{env:TMUX_PANE}",
+          "#{pane_pid}"
+        ]
+      },
+      "binaries": {
+        "linux": [
+          "tmux"
+        ],
+        "macos": [
+          "tmux"
+        ]
+      },
+      "address": {
+        "env": "TMUX_PANE",
+        "qualifiers": [
+          "TMUX"
+        ]
+      }
     }
   ],
   "shells": {

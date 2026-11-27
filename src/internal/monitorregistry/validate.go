@@ -123,7 +123,12 @@ func set(values ...string) map[string]bool {
 	return m
 }
 
-type validator struct{ errs ValidationErrors }
+type validator struct {
+	errs ValidationErrors
+	// delivery: the argument lists being validated are the calls of a
+	// blind channel, which may name PlaceholderDelivery.
+	delivery bool
+}
 
 func (v *validator) add(rule Rule, path, format string, args ...any) {
 	v.errs = append(v.errs, &ValidationError{Rule: rule, Path: path, Detail: fmt.Sprintf(format, args...)})
@@ -378,7 +383,9 @@ func (v *validator) channel(path string, c *Channel) {
 		v.add(RuleInvalid, path+".detect", "the channel has no detection sign")
 	}
 	v.conditions(path+".detect", c.Detect, false)
+	v.delivery = c.Blind
 	v.executor(path+".executor", c.Executor)
+	v.delivery = false
 	v.idle(path+".idle", c.Idle)
 
 	if len(c.Outcomes) == 0 {
@@ -439,8 +446,9 @@ func (v *validator) channel(path string, c *Channel) {
 		v.add(RuleInvalid, path+".panePid", "only a blind channel has a pane PID source")
 	}
 	if c.PanePID != nil {
-		v.argv(path+".panePid.argv", c.PanePID.Argv, false)
+		v.formatArgv(path+".panePid.argv", c.PanePID.Argv)
 	}
+	v.blindCalls(path, c)
 
 	switch {
 	case c.Executor.Type == ExecutorHTTP && len(c.Binaries) > 0:
@@ -563,6 +571,86 @@ func count(argv []string, element string) int {
 // argv checks an argument list: non-empty, the program a literal, every
 // element a literal without braces or exactly one known placeholder; the
 // text placeholders only where allowText.
+// formatArgv validates the argument list of a command that never carries
+// a text, whose program reads braces of its own: an element that starts
+// with "{" is a placeholder, any other may hold braces ("#{pane_pid}").
+func (v *validator) formatArgv(path string, argv []string) {
+	if len(argv) == 0 {
+		v.add(RuleInvalid, path, "the argument list is empty")
+		return
+	}
+	if strings.ContainsAny(argv[0], "{}") || strings.TrimSpace(argv[0]) == "" {
+		v.add(RuleInvalid, path+"[0]", "the program must be a literal name")
+	}
+	for i, a := range argv[1:] {
+		if strings.HasPrefix(a, "{") || !strings.ContainsAny(a, "{}") {
+			v.value(fmt.Sprintf("%s[%d]", path, i+1), a, false)
+		}
+	}
+}
+
+// blindCalls validates the calls of a blind channel besides its insert: the
+// stage, the unstage and the submit, and the multiplexer mark.
+func (v *validator) blindCalls(path string, c *Channel) {
+	if !c.Blind {
+		if c.Multiplexer || c.Stage != nil || c.Unstage != nil || c.Submit != nil {
+			v.add(RuleInvalid, path, "only a blind channel has a multiplexer mark, a stage, an unstage or a submit")
+		}
+		return
+	}
+	v.delivery = true
+	defer func() { v.delivery = false }()
+	argvOnly := func(p string, e Executor) {
+		if e.Type != ExecutorArgv {
+			v.add(RuleInvalid, p+".type", "a call of a blind channel runs its program")
+		}
+		v.executor(p, e)
+	}
+	if c.Stage != nil {
+		argvOnly(path+".stage", *c.Stage)
+		if c.Executor.Feed != FeedStdin {
+			v.add(RuleInvalid, path+".executor.feed", "with a stage the insert takes no text: its feed is stdin")
+		}
+	}
+	if c.Unstage != nil {
+		if c.Stage == nil {
+			v.add(RuleInvalid, path+".unstage", "an unstage needs a stage")
+		}
+		argvOnly(path+".unstage", *c.Unstage)
+		if c.Unstage.Feed != FeedStdin {
+			v.add(RuleInvalid, path+".unstage.feed", "the unstage takes no text: its feed is stdin")
+		}
+	}
+	if s := c.Submit; s != nil {
+		argvOnly(path+".submit.executor", s.Executor)
+		if s.Executor.Feed == FeedFile {
+			v.add(RuleInvalid, path+".submit.executor.feed", "the submit takes its literal text on stdin or as an argument")
+		}
+		if s.Executor.Feed == FeedArg && s.Text == "" {
+			v.add(RuleInvalid, path+".submit.text", "a submit that takes an argument names its text")
+		}
+		if len(s.Outcomes) == 0 {
+			v.add(RuleInvalid, path+".submit.outcomes", "the outcome table is empty")
+		}
+		rows := make([]Match, len(s.Outcomes))
+		for i, row := range s.Outcomes {
+			rows[i] = row.Match
+			p := fmt.Sprintf("%s.submit.outcomes[%d]", path, i)
+			switch {
+			case !outcomes[row.Outcome]:
+				v.add(RuleUnknownOutcome, p+".outcome", "%q is not an outcome", row.Outcome)
+			case row.Outcome == OutcomeRefused:
+				v.add(RuleInvalid, p+".outcome", "the text is already written: the submit refuses nothing before send")
+			}
+			if row.Shorten {
+				v.add(RuleInvalid, p+".shorten", "only a refusal before send shortens the text")
+			}
+		}
+		v.signs(path+".submit.outcomes", rows)
+		v.criteriaOf(path+".submit.outcomes", rows, s.Executor.Type)
+	}
+}
+
 func (v *validator) argv(path string, argv []string, allowText bool) {
 	if len(argv) == 0 {
 		v.add(RuleInvalid, path, "the argument list is empty")
@@ -588,6 +676,10 @@ func (v *validator) value(path, s string, allowText bool) {
 		name := strings.TrimSuffix(strings.TrimPrefix(s, PlaceholderEnvPrefix), "}")
 		if !envNamePattern.MatchString(name) {
 			v.add(RuleInvalid, path, "%q is not an environment variable name", name)
+		}
+	case s == PlaceholderDelivery:
+		if !v.delivery {
+			v.add(RuleInvalid, path, "only the calls of a blind channel name %s", s)
 		}
 	case strings.ContainsAny(s, "{}"):
 		v.add(RuleInvalid, path, "%q is neither a literal nor a placeholder", s)

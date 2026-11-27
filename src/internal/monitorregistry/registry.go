@@ -308,6 +308,23 @@ type Channel struct {
 	// PanePID tells a blind channel how to get the PID of the pane's
 	// process. Required for a blind channel, absent otherwise.
 	PanePID *PanePID `json:"panePid,omitempty"`
+	// Multiplexer marks a blind channel of a terminal multiplexer (tmux,
+	// Zellij): a runner in its pane skips step 6 and the other blind
+	// channels, and of two multiplexers the one nearest the runner is used.
+	Multiplexer bool `json:"multiplexer,omitempty"`
+	// Stage hands the text to a blind channel without writing it into the
+	// pane (a buffer of the multiplexer), before Executor, the insert,
+	// writes it there; a stage that fails is a refusal before send. With a
+	// stage the insert takes no text.
+	Stage *Executor `json:"stage,omitempty"`
+	// Unstage removes what Stage left when the insert did not take the
+	// text; its answer changes no outcome. Only with a stage.
+	Unstage *Executor `json:"unstage,omitempty"`
+	// Submit is the final step of a two-step blind channel (Enter): run
+	// only after the insert wrote the text and the addressee and the access
+	// boundary were checked again; a failed check withholds it and the
+	// outcome is "unknown".
+	Submit *Submit `json:"submit,omitempty"`
 	// Binaries are the programs of the channel per platform, in the order
 	// they are tried: a bare name (the executable of the agent process of
 	// that name, else PATH), a "~/" path, or "{env:NAME}" (the program the
@@ -404,6 +421,9 @@ const (
 	// PlaceholderEnvPrefix starts "{env:NAME}", the value of variable NAME
 	// of the agent process.
 	PlaceholderEnvPrefix = "{env:"
+	// PlaceholderDelivery is a name unique to one transfer, the same in
+	// every call of it; only the calls of a blind channel name it.
+	PlaceholderDelivery = "{delivery}"
 )
 
 // Executor is the transport of a channel.
@@ -631,8 +651,22 @@ type AddresseeResultRow struct {
 	Result string `json:"result"`
 }
 
+// Submit is the final step of a two-step blind channel.
+type Submit struct {
+	Executor Executor `json:"executor"`
+	// Text is the literal input of the step (a carriage return for a
+	// channel that takes the key as text); empty for a key the program
+	// names in its arguments.
+	Text string `json:"text,omitempty"`
+	// Outcomes is the closed table of the step's answers; the text is
+	// already written, so no row is a refusal before send.
+	Outcomes []OutcomeRow `json:"outcomes"`
+}
+
 // PanePID is how a blind channel gets the PID of the process of its pane.
 type PanePID struct {
+	// Argv is the command; an element that does not start with "{" may hold
+	// braces of the program's own (the tmux format "#{pane_pid}").
 	Argv []string `json:"argv"`
 	// JSONField is the dotted path of the PID in the JSON the command
 	// prints; empty when the command prints the bare PID.

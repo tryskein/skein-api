@@ -683,3 +683,104 @@ func TestValidate_AnEmptyStderrIsApartFromAStderrJSON(t *testing.T) {
 		t.Fatalf("rows apart by an empty stderr were refused: %v", err)
 	}
 }
+
+// blindTwoStep turns the fixture's blind channel into a multiplexer with
+// the calls of a two-step delivery: a stage that carries the text, the
+// insert, an unstage and a submit, each naming the transfer's {delivery},
+// and a pane PID command with a format of the program's own braces.
+func blindTwoStep(r *Registry) *Channel {
+	c := &r.Channels[2]
+	c.Multiplexer = true
+	c.Stage = &Executor{Type: ExecutorArgv, Argv: []string{"mux", "load", "{delivery}"}, Feed: FeedStdin, TimeoutSec: 5}
+	c.Executor = Executor{Type: ExecutorArgv, Argv: []string{"mux", "paste", "{delivery}", "{env:PANE}"}, Feed: FeedStdin, TimeoutSec: 5}
+	c.Unstage = &Executor{Type: ExecutorArgv, Argv: []string{"mux", "drop", "{delivery}"}, Feed: FeedStdin, TimeoutSec: 5}
+	c.Submit = &Submit{
+		Executor: Executor{Type: ExecutorArgv, Argv: []string{"mux", "keys", "{env:PANE}", "Enter"}, Feed: FeedStdin, TimeoutSec: 5},
+		Outcomes: []OutcomeRow{{Match: Match{ExitCode: intp(0)}, Outcome: OutcomeInputWritten}},
+	}
+	c.PanePID = &PanePID{Argv: []string{"mux", "show", "-t", "{env:PANE}", "#{pane_pid}"}}
+	return c
+}
+
+// TestValidate_AcceptsABlindTwoStepChannel — a blind multiplexer with a
+// stage, an unstage and a submit (tmux), and a submit that takes its key as
+// literal text on stdin (WezTerm), pass.
+func TestValidate_AcceptsABlindTwoStepChannel(t *testing.T) {
+	r := validRegistry()
+	blindTwoStep(r)
+	if err := r.Validate(); err != nil {
+		t.Fatalf("a correct two-step blind record was refused: %v", err)
+	}
+	r = validRegistry()
+	c := &r.Channels[2]
+	c.Submit = &Submit{
+		Executor: Executor{Type: ExecutorArgv, Argv: []string{"mux", "send", "--no-paste"}, Feed: FeedStdin, TimeoutSec: 5},
+		Text:     "\r",
+		Outcomes: []OutcomeRow{{Match: Match{ExitCode: intp(0)}, Outcome: OutcomeInputWritten}},
+	}
+	if err := r.Validate(); err != nil {
+		t.Fatalf("a submit with a literal text on stdin was refused: %v", err)
+	}
+}
+
+// TestValidate_RejectsABlindCallOutOfItsPlace — the calls of a blind
+// delivery are a blind channel's only, and each takes the text where the
+// delivery hands it over; every violation is refused alone.
+func TestValidate_RejectsABlindCallOutOfItsPlace(t *testing.T) {
+	cases := []struct {
+		name   string
+		mutate func(r *Registry)
+	}{
+		{"a multiplexer mark on a host", func(r *Registry) { r.Channels[1].Multiplexer = true }},
+		{"a submit on a host", func(r *Registry) { r.Channels[1].Submit = blindTwoStep(validRegistry()).Submit }},
+		{"{delivery} in a host's call", func(r *Registry) {
+			r.Channels[1].Executor.Argv = []string{"host", "send", "{delivery}", "--file", "{textFile}"}
+		}},
+		{"{delivery} in the probe of a blind channel", func(r *Registry) {
+			blindTwoStep(r).Probes[0].Argv = []string{"mux", "list", "{delivery}"}
+		}},
+		{"an unstage without a stage", func(r *Registry) { blindTwoStep(r).Stage = nil }},
+		{"a stage with an insert that takes the text", func(r *Registry) {
+			blindTwoStep(r).Executor = Executor{Type: ExecutorArgv, Argv: []string{"mux", "paste", "{text}"}, Feed: FeedArg, TimeoutSec: 5}
+		}},
+		{"an unstage that takes the text", func(r *Registry) {
+			blindTwoStep(r).Unstage = &Executor{Type: ExecutorArgv, Argv: []string{"mux", "drop", "{text}"}, Feed: FeedArg, TimeoutSec: 5}
+		}},
+		{"a submit that refuses before send", func(r *Registry) {
+			blindTwoStep(r).Submit.Outcomes[0].Outcome = OutcomeRefused
+		}},
+		{"a submit row outside the outcomes", func(r *Registry) {
+			blindTwoStep(r).Submit.Outcomes[0].Outcome = "entered"
+		}},
+		{"a submit without a table", func(r *Registry) { blindTwoStep(r).Submit.Outcomes = nil }},
+		{"a submit by an argument without its text", func(r *Registry) {
+			blindTwoStep(r).Submit.Executor = Executor{Type: ExecutorArgv, Argv: []string{"mux", "keys", "{text}"}, Feed: FeedArg, TimeoutSec: 5}
+		}},
+		{"a submit that is a request", func(r *Registry) {
+			blindTwoStep(r).Submit.Executor = Executor{Type: ExecutorHTTP, TimeoutSec: 5,
+				HTTP: &HTTPRequest{Method: "POST", URL: "{env:PANE_URL}", BodyField: "text"}}
+		}},
+		{"a pane PID element shaped as an unknown placeholder", func(r *Registry) {
+			blindTwoStep(r).PanePID.Argv = []string{"mux", "show", "{pane_pid}"}
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r := validRegistry()
+			tc.mutate(r)
+			want := RuleInvalid
+			if tc.name == "a submit row outside the outcomes" {
+				want = RuleUnknownOutcome
+			}
+			err := r.Validate()
+			if err == nil {
+				t.Fatalf("Validate accepted the violation, want rule %s", want)
+			}
+			for _, got := range rulesOf(t, err) {
+				if got != want {
+					t.Fatalf("Validate reported %v, want only %s", err, want)
+				}
+			}
+		})
+	}
+}
