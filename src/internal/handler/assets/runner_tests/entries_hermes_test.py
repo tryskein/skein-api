@@ -141,6 +141,25 @@ class HermesPreflightTest(unittest.TestCase):
                 self.config(text)
                 self.assertEqual(self.line(**env)["channel"], channel)
 
+    def test_a_variable_of_white_space_gives_way_to_the_file(self):
+        # _env_or_cfg_str: the variable stripped and empty -> the YAML.
+        for name, text, env, channel in (
+                ("notifications: the file's off", "display:\n  background_process_notifications: off\n"
+                 "  busy_input_mode: queue\n", {"HERMES_BACKGROUND_NOTIFICATIONS": "   "}, "hermes-resume"),
+                ("notifications: the file's default", "display:\n  busy_input_mode: queue\n",
+                 {"HERMES_BACKGROUND_NOTIFICATIONS": " \t "}, "stdout"),
+                ("mode: the file's queue", "display:\n  background_process_notifications: off\n"
+                 "  busy_input_mode: queue\n", {"HERMES_GATEWAY_BUSY_INPUT_MODE": "  "}, "hermes-resume"),
+                ("mode: the file's interrupt", "display:\n  background_process_notifications: off\n"
+                 "  busy_input_mode: interrupt\n", {"HERMES_GATEWAY_BUSY_INPUT_MODE": "  "}, None)):
+            with self.subTest(case=name):
+                self.config(text)
+                line = self.line(**env)
+                if channel is None:
+                    self.assertEqual(line["method"], "journal", line)
+                else:
+                    self.assertEqual(line["channel"], channel, line)
+
     def test_the_config_of_hermes_home(self):
         home = os.path.join(self.box.root, "profile")
         self.config("display:\n  background_process_notifications: off\n  busy_input_mode: queue\n", home=home)

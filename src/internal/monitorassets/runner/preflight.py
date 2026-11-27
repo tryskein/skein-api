@@ -550,7 +550,9 @@ def _plain_conditions_hold(conds, env):
         if not env_not_holds(cond, env):
             return False, "variable %s is %s" % (cond.get("name"), cond.get("equals"))
     for name in conds.get("envAbsent") or []:
-        if env.get(name, ""):
+        # Unset, empty or white space only: an agent that reads its variable
+        # stripped falls back to its file then (Hermes, .strip()).
+        if env.get(name, "").strip():
             return False, "variable %s is set" % name
     for cond in conds.get("settings") or []:
         if not setting_holds(cond, env):

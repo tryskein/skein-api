@@ -231,9 +231,10 @@ type Conditions struct {
 	// entry has Equals and no Pattern. Only a method of an agent record
 	// states it.
 	EnvNot []EnvCondition `json:"envNot,omitempty"`
-	// EnvAbsent are variables of the agent process that must be unset or
-	// empty (a setting read from a file only when no variable overrides
-	// it). Only a method of an agent record states it.
+	// EnvAbsent are variables of the agent process that must be unset,
+	// empty or white space only (a setting read from a file only when no
+	// variable overrides it; an agent reads the variable stripped). Only a
+	// method of an agent record states it.
 	EnvAbsent []string `json:"envAbsent,omitempty"`
 	// Settings are values read from configuration files of the agent. A
 	// setting that cannot be read does not hold.
