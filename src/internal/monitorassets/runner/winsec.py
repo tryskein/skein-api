@@ -151,7 +151,8 @@ def chain_refusal(views, me):
         if view.reparse:
             return "a reparse point: " + role
         if _norm_path(view.final) != _norm_path(path):
-            return "it resolves elsewhere: " + role
+            return ("it resolves elsewhere (a junction, a short 8.3 name or a substituted drive: give the full "
+                    "long path): " + role)
         if view.owner not in trusted:
             return "owned by another account: " + role
         if view.dacl is None:
