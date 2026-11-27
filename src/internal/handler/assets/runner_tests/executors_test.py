@@ -610,6 +610,44 @@ class PreflightProbeTest(unittest.TestCase):
         self.assertEqual(tcp.received, b"")
 
 
+class ThreadReadRequestTest(unittest.TestCase):
+    """The request executor on a pipe that cannot be read without blocking
+    (Windows with Python below 3.12, a monitor without client: US-1, INV-7):
+    a reader thread hands its answer over, and the limit of a request still
+    holds; no traceback."""
+
+    def setUp(self):
+        patch = mock.patch.dict(RUNNER.__dict__, {"pipe_reads_without_blocking": lambda: False})
+        patch.start()
+        self.addCleanup(patch.stop)
+
+    def serve(self, respond):
+        server = harness.ScriptedServer(respond)
+        self.addCleanup(server.stop)
+        executor = RUNNER.Executor()
+        self.addCleanup(executor.stop)
+        return server, executor
+
+    def test_the_answer_comes_through_the_reader_thread(self):
+        server, executor = self.serve(lambda h, qs: h.send_json(200, {"items": []}))
+        answer = executor.request(server.url() + "/agent/v1/notifications/poll", TOKEN)
+        self.assertIsNotNone(executor.lines)
+        self.assertEqual(answer.get("status"), 200)
+        self.assertEqual(json.loads(answer["body"]), {"items": []})
+
+    def test_the_limit_of_a_request_holds(self):
+        def slow(h, qs):
+            time.sleep(3)
+            h.send_json(200, {})
+
+        server, executor = self.serve(slow)
+        with mock.patch.dict(RUNNER.__dict__, {"REQUEST_LIMIT_SEC": 0.5}):
+            answer = executor.request(server.url() + "/x", TOKEN)
+        # The executor's own timeout or the limit of the wait, whichever ends
+        # first: a failure, not a hang.
+        self.assertEqual(answer.get("status"), 0)
+
+
 class PolledWaitTest(unittest.TestCase):
     """The polled wait (Windows, Python 3.12+): after its timeout the call
     ends within one more grace even when the kill does not end the program

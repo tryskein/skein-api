@@ -58,9 +58,11 @@
 
 import json
 import os
+import queue
 import signal
 import subprocess
 import sys
+import threading
 import time
 import traceback
 import urllib.parse
@@ -163,6 +165,9 @@ class Executor:
     def __init__(self):
         self.proc = None
         self.pending = []
+        # The answers of a reader thread (a pipe that cannot be read without
+        # blocking), or None.
+        self.lines = None
 
     def _start(self):
         self.proc = subprocess.Popen(
@@ -172,10 +177,17 @@ class Executor:
             close_fds=True,
             **current_platform().child_popen_options()
         )
-        # Non-blocking reads: POSIX, and Windows pipes from Python 3.12 on
-        # (the lowest Python of a Windows monitor with client, R-9).
-        os.set_blocking(self.proc.stdout.fileno(), False)
         self.pending = []
+        self.lines = None
+        if pipe_reads_without_blocking():
+            os.set_blocking(self.proc.stdout.fileno(), False)
+            return
+        # A Windows pipe of an older Python (a monitor without client, US-1,
+        # INV-7) is read by a thread; the request waits on its lines.
+        self.lines = queue.Queue()
+        reader = threading.Thread(target=_read_lines, args=(self.proc.stdout, self.lines))
+        reader.daemon = True
+        reader.start()
 
     def stop(self):
         """Kill and reap the executor, if any."""
@@ -210,6 +222,8 @@ class Executor:
             self.stop()
             return {"status": 0, "error": "executor_unavailable"}
         deadline = time.monotonic() + REQUEST_LIMIT_SEC
+        if self.lines is not None:
+            return self._answer_of_thread(deadline)
         fd = self.proc.stdout.fileno()
         # The answer is one line; collect chunks and join once (no quadratic
         # copying). The deadline bounds the WHOLE request, transfer of the
@@ -247,6 +261,43 @@ class Executor:
                 return answer
             self.stop()
             return {"status": 0, "error": "executor_garbled"}
+
+
+    def _answer_of_thread(self, deadline):
+        try:
+            line = self.lines.get(timeout=max(deadline - time.monotonic(), 0))
+        except queue.Empty:
+            self.stop()
+            return {"status": 0, "error": "request_limit"}
+        if line is None:
+            self.stop()
+            return {"status": 0, "error": "executor_died"}
+        try:
+            answer = json.loads(line.decode("utf-8"))
+        except ValueError:
+            answer = None
+        if isinstance(answer, dict):
+            return answer
+        self.stop()
+        return {"status": 0, "error": "executor_garbled"}
+
+
+def pipe_reads_without_blocking():
+    """Whether a pipe can be set non-blocking: POSIX, and Windows pipes from
+    Python 3.12 on (the lowest Python of a Windows monitor with client,
+    R-9)."""
+    return os.name == "posix" or sys.version_info >= (3, 12)
+
+
+def _read_lines(stream, lines):
+    """Hand every line of the executor's stdout to the queue; None at its
+    end."""
+    try:
+        for line in iter(stream.readline, b""):
+            lines.put(line)
+    except (OSError, ValueError):
+        pass
+    lines.put(None)
 
 
 def poll_once(executor, base, token, cursor, exclude_session="", limit=None):
