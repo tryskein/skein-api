@@ -161,6 +161,29 @@ class ExitOnEventTest(unittest.TestCase):
         self.assertEqual(sorted(printed_ids(box)), list(range(1, 8)))
         self.assertEqual(len(printed_ids(box)), 7)
 
+    def test_the_counts_survive_a_rearm(self):
+        # Review of wave 8, row 25: the summary of the close counts what the
+        # earlier cycles of the monitor fixed, not only the last cycle.
+        box = ms.Box(self)
+        limits = {"batch": {"max": 3, "unit": "lines"}}
+        unfit = {2, 6}
+
+        def output():
+            out = box.output(limits, "exit-on-event")
+            real = out.event_text
+            out.event_text = lambda n: (None, ms.RUNNER.STATUS_UNFIT) if n.get("id") in unfit else real(n)
+            return out
+        stop = cycle(box, ms.FakeExecutor([ms.page(list(range(1, 8)), 1, root_closed=True)]), output(),
+                     "exit-on-event")
+        cycles = 1
+        while stop.reason == "delivered" and cycles < 20:
+            stop = cycle(box, ms.FakeExecutor([ms.page([900], 9)]), output(), "exit-on-event")
+            cycles += 1
+        self.assertEqual(stop.reason, "root_closed")
+        self.assertGreater(cycles, 2)
+        self.assertEqual(stop.detail["doesNotFit"], 2)
+        self.assertEqual(sorted(printed_ids(box)), [1, 3, 4, 5, 7])
+
     def test_a_refusing_channel_gives_not_delivered_n(self):
         world = dt.World(self, [dt.chan("A", "chan-a")])
         world.prog("chan-a").respond([dt.REFUSE])
