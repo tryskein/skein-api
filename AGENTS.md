@@ -153,7 +153,7 @@ The profile is `.progon/api.toml`; run from the repository root:
 | mutation | `progon api mutation ./internal/<pkg>/` | the package patterns are the targets; `--since <ref>` limits it to changed lines |
 | pyunit | `progon api pyunit` | `progon api pyunit <file>` — a path relative to `src`, e.g. `internal/handler/assets/runner_tests/monitor_runner_test.py` |
 | pyunit36 | `progon api pyunit36` | `progon api pyunit36 <file>` — only `*_py36_test.py` files (stdlib of Python 3.6), run on a Python 3.6 image: the lowest Python of POSIX the runner, the loader and the starter support |
-| pymutation | `progon api pymutation <mutant pattern>` | the targets are mutmut mutant name patterns, e.g. `'internal.monitorassets.runner.core.x_build_url*'`; no `--since` (mutmut has no diff mode) |
+| pymutation | `progon api pymutation <mutant pattern>` | the targets are mutmut mutant name patterns, named by the module of a part's file: `'internal.monitorassets.runner.*'` (every part), `'internal.monitorassets.runner.<part>.*'` (one part), `'internal.monitorassets.runner.core.x_build_url*'` (one function); no `--since` (mutmut has no diff mode) |
 | py27 | `progon api py27` | none: one script, `scripts/progon/starter-py27.sh`; it runs both modes of the monitor starter (`src/internal/mcp/tools/assets/monitor_starter.py`) with Python 2.7 and prints TAP: an old interpreter gets the stop line `config_invalid`, not a SyntaxError |
 | measure | `progon api measure` | none: one script, `scripts/progon/measure.sh`; it prints `MEASURE_*` lines of `scripts/measure-tools-list.sh` and `scripts/measure-tool-responses.sh` against the same Postgres fixture and migrations as `integ` |
 
@@ -169,12 +169,16 @@ section of `src/setup.cfg`; the tests it drives are the same `*_test.py` files,
 collected by pytest. The Go kinds `unit` and `integ` install `python3` on top of
 the Go image.
 `pymutation` measures only what the tests run in process: the harness
-(`runner_tests/harness.py#RUNNER_MODULE`) loads the runner under the module
-name of its core part, `internal.monitorassets.runner.core`, which mutmut's
-trampoline keys match. A test that starts the runner (or the loader) as a
-subprocess runs it as `__main__`, so the mutants it would kill are not
-attributed to it and can show as survived. Read a survivor on a line only
-subprocess tests reach as not measured, not as a gap of the suite.
+(`runner_tests/harness.py#load_runner`) runs each part under the module of its
+file (`PART_MODULE_PREFIX` and the part's name), which mutmut's trampoline keys
+match. A test that starts the runner (or the loader) as a subprocess runs it as
+`__main__`, so the mutants it would kill are not attributed to it and can show
+as survived. Read a survivor on a line only subprocess tests reach as not
+measured, not as a gap of the suite. The test files that run the runner, the
+loader, the starter or prepare only as subprocesses are left out of mutmut's
+collection (`--ignore` in the `[mutmut]` section of `src/setup.cfg`).
+Its stats step runs the whole collection in one process: give it
+`--memory-mib 6144` or more, and `--split` for every part.
 Zero measured is not a green result.
 
 ### Project specifics
