@@ -154,6 +154,10 @@ class InstructionTest(unittest.TestCase):
         self.assertEqual((line["method"], line["channel"]), ("stream", "stdout"))
         self.assertIn("idle_timeout_ms %d" % QWEN_MAX_IDLE_MS, line["instruction"])
         self.assertIn("Idle timeout", line["instruction"])
+        # The limit of 16 running monitors (monitorRegistry.ts
+        # #MAX_CONCURRENT_MONITORS) is the agent's state, not a condition the
+        # preflight reads: the instruction says what to do when it refuses.
+        self.assertIn("maximum of concurrent monitors", line["instruction"])
         second = REG.agents["qwen-code"]["methods"][1]
         self.assertEqual(second["kind"], "exit-on-event")
         self.assertIn("is_background: true", second["instruction"])
