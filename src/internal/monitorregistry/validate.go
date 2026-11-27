@@ -512,6 +512,8 @@ func (v *validator) settingPath(path, s string) {
 		head, tail, ok := strings.Cut(s, "/")
 		v.value(path, head, false)
 		if !ok {
+			// The variable is a directory: a file is named after it.
+			v.add(RuleInvalid, path, "%q names no file under the variable: \"{env:NAME}/\" and the path of the file", s)
 			return
 		}
 		rest = tail
