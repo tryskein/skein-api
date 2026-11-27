@@ -18,6 +18,7 @@ registry.py
 overrides.py
 proctree.py
 identity.py
+settings.py
 preflight.py
 executors.py
 ledger.py

@@ -117,7 +117,7 @@ var (
 	steps            = map[int]bool{StepOwnDelivery: true, StepHost: true, StepTerminal: true, StepBlind: true}
 	platforms        = set(PlatformLinux, PlatformMacOS, PlatformWindows)
 	units            = set(UnitChars, UnitUTF16, UnitBytes, UnitLines, UnitEvents)
-	settingFormats   = set(SettingJSON, SettingTOML, SettingYAML)
+	settingFormats   = set(SettingJSON, SettingTOML, SettingYAMLScalar)
 	windowsShells    = set(WindowsShellPowerShell, WindowsShellPwsh, WindowsShellGitBash)
 	httpMethods      = set("POST", "PUT")
 )
@@ -367,7 +367,7 @@ func (v *validator) conditions(path string, c Conditions, agentOptions bool) {
 		v.text(RuleInvalid, spath+".path", s.Path)
 		v.text(RuleInvalid, spath+".key", s.Key)
 		if !settingFormats[s.Format] {
-			v.add(RuleInvalid, spath+".format", "format %q is not one of json, toml, yaml", s.Format)
+			v.add(RuleInvalid, spath+".format", "format %q is not one of json, toml, yaml-scalar", s.Format)
 		}
 		if len(s.Equals) == 0 {
 			v.add(RuleInvalid, spath+".equals", "the expected value is missing")

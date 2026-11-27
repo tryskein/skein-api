@@ -240,7 +240,9 @@ type EnvCondition struct {
 const (
 	SettingJSON = "json"
 	SettingTOML = "toml"
-	SettingYAML = "yaml"
+	// SettingYAMLScalar reads one scalar of a YAML file through block
+	// mappings only (runner/settings.py): any other form is not read.
+	SettingYAMLScalar = "yaml-scalar"
 )
 
 // SettingCondition holds when the value at Key of the file at Path equals

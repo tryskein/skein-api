@@ -258,6 +258,12 @@ def read_setting(cond, env):
     except OSError:
         return _MISSING
     fmt = cond.get("format")
+    if fmt == "yaml-scalar":
+        try:
+            value = read_yaml_scalar(raw.decode("utf-8"), cond.get("key", "").split("."))
+        except ValueError:  # not UTF-8
+            return _MISSING
+        return _MISSING if value is SETTING_NOT_READ else value
     try:
         if fmt == "json":
             doc = json.loads(raw.decode("utf-8"))
