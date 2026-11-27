@@ -284,6 +284,31 @@ func (v *validator) names(path string, names []string) {
 	}
 }
 
+// scripts checks script signs: bare interpreter names, and a tail of
+// whole non-empty elements joined by "/", neither absolute nor with "\\".
+func (v *validator) scripts(path string, scripts []ScriptSign) {
+	for i, sc := range scripts {
+		spath := fmt.Sprintf("%s[%d]", path, i)
+		if len(sc.Interpreters) == 0 {
+			v.add(RuleInvalid, spath+".interpreters", "the script sign names no interpreter")
+		}
+		v.names(spath+".interpreters", sc.Interpreters)
+		v.pathTail(spath+".pathTail", sc.PathTail)
+		if r := sc.Runner; r != nil {
+			v.pathTail(spath+".runner.pathTail", r.PathTail)
+			if strings.TrimSpace(r.Arg) == "" {
+				v.add(RuleInvalid, spath+".runner.arg", "the runner's argument is empty")
+			}
+		}
+	}
+}
+
+func (v *validator) pathTail(path, tail string) {
+	if tail == "" || strings.Contains(tail, "\\") || slices.Contains(strings.Split(tail, "/"), "") {
+		v.add(RuleInvalid, path, "%q is not a relative path of whole elements", tail)
+	}
+}
+
 func (v *validator) id(path, id string) {
 	if !idPattern.MatchString(id) {
 		v.add(RuleBadID, path, "id %q is not of the form [a-z0-9-]{1,64}", id)
@@ -294,9 +319,10 @@ func (v *validator) agent(path string, a *Agent, channelSteps map[string]int) {
 	v.id(path+".id", a.ID)
 	v.text(RuleMissingAbout, path+".about", a.About)
 	v.text(RuleMissingSource, path+".source", a.Source)
-	if len(a.Process.Executables) == 0 && len(a.Process.Argv) == 0 && len(a.Process.ArgvBaseNames) == 0 {
+	if a.Process.empty() {
 		v.add(RuleInvalid, path+".process", "the agent record has no process sign")
 	}
+	v.scripts(path+".process.scripts", a.Process.Scripts)
 	v.names(path+".process.executables", a.Process.Executables)
 	v.names(path+".process.argvBaseNames", a.Process.ArgvBaseNames)
 	for i, arg := range a.Process.Argv {
@@ -516,9 +542,10 @@ func (v *validator) channel(path string, c *Channel) {
 		if c.Step != StepHost || c.Address == nil {
 			v.add(RuleInvalid, path+".launcher", "only a host of step 5 with an address launches agents")
 		}
-		if len(l.Process.Executables) == 0 && len(l.Process.Argv) == 0 && len(l.Process.ArgvBaseNames) == 0 {
+		if l.Process.empty() {
 			v.add(RuleInvalid, path+".launcher.process", "the launcher has no process sign")
 		}
+		v.scripts(path+".launcher.process.scripts", l.Process.Scripts)
 		v.names(path+".launcher.process.executables", l.Process.Executables)
 		v.names(path+".launcher.process.argvBaseNames", l.Process.ArgvBaseNames)
 		for i, arg := range l.Process.Argv {

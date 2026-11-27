@@ -35,7 +35,8 @@ HOST_FORM_FOREIGN = "foreign"  # another agent stands between: not ours
 
 def sign_matches(proc, sign):
     """Whether proc bears a process sign ({"executables": [...], "argv":
-    [...]}, as in a registry record)."""
+    [...], "argvBaseNames": [...], "scripts": [...]}, as in a registry
+    record)."""
     if not sign:
         return False
     if proc.names() & set(sign.get("executables") or []):
@@ -45,8 +46,39 @@ def sign_matches(proc, sign):
         return True
     # An entry point started by its path, wherever it is installed.
     bases = sign.get("argvBaseNames") or []
-    return bool(proc.argv) and bool(bases) and any(
-        a.replace("\\", "/").rsplit("/", 1)[-1] in bases for a in proc.argv)
+    if proc.argv and bases and any(a.replace("\\", "/").rsplit("/", 1)[-1] in bases for a in proc.argv):
+        return True
+    # An interpreter running a script of that path tail.
+    for script in sign.get("scripts") or []:
+        if proc.names() & set(script.get("interpreters") or []) and _runs_script(proc.argv, script):
+            return True
+    return False
+
+
+def _runs_script(argv, script):
+    """Whether the script an interpreter's argv runs - the first argument
+    after the executable that is not an option, or, with a runner, the
+    argument after the runner's own argument - ends with the path tail of
+    script, in whole elements."""
+    args = list(argv or [])[1:]
+    first = next((i for i, a in enumerate(args) if not a.startswith("-")), None)
+    if first is None:
+        return False
+    runner = script.get("runner")
+    if runner:
+        if not _ends_with(args[first], runner.get("pathTail")) or args[first + 1:first + 2] != [runner.get("arg")]:
+            return False
+        first += 2
+        if first >= len(args):
+            return False
+    return _ends_with(args[first], script.get("pathTail"))
+
+
+def _ends_with(arg, tail):
+    """Whether the path arg ends with tail, in whole elements ("/" or "\\")."""
+    if not tail:
+        return False
+    return ("/" + arg.replace("\\", "/")).endswith("/" + tail)
 
 
 def record_of(proc, registry):

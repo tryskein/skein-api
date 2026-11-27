@@ -1422,3 +1422,44 @@ func TestValidate_EnvAliases(t *testing.T) {
 		}
 	}
 }
+
+// TestValidate_ScriptSigns — a script sign names its interpreters and a
+// relative tail of whole elements; a runner names its tail and argument.
+func TestValidate_ScriptSigns(t *testing.T) {
+	good := ScriptSign{Interpreters: []string{"node"}, PathTail: "server/worker.js",
+		Runner: &ScriptRunner{PathTail: "dist/runner.js", Arg: "node-script"}}
+	r := validRegistry()
+	r.Agents[0].Process = ProcessSign{Scripts: []ScriptSign{good}}
+	if err := r.Validate(); err != nil {
+		t.Fatalf("a script sign alone was refused: %v", err)
+	}
+	for name, change := range map[string]func(*ScriptSign){
+		"no interpreter":             func(s *ScriptSign) { s.Interpreters = nil },
+		"an interpreter with a path": func(s *ScriptSign) { s.Interpreters = []string{"/usr/bin/node"} },
+		"an empty tail":              func(s *ScriptSign) { s.PathTail = "" },
+		"an absolute tail":           func(s *ScriptSign) { s.PathTail = "/server/worker.js" },
+		"a tail with a backslash":    func(s *ScriptSign) { s.PathTail = "server\\worker.js" },
+		"a runner without its argument": func(s *ScriptSign) {
+			s.Runner = &ScriptRunner{PathTail: "dist/runner.js"}
+		},
+		"a runner tail with an empty element": func(s *ScriptSign) {
+			s.Runner = &ScriptRunner{PathTail: "dist//runner.js", Arg: "x"}
+		},
+	} {
+		sign := good
+		runner := *good.Runner
+		sign.Runner = &runner
+		change(&sign)
+		r := validRegistry()
+		r.Agents[0].Process = ProcessSign{Scripts: []ScriptSign{sign}}
+		err := r.Validate()
+		if err == nil {
+			t.Fatalf("%s: accepted", name)
+		}
+		for _, got := range rulesOf(t, err) {
+			if got != RuleInvalid {
+				t.Fatalf("%s: %v, want only %s", name, err, RuleInvalid)
+			}
+		}
+	}
+}

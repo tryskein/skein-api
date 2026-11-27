@@ -161,6 +161,33 @@ type ProcessSign struct {
 	// "/" or "\\" (an entry point started by its path, wherever it is
 	// installed).
 	ArgvBaseNames []string `json:"argvBaseNames,omitempty"`
+	// Scripts mark a process an interpreter runs a script of: its
+	// executable is one of Interpreters and the script it runs (the first
+	// argument after the executable that is not an option) ends with
+	// PathTail, whole elements after a "/" or "\\".
+	Scripts []ScriptSign `json:"scripts,omitempty"`
+}
+
+// ScriptSign is an interpreter running a script found by the tail of its
+// path ("server/daemon-worker.js").
+type ScriptSign struct {
+	Interpreters []string `json:"interpreters"`
+	PathTail     string   `json:"pathTail"`
+	// Runner is a script the interpreter runs first, which runs the script
+	// named after its argument Arg (a packaged app's node entry point).
+	Runner *ScriptRunner `json:"runner,omitempty"`
+}
+
+// ScriptRunner is the runner script of a ScriptSign and the argument that
+// precedes the script it runs.
+type ScriptRunner struct {
+	PathTail string `json:"pathTail"`
+	Arg      string `json:"arg"`
+}
+
+// empty reports whether the sign names nothing to recognise.
+func (p ProcessSign) empty() bool {
+	return len(p.Executables) == 0 && len(p.Argv) == 0 && len(p.ArgvBaseNames) == 0 && len(p.Scripts) == 0
 }
 
 // Method kinds. They are the steps 2-4 of the method order.

@@ -349,9 +349,10 @@ class AgentUnderPaseoTest(unittest.TestCase):
 
     def test_the_daemon_known_by_its_entry_point_where_no_title_shows(self):
         # macOS and Windows list the image name, not the title: the worker
-        # is told by the path of daemon-worker.js among its arguments
-        # (supervisor-entrypoint.ts#resolveWorkerEntry; supervisor.ts fork,
-        # or the packaged runner with "node-script").
+        # is node running .../server/daemon-worker.js, or the packaged app
+        # running it through dist/daemon/node-entrypoint-runner.js
+        # node-script (supervisor-entrypoint.ts#resolveWorkerEntry and
+        # #resolveWorkerSpawnSpec; supervisor.ts fork).
         for name, daemon in (
                 ("macOS, forked by node", ("node", ["/usr/local/bin/node",
                                                    "/Applications/Paseo.app/Contents/Resources/app/node_modules/"
@@ -364,11 +365,23 @@ class AgentUnderPaseoTest(unittest.TestCase):
                 procs = [("bash", None, None), ("kimi-code", ["kimi-code"], self.agent.pid), daemon]
                 line = self.line("kimi", procs, PASEO_AGENT_ID=AGENT_ID)
                 self.assertEqual((line["method"], line["channel"]), ("detached", "paseo"))
-        # A script of another name is no daemon: the agent is in a terminal.
-        other = ("node", ["/usr/local/bin/node", "/opt/tool/daemon-helper.js"], None)
-        line = self.line("kimi", [("bash", None, None), ("kimi-code", ["kimi-code"], self.agent.pid), other],
-                         PASEO_AGENT_ID=AGENT_ID)
-        self.assertEqual(line["method"], "exit-on-event")
+        # Anything else is no daemon, the agent is in a terminal: a script of
+        # another name, or a file named daemon-worker.js that no node runs as
+        # the worker (an editor, a shell script, an argument of another
+        # script, another server's tail, the packaged app without its runner).
+        for name, other in (
+                ("another script", ("node", ["/usr/local/bin/node", "/opt/tool/daemon-helper.js"], None)),
+                ("an editor", ("editor", ["editor", "/tmp/daemon-worker.js"], None)),
+                ("a shell", ("bash", ["bash", "daemon-worker.js"], None)),
+                ("an argument of another script", ("node", ["node", "/opt/tool/cli.js",
+                                                            "/x/server/daemon-worker.js"], None)),
+                ("node with a bare file", ("node", ["node", "/tmp/daemon-worker.js"], None)),
+                ("the packaged app without its runner", ("Paseo.exe", ["Paseo.exe", "node-script",
+                                                                        "C:\\P\\server\\daemon-worker.js"], None))):
+            with self.subTest(case=name):
+                line = self.line("kimi", [("bash", None, None), ("kimi-code", ["kimi-code"], self.agent.pid), other],
+                                 PASEO_AGENT_ID=AGENT_ID)
+                self.assertEqual(line["method"], "exit-on-event")
 
     def test_the_acp_terminal_and_an_agent_nested_in_it(self):
         line = self.line("gemini", [("bash", None, None), DAEMON], PASEO_AGENT_ID=AGENT_ID)
