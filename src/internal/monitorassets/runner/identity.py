@@ -156,9 +156,36 @@ def host_form(placement, registry, host_sign, self_pid=None):
     between = [p for p in chain[:host] if not is_loader(p, self_pid) and record_of(p, registry) is not None]
     if not between:
         return HOST_FORM_TERMINAL
-    if placement.agent is not None and placement.top + 1 == host and placement.agent_index < host:
-        return HOST_FORM_AGENT
+    if placement.agent is not None and placement.agent_index < host:
+        above = placement.top + 1
+        executables = _record_executables(placement.agent, registry)
+        # A wrapper of the same record between the agent's processes and
+        # the host (the npm launcher of Codex: node .../bin/codex.js) is
+        # part of the agent, as processes of one record in a row are
+        # ("Addressee and check", item 2).
+        while above < host and _wrapper_of(chain[above], executables):
+            above += 1
+        if above == host:
+            return HOST_FORM_AGENT
     return HOST_FORM_FOREIGN
+
+
+def _record_executables(agent_proc, registry):
+    agent_id = record_of(agent_proc, registry)
+    if agent_id is None:
+        return set()
+    return set((registry.agents[agent_id].get("process") or {}).get("executables") or [])
+
+
+def _wrapper_of(proc, executables):
+    """Whether proc runs a script named as one of the record's executables
+    through an interpreter (its first argument: .../codex.js for codex)."""
+    argv = proc.argv or []
+    if len(argv) < 2 or not executables:
+        return False
+    script = os.path.basename(argv[1].replace("\\", "/"))
+    stem, ext = os.path.splitext(script)
+    return ext.lower() in (".js", ".mjs", ".cjs") and stem in executables
 
 
 class AddressSpec(object):

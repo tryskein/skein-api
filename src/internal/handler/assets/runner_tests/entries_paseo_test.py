@@ -311,6 +311,21 @@ class AgentUnderPaseoTest(unittest.TestCase):
         self.assertEqual(RUNNER.load_preflight(self.world.env("tok-%d" % self.n, "codex")["SKEIN_TOKEN_FILE"])
                          ["fallbacks"], ["zavod"])
 
+    def test_the_npm_wrapper_of_codex_is_part_of_the_agent_paseo_launched(self):
+        # Codex from npm: node runs .../bin/codex.js, which starts the
+        # native codex; the daemon launched node. One agent of one record:
+        # Paseo launched it, its own queue is not used under the host.
+        env = dict(PASEO_AGENT_ID=AGENT_ID, CODEX_THREAD_ID=THREAD)
+        wrapper = ("node", ["node", "/usr/lib/node_modules/@openai/codex/bin/codex.js", "app-server"], None)
+        procs = [("bash", None, None), ("codex", ["codex", "app-server"], self.agent.pid), wrapper, DAEMON]
+        line = self.line("codex", procs, **env)
+        self.assertEqual((line["method"], line["channel"]), ("detached", "paseo"))
+        self.assertIn("delivery: not used under host paseo", line["reason"])
+        # Another program between them is not the agent's: no launch.
+        other = ("node", ["node", "/opt/tool/server.js"], None)
+        line = self.line("codex", [("bash", None, None), ("codex", ["codex"], self.agent.pid), other, DAEMON], **env)
+        self.assertEqual(line["channel"], "codex-queue")
+
     def test_kimi_tui_against_kimi_in_paseo(self):
         line = self.line("kimi", in_terminal("kimi-code"), PASEO_AGENT_ID=AGENT_ID)
         self.assertEqual(line["method"], "exit-on-event")
