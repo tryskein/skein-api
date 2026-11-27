@@ -158,6 +158,11 @@ class Detector(object):
         confirmed are not enabled, for the preflight line."""
         return []
 
+    def host_messages(self, ctx):
+        """The host messages of the environments without a channel the
+        agent runs in (US-8). This one finds none."""
+        return []
+
     def address_specs(self, ctx):
         """The AddressSpecs of the identity of the addressee."""
         return []
@@ -986,6 +991,8 @@ def preflight(token_file, env, registry, settings, detector=None, prober=None, p
     # the `client` value "general" (the general record), not into warnings.
     record_warnings = settings.record.warnings if settings.record is not None else []
     warnings = [w for w in settings.warnings if w not in record_warnings] + list(detector.warnings)
+    # An environment without a channel says so; the choice is the same.
+    warnings.extend(detector.host_messages(ctx))
     if not external:
         warnings.append("The ledger directory is not writable: no external channel is used.")
     binding = None

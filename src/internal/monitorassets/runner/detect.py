@@ -21,6 +21,12 @@
 # the runner first; the other blind channels are skipped when the runner is
 # in a multiplexer pane.
 #
+# An environment without a channel (the registry's "environments": an
+# editor, an orchestrator, a terminal that cannot wake an agent) is
+# recognised by the env conditions of its detect: it adds its host message
+# to the warnings of the preflight line, which the first full monitor_started
+# repeats, and changes nothing of the choice of the method.
+#
 # The binding to a pane is a boundary object (PaneBinder): bind() answers for
 # one blind channel whether the runner is a descendant of the agent process
 # in a pane of that channel. The base one here confirms nothing; the
@@ -38,6 +44,12 @@ ZAVOD_AGENT_ID_VAR = "ZAVOD_AGENT_ID"
 ZAVOD_UUID = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
 # The cause of the warning about two terminal environments.
 AMBIGUOUS_TERMINAL = "ambiguous_terminal"
+# The host message of an environment without a channel (US-8): its kind in
+# the record, the code that starts its warning, the text after the code.
+HOST_MESSAGES = {
+    "cannot-wake": ("host_cannot_wake", "%s cannot wake the agent; the agent's own method works."),
+    "unsupported": ("host_unsupported", "a monitor inside %s is not supported."),
+}
 # The warning of a chosen blind channel.
 BLIND_WARNING = "Blind delivery: the text is typed into the agent's pane and can mix with what a person types there."
 
@@ -105,6 +117,19 @@ class RegistryDetector(Detector):
             if b.channel["id"] == channel_id and b.confirmed:
                 return b
         return None
+
+    def host_messages(self, ctx):
+        """The host messages of the environments without a channel whose
+        variables are set, in registry order: "<code>: <text>"."""
+        out = []
+        for e in ctx.registry.doc.get("environments") or []:
+            conds = e.get("detect") or {}
+            if not conds.get("env") or not all(env_holds(c, ctx.env) for c in conds["env"]):
+                continue
+            kind = HOST_MESSAGES.get(e.get("hostMessage"))
+            if kind is not None:
+                out.append("%s: %s" % (kind[0], kind[1] % (e.get("name") or e.get("id"))))
+        return out
 
     def blind_causes(self, ctx):
         """Why each blind channel of this environment is not enabled by its
