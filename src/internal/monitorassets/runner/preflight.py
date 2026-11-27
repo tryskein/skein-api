@@ -526,7 +526,8 @@ def channel_available(ctx, channel_id):
         # given by the variables of the agent process.
         http = spec.get("http") or {}
         try:
-            expand_url(http.get("url") or "", ctx.env)
+            endpoint = read_endpoint(http, ctx.env)[0] if http.get("endpointFile") else None
+            expand_url(http.get("url") or "", ctx.env, endpoint=endpoint)
         except ExecutorRefusal as exc:
             return False, "channel %s: %s" % (channel_id, exc.reason)
         if http.get("keyEnv") and http_key(http, ctx.env) is None:
