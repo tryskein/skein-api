@@ -905,7 +905,15 @@ class UnusableLedgerTest(Base):
         self.deliver(led, ["1"])
         path = led._path()
         for name, doc in (("no addressees", {}), ("not a list", {"addressees": {}}),
-                          ("an entry that is no object", {"addressees": [1]})):
+                          ("an entry that is no object", {"addressees": [1]}),
+                          # Review round 3 of wave 7, row 14: an entry the
+                          # code would walk into an error.
+                          ("an entry without events", {"addressees": [{"processes": [], "addresses": []}]}),
+                          ("an event record that is no object", {"addressees": [{"events": {"1": 7}}]}),
+                          ("a reservation that is no object",
+                           {"addressees": [{"events": {"1": {"delivering": "x"}}}]}),
+                          ("addresses that are no list", {"addressees": [{"events": {}, "addresses": {}}]}),
+                          ("a window that is no object", {"addressees": [{"events": {}, "window": 5}]})):
             with self.subTest(case=name):
                 with open(path) as fh:
                     version = json.load(fh)["version"]

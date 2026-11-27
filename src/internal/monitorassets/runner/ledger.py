@@ -519,10 +519,8 @@ class Ledger(object):
             raise LedgerUnavailable("corrupt")
         if not isinstance(doc, dict) or doc.get("version") != LEDGER_VERSION:
             raise LedgerUnavailable("corrupt")
-        addressees = doc.get("addressees")
-        if not isinstance(addressees, list) or not all(
-                isinstance(e, dict) and isinstance(e.get("events", {}), dict) for e in addressees):
-            # A document without a usable collection of addressees is as
+        if not _doc_usable(doc):
+            # A document whose addressees this code cannot walk is as
             # unusable as one that does not parse.
             raise LedgerUnavailable("corrupt")
         return doc
@@ -858,6 +856,40 @@ def defer_lines(journal, lines, env=None):
             raise LedgerUnavailable(exc.strerror or "write_failed")
 
 
+# The parts of an addressee entry and their types: events must be there
+# (every entry is written with them); the others may be missing in an
+# entry written before they existed.
+_ENTRY_PARTS = (("events", dict, True), ("processes", list, False), ("addresses", list, False),
+                ("window", dict, False), ("series", dict, False))
+# The parts of the record of an event that are objects when present.
+_RECORD_PARTS = ("delivering", "addressee", "monitors")
+
+
+def _doc_usable(doc):
+    """Whether every addressee entry of the ledger document has the shape
+    the code walks: no part missing that is always written, no part of
+    another type, every event record an object with object parts."""
+    addressees = doc.get("addressees") if isinstance(doc, dict) else None
+    if not isinstance(addressees, list):
+        return False
+    for entry in addressees:
+        if not isinstance(entry, dict):
+            return False
+        for name, kind, required in _ENTRY_PARTS:
+            if name not in entry:
+                if required:
+                    return False
+                continue
+            if not isinstance(entry[name], kind):
+                return False
+        for rec in entry["events"].values():
+            if not isinstance(rec, dict):
+                return False
+            if any(part in rec and not isinstance(rec[part], dict) for part in _RECORD_PARTS):
+                return False
+    return True
+
+
 def _read_tail(path):
     try:
         raw = current_platform().read_own_file(path)
@@ -1019,6 +1051,9 @@ def _named_by_record(root, key):
         try:
             doc = json.loads(current_platform().read_own_file(os.path.join(root, name)).decode("utf-8"))
         except (PlatformRefusal, OSError, ValueError):
+            return True
+        if not _doc_usable(doc):
+            # A document that cannot be walked may name the key: keep it.
             return True
         for entry in doc.get("addressees") or []:
             for rec in (entry.get("events") or {}).values():
