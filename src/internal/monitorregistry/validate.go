@@ -722,8 +722,10 @@ func (v *validator) environment(path string, e *Environment) {
 }
 
 // formatArgv validates the argument list of a command that never carries
-// a text, whose program reads braces of its own: an element that starts
-// with "{" is a placeholder, any other may hold braces ("#{pane_pid}").
+// a text, whose program reads braces of its own: an element of the shape of
+// a placeholder ("{env:NAME}", "{text}", "{textFile}", "{delivery}", a prefix
+// and one variable) is checked as one; any other may hold braces
+// ("#{pane_pid}", a JSON format of tmux).
 func (v *validator) formatArgv(path string, argv []string) {
 	if len(argv) == 0 {
 		v.add(RuleInvalid, path, "the argument list is empty")
@@ -733,11 +735,21 @@ func (v *validator) formatArgv(path string, argv []string) {
 		v.add(RuleInvalid, path+"[0]", "the program must be a literal name")
 	}
 	for i, a := range argv[1:] {
-		if strings.HasPrefix(a, "{") || !strings.ContainsAny(a, "{}") {
+		if placeholderShaped(a) || !strings.ContainsAny(a, "{}") {
 			v.value(fmt.Sprintf("%s[%d]", path, i+1), a, false)
 		}
 	}
 }
+
+// placeholderShaped reports whether an element reads as a placeholder of
+// an argument list, which the runner replaces.
+func placeholderShaped(a string) bool {
+	return placeholderShape.MatchString(a) || prefixedEnvPattern.MatchString(a)
+}
+
+// placeholderShape is "{name}" or "{name:...}" without quotes or braces
+// inside: a placeholder, known or not, never a literal.
+var placeholderShape = regexp.MustCompile(`^\{[A-Za-z][A-Za-z0-9]*(:[^{}"]*)?\}$`)
 
 // blindCalls validates the calls of a blind channel besides its insert: the
 // stage, the unstage and the submit, and the multiplexer mark.
@@ -1346,7 +1358,7 @@ func (v *validator) addressee(path string, c *Channel) {
 		}
 		v.httpGetURL(path+".command.httpGet", a.Command.HTTPGet, c.Executor)
 	} else if a.Command != nil {
-		v.argv(path+".command.argv", a.Command.Argv, false)
+		v.formatArgv(path+".command.argv", a.Command.Argv)
 	}
 	if a.Command != nil {
 		if len(a.Command.Results) == 0 {

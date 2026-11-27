@@ -87,7 +87,8 @@ class BlindCase(unittest.TestCase):
         # stdin as bytes keeps it as sent.
         self.cli["wezterm"] = fake_channel.FakeProgram(self.world.bin, "wezterm")
         self.cli["wezterm"].respond([{"exit": 0}])
-        self.cli["tmux"].respond(**{"display-message": [out(stdout="%d\n" % et.PANE_PID)]})
+        self.cli["tmux"].respond(**{"display-message": [out(stdout="%d\n" % et.PANE_PID)],
+                                    "display-message -p -F": [out(stdout=et.STATE_OK)]})
         self.cli["kitten"].respond(**{"@ ls": [kitty_ls(et.PANE_PID)]})
 
     def preflight(self, above=IN_PANE, agent="aider", client="aider", forced=None, **extra):
@@ -353,7 +354,8 @@ class NestedMultiplexersTest(BlindCase):
         # (tmux pane) <- tmux server: Zellij is the nearer one and is not
         # confirmed, so tmux is not used.
         self.fresh()
-        self.cli["tmux"].respond(**{"display-message": [out(stdout="4990\n")]})
+        self.cli["tmux"].respond(**{"display-message": [out(stdout="4990\n")],
+                                    "display-message -p -F": [out(stdout=et.STATE_OK)]})
         line = self.preflight(above=[(et.PANE_PID, "bash"), (et.SERVER_PID, "zellij"), (4990, "bash"),
                                      (4989, "tmux: server")], **dict(TMUX, **ZELLIJ))
         self.assertEqual((line["method"], line["channel"]), ("journal", None))

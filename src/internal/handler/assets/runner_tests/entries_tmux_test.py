@@ -53,6 +53,12 @@ RUNNER_PID, AGENT_PID, PANE_PID, SERVER_PID = 5000, 4998, 4997, 4996
 ZAVOD_UUID = "0f4c2a8e-3b1d-4e57-9a62-5d8b7c1e2f30"
 
 
+# The state of the pane the check reads (tmux format.c#format_cb_pane_input_off,
+# #format_cb_pane_synchronized, #format_cb_pane_in_mode): input on, not
+# synchronized, no mode.
+STATE_OK = {"inputOff": 0, "synchronized": 0, "modes": 0}
+
+
 def processes(agent, foreground=True, agent_pid=AGENT_PID):
     source = fake_proc.FakeProcesses()
     fg = agent_pid if foreground else PANE_PID
@@ -86,7 +92,8 @@ class TmuxCase(unittest.TestCase):
         self.world = eo.new_world(self)
         self.tmux = ah.FakeCli(self.world.bin, "tmux")
         # The CLI answers by subcommand; every other call exits 0.
-        self.tmux.respond(**{"display-message": [out(stdout="%d\n" % pane_pid)]})
+        self.tmux.respond(**{"display-message": [out(stdout="%d\n" % pane_pid)],
+                             "display-message -p -F": [out(stdout=STATE_OK)]})
 
     def env(self, name, client, **extra):
         change = {"TMUX_PANE": PANE, "TMUX": SERVER_A}
@@ -182,6 +189,27 @@ class TmuxRecordTest(TmuxCase):
                 mon.page([ft.note(i + 1)], cursor={"ts": "t", "id": i + 1})
                 self.assertEqual(mon.statuses(), [(i + 1, outcome)])
                 self.assertEqual([c[0] for c in self.argvs() if c[0] != "display-message"], calls)
+
+    def test_the_state_of_the_pane_before_the_insert_and_before_enter(self):
+        # Input off: paste-buffer and send-keys would write nothing and exit
+        # 0 - nothing is sent. Synchronized panes would send Enter to the
+        # others too, a pane in copy mode reads Enter as a key of the mode:
+        # after the insert, no Enter and unknown.
+        for name, states, outcome, calls in (
+                ("input off", [dict(STATE_OK, inputOff=1)], "refused-before-send", []),
+                ("synchronized", [STATE_OK, STATE_OK, dict(STATE_OK, synchronized=1)], "unknown",
+                 ["load-buffer", "paste-buffer"]),
+                ("in copy mode", [STATE_OK, STATE_OK, dict(STATE_OK, modes=1)], "unknown",
+                 ["load-buffer", "paste-buffer"])):
+            with self.subTest(case=name):
+                self.fresh()
+                mon = self.mon()
+                self.tmux.respond(**{"display-message -p -F": [out(stdout=st) for st in states]})
+                mon.page([ft.note(1)])
+                self.assertEqual(mon.statuses(), [(1, outcome)])
+                self.assertEqual([c[0] for c in self.argvs() if c[0] not in ("display-message", "delete-buffer")],
+                                 calls)
+                self.assertEqual(self.argvs("send-keys"), [])
 
     def test_an_agent_out_of_the_foreground_gets_nothing(self):
         self.fresh()

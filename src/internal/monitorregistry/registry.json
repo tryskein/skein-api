@@ -2722,7 +2722,7 @@
     {
       "id": "tmux",
       "about": "tmux: the event is pasted into the agent's pane from a buffer of its own, then Enter is sent; blind, without a receipt of the turn.",
-      "source": "github.com/tmux/tmux dace7f5 (3.8): cmd-load-buffer.c#cmd_load_buffer_exec (load-buffer -b <name> - reads the buffer from the client's stdin; a read or buffer error fails the command, and nothing is pasted); cmd-paste-buffer.c#cmd_paste_buffer_exec (paste-buffer -b <name> -t <pane> writes the buffer into the pane, -p with the bracketed-paste codes when the application in the pane asked for them, -d deletes the buffer; exit 0 only says the bytes were written, never that a turn began); cmd-set-buffer.c (delete-buffer -b <name>); cmd-send-keys.c#cmd_send_keys_exec (send-keys -t <pane> Enter); cmd-display-message.c (display-message -p -t <pane> '#{pane_pid}' prints the PID of the pane's process, an empty line for a pane that is not found); cmd-new-session.c (has-session -t <pane> exits 0 only when the pane's session exists). TMUX_PANE is the pane of the process, TMUX the server's socket with its pid and session: one pane id under two servers is two panes. A buffer of its own on every delivery keeps two monitors from pasting each other's text. Claude Squad runs its agents in plain tmux sessions (claudesquad_*) without variables of its own: the same record. Linux and macOS; on Windows only under Cygwin or WSL.",
+      "source": "github.com/tmux/tmux dace7f5 (3.8): cmd-load-buffer.c#cmd_load_buffer_exec (load-buffer -b <name> - reads the buffer from the client's stdin; a read or buffer error fails the command, and nothing is pasted); cmd-paste-buffer.c#cmd_paste_buffer_exec (paste-buffer -b <name> -t <pane> writes the buffer into the pane, -p with the bracketed-paste codes when the application in the pane asked for them, -d deletes the buffer; exit 0 only says the bytes were written, never that a turn began); cmd-set-buffer.c (delete-buffer -b <name>); cmd-send-keys.c#cmd_send_keys_exec (send-keys -t <pane> Enter); cmd-display-message.c (display-message -p -t <pane> '#{pane_pid}' prints the PID of the pane's process, an empty line for a pane that is not found); cmd-new-session.c (has-session -t <pane> exits 0 only when the pane's session exists). TMUX_PANE is the pane of the process, TMUX the server's socket with its pid and session: one pane id under two servers is two panes. A buffer of its own on every delivery keeps two monitors from pasting each other's text. Claude Squad runs its agents in plain tmux sessions (claudesquad_*) without variables of its own: the same record. Linux and macOS; on Windows only under Cygwin or WSL. Before the insert and before Enter the pane's state (format.c#format_cb_pane_input_off: input off makes paste-buffer and send-keys write nothing yet exit 0; #format_cb_pane_synchronized: synchronize-panes sends the key to the other panes too; #format_cb_pane_in_mode: a pane in copy mode reads the key as a key of the mode) must be input on, not synchronized, in no mode: else nothing goes before the insert (a refusal before send) and no Enter after it (unknown).",
       "step": 7,
       "order": 1,
       "kind": "terminal",
@@ -2831,7 +2831,31 @@
       ],
       "addressee": {
         "process": "foreground",
-        "limitation": "tmux reports no turn: exit 0 of the paste and of Enter only says the bytes were written into the pane."
+        "limitation": "tmux reports no turn: exit 0 of the paste and of Enter only says the bytes were written into the pane.",
+        "command": {
+          "argv": [
+            "tmux",
+            "display-message",
+            "-p",
+            "-F",
+            "{\"inputOff\":#{pane_input_off},\"synchronized\":#{pane_synchronized},\"modes\":#{pane_in_mode}}",
+            "-t",
+            "{env:TMUX_PANE}"
+          ],
+          "results": [
+            {
+              "match": {
+                "exitCode": 0,
+                "json": {
+                  "inputOff": "0",
+                  "synchronized": "0",
+                  "modes": "0"
+                }
+              },
+              "result": "same"
+            }
+          ]
+        }
       },
       "panePid": {
         "argv": [
