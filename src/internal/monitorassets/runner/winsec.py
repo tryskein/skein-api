@@ -178,9 +178,12 @@ class _SecurityAttributes(ctypes.Structure):
 
 
 # The system source of views and private directories (ctypes, stdlib only).
-# Handles are opened without following a reparse point and without
-# FILE_SHARE_DELETE, so nobody deletes or renames a component while one is
-# held; a caller keeps them until it no longer needs the path.
+# Handles are opened without following a reparse point. A handle of a path
+# component has READ_CONTROL and FILE_READ_ATTRIBUTES only, an access the
+# sharing check of Windows does not count: holding it does not keep anyone
+# from deleting or renaming the component. What keeps the path is criterion
+# (b): no account but the user and the trusted system accounts may replace
+# a component.
 class WinSecurity(object):
     def __init__(self):
         k = self._k = ctypes.WinDLL("kernel32", use_last_error=True)
@@ -250,7 +253,7 @@ class WinSecurity(object):
 
     # A handle of an existing file or directory: READ_CONTROL and
     # FILE_READ_ATTRIBUTES, and GENERIC_READ when data is asked for; shared
-    # for reading and writing, not for deletion; a reparse point is opened
+    # for reading and writing, and for deletion when data is read; a reparse point is opened
     # itself, not followed (FILE_FLAG_OPEN_REPARSE_POINT), a directory too
     # (FILE_FLAG_BACKUP_SEMANTICS).
     def open(self, path, data=False):

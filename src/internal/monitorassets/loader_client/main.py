@@ -280,10 +280,13 @@ def loader_client_action(reason, issue):
 # checks that a file can be created in it, opens every component of the path
 # from the root of the drive down to it and checks criterion (b) of P-9 on
 # their descriptors, then writes starter.py byte for byte and prints the
-# ready line. The handles stay open (no FILE_SHARE_DELETE) until the process
-# ends, after the ready line, so between the check and the Write no other
-# account deletes, renames or rechanges a component. Every refusal is one
-# prepare_failed line {reason, action}; no line repeats a path (INV-17).
+# ready line. The handles stay open until the process ends, after the ready
+# line; they hold the views that were checked, not the path: their access
+# (READ_CONTROL, FILE_READ_ATTRIBUTES) takes no part in the sharing check of
+# Windows. Between the check and the Write no other account deletes,
+# renames or rechanges a component because criterion (b) proved that none
+# may. Every refusal is one prepare_failed line {reason, action}; no line
+# repeats a path (INV-17).
 
 LOADER_PREPARE_MINT = " Mint a new monitor with skein_get_monitor_script and the same parameters."
 LOADER_PREPARE_FIX = (" Fix the cause, then mint a new monitor with skein_get_monitor_script and the"
