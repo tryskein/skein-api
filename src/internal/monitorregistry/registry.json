@@ -852,7 +852,10 @@
         "Paradev follows an agent only through its hooks; the text of an event is one argument of the paradev command, visible to other local users through ps."
       ],
       "address": {
-        "env": "SUPERSET_TERMINAL_ID"
+        "env": "SUPERSET_TERMINAL_ID",
+        "qualifiers": [
+          "SUPERSET_WORKSPACE_ID"
+        ]
       }
     },
     {
@@ -944,7 +947,10 @@
         ]
       },
       "address": {
-        "env": "CMUX_SURFACE_ID"
+        "env": "CMUX_SURFACE_ID",
+        "qualifiers": [
+          "CMUX_SOCKET_PATH"
+        ]
       }
     },
     {
@@ -1027,7 +1033,10 @@
         ]
       },
       "address": {
-        "env": "CMUX_SURFACE_ID"
+        "env": "CMUX_SURFACE_ID",
+        "qualifiers": [
+          "CMUX_SOCKET_PATH"
+        ]
       }
     },
     {
@@ -1657,7 +1666,10 @@
         "Sculptor refuses a terminal agent that is busy or did not opt in to automated prompts; the text of an event is one argument of the sculpt command, visible to other local users through ps."
       ],
       "address": {
-        "env": "SCULPT_AGENT_ID"
+        "env": "SCULPT_AGENT_ID",
+        "qualifiers": [
+          "SCULPT_API_PORT"
+        ]
       }
     },
     {
@@ -1723,7 +1735,10 @@
         "Conductor: the text of every event goes to the Conductor cloud API; the API is documented for cloud workspaces only, and a local workspace sets neither CONDUCTOR_API_URL nor a key."
       ],
       "address": {
-        "env": "CONDUCTOR_SESSION_ID"
+        "env": "CONDUCTOR_SESSION_ID",
+        "qualifiers": [
+          "CONDUCTOR_API_URL"
+        ]
       }
     },
     {
