@@ -197,3 +197,37 @@ func TestClientUsage_OnlyCommonSteps(t *testing.T) {
 		}
 	}
 }
+
+// TestClientCommands_MintParameters — rows #15 and #16 (review of the gate
+// T051): the preflight command carries the parameters of the mint, so a
+// reissue repeats them (US-12): SKEIN_SUBTREE is 1 for subtree=true and
+// SKEIN_EVENT_TYPES the event types joined by commas, both empty for the
+// defaults (comment.created and issue.closed).
+func TestClientCommands_MintParameters(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		args map[string]any
+		want string
+	}{
+		{"defaults", map[string]any{}, " SKEIN_SUBTREE='' SKEIN_EVENT_TYPES='' "},
+		{"subtree", map[string]any{"subtree": true}, " SKEIN_SUBTREE='1' SKEIN_EVENT_TYPES='' "},
+		{"other event types", map[string]any{"eventTypes": []any{"issue.closed"}}, " SKEIN_SUBTREE='' SKEIN_EVENT_TYPES='issue.closed' "},
+		{"the default event types named", map[string]any{"eventTypes": []any{"comment.created", "issue.closed"}}, " SKEIN_SUBTREE='' SKEIN_EVENT_TYPES='' "},
+		{"both", map[string]any{"subtree": true, "eventTypes": []any{"issue.status_changed", "issue.closed"}}, " SKEIN_SUBTREE='1' SKEIN_EVENT_TYPES='issue.status_changed,issue.closed' "},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			args := map[string]any{"id": "sk-42", "client": "unit-agent"}
+			for k, v := range tc.args {
+				args[k] = v
+			}
+			res := newGMSUnit(gmsUnitRegistry(t)).call(t, args)
+			if res.IsError {
+				t.Fatalf("call refused: %v", extractToolJSON(t, res))
+			}
+			preflight, _ := extractToolJSON(t, res)["preflight"].(string)
+			if !strings.Contains(preflight, tc.want) {
+				t.Fatalf("preflight lacks %q:\n%s", tc.want, preflight)
+			}
+		})
+	}
+}
