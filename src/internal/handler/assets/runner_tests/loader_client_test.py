@@ -36,6 +36,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -206,6 +207,37 @@ class LostAccessTest(unittest.TestCase):
                 self.assertEqual((rc, lines[0]["event"], lines[0]["reason"]), (1, "paused", "server_unreachable"))
                 self.assertEqual(box.snapshot(), before)
                 self.assertEqual(box.deliveries(), [])
+
+    def test_a_download_that_trickles_ends_within_the_timeout(self):
+        # Review of wave 8, row 20: the timeout bounds the whole download,
+        # not each socket operation. The served loader here waits 2 s.
+        stop = threading.Event()
+        self.addCleanup(stop.set)
+
+        def trickle(h):
+            h.send_response(200)
+            h.send_header("Content-Length", str(1 << 20))
+            h.end_headers()
+            try:
+                while not stop.is_set():
+                    h.wfile.write(b"x")
+                    h.wfile.flush()
+                    time.sleep(0.5)
+            except OSError:
+                pass
+        mark = "LOADER_DOWNLOAD_TIMEOUT_SEC = 30"
+        loader = harness.served_loader()
+        self.assertIn(mark, loader)
+        short = loader.replace(mark, "LOADER_DOWNLOAD_TIMEOUT_SEC = 2").encode("utf-8")
+        srv = harness.LoaderServer(trickle, loader=lambda h: h.send_body(200, short))
+        self.addCleanup(srv.stop)
+        box = Box(self)
+        before = box.snapshot()
+        started = time.monotonic()
+        rc, lines, _ = box.run(srv.url(), extra={"SKEIN_LOADER_SHA256": sha(short)})
+        self.assertLess(time.monotonic() - started, 15)
+        self.assertEqual((rc, lines[0]["event"], lines[0]["reason"]), (1, "paused", "server_unreachable"))
+        self.assertEqual(box.snapshot(), before)
 
     def test_a_live_owner_of_the_lock_is_left_to_end_the_monitor(self):
         for code in (401, 403):

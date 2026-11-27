@@ -111,7 +111,34 @@ def loader_client_read_token(path):
 
 
 def loader_client_download(base, token, want):
-    """The runner body. Raises Stop by the answer."""
+    """The runner body. Raises Stop by the answer. The whole download -
+    connection, answer and body - ends within LOADER_DOWNLOAD_TIMEOUT_SEC:
+    the timeout of the request bounds each socket operation only, so a
+    server that trickles bytes would hold the start past it. The download
+    runs in a daemon thread the start stops waiting for (it ends with the
+    process)."""
+    import threading
+    got = {}
+
+    def fetch():
+        try:
+            got["body"] = _loader_client_fetch(base, token, want)
+        except Stop as stop:
+            got["stop"] = stop
+        except BaseException:
+            got["stop"] = Stop("server_unreachable")
+    worker = threading.Thread(target=fetch)
+    worker.daemon = True
+    worker.start()
+    worker.join(LOADER_DOWNLOAD_TIMEOUT_SEC)
+    if worker.is_alive():
+        raise Stop("server_unreachable")
+    if "stop" in got:
+        raise got["stop"]
+    return got["body"]
+
+
+def _loader_client_fetch(base, token, want):
     import http.client
     import urllib.error
     import urllib.request
