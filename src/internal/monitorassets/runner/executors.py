@@ -211,10 +211,12 @@ def expand_path_value(value, env):
     "/" and literal elements. ExecutorRefusal when the variable it needs is
     not set."""
     if value.startswith("~/"):
-        home = env.get("HOME", "")
-        if not home:
+        # The home of the agent process as the programs take it: HOME, or
+        # USERPROFILE on Windows when HOME is unset (preflight.py#home_path).
+        path = home_path(value, env)
+        if path is None:
             raise ExecutorRefusal("variable HOME is not set")
-        return os.path.join(home, value[2:])
+        return path
     head, sep, rest = value.partition("/")
     if head.startswith("{env:"):
         base = env_value(head, env)

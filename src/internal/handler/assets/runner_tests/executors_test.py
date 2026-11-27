@@ -610,6 +610,25 @@ class PreflightProbeTest(unittest.TestCase):
         self.assertEqual(tcp.received, b"")
 
 
+class ProbeHomeTest(unittest.TestCase):
+    """A probe path under "~/" takes the home of the agent process as its
+    programs do: HOME, else USERPROFILE on Windows (the Codex record's
+    ~/.codex after CODEX_SQLITE_HOME and CODEX_HOME)."""
+
+    def test_the_home_of_a_windows_process_without_home(self):
+        with mock.patch.object(os, "name", "nt"):
+            self.assertEqual(RUNNER.expand_path_value("~/.codex", {"USERPROFILE": "/users/ivan"}),
+                             os.path.join("/users/ivan", ".codex"))
+            self.assertEqual(RUNNER.expand_path_value("~/.codex", {"HOME": "/home/x", "USERPROFILE": "/u"}),
+                             os.path.join("/home/x", ".codex"))
+            with self.assertRaises(RUNNER.ExecutorRefusal):
+                RUNNER.expand_path_value("~/.codex", {})
+
+    def test_posix_takes_home_only(self):
+        with self.assertRaises(RUNNER.ExecutorRefusal):
+            RUNNER.expand_path_value("~/.codex", {"USERPROFILE": "/users/ivan"})
+
+
 class ThreadReadRequestTest(unittest.TestCase):
     """The request executor on a pipe that cannot be read without blocking
     (Windows with Python below 3.12, a monitor without client: US-1, INV-7):
