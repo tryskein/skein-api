@@ -306,7 +306,8 @@ type Channel struct {
 	// one the preflight saw.
 	Addressee AddresseeCheck `json:"addressee"`
 	// PanePID tells a blind channel how to get the PID of the pane's
-	// process. Required for a blind channel, absent otherwise.
+	// process. Only a blind channel has one; a blind channel whose source
+	// gives no PID has none and is never bound to a pane, so never used.
 	PanePID *PanePID `json:"panePid,omitempty"`
 	// Multiplexer marks a blind channel of a terminal multiplexer (tmux,
 	// Zellij): a runner in its pane skips step 6 and the other blind

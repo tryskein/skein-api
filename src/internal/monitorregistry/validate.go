@@ -439,9 +439,8 @@ func (v *validator) channel(path string, c *Channel) {
 		}
 	}
 
-	if c.Blind && c.PanePID == nil {
-		v.add(RuleInvalid, path+".panePid", "a blind channel needs the source of its pane PID")
-	}
+	// A blind channel without a pane PID source is never bound to a pane, so
+	// it is never used (US-7); it still places the runner in its pane.
 	if !c.Blind && c.PanePID != nil {
 		v.add(RuleInvalid, path+".panePid", "only a blind channel has a pane PID source")
 	}

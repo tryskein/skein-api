@@ -1864,6 +1864,411 @@
           "TMUX"
         ]
       }
+    },
+    {
+      "id": "zellij",
+      "about": "Zellij: the event is pasted into the agent's pane, then Enter is sent; blind. Its CLI gives no PID of a pane's process, so it is never bound to a pane and never used; it still keeps an outer channel from typing into it.",
+      "source": "github.com/zellij-org/zellij d73e7d5 (0.46.1): zellij-utils/src/cli.rs#CliAction (action paste <chars> --pane-id <id>: the text by bracketed paste; action send-keys --pane-id <id> Enter; action list-panes --json: the panes, sends nothing; --pane-id from 0.44 on) and zellij-utils/src/data.rs#PaneInfo and #PaneListEntry (the answer of list-panes: no PID of a pane's process). ZELLIJ_PANE_ID is the pane of the process, ZELLIJ_SESSION_NAME its session. Panes are children of the Zellij server process. Linux, macOS, Windows.",
+      "step": 7,
+      "order": 2,
+      "kind": "terminal",
+      "blind": true,
+      "multiplexer": true,
+      "detect": {
+        "env": [
+          {
+            "name": "ZELLIJ_PANE_ID"
+          },
+          {
+            "name": "ZELLIJ_SESSION_NAME"
+          }
+        ]
+      },
+      "executor": {
+        "type": "argv",
+        "argv": [
+          "zellij",
+          "action",
+          "paste",
+          "--pane-id",
+          "{env:ZELLIJ_PANE_ID}",
+          "{text}"
+        ],
+        "feed": "arg",
+        "timeoutSec": 10
+      },
+      "submit": {
+        "executor": {
+          "type": "argv",
+          "argv": [
+            "zellij",
+            "action",
+            "send-keys",
+            "--pane-id",
+            "{env:ZELLIJ_PANE_ID}",
+            "Enter"
+          ],
+          "feed": "stdin",
+          "timeoutSec": 10
+        },
+        "outcomes": [
+          {
+            "match": {
+              "exitCode": 0
+            },
+            "outcome": "input-written"
+          }
+        ]
+      },
+      "idle": {
+        "type": "none"
+      },
+      "outcomes": [
+        {
+          "match": {
+            "exitCode": 0
+          },
+          "outcome": "input-written"
+        }
+      ],
+      "probes": [
+        {
+          "type": "argv",
+          "source": "github.com/zellij-org/zellij d73e7d5 (0.46.1): zellij-utils/src/cli.rs#CliAction (action list-panes lists the panes of the session and sends nothing).",
+          "argv": [
+            "zellij",
+            "action",
+            "list-panes",
+            "--json"
+          ],
+          "results": [
+            {
+              "match": {
+                "exitCode": 0
+              },
+              "result": "available"
+            }
+          ]
+        }
+      ],
+      "addressee": {
+        "process": "foreground",
+        "limitation": "Zellij reports no turn, and its CLI gives no PID of a pane's process: the channel is not bound to a pane."
+      },
+      "binaries": {
+        "linux": [
+          "zellij"
+        ],
+        "macos": [
+          "zellij"
+        ],
+        "windows": [
+          "zellij.exe"
+        ]
+      },
+      "address": {
+        "env": "ZELLIJ_PANE_ID",
+        "qualifiers": [
+          "ZELLIJ_SESSION_NAME"
+        ]
+      }
+    },
+    {
+      "id": "wezterm",
+      "about": "WezTerm: the event is sent to the agent's pane as a bracketed paste, then a carriage return; blind. Its CLI gives no PID of a pane's process, so it is never bound to a pane and never used.",
+      "source": "github.com/wezterm/wezterm 0c655c1: wezterm/src/cli/send_text.rs#SendText (cli send-text --pane-id <id> reads the text from stdin when no text argument is given; a bracketed paste, or written as is with --no-paste) and wezterm/src/cli/list.rs#CliListResultItem (cli list --format json: the panes with their tty name, no PID; sends nothing). WEZTERM_PANE is the pane of the process. Linux, macOS, Windows.",
+      "step": 7,
+      "order": 3,
+      "kind": "terminal",
+      "blind": true,
+      "detect": {
+        "env": [
+          {
+            "name": "WEZTERM_PANE"
+          }
+        ]
+      },
+      "executor": {
+        "type": "argv",
+        "argv": [
+          "wezterm",
+          "cli",
+          "send-text",
+          "--pane-id",
+          "{env:WEZTERM_PANE}"
+        ],
+        "feed": "stdin",
+        "timeoutSec": 10
+      },
+      "submit": {
+        "executor": {
+          "type": "argv",
+          "argv": [
+            "wezterm",
+            "cli",
+            "send-text",
+            "--pane-id",
+            "{env:WEZTERM_PANE}",
+            "--no-paste"
+          ],
+          "feed": "stdin",
+          "timeoutSec": 10
+        },
+        "text": "\r",
+        "outcomes": [
+          {
+            "match": {
+              "exitCode": 0
+            },
+            "outcome": "input-written"
+          }
+        ]
+      },
+      "idle": {
+        "type": "none"
+      },
+      "outcomes": [
+        {
+          "match": {
+            "exitCode": 0
+          },
+          "outcome": "input-written"
+        }
+      ],
+      "probes": [
+        {
+          "type": "argv",
+          "source": "github.com/wezterm/wezterm 0c655c1: wezterm/src/cli/list.rs#ListCommand (cli list lists the panes and sends nothing).",
+          "argv": [
+            "wezterm",
+            "cli",
+            "list",
+            "--format",
+            "json"
+          ],
+          "results": [
+            {
+              "match": {
+                "exitCode": 0
+              },
+              "result": "available"
+            }
+          ]
+        }
+      ],
+      "addressee": {
+        "process": "foreground",
+        "limitation": "WezTerm reports no turn, and its CLI gives no PID of a pane's process: the channel is not bound to a pane."
+      },
+      "binaries": {
+        "linux": [
+          "wezterm"
+        ],
+        "macos": [
+          "wezterm"
+        ],
+        "windows": [
+          "wezterm.exe"
+        ]
+      },
+      "address": {
+        "env": "WEZTERM_PANE"
+      }
+    },
+    {
+      "id": "kitty",
+      "about": "kitty (allow_remote_control): the event is sent to the agent's window, then Enter; blind, and kitty reports no errors of either: input without a receipt.",
+      "source": "github.com/kovidgoyal/kitty 121ef18 (0.51.1): kitty/rc/send_text.py (send-text --stdin reads the text from stdin, --bracketed-paste auto wraps it when the program asked for it; \"errors are not reported, for technical reasons\"), kitty/rc/send_key.py (send-key enter), kitty/rc/base.py (--match state:self is the window the command runs in) and tools/cmd/at/main.go#send_rc_command (the client names that window by KITTY_WINDOW_ID), kitty/rc/ls.py with kitty/boss.py#list_os_windows and kitty/window.py#WindowDict (ls --match state:self: a JSON list of OS windows, tabs and windows; the pid of the window's process; sends nothing). KITTY_WINDOW_ID is the window, KITTY_LISTEN_ON the socket remote control listens on; remote control needs allow_remote_control. Linux and macOS.",
+      "step": 7,
+      "order": 4,
+      "kind": "terminal",
+      "blind": true,
+      "detect": {
+        "env": [
+          {
+            "name": "KITTY_WINDOW_ID"
+          },
+          {
+            "name": "KITTY_LISTEN_ON"
+          }
+        ]
+      },
+      "executor": {
+        "type": "argv",
+        "argv": [
+          "kitten",
+          "@",
+          "send-text",
+          "--match",
+          "state:self",
+          "--bracketed-paste",
+          "auto",
+          "--stdin"
+        ],
+        "feed": "stdin",
+        "timeoutSec": 10
+      },
+      "submit": {
+        "executor": {
+          "type": "argv",
+          "argv": [
+            "kitten",
+            "@",
+            "send-key",
+            "--match",
+            "state:self",
+            "enter"
+          ],
+          "feed": "stdin",
+          "timeoutSec": 10
+        },
+        "outcomes": [
+          {
+            "match": {
+              "exitCode": 0
+            },
+            "outcome": "input-without-receipt"
+          }
+        ]
+      },
+      "idle": {
+        "type": "none"
+      },
+      "outcomes": [
+        {
+          "match": {
+            "exitCode": 0
+          },
+          "outcome": "input-without-receipt"
+        }
+      ],
+      "probes": [
+        {
+          "type": "argv",
+          "source": "github.com/kovidgoyal/kitty 121ef18 (0.51.1): kitty/rc/ls.py (ls lists the windows and sends nothing; it fails without remote control).",
+          "argv": [
+            "kitten",
+            "@",
+            "ls",
+            "--match",
+            "state:self"
+          ],
+          "results": [
+            {
+              "match": {
+                "exitCode": 0
+              },
+              "result": "available"
+            }
+          ]
+        }
+      ],
+      "addressee": {
+        "process": "foreground",
+        "limitation": "kitty reports no errors of send-text and send-key: neither a refusal nor a turn is known."
+      },
+      "panePid": {
+        "argv": [
+          "kitten",
+          "@",
+          "ls",
+          "--match",
+          "state:self"
+        ],
+        "jsonField": "0.tabs.0.windows.0.pid"
+      },
+      "binaries": {
+        "linux": [
+          "kitten"
+        ],
+        "macos": [
+          "kitten"
+        ]
+      },
+      "address": {
+        "env": "KITTY_WINDOW_ID",
+        "qualifiers": [
+          "KITTY_LISTEN_ON"
+        ]
+      }
+    },
+    {
+      "id": "paseo-tab",
+      "about": "A terminal tab of Paseo: the event and Enter are typed into the tab in one call; blind, no receipt. Paseo gives no PID of a tab's process, so it is never bound to a tab and never used.",
+      "source": "github.com/getpaseo/paseo c1b43ee5: packages/cli/src/commands/terminal/send-keys.ts#executeSendKeysCommand (terminal send-keys <terminal-id> <keys...>: each key token, Enter as a carriage return, the rest as given, written to the terminal; an error exits 1; nothing reports that the program read it) with packages/client/src/terminals/index.ts#resolveKeyToken, and packages/cli/src/commands/terminal/index.ts (terminal ls lists the terminals, sends nothing). PASEO_TERMINAL_ID is the tab of the process; an agent of Paseo has PASEO_AGENT_ID, which detects the Paseo host and keeps blind channels off. No PID of a tab's process. Windows not found: the journal there.",
+      "step": 7,
+      "order": 5,
+      "kind": "terminal",
+      "blind": true,
+      "detect": {
+        "env": [
+          {
+            "name": "PASEO_TERMINAL_ID"
+          }
+        ]
+      },
+      "executor": {
+        "type": "argv",
+        "argv": [
+          "paseo",
+          "terminal",
+          "send-keys",
+          "{env:PASEO_TERMINAL_ID}",
+          "{text}",
+          "Enter"
+        ],
+        "feed": "arg",
+        "timeoutSec": 10
+      },
+      "idle": {
+        "type": "none"
+      },
+      "outcomes": [
+        {
+          "match": {
+            "exitCode": 0
+          },
+          "outcome": "input-without-receipt"
+        }
+      ],
+      "probes": [
+        {
+          "type": "argv",
+          "source": "github.com/getpaseo/paseo c1b43ee5: packages/cli/src/commands/terminal/index.ts (terminal ls --all lists the terminals and sends nothing).",
+          "argv": [
+            "paseo",
+            "terminal",
+            "ls",
+            "--all",
+            "--json"
+          ],
+          "results": [
+            {
+              "match": {
+                "exitCode": 0
+              },
+              "result": "available"
+            }
+          ]
+        }
+      ],
+      "addressee": {
+        "process": "foreground",
+        "limitation": "Paseo gives no PID of a tab's process: the channel is not bound to a tab."
+      },
+      "binaries": {
+        "linux": [
+          "paseo",
+          "~/.local/bin/paseo"
+        ],
+        "macos": [
+          "paseo",
+          "~/.local/bin/paseo"
+        ]
+      },
+      "address": {
+        "env": "PASEO_TERMINAL_ID"
+      }
     }
   ],
   "shells": {
