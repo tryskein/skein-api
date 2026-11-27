@@ -245,16 +245,18 @@ class BlindAddresseeTest(unittest.TestCase):
     def test_an_agent_on_another_terminal_of_the_pane_gets_nothing(self):
         # K3 of wave 13 round 1 (P-8): the foreground of the agent's own
         # terminal is not the pane's. An agent in an editor's terminal
-        # (nvim :terminal, vterm) on another PTY inside the pane is not its
-        # addressee: no stage, no insert, no Enter.
+        # (nvim :terminal, vterm) on another PTY inside the pane is not in
+        # the pane's foreground: no stage, no insert, no Enter. The process
+        # is the same, so it is a refusal before send ("Addressee and
+        # check", item 4), not another addressee.
         procs = fake_proc.FakeProcesses()
         procs.add(4241, 1, "bash", start="s-shell", pgid=4241, tpgid=4241, tty=1)
         procs.add(4242, 4241, "alpha", start="s-agent", pgid=4242, tpgid=4242, tty=2)
         mon = self.mon(procs)
         mon.page([dt.note(1)])
         self.assertEqual(self.box.calls(), [])
-        self.assertEqual([d[:2] for d in mon.deliveries()], [(1, "unknown")])
-        self.assertEqual(len(mon.degraded("addressee_changed")), 1)
+        self.assertEqual([d[:2] for d in mon.deliveries()], [(1, "refused-before-send")])
+        self.assertEqual(mon.degraded("addressee_changed"), [])
 
     def test_another_process_before_enter_withholds_it(self):
         procs = pane()
