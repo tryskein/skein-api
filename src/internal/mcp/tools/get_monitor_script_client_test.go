@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path"
 	"path/filepath"
@@ -27,11 +28,15 @@ func (f *fakeMonitorIssues) ResolveVisibleIssueProject(context.Context, string, 
 	return uuid.New(), nil
 }
 
-type fakeMonitorWatcher struct{ calls int }
+type fakeMonitorWatcher struct {
+	calls int
+	// err is what AddIssueWatch answers (nil: the watch is added).
+	err error
+}
 
 func (f *fakeMonitorWatcher) AddIssueWatch(context.Context, string, uuid.UUID, bool) error {
 	f.calls++
-	return nil
+	return f.err
 }
 
 type fakeMonitorMinter struct{ calls int }
@@ -192,6 +197,24 @@ func TestGetMonitorScriptClient_TokenDirCharacters(t *testing.T) {
 				t.Fatalf("tokenFilePath = %q, want it under %q", tokenFile, dir)
 			}
 		})
+	}
+}
+
+// TestGetMonitorScriptClient_NoTokenWithoutTheWatch — the tool watches the
+// task before it mints (row #3b, review of the gate T051): a watch that
+// fails is an internal_error, and no token is minted.
+func TestGetMonitorScriptClient_NoTokenWithoutTheWatch(t *testing.T) {
+	u := newGMSUnit(gmsUnitRegistry(t))
+	u.watcher.err = errors.New("watch store down")
+	res := u.call(t, map[string]any{"id": "sk-42"})
+	if !res.IsError {
+		t.Fatal("the call succeeded without its watch")
+	}
+	if body := extractToolJSON(t, res); body["error"] != ErrCodeInternalError {
+		t.Fatalf("error = %v, want %s", body["error"], ErrCodeInternalError)
+	}
+	if u.watcher.calls != 1 || u.minter.calls != 0 {
+		t.Fatalf("watch %d, mint %d: want one watch and no mint", u.watcher.calls, u.minter.calls)
 	}
 }
 
