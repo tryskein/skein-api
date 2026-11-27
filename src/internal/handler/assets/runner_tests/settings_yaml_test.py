@@ -122,6 +122,35 @@ class YamlSettingTest(unittest.TestCase):
             with self.subTest(word=word):
                 self.assert_read("display:\n  busy_input_mode: %s\n" % word, "display.busy_input_mode", expected)
 
+    def test_the_tail_of_an_entry_line_is_read_as_yaml_reads_it(self):
+        # YAML 1.1: spaces and a comment after the colon are no value (the
+        # key holds null, or the block below it); spaces after a scalar end
+        # it; a BOM opens the file; CRLF ends a line. None of them may end
+        # the reading with an exception: a form not read gives no value.
+        key = "display.busy_input_mode"
+        for name, text, expected in (
+                ("nothing after the colon", "display:\n  busy_input_mode:\n", None),
+                ("spaces after the colon", "display:\n  busy_input_mode:   \n", None),
+                ("one space after the colon", "display:\n  busy_input_mode: \n", None),
+                ("spaces and a comment after the colon", "display:\n  busy_input_mode:   # unset\n", None),
+                ("spaces after the scalar", "display:\n  busy_input_mode: queue   \n", "queue"),
+                ("spaces after a quoted scalar", "display:\n  busy_input_mode: 'queue'   \n", "queue"),
+                ("spaces after the section's colon", "display:   \n  busy_input_mode: queue\n", "queue"),
+                ("a comment after the section's colon", "display:  # shown\n  busy_input_mode: queue\n", "queue"),
+                ("CRLF and spaces", "display:  \r\n  busy_input_mode:  queue  \r\n", "queue"),
+                ("CRLF after an empty value", "display:\r\n  busy_input_mode:  \r\n", None),
+                ("a BOM before the first key", "﻿display:\n  busy_input_mode: queue\n", "queue"),
+                ("the last line without a line break", "display:\n  busy_input_mode:  ", None)):
+            with self.subTest(case=name):
+                self.assert_read(text, key, expected)
+        for name, text in (
+                ("a tab after the colon", "display:\n  busy_input_mode:\tqueue\n"),
+                ("a tab after the scalar", "display:\n  busy_input_mode: queue\t\n"),
+                ("a tab after the section's colon", "display:\t\n  busy_input_mode: queue\n"),
+                ("a tab before a comment", "display:\n  busy_input_mode: queue\t# set\n")):
+            with self.subTest(case=name):
+                self.assert_not_read(text, key)
+
     def test_a_key_the_file_does_not_hold_is_absent(self):
         # No such key: the agent's default applies (a setting that must not
         # carry a value holds then; one that must carry it does not).

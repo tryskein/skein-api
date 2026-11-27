@@ -122,9 +122,13 @@ def _entries(lines, start, end, indent):
         key = match.group("key")
         if key in entries or key == "<<":
             raise _NotRead()
+        # Only spaces or a comment after the colon: nothing on the line,
+        # the same as no rest at all.
         rest = match.group("rest")
-        if rest is not None and rest.startswith("#"):
-            rest = None
+        if rest is not None:
+            rest = rest.strip(" ")
+            if not rest or rest.startswith("#"):
+                rest = None
         if current is not None:
             entries[current[0]] = (current[1], current[2] + 1, i)
         current = [key, rest, i]
