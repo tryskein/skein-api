@@ -170,6 +170,30 @@ class InstructionTest(unittest.TestCase):
         self.assertEqual(second["kind"], "exit-on-event")
         self.assertIn("is_background: true", second["instruction"])
 
+    def test_qwen_in_bare_mode_exits_on_an_event(self):
+        # Review round 3 of wave 14, row 14 (QwenLM/qwen-code df0f008d,
+        # packages/core/src/utils/bareMode.ts#isBareMode, config.ts
+        # #DEFAULT_BARE_CORE_TOOLS): --bare, or QWEN_CODE_SIMPLE of 1, true,
+        # yes or on (any case, stripped), registers only read_file, edit,
+        # notebook_edit and the shell - no monitor tool, so no stream; the
+        # shell's background run remains.
+        argv = ["node", "/usr/bin/qwen"]
+        for name, extra, env, method in (
+                ("--bare", ["--bare"], {}, "exit-on-event"),
+                ("--bare with a value", ["--bare=true"], {}, "exit-on-event"),
+                ("QWEN_CODE_SIMPLE yes", [], {"QWEN_CODE_SIMPLE": " Yes "}, "exit-on-event"),
+                ("QWEN_CODE_SIMPLE 1", [], {"QWEN_CODE_SIMPLE": "1"}, "exit-on-event"),
+                ("QWEN_CODE_SIMPLE on", [], {"QWEN_CODE_SIMPLE": "ON"}, "exit-on-event"),
+                ("QWEN_CODE_SIMPLE true", [], {"QWEN_CODE_SIMPLE": "true"}, "exit-on-event"),
+                ("QWEN_CODE_SIMPLE 0", [], {"QWEN_CODE_SIMPLE": "0"}, "stream"),
+                ("QWEN_CODE_SIMPLE empty", [], {"QWEN_CODE_SIMPLE": ""}, "stream"),
+                ("neither", [], {}, "stream")):
+            with self.subTest(case=name):
+                line = self.line("qwen-code", ["node"], agent_argv=argv + extra, **env)
+                self.assertEqual(line["method"], method, line)
+                if method == "exit-on-event":
+                    self.assertIn("is_background: true", line["instruction"])
+
     def test_oh_my_pi_under_paseo_is_woken_by_paseo(self):
         # SC-002 "agent under Paseo - oh-my-pi": Paseo keeps no own method
         # of oh-my-pi, so its channel goes first.

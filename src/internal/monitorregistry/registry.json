@@ -223,7 +223,7 @@
     {
       "id": "qwen-code",
       "about": "Qwen Code: the runner's stdout lines become turns through its monitor tool, started again when it stops; or the runner exits after a batch and the end of the background command wakes the agent.",
-      "source": "github.com/QwenLM/qwen-code df0f008d (0.28.3): packages/core/src/tools/monitor.ts#MonitorTool (a start beyond MAX_CONCURRENT_MONITORS 16 running monitors, packages/core/src/services/monitorRegistry.ts, is refused with 'Cannot start monitor: maximum concurrent monitors (16) reached': a state of the agent's process the preflight cannot read, so the instruction says what to do; every stdout and stderr line is a notification; THROTTLE_BURST_SIZE 5 lines, then one per THROTTLE_REFILL_INTERVAL_MS 1000, the rest dropped; a line is cut at PARTIAL_LINE_BUFFER_CAP 4096 by JS length; the monitor stops after idle_timeout_ms of silence, at most MAX_IDLE_TIMEOUT_MS 600000, or after max_events, at most MAX_MAX_EVENTS 10000, with a notice that wakes the agent), packages/core/src/tools/shell.ts#ShellToolParams (run_shell_command, is_background: true; its end starts a turn through packages/cli/src/ui/hooks/use-llm-stream.ts); npm @qwen-code/qwen-code bin qwen (scripts/cli-entry.js under Node). No condition of the source makes the stream unavailable before a start: the cap of running monitors is a state of the agent's process, and the monitor tool turned off by its permissions (the coreTools allowlist, a deny rule, --exclude-tools: packages/core/src/config/config.ts#registerLazyTool) is a configuration of several layers the preflight does not read. The preflight therefore takes the stream whenever the record is found; the exit-on-event method is no fallback a refused start reaches, and the stream instruction does not offer it.",
+      "source": "github.com/QwenLM/qwen-code df0f008d (0.28.3): packages/core/src/tools/monitor.ts#MonitorTool (a start beyond MAX_CONCURRENT_MONITORS 16 running monitors, packages/core/src/services/monitorRegistry.ts, is refused with 'Cannot start monitor: maximum concurrent monitors (16) reached': a state of the agent's process the preflight cannot read, so the instruction says what to do; every stdout and stderr line is a notification; THROTTLE_BURST_SIZE 5 lines, then one per THROTTLE_REFILL_INTERVAL_MS 1000, the rest dropped; a line is cut at PARTIAL_LINE_BUFFER_CAP 4096 by JS length; the monitor stops after idle_timeout_ms of silence, at most MAX_IDLE_TIMEOUT_MS 600000, or after max_events, at most MAX_MAX_EVENTS 10000, with a notice that wakes the agent), packages/core/src/tools/shell.ts#ShellToolParams (run_shell_command, is_background: true; its end starts a turn through packages/cli/src/ui/hooks/use-llm-stream.ts); npm @qwen-code/qwen-code bin qwen (scripts/cli-entry.js under Node). Bare mode, --bare or QWEN_CODE_SIMPLE of 1, true, yes or on (any case, stripped: packages/core/src/utils/bareMode.ts#isBareMode), registers only read_file, edit, notebook_edit and the shell (packages/core/src/config/config.ts#DEFAULT_BARE_CORE_TOOLS): no monitor tool, so the stream is not chosen and the shell's background run wakes the agent. Otherwise no condition of the source makes the stream unavailable before a start: the cap of running monitors is a state of the agent's process, and the monitor tool turned off by its permissions (the coreTools allowlist, a deny rule, --exclude-tools: config.ts#registerLazyTool) is a configuration of several layers the preflight does not read. A start refused so reaches no exit-on-event, and the stream instruction does not offer it.",
       "process": {
         "executables": [
           "qwen"
@@ -236,7 +236,33 @@
       "methods": [
         {
           "kind": "stream",
-          "conditions": {},
+          "conditions": {
+            "envNot": [
+              {
+                "name": "QWEN_CODE_SIMPLE",
+                "equals": "1",
+                "fold": "strip-lower"
+              },
+              {
+                "name": "QWEN_CODE_SIMPLE",
+                "equals": "true",
+                "fold": "strip-lower"
+              },
+              {
+                "name": "QWEN_CODE_SIMPLE",
+                "equals": "yes",
+                "fold": "strip-lower"
+              },
+              {
+                "name": "QWEN_CODE_SIMPLE",
+                "equals": "on",
+                "fold": "strip-lower"
+              }
+            ],
+            "agentOptionsAbsent": [
+              "--bare"
+            ]
+          },
           "instruction": "Run `command` with the monitor tool, idle_timeout_ms 600000 and max_events 10000 (their maximums). Each stdout line is an event of the monitor. When the monitor stops (Idle timeout after ten minutes without an event, or its event limit), run `command` with the monitor tool again: the cursor is kept, no event is lost. If the monitor tool refuses because the maximum of concurrent monitors is reached, stop a monitor you no longer need and run `command` again.",
           "limits": {
             "line": {
