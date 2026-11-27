@@ -453,7 +453,7 @@ class DeliverySink(object):
         if command:
             try:
                 env = child_env(self.env, self.executor.secrets)
-                argv = expand_argv(command.get("argv") or [], env)
+                argv = self._program(expand_argv(command.get("argv") or [], env))
                 limit = (channel.get("executor") or {}).get("timeoutSec") or PROBE_TIMEOUT_SEC
                 result = run_program(argv, env, None, limit if timeout is None else min(limit, timeout),
                                      self.executor.secrets)
@@ -470,6 +470,22 @@ class DeliverySink(object):
                 raise AddresseeGone()
             if verdict == "changed" or (verdict is None and channel.get("kind") == "terminal"):
                 raise AddresseeChanged()
+            # The values the preflight saw (its process incarnation): any
+            # other value, or none, is another addressee.
+            saved = dict((p, v) for p, v in ((self.identity.get("captures") or {}).get(channel.get("id")) or []))
+            for path in command.get("capture") or []:
+                if path not in saved or result.timed_out or result.json is None or \
+                        json_path_value(result.json, path) != saved[path]:
+                    raise AddresseeChanged()
+
+    def _program(self, argv):
+        """argv with its program as the preflight found it (preflight.json
+        "programs": a path under the home directory, the agent's own
+        executable, the program a variable names)."""
+        programs = getattr(self.executor, "programs", None) or {}
+        if argv and argv[0] in programs:
+            argv = [programs[argv[0]]] + list(argv[1:])
+        return argv
 
     def _check_root_life(self, channel, life):
         """The root process of the addressee lives the life the preflight saw
@@ -516,7 +532,7 @@ class DeliverySink(object):
             return
         try:
             env = child_env(self.env, self.executor.secrets)
-            argv = expand_argv(idle.get("argv") or [], env)
+            argv = self._program(expand_argv(idle.get("argv") or [], env))
             result = run_program(argv, env, None, min(idle.get("timeoutSec") or timeout, timeout),
                                  self.executor.secrets)
         except ExecutorRefusal as exc:

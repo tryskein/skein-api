@@ -1,0 +1,369 @@
+#!/usr/bin/env python3
+"""Tests of four readings of the runner core on synthetic records, before
+the records that need them (Orca, Paseo):
+
+- the answer sign: a decimal element of a dotted path indexes a list, and a
+  path may be required to be absent (registry.go#Match.JSONAbsent), so two
+  receipts that differ in the length of a list give two outcomes;
+- the addressee check whose values the preflight captures
+  (registry.go#AddresseeCommand.Capture): the preflight saves them, and a
+  transfer goes only while the check gives them again;
+- a program named by a variable ("{env:NAME}" in binaries);
+- a host that launches agents (registry.go#Channel.Launcher): an agent it
+  launched skips its own methods but the kept ones and the host goes first
+  at step 5; a nested agent, the host's own terminal and the variables
+  without the host's process are not launched by it.
+
+Run on its own: python3 internal/handler/assets/runner_tests/core_readings_test.py
+Standard library of Python 3.6 only.
+"""
+
+import base64
+import json
+import os
+import shutil
+import stat
+import sys
+import tempfile
+import unittest
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+
+import deliver_test as delivery  # noqa: E402
+import fake_channel  # noqa: E402
+import fake_proc  # noqa: E402
+import harness  # noqa: E402
+
+TOKEN = "skm_" + "R" * 43
+PROBE = [{"type": "argv", "source": "test", "argv": ["probe"]}]
+SH = {"linux": ["sh"], "macos": ["sh"]}
+SHOW = {"argv": ["show", "{env:HOST_AGENT_ID}"],
+        "results": [{"match": {"exitCode": 0}, "result": "same"}],
+        "capture": ["result.terminal.incarnationId", "result.terminal.agentIdentity"]}
+
+REGISTRY = {
+    "schemaVersion": 1,
+    "general": {"about": "general", "source": "test", "warnings": ["general record used"]},
+    "agents": [
+        {"id": "alpha", "process": {"executables": ["alpha"]},
+         "methods": [{"kind": "stream", "conditions": {}, "instruction": "x"}]},
+        {"id": "beta", "process": {"executables": ["beta"]},
+         "methods": [{"kind": "delivery", "channel": "own-q", "conditions": {"env": [{"name": "BETA_THREAD"}]},
+                      "instruction": "x"}]},
+        {"id": "gamma", "process": {"executables": ["gamma"]}, "methods": []},
+    ],
+    "channels": [
+        {"id": "own-q", "step": 3, "order": 1, "kind": "addressed", "blind": False,
+         "detect": {"env": [{"name": "BETA_THREAD"}]}, "probes": PROBE, "binaries": SH,
+         "addressee": {"process": "none"},
+         "address": {"env": "BETA_THREAD", "perProcess": True}},
+        {"id": "first", "step": 5, "order": 1, "kind": "addressed", "blind": False,
+         "detect": {"env": [{"name": "FIRST_ID"}]}, "probes": PROBE, "binaries": SH,
+         "addressee": {"process": "none"}, "address": {"env": "FIRST_ID"}},
+        {"id": "launch", "step": 5, "order": 2, "kind": "addressed", "blind": False,
+         "detect": {"env": [{"name": "HOST_AGENT_ID"}]}, "probes": PROBE, "binaries": SH,
+         "addressee": {"process": "none", "command": SHOW}, "address": {"env": "HOST_AGENT_ID"},
+         "launcher": {"process": {"executables": ["host-daemon"]}, "keeps": {"alpha": ["stream"]}}},
+    ],
+    "shells": {"source": "test", "names": ["sh", "bash"]},
+    "zavodEngines": {},
+}
+RUNNER = harness.load_runner(registry=base64.b64encode(json.dumps(REGISTRY).encode("utf-8")).decode("ascii"))
+REG = RUNNER.load_registry()
+RUNNER_PROC = ("python3", ["python3", "-c", "_SKEIN_LOADER_MODE = 'client'"])
+SHOW_ANSWER = {"result": {"terminal": {"incarnationId": "inc-1", "agentIdentity": "codex"}}}
+CAPTURED = [["result.terminal.incarnationId", "inc-1"], ["result.terminal.agentIdentity", "codex"]]
+
+
+class FakeProbe(object):
+    """Every probe available; capture answers what it is given (a list of
+    values or an exception to raise)."""
+
+    def __init__(self, capture=None):
+        self.captured = capture if capture is not None else CAPTURED
+
+    def run(self, chan, probe, env):
+        return RUNNER.PROBE_AVAILABLE
+
+    def capture(self, chan, env):
+        if isinstance(self.captured, Exception):
+            raise self.captured
+        return self.captured
+
+
+def context(procs, client, env, prober=None):
+    """A context over a fake chain (the runner first) with the identity the
+    registry detector's address specs give."""
+    source, pids = fake_proc.linear(RUNNER_PROC, *procs)
+    record = RUNNER.resolve_record(REG, client)
+    placement = RUNNER.place(RUNNER.ancestry(source, pids[0]), REG, record, self_pid=pids[0])
+    settings = RUNNER.Settings(record=record, platform="posix")
+    detector = RUNNER.RegistryDetector()
+    ctx = RUNNER.Context(REG, settings, env, placement, detector, prober or FakeProbe())
+    ctx.identity = RUNNER.identity(placement, REG, env, detector.address_specs(ctx), self_pid=pids[0])
+    return ctx
+
+
+# Receipts in the form of an Orca terminal send (a list of stages): the
+# rows tell the two lengths apart under one exit code.
+STAGES = [
+    {"match": {"exitCode": 0, "json": {"result.prompt.stages.0": "input_accepted",
+                                       "result.prompt.stages.1": "turn_started"}},
+     "outcome": "turn-started"},
+    {"match": {"exitCode": 0, "json": {"result.prompt.stages.0": "input_accepted"},
+               "jsonAbsent": ["result.prompt.stages.1"]},
+     "outcome": "input-written"},
+]
+
+
+def receipt(stages):
+    return {"result": {"prompt": {"stages": stages}}}
+
+
+class ListAndAbsenceSignTest(unittest.TestCase):
+    """A list element by its index and the absence of a path in the closed
+    table of a channel (classification rule, item 1)."""
+
+    def outcome(self, doc, exit_code=0):
+        return RUNNER.classify(STAGES, exit_code=exit_code, doc=doc)[0]
+
+    def test_the_second_element_tells_the_turn_from_the_input(self):
+        self.assertEqual(self.outcome(receipt(["input_accepted", "turn_started"])), "turn-started")
+        self.assertEqual(self.outcome(receipt(["input_accepted"])), "input-written")
+
+    def test_answers_outside_both_rows_are_unknown(self):
+        cases = {
+            "an empty list": receipt([]),
+            "another first stage": receipt(["queued"]),
+            "a list of another second stage": receipt(["input_accepted", "observed"]),
+            "no list but a string": {"result": {"prompt": {"stages": "input_accepted"}}},
+            "no prompt": {"result": {}},
+            "no JSON document": None,
+        }
+        for name, doc in cases.items():
+            with self.subTest(case=name):
+                self.assertEqual(self.outcome(doc), "unknown")
+        self.assertEqual(self.outcome(receipt(["input_accepted"]), exit_code=1), "unknown")
+
+    def test_a_digit_in_an_object_is_a_key(self):
+        doc = {"result": {"prompt": {"stages": {"0": "input_accepted"}}}}
+        self.assertEqual(self.outcome(doc), "input-written")
+
+    def test_absence_needs_a_json_answer(self):
+        rows = [{"match": {"exitCode": 0, "jsonAbsent": ["warning"]}, "outcome": "queued"}]
+        self.assertEqual(RUNNER.classify(rows, exit_code=0, doc={"ok": True})[0], "queued")
+        self.assertEqual(RUNNER.classify(rows, exit_code=0, doc={"warning": "stale"})[0], "unknown")
+        self.assertEqual(RUNNER.classify(rows, exit_code=0, doc=None)[0], "unknown")
+
+
+class ProgramFromVariableTest(unittest.TestCase):
+    """A program of a channel named by a variable: the program it names
+    when set (a path or a name PATH finds), none when unset."""
+
+    def setUp(self):
+        self.root = tempfile.mkdtemp(prefix="skein-readings-")
+        self.addCleanup(shutil.rmtree, self.root, True)
+        self.program = os.path.join(self.root, "host-cli")
+        with open(self.program, "w") as fh:
+            fh.write("#!/bin/sh\nexit 0\n")
+        os.chmod(self.program, stat.S_IRWXU)
+
+    @unittest.skipUnless(os.name == "posix", "POSIX paths")
+    def test_the_variable_names_a_path_or_a_name(self):
+        name = "{env:HOST_CLI}"
+        self.assertEqual(RUNNER.channel_program(name, {"PATH": "/nonexistent", "HOST_CLI": self.program}, None),
+                         self.program)
+        self.assertEqual(RUNNER.channel_program(name, {"PATH": self.root, "HOST_CLI": "host-cli"}, None),
+                         "host-cli")
+        self.assertIsNone(RUNNER.channel_program(name, {"PATH": self.root}, None))
+        self.assertIsNone(RUNNER.channel_program(name, {"PATH": self.root, "HOST_CLI": "absent-cli"}, None))
+
+    @unittest.skipUnless(os.name == "posix", "POSIX paths")
+    def test_the_executor_runs_the_program_the_variable_names(self):
+        chan = {"executor": {"argv": ["host", "send"]},
+                "binaries": {"linux": ["host", "{env:HOST_CLI}"], "macos": ["host", "{env:HOST_CLI}"]}}
+        env = {"PATH": "/nonexistent", "HOST_CLI": self.program}
+        self.assertEqual(RUNNER.channel_programs(chan, env, None), {"host": self.program})
+
+    def test_an_unset_variable_is_named_in_the_cause(self):
+        cause = RUNNER._missing_programs_cause("host", ["host", "{env:HOST_CLI}"], {"PATH": self.root})
+        self.assertIn("HOST_CLI not set", cause)
+
+
+@unittest.skipUnless(os.name == "posix", "the POSIX probe executor")
+class CaptureAtPreflightTest(unittest.TestCase):
+    """The preflight runs the addressee check once and saves its values; a
+    check that does not answer "same" or lacks a value leaves the channel
+    unavailable with the cause."""
+
+    def setUp(self):
+        self.root = tempfile.mkdtemp(prefix="skein-capture-")
+        self.addCleanup(shutil.rmtree, self.root, True)
+        self.bin = os.path.join(self.root, "bin")
+        os.mkdir(self.bin)
+        self.show = fake_channel.FakeProgram(self.bin, "show")
+        self.env = fake_channel.with_path({"PATH": os.environ.get("PATH", os.defpath), "HOME": self.root,
+                                           "HOST_AGENT_ID": "agent-1"}, self.bin)
+        self.chan = REG.channel("launch")
+
+    def test_the_values_of_a_same_answer_are_captured(self):
+        self.show.respond([{"exit": 0, "stdout": SHOW_ANSWER}])
+        self.assertEqual(RUNNER.SystemProbeRunner().capture(self.chan, self.env), CAPTURED)
+        self.assertEqual([c["argv"] for c in self.show.calls()], [["agent-1"]])
+
+    def test_no_value_or_no_same_is_no_capture(self):
+        cases = {
+            "a path without a value": {"exit": 0, "stdout": {"result": {"terminal": {"incarnationId": "inc-1"}}}},
+            "an object at a path": {"exit": 0, "stdout": {"result": {"terminal": {"incarnationId": {"id": 1},
+                                                                                   "agentIdentity": "codex"}}}},
+            "no same": {"exit": 1, "stdout": SHOW_ANSWER},
+            "no JSON": {"exit": 0, "stdout": "not json"},
+        }
+        for name, answer in cases.items():
+            with self.subTest(case=name):
+                self.show.respond([answer])
+                with self.assertRaises(RUNNER.ProbeError):
+                    RUNNER.SystemProbeRunner().capture(self.chan, self.env)
+
+    def test_a_failed_capture_makes_the_channel_unavailable(self):
+        env = {"PATH": os.environ.get("PATH", os.defpath), "HOST_AGENT_ID": "agent-1"}
+        ctx = context(["bash", "gamma", "host-daemon"], "gamma", env,
+                      FakeProbe(RUNNER.ProbeError("the addressee check does not answer same")))
+        ok, cause = RUNNER.channel_available(ctx, "launch")
+        self.assertFalse(ok)
+        self.assertIn("addressee check of launch", cause)
+        ctx = context(["bash", "gamma", "host-daemon"], "gamma", env)
+        self.assertEqual(RUNNER.channel_available(ctx, "launch"), (True, None))
+        self.assertEqual(ctx.captures["launch"], CAPTURED)
+
+    def test_the_preflight_result_keeps_the_values_of_the_chosen_channel(self):
+        token_dir = os.path.join(self.root, "skein-mon-zz-77-0123456789abcdef")
+        os.mkdir(token_dir, 0o700)
+        token = os.path.join(token_dir, "token")
+        with open(token, "w") as fh:
+            fh.write(TOKEN)
+        os.chmod(token, 0o600)
+        env = dict(self.env, XDG_STATE_HOME=os.path.join(self.root, "state"), SKEIN_PUBLIC_URL="http://127.0.0.1:9",
+                   SKEIN_ISSUE="zz-77", SKEIN_TOKEN_FILE=token, SKEIN_EXCLUDE_SESSION="sess-1",
+                   SKEIN_RUNNER_SHA256="ab" * 32, SKEIN_LOADER_SHA256="cd" * 32, SKEIN_CLIENT="gamma",
+                   SKEIN_PLATFORM="posix")
+        ctx = context(["bash", "gamma", "host-daemon"], "gamma", env)
+        line = RUNNER.preflight(token, env, REG, ctx.settings, RUNNER.RegistryDetector(), FakeProbe(),
+                                ctx.placement)
+        self.assertEqual(line["channel"], "launch")
+        with open(os.path.join(token_dir, "preflight.json")) as fh:
+            saved = json.load(fh)
+        self.assertEqual(saved["identity"]["captures"], {"launch": CAPTURED})
+
+
+@unittest.skipUnless(os.name == "posix", "the POSIX pipeline")
+class CaptureBeforeTransferTest(unittest.TestCase):
+    """Before each transfer the addressee check gives the values the
+    preflight saved, else the addressee changed: no call of the channel,
+    the event "unknown" and the journal from then on. The check and the idle
+    wait run their program as the preflight found it."""
+
+    def world(self, show="show", idle=None):
+        chan = delivery.chan("A", "chan-a")
+        chan["addressee"] = {"process": "none", "command": {
+            "argv": [show], "results": [{"match": {"exitCode": 0}, "result": "same"}],
+            "capture": ["inc"]}}
+        if idle is not None:
+            chan["idle"] = {"type": "argv", "argv": [idle], "timeoutSec": 2}
+        world = delivery.World(self, [chan, delivery.chan("B", "chan-b")])
+        return world
+
+    def identity(self, captures):
+        ident = dict(delivery.ADDRESS)
+        if captures is not None:
+            ident["captures"] = captures
+        return ident
+
+    def test_the_saved_value_again_lets_the_transfer_go(self):
+        world = self.world()
+        show = fake_channel.FakeProgram(world.bin, "show")
+        show.respond([{"exit": 0, "stdout": {"inc": "inc-1"}}])
+        mon = world.monitor(identity=self.identity({"A": [["inc", "inc-1"]]}))
+        mon.page([delivery.note(1)])
+        self.assertEqual([d[:3] for d in mon.deliveries()], [(1, "queued", "A")])
+        # Before the idle wait and again right before the hand-over.
+        self.assertEqual(len(show.calls()), 2)
+
+    def test_another_value_or_none_is_another_addressee(self):
+        cases = {
+            "another incarnation": ({"A": [["inc", "inc-1"]]}, {"exit": 0, "stdout": {"inc": "inc-2"}}),
+            "no value in the answer": ({"A": [["inc", "inc-1"]]}, {"exit": 0, "stdout": {"other": "inc-1"}}),
+            "no value saved by the preflight": (None, {"exit": 0, "stdout": {"inc": "inc-1"}}),
+        }
+        for name, (captures, answer) in cases.items():
+            with self.subTest(case=name):
+                world = self.world()
+                fake_channel.FakeProgram(world.bin, "show").respond([answer])
+                mon = world.monitor(identity=self.identity(captures))
+                mon.page([delivery.note(1)])
+                self.assertEqual(world.prog("chan-a").calls(), [])
+                self.assertEqual(world.prog("chan-b").calls(), [])
+                self.assertEqual([d[:2] for d in mon.deliveries()], [(1, "unknown")])
+                self.assertEqual(len(mon.degraded("addressee_changed")), 1)
+
+    def test_the_check_and_the_idle_wait_run_the_programs_of_the_preflight(self):
+        world = self.world(show="show", idle="idle")
+        real_show = fake_channel.FakeProgram(world.bin, "show-real")
+        real_show.respond([{"exit": 0, "stdout": {"inc": "inc-1"}}])
+        real_idle = fake_channel.FakeProgram(world.bin, "idle-real")
+        mon = world.monitor(identity=self.identity({"A": [["inc", "inc-1"]]}))
+        mon.spy.programs = {"show": real_show.path, "idle": real_idle.path}
+        mon.page([delivery.note(1)])
+        self.assertEqual([d[:3] for d in mon.deliveries()], [(1, "queued", "A")])
+        self.assertEqual(len(real_show.calls()), 2)
+        self.assertEqual(len(real_idle.calls()), 1)
+
+
+class LauncherTest(unittest.TestCase):
+    """A host that launches agents: the agent it launched skips its own
+    methods but the kept ones, the host goes first at step 5 (the method
+    order, "agent under Paseo"); not launched by it: a nested agent, the
+    host's own terminal, the variables without the host's process."""
+
+    ENV = {"PATH": os.environ.get("PATH", os.defpath), "HOST_AGENT_ID": "agent-1", "FIRST_ID": "first-1",
+           "BETA_THREAD": "thread-1"}
+
+    def test_an_agent_launched_by_the_host_skips_its_own_delivery(self):
+        ctx = context(["bash", "beta", "host-daemon"], "beta", self.ENV)
+        self.assertEqual(ctx.detector.under_host(ctx), ("launch", ()))
+        choice = RUNNER.choose(ctx)
+        self.assertEqual((choice.method, choice.channel), (RUNNER.METHOD_DETACHED, "launch"))
+        self.assertIn("delivery: not used under host launch", choice.reasons)
+        # The host of order 1, detected too, comes after it.
+        self.assertEqual(choice.fallbacks, ["first"])
+
+    def test_a_kept_method_stays(self):
+        ctx = context(["bash", "alpha", "host-daemon"], "alpha", self.ENV)
+        self.assertEqual(ctx.detector.under_host(ctx), ("launch", ("stream",)))
+        self.assertEqual(RUNNER.choose(ctx).method, RUNNER.METHOD_STREAM)
+
+    def test_not_launched_by_the_host(self):
+        cases = {
+            # beta under alpha, launched by the host: beta is nested, the
+            # host's address belongs to alpha; beta's own thread stays its.
+            "a nested agent": (["bash", "beta", "bash", "alpha", "host-daemon"], "beta", "own-q"),
+            # The host's variables inherited without its process above.
+            "no host process": (["bash", "beta", "sshd"], "beta", "own-q"),
+        }
+        for name, (procs, client, chosen) in cases.items():
+            with self.subTest(case=name):
+                ctx = context(procs, client, self.ENV)
+                self.assertIsNone(ctx.detector.under_host(ctx))
+                self.assertIn("launch", ctx.identity.inherited)
+                self.assertEqual(RUNNER.choose(ctx).channel, chosen)
+
+    def test_the_host_terminal_is_its_session_not_a_launch(self):
+        ctx = context(["bash", "host-daemon"], "gamma", self.ENV)
+        self.assertEqual(ctx.identity.terminal, "launch")
+        self.assertIsNone(ctx.detector.under_host(ctx))
+        self.assertEqual(RUNNER.choose(ctx).channel, "launch")
+
+
+if __name__ == "__main__":
+    unittest.main()

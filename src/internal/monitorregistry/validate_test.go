@@ -193,6 +193,55 @@ func TestValidate_RejectsEachRule(t *testing.T) {
 			r.Channels[0].Address = &AddressSpec{Env: "ALPHA_THREAD", Qualifiers: []string{"ALPHA_HOME"},
 				QualifierPaths: map[string]string{"ALPHA_HOME": ".alpha"}}
 		}, RuleInvalid},
+		{"one path both required and absent", func(r *Registry) {
+			r.Channels[1].Outcomes[0].Match.JSONAbsent = []string{"status"}
+		}, RuleInvalid},
+		{"dotted path with an empty element", func(r *Registry) {
+			r.Channels[1].Outcomes[0].Match.JSON = map[string]string{"result..stages": "queued"}
+		}, RuleInvalid},
+		{"list element and its absence in rows that differ on nothing else", func(r *Registry) {
+			// Absence of one path does not part a row from a row of another
+			// path: an answer with stages.0 and without stages.1 matches both.
+			r.Channels[1].Outcomes = []OutcomeRow{
+				{Match: Match{ExitCode: intp(0), JSON: map[string]string{"stages.0": "input_accepted"}}, Outcome: OutcomeInputWritten},
+				{Match: Match{ExitCode: intp(0), JSONAbsent: []string{"stages.1"}}, Outcome: OutcomeUnknown},
+			}
+		}, RuleAmbiguousSign},
+		{"capture path with an empty element", func(r *Registry) {
+			r.Channels[1].Addressee.Command = &AddresseeCommand{Argv: []string{"host", "show"},
+				Results: []AddresseeResultRow{{Match: Match{ExitCode: intp(0)}, Result: AddresseeSame}}, Capture: []string{"id."}}
+		}, RuleInvalid},
+		{"path captured twice", func(r *Registry) {
+			r.Channels[1].Addressee.Command = &AddresseeCommand{Argv: []string{"host", "show"},
+				Results: []AddresseeResultRow{{Match: Match{ExitCode: intp(0)}, Result: AddresseeSame}}, Capture: []string{"id", "id"}}
+		}, RuleInvalid},
+		{"program that is neither a name nor a variable", func(r *Registry) {
+			r.Channels[1].Binaries[PlatformLinux] = []string{"{env:HOST_CLI}/host"}
+		}, RuleInvalid},
+		{"program from a variable of a bad name", func(r *Registry) {
+			r.Channels[1].Binaries[PlatformLinux] = []string{"{env:HOST CLI}"}
+		}, RuleInvalid},
+		{"launcher on a channel outside step 5", func(r *Registry) {
+			r.Channels[0].Address = &AddressSpec{Env: "ALPHA_THREAD"}
+			r.Channels[0].Launcher = &Launcher{Process: ProcessSign{Executables: []string{"alpha-daemon"}}}
+		}, RuleInvalid},
+		{"launcher on a host without an address", func(r *Registry) {
+			r.Channels[1].Launcher = &Launcher{Process: ProcessSign{Executables: []string{"host-daemon"}}}
+		}, RuleInvalid},
+		{"launcher without a process sign", func(r *Registry) {
+			r.Channels[1].Address = &AddressSpec{Env: "HOST_ID"}
+			r.Channels[1].Launcher = &Launcher{}
+		}, RuleInvalid},
+		{"launcher keeping methods of a missing record", func(r *Registry) {
+			r.Channels[1].Address = &AddressSpec{Env: "HOST_ID"}
+			r.Channels[1].Launcher = &Launcher{Process: ProcessSign{Executables: []string{"host-daemon"}},
+				Keeps: map[string][]string{"beta": {MethodStream}}}
+		}, RuleInvalid},
+		{"launcher keeping a method kind outside the set", func(r *Registry) {
+			r.Channels[1].Address = &AddressSpec{Env: "HOST_ID"}
+			r.Channels[1].Launcher = &Launcher{Process: ProcessSign{Executables: []string{"host-daemon"}},
+				Keeps: map[string][]string{"alpha": {"poll"}}}
+		}, RuleUnknownMethod},
 		{"rows on different criteria that one answer can match", func(r *Registry) {
 			r.Channels[1].Outcomes = []OutcomeRow{
 				{Match: Match{JSON: map[string]string{"status": "queued"}}, Outcome: OutcomeQueued},
@@ -458,5 +507,30 @@ func TestValidate_AcceptsTheZavodReadings(t *testing.T) {
 	r.Channels[1].Address = &AddressSpec{Env: "HOST_ID", Qualifiers: []string{"HOST_ROOT_PID"}, RootPIDEnv: "HOST_ROOT_PID"}
 	if err := r.Validate(); err != nil {
 		t.Fatalf("a correct record with the Zavod readings was refused: %v", err)
+	}
+}
+
+// TestValidate_AcceptsTheOrcaAndPaseoReadings — the readings the Orca and
+// Paseo records need pass in a correct record: a list element and the
+// absence of the next one telling two receipts apart under one exit code,
+// an addressee check whose values the preflight captures, a program named
+// by a variable, and a host that launches agents.
+func TestValidate_AcceptsTheOrcaAndPaseoReadings(t *testing.T) {
+	r := validRegistry()
+	r.Channels[1].Outcomes = []OutcomeRow{
+		{Match: Match{ExitCode: intp(0), JSON: map[string]string{"stages.0": "input_accepted", "stages.1": "turn_started"}},
+			Outcome: OutcomeTurnStarted},
+		{Match: Match{ExitCode: intp(0), JSON: map[string]string{"stages.0": "input_accepted"}, JSONAbsent: []string{"stages.1"}},
+			Outcome: OutcomeInputWritten},
+	}
+	r.Channels[1].Addressee.Command = &AddresseeCommand{Argv: []string{"host", "show", "{env:HOST_ID}"},
+		Results: []AddresseeResultRow{{Match: Match{ExitCode: intp(0)}, Result: AddresseeSame}},
+		Capture: []string{"result.terminal.incarnationId", "result.terminal.agentIdentity"}}
+	r.Channels[1].Binaries[PlatformLinux] = []string{"host", "{env:HOST_CLI}"}
+	r.Channels[1].Address = &AddressSpec{Env: "HOST_ID"}
+	r.Channels[1].Launcher = &Launcher{Process: ProcessSign{Argv: []string{"/opt/host/daemon.js"}},
+		Keeps: map[string][]string{"alpha": {MethodStream}}}
+	if err := r.Validate(); err != nil {
+		t.Fatalf("a correct record with the Orca and Paseo readings was refused: %v", err)
 	}
 }

@@ -103,6 +103,12 @@ class ProbeRunner(object):
     def run(self, channel, probe, env):
         raise ProbeError("no probe executor for type %s" % probe.get("type"))
 
+    def capture(self, channel, env):
+        """The values of the capture paths of the channel's addressee
+        command, [[path, value], ...]; ProbeError when they cannot be
+        read. This one reads none."""
+        raise ProbeError("no executor for the addressee check")
+
 
 class Detector(object):
     """Finds what the environment of the agent offers beyond the record's own
@@ -171,6 +177,9 @@ class Context(object):
         self.prober = prober
         self.external = external
         self.identity = identity
+        # {channel id: [[path, value], ...]}: what the addressee command of
+        # an available channel gave at its capture paths.
+        self.captures = {}
 
 
 class Choice(object):
@@ -295,7 +304,13 @@ def channel_program(name, env, agent):
     executable comes first: a launcher such as the npm wrapper of Codex
     execs a native program outside every PATH (bin/codex.js), and the login
     shell of the agent's commands rebuilds its PATH without the wrapper's
-    directory, while the program is the build that owns the agent's thread."""
+    directory, while the program is the build that owns the agent's thread.
+    A name "{env:NAME}" is the program the variable names (a name or a
+    path), None when it is unset or empty."""
+    if name.startswith("{env:") and name.endswith("}"):
+        name = env.get(name[len("{env:"):-1], "")
+        if not name or (name.startswith("{env:") and name.endswith("}")):
+            return None
     if name.startswith("~/"):
         path = home_path(name, env)
         return path if path is not None and program_found(path, env) else None
@@ -342,9 +357,16 @@ def _missing_programs_cause(channel_id, binaries, env):
     """Why no program of the channel was found, naming a path under the
     home directory that HOME does not give."""
     unexpanded = [b for b in binaries if b.startswith("~/") and home_path(b, env) is None]
+    unset = [b[len("{env:"):-1] for b in binaries
+             if b.startswith("{env:") and b.endswith("}") and not env.get(b[len("{env:"):-1], "")]
     cause = "no program of channel %s found" % channel_id
+    notes = []
     if unexpanded:
-        cause += " (%s: HOME is not set)" % ", ".join(unexpanded)
+        notes.append("%s: HOME is not set" % ", ".join(unexpanded))
+    if unset:
+        notes.append("%s not set" % ", ".join(unset))
+    if notes:
+        cause += " (%s)" % "; ".join(notes)
     return cause
 
 
@@ -416,7 +438,7 @@ def channel_available(ctx, channel_id):
         # US-11: a .cmd program takes a message file only by an ASCII path.
         return False, "no private message directory of an ASCII path for the .cmd program of %s" % channel_id
     if channel.get("probeUndefined"):
-        return True, None
+        return _capture(ctx, channel_id, channel)
     for probe in channel.get("probes") or []:
         try:
             answer = ctx.prober.run(channel, probe, ctx.env)
@@ -424,6 +446,19 @@ def channel_available(ctx, channel_id):
             return False, "probe %s failed: %s" % (probe.get("type"), exc)
         if answer != PROBE_AVAILABLE:
             return False, "probe %s: unavailable" % probe.get("type")
+    return _capture(ctx, channel_id, channel)
+
+
+def _capture(ctx, channel_id, channel):
+    """The values the addressee check compares before each transfer, read
+    once here (registry.go#AddresseeCommand.Capture): no value, no channel."""
+    command = (channel.get("addressee") or {}).get("command") or {}
+    if not command.get("capture"):
+        return True, None
+    try:
+        ctx.captures[channel_id] = ctx.prober.capture(channel, ctx.env)
+    except Exception as exc:  # any failure of the check: unavailable, not a crash
+        return False, "addressee check of %s: %s" % (channel_id, exc)
     return True, None
 
 
@@ -817,16 +852,21 @@ def instruction(registry, record, choice):
     return " ".join(p for p in parts if p)
 
 
-def _identity_doc(identity):
+def _identity_doc(identity, captures=None):
     if identity is None:
         return None
-    return {
+    doc = {
         "process": list(identity.process) if identity.process else None,
         "addresses": [{"channel": a.channel, "value": a.value, "qualifiers": [list(q) for q in a.qualifiers],
                        "env": a.env} for a in identity.addresses],
         "inherited": list(identity.inherited),
         "terminal": identity.terminal,
     }
+    if captures:
+        # The values of the addressee checks of the chosen channel and its
+        # fallbacks (registry.go#AddresseeCommand.Capture).
+        doc["captures"] = captures
+    return doc
 
 
 def _binding_doc(binding):
@@ -910,7 +950,8 @@ def preflight(token_file, env, registry, settings, detector=None, prober=None, p
                 "journal": journal,
                 "overrides": {"SKEIN_MONITOR_CHANNEL": settings.channel,
                               "SKEIN_MONITOR_BLIND": BLIND_OFF if settings.blind_off else None},
-                "identity": _identity_doc(ctx.identity),
+                "identity": _identity_doc(ctx.identity, dict(
+                    (c, ctx.captures[c]) for c in [choice.channel] + list(choice.fallbacks) if c in ctx.captures)),
                 "binding": binding,
                 "programs": _programs_doc(registry, [choice.channel] + list(choice.fallbacks), env,
                                           placement.agent),

@@ -100,14 +100,28 @@ def parse_json_object(raw):
     return doc if isinstance(doc, dict) else None
 
 
+def json_path_lookup(doc, path):
+    """(True, value) at the dotted path of a JSON document, else (False,
+    None). An element that is a decimal number indexes a list ("stages.1":
+    its second element); in an object it is a key like any other."""
+    for part in path.split("."):
+        if isinstance(doc, dict) and part in doc:
+            doc = doc[part]
+        elif isinstance(doc, list) and part.isdigit() and int(part) < len(doc):
+            doc = doc[int(part)]
+        else:
+            return False, None
+    return True, doc
+
+
 def json_path_value(doc, path):
     """The value at the dotted path of a JSON document as a string the
     outcome tables compare with (a string as is, a number, a boolean or null
-    in its JSON form), or None when the path is absent."""
-    for part in path.split("."):
-        if not isinstance(doc, dict) or part not in doc:
-            return None
-        doc = doc[part]
+    in its JSON form), or None when the path is absent or holds an object or
+    a list."""
+    found, doc = json_path_lookup(doc, path)
+    if not found:
+        return None
     if isinstance(doc, str):
         return doc
     if isinstance(doc, (dict, list)):
@@ -135,6 +149,12 @@ def outcome_sign_matches(match, exit_code=None, doc=None, http_status=None, stde
     for path, want in (match.get("json") or {}).items():
         stated = True
         if doc is None or json_path_value(doc, path) != want:
+            return False
+    for path in match.get("jsonAbsent") or []:
+        # Absent from a JSON answer: an answer that is no JSON document
+        # carries no sign of its fields.
+        stated = True
+        if doc is None or json_path_lookup(doc, path)[0]:
             return False
     return stated
 
@@ -794,6 +814,39 @@ class SystemProbeRunner(ProbeRunner):
                                     stderr=result.stderr):
                 return row.get("result")
         return PROBE_UNAVAILABLE
+
+    def capture(self, channel, env):
+        """The values the addressee command of the channel gives at its
+        capture paths, [[path, value], ...]: the command answers "same" and
+        holds a value at every path, else ProbeError."""
+        command = (channel.get("addressee") or {}).get("command") or {}
+        timeout = min((channel.get("executor") or {}).get("timeoutSec") or PROBE_TIMEOUT_SEC, PROBE_TIMEOUT_SEC)
+        clean = child_env(env, self.secrets)
+        try:
+            argv = expand_argv(command.get("argv") or [], clean)
+        except ExecutorRefusal as exc:
+            raise ProbeError(exc.reason)
+        programs = channel_programs(channel, env, None)
+        if argv and argv[0] in programs:
+            argv[0] = programs[argv[0]]
+        result = run_program(argv, clean, None, timeout, self.secrets)
+        if result.timed_out:
+            raise ProbeError("timed out after %d s" % timeout)
+        verdict = None
+        for row in command.get("results") or []:
+            if outcome_sign_matches(row.get("match") or {}, exit_code=result.exit_code, doc=result.json,
+                                    stderr=result.stderr):
+                verdict = row.get("result")
+                break
+        if verdict != "same":
+            raise ProbeError("the addressee check does not answer same")
+        values = []
+        for path in command.get("capture") or []:
+            value = json_path_value(result.json, path) if result.json is not None else None
+            if value is None:
+                raise ProbeError("the addressee check gives no value at %s" % path)
+            values.append([path, value])
+        return values
 
     @staticmethod
     def _socket(path):

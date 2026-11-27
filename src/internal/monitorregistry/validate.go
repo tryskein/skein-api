@@ -180,6 +180,17 @@ func (r *Registry) Validate() error {
 		}
 	}
 
+	for i := range r.Channels {
+		if l := r.Channels[i].Launcher; l != nil {
+			for _, agent := range slices.Sorted(maps.Keys(l.Keeps)) {
+				if !seenAgents[agent] {
+					v.add(RuleInvalid, fmt.Sprintf("channels[%d].launcher.keeps.%s", i, agent),
+						"%q is not an agent record", agent)
+				}
+			}
+		}
+	}
+
 	for engine, target := range r.ZavodEngines {
 		path := "zavodEngines." + engine
 		if !idPattern.MatchString(engine) {
@@ -384,6 +395,29 @@ func (v *validator) channel(path string, c *Channel) {
 
 	v.addressee(path+".addressee", c)
 
+	if l := c.Launcher; l != nil {
+		if c.Step != StepHost || c.Address == nil {
+			v.add(RuleInvalid, path+".launcher", "only a host of step 5 with an address launches agents")
+		}
+		if len(l.Process.Executables) == 0 && len(l.Process.Argv) == 0 {
+			v.add(RuleInvalid, path+".launcher.process", "the launcher has no process sign")
+		}
+		v.names(path+".launcher.process.executables", l.Process.Executables)
+		for i, arg := range l.Process.Argv {
+			if strings.TrimSpace(arg) == "" {
+				v.add(RuleInvalid, fmt.Sprintf("%s.launcher.process.argv[%d]", path, i), "argument sign is empty")
+			}
+		}
+		for _, agent := range slices.Sorted(maps.Keys(l.Keeps)) {
+			for i, kind := range l.Keeps[agent] {
+				if !methodKinds[kind] {
+					v.add(RuleUnknownMethod, fmt.Sprintf("%s.launcher.keeps.%s[%d]", path, agent, i),
+						"method %q is not one of stream, delivery, exit-on-event", kind)
+				}
+			}
+		}
+	}
+
 	if c.Blind && c.PanePID == nil {
 		v.add(RuleInvalid, path+".panePid", "a blind channel needs the source of its pane PID")
 	}
@@ -405,8 +439,17 @@ func (v *validator) channel(path string, c *Channel) {
 			v.add(RuleInvalid, path+".binaries."+p, "no program for the platform")
 		}
 		for i, b := range bins {
-			if strings.TrimSpace(b) == "" {
-				v.add(RuleInvalid, fmt.Sprintf("%s.binaries.%s[%d]", path, p, i), "program is empty")
+			bpath := fmt.Sprintf("%s.binaries.%s[%d]", path, p, i)
+			switch {
+			case strings.TrimSpace(b) == "":
+				v.add(RuleInvalid, bpath, "program is empty")
+			case strings.ContainsAny(b, "{}"):
+				// Only "{env:NAME}" as the whole element.
+				if !strings.HasPrefix(b, PlaceholderEnvPrefix) || !strings.HasSuffix(b, "}") {
+					v.add(RuleInvalid, bpath, "%q: a program is a name, a path or \"{env:NAME}\"", b)
+				} else {
+					v.value(bpath, b, false)
+				}
 			}
 		}
 	}
@@ -580,6 +623,15 @@ func (v *validator) signs(path string, rows []Match) {
 			v.add(RuleAmbiguousSign, rpath, "the row has no criterion")
 			continue
 		}
+		for _, k := range slices.Sorted(maps.Keys(m.JSON)) {
+			v.jsonPath(rpath+".json", k)
+		}
+		for j, k := range m.JSONAbsent {
+			v.jsonPath(fmt.Sprintf("%s.jsonAbsent[%d]", rpath, j), k)
+			if _, both := m.JSON[k]; both {
+				v.add(RuleInvalid, fmt.Sprintf("%s.jsonAbsent[%d]", rpath, j), "path %q is both required and absent", k)
+			}
+		}
 		for j := 0; j < i; j++ {
 			if rows[j].overlaps(m) {
 				v.add(RuleAmbiguousSign, rpath, "an answer can match both this row and row %d", j)
@@ -607,9 +659,17 @@ func (v *validator) criteriaOf(path string, rows []Match, executor string) {
 	}
 }
 
+// jsonPath checks a dotted path of a JSON answer: non-empty elements.
+func (v *validator) jsonPath(path, p string) {
+	if p == "" || slices.Contains(strings.Split(p, "."), "") {
+		v.add(RuleInvalid, path, "%q is not a dotted path of non-empty elements", p)
+	}
+}
+
 // empty reports whether the sign states no criterion.
 func (m Match) empty() bool {
-	return m.ExitCode == nil && m.HTTPStatus == nil && len(m.JSON) == 0 && m.StderrEmpty == nil
+	return m.ExitCode == nil && m.HTTPStatus == nil && len(m.JSON) == 0 && len(m.JSONAbsent) == 0 &&
+		m.StderrEmpty == nil
 }
 
 // overlaps reports whether one answer can satisfy both signs: every
@@ -630,6 +690,14 @@ func (m Match) overlaps(o Match) bool {
 	}
 	for k, want := range m.JSON {
 		if got, both := o.JSON[k]; both && got != want {
+			return false
+		}
+		if slices.Contains(o.JSONAbsent, k) {
+			return false
+		}
+	}
+	for k := range o.JSON {
+		if slices.Contains(m.JSONAbsent, k) {
 			return false
 		}
 	}
@@ -740,6 +808,15 @@ func (v *validator) addressee(path string, c *Channel) {
 		}
 		v.signs(path+".command.results", rows)
 		v.criteriaOf(path+".command.results", rows, ExecutorArgv)
+		seen := map[string]bool{}
+		for i, p := range a.Command.Capture {
+			cpath := fmt.Sprintf("%s.command.capture[%d]", path, i)
+			v.jsonPath(cpath, p)
+			if seen[p] {
+				v.add(RuleInvalid, cpath, "path %q is captured twice", p)
+			}
+			seen[p] = true
+		}
 	}
 }
 

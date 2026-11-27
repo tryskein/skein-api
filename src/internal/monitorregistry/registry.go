@@ -300,7 +300,10 @@ type Channel struct {
 	// PanePID tells a blind channel how to get the PID of the pane's
 	// process. Required for a blind channel, absent otherwise.
 	PanePID *PanePID `json:"panePid,omitempty"`
-	// Binaries are the program names or paths of the channel per platform.
+	// Binaries are the programs of the channel per platform, in the order
+	// they are tried: a bare name (the executable of the agent process of
+	// that name, else PATH), a "~/" path, or "{env:NAME}" (the program the
+	// variable names, a name or a path, when it is set).
 	Binaries map[string][]string `json:"binaries"`
 	// Limits are the limits of the channel.
 	Limits *Limits `json:"limits,omitempty"`
@@ -310,6 +313,13 @@ type Channel struct {
 	// right after the label, within the channel's limit (what its source
 	// asks the addressee to know of each delivery).
 	TextNotes []string `json:"textNotes,omitempty"`
+	// Launcher is set for a host that launches agent processes itself: an
+	// agent process it launched skips its own methods except those Keeps
+	// names, and the host goes first at step 5 (the method order, "agent
+	// under Paseo"); the runner tells such a launch from a terminal of the
+	// host and from a nested agent by the host's process ("Addressee and
+	// check", the ACP terminal). Only a host of step 5 with an address.
+	Launcher *Launcher `json:"launcher,omitempty"`
 	// Address is the address of the addressee in this channel, as the
 	// preflight reads it from the environment of the agent process; it joins
 	// the identity of the addressee (the ledger key and the check before a
@@ -338,6 +348,18 @@ type AddressSpec struct {
 	// normal ("~/" from HOME), so an explicit default and an unset variable
 	// are one addressee.
 	QualifierPaths map[string]string `json:"qualifierPaths,omitempty"`
+}
+
+// Launcher is the process of a host that launches agents and the own
+// methods its agents keep.
+type Launcher struct {
+	// Process recognises the host's process among the ancestors of the
+	// runner.
+	Process ProcessSign `json:"process"`
+	// Keeps maps the id of an agent record to the kinds of its own methods
+	// that stay in use when the host launched it; a record it does not name
+	// keeps none.
+	Keeps map[string][]string `json:"keeps,omitempty"`
 }
 
 // Platforms of Channel.Binaries.
@@ -450,8 +472,13 @@ type Match struct {
 	// ExitCode is the exit code of an argv program.
 	ExitCode *int `json:"exitCode,omitempty"`
 	// JSON maps a dotted path of the JSON document the program printed (or
-	// the HTTP response body) to the string the value must equal.
+	// the HTTP response body) to the string the value must equal. An
+	// element of a path that is a decimal number indexes a list
+	// ("stages.1": the second element).
 	JSON map[string]string `json:"json,omitempty"`
+	// JSONAbsent are dotted paths (as in JSON) that must be absent from the
+	// document: a list shorter than the index, an object without the key.
+	JSONAbsent []string `json:"jsonAbsent,omitempty"`
 	// HTTPStatus is the status of an http response.
 	HTTPStatus *int `json:"httpStatus,omitempty"`
 	// StderrEmpty, when set, is whether the argv program wrote nothing to
@@ -561,6 +588,13 @@ type RootLife struct {
 type AddresseeCommand struct {
 	Argv    []string             `json:"argv"`
 	Results []AddresseeResultRow `json:"results"`
+	// Capture are dotted paths (as in Match.JSON) of the command's JSON
+	// answer whose values the preflight saves (it runs the command once;
+	// an answer that is not "same" or lacks a path makes the channel
+	// unavailable); before each transfer every path must hold the saved
+	// value again, else the addressee changed (the process incarnation of
+	// a terminal).
+	Capture []string `json:"capture,omitempty"`
 }
 
 // AddresseeResultRow maps one answer of the addressee command to a result.

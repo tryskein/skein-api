@@ -171,8 +171,27 @@ class RegistryDetector(Detector):
                 specs.append(AddressSpec(c["id"], a["env"], qualifiers=a.get("qualifiers") or (),
                                          per_process=per_process, host=step in (5, 6),
                                          root_pid_env=a.get("rootPidEnv") or None,
+                                         host_sign=(c.get("launcher") or {}).get("process") or None,
                                          qualifier_paths=a.get("qualifierPaths")))
         return specs
+
+    def under_host(self, ctx):
+        """(channel id, kinds the record keeps) when a host of step 5 that
+        launches agents (its record's launcher) launched the agent process:
+        the agent owns the host's address (identity: host_form is
+        HOST_FORM_AGENT) and the runner does not stand in the host's own
+        terminal. A record the launcher does not name keeps no method."""
+        identity = ctx.identity
+        if identity is None or identity.terminal is not None:
+            return None
+        owned = set(a.channel for a in identity.addresses)
+        record = ctx.settings.record
+        for c in self._channels(ctx, 5):
+            launcher = c.get("launcher")
+            if launcher and c["id"] in owned and self.detected(ctx, c):
+                keeps = (launcher.get("keeps") or {}).get(record.id if record is not None else "general") or []
+                return c["id"], tuple(keeps)
+        return None
 
     def addressee_holds(self, ctx, channel):
         """A forced host passes the same checks as a detected one, the
