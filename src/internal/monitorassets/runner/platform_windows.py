@@ -1,7 +1,7 @@
 # --- platform layer: Windows -------------------------------------------------
 # The Windows implementation of the platform layer, on the security part
-# winsec.py (P-9). Privacy is criterion (a) of P-9, the term "Приватный
-# каталог Windows": a directory is checked on a handle of it, a file is
+# winsec.py (P-9). Privacy is criterion (a) of P-9, the term "private Windows
+# directory": a directory is checked on a handle of it, a file is
 # checked on the very handle that is then read (its own DACL), and a
 # reparse point is never followed. Private directories are created in one
 # call with their protected DACL. The one-runner lock is msvcrt.locking on

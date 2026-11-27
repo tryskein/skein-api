@@ -95,7 +95,7 @@ func TestValidate_FixtureIsValid(t *testing.T) {
 	}
 }
 
-// TestValidate_RejectsEachRule — П-1, ИНВ-13 (row #8): each violation is
+// TestValidate_RejectsEachRule — P-1, INV-13 (row #8): each violation is
 // refused, and the refusal names exactly that rule (one cause per case).
 func TestValidate_RejectsEachRule(t *testing.T) {
 	cases := []struct {
@@ -217,7 +217,7 @@ func TestValidate_RejectsEachRule(t *testing.T) {
 	}
 }
 
-// TestValidate_AcceptsEveryProbeType — П-7 (row #8): each of the four probe
+// TestValidate_AcceptsEveryProbeType — P-7 (row #8): each of the four probe
 // types in a correct record passes, so the schema takes all of them before
 // any record uses them.
 func TestValidate_AcceptsEveryProbeType(t *testing.T) {
@@ -239,7 +239,7 @@ func TestValidate_AcceptsEveryProbeType(t *testing.T) {
 	}
 }
 
-// TestLoad — П-1, Р-1 (row #9): Load refuses a malformed document and a
+// TestLoad — P-1, R-1 (row #9): Load refuses a malformed document and a
 // well-formed but invalid one (it runs Validate), loads the embedded
 // registry.json, and resolves a known id to its record and any other name
 // of the right form to the general record.

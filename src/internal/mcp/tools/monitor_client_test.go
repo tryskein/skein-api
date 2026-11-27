@@ -2,7 +2,7 @@ package tools
 
 import "testing"
 
-// TestValidWindowsTokenDir — US-11, Р-7: a tokenDir is an absolute path with
+// TestValidWindowsTokenDir — US-11, R-7: a tokenDir is an absolute path with
 // a drive letter whose components Windows takes as written. A component
 // ending in a dot or a space is refused: Windows path resolution strips
 // trailing dots and spaces, so ".. " and "..." step to the parent and "x."

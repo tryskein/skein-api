@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """The Windows platform layer of the runner and the loader on a fake source
 of security descriptors (fake_secdesc.py): matrix rows #90 (criterion (a)
-of P-9, the term "Приватный каталог Windows"), #91 (no untrusted text for a
+of P-9, the term "private Windows directory"), #91 (no untrusted text for a
 .cmd/.bat program, the message path and directory, the Codex executable)
 and #125 (a monitor without client on Windows keeps its behaviour).
 

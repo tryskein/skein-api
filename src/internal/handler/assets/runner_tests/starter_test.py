@@ -159,7 +159,7 @@ def loader_server(test, body=MODE_LOADER, loader=None, script=None, poll=None):
     return srv
 
 
-# The stop lines of the starter refusal table (R-10, "Строки stdout раннера"),
+# The stop lines of the starter refusal table (R-10, "Runner stdout lines"),
 # whole: event, reason, exit code and the action that names the loader
 # download and the step to take.
 REFUSALS = {

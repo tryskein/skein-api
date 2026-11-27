@@ -658,7 +658,7 @@ func measureMonitorRealRegistry(m *respMeasurer, pool *pgxpool.Pool, ctx context
 
 // measureMonitorTokenDir is the tokenDir of the Windows rows: one fixed
 // literal for every record, so the growth over POSIX compares like with
-// like (SC-009, "Единицы и точки замера").
+// like (SC-009, "Units and points of measurement").
 const measureMonitorTokenDir = `C:\Users\measure\AppData\Local`
 
 // respMeasurer calls a tool and reports the size of its response.

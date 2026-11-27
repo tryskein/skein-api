@@ -142,7 +142,7 @@ func TestGetMonitorScriptClient_RefusedBeforeSideEffects(t *testing.T) {
 	}
 }
 
-// TestGetMonitorScriptClient_WithoutClientUnchanged — US-1, SC-004, ИНВ-7
+// TestGetMonitorScriptClient_WithoutClientUnchanged — US-1, SC-004, INV-7
 // (rows #13, #138): without client, platform and tokenDir the response has
 // exactly the fields it had before them, the bootstrap runs the starter with
 // SKEIN_LOADER_SHA256 (R-10), and the usage and the tool schema point an
@@ -193,7 +193,7 @@ func TestGetMonitorScriptClient_WithoutClientUnchanged(t *testing.T) {
 	}
 }
 
-// TestGetMonitorScriptClient_ResolvesRecords — ИНВ-13, API surface (rows #14,
+// TestGetMonitorScriptClient_ResolvesRecords — INV-13, API surface (rows #14,
 // #138): a known id answers with client equal to the id and no bootstrap
 // key, an unknown id of the right form answers with the general record and
 // its warning carrying the full list of ids, and client without platform is
@@ -451,10 +451,10 @@ func TestGetMonitorScriptClient_StartCommands(t *testing.T) {
 }
 
 // monitorMainAgentIDs are the ids of the main agents the description lists
-// (ИНВ-17, С3).
+// (INV-17, C3).
 var monitorMainAgentIDs = []string{"claude", "codex", "grok", "kimi", "gemini", "opencode", "qwen-code", "cursor", "copilot", "hermes"}
 
-// TestGetMonitorScriptClient_DescriptionAndFullList — ИНВ-17, С3 (row #148):
+// TestGetMonitorScriptClient_DescriptionAndFullList — INV-17, C3 (row #148):
 // the description names exactly the ten main agent ids and no other id of
 // the registry; the warning for an unknown id lists every id of the
 // embedded registry (compared as a set).

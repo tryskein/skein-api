@@ -4,7 +4,7 @@
 # created), then runs the starter in prepare mode: the starter downloads the
 # loader and checks its SHA-256 as on every start, and the loader creates
 # the token directory, checks the whole path before the token is written
-# ("До записи токена"), writes starter.py byte for byte from the text this
+# ("Before the token is written"), writes starter.py byte for byte from the text this
 # script hands it and prints the ready line. The code of those checks lives
 # in the loader, not in the response (SC-009). A refusal of the starter here
 # is a prepare_failed line with its reason. The mode and the starter text go

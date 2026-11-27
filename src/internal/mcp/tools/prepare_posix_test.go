@@ -120,7 +120,7 @@ func requirePython(t *testing.T) {
 	}
 }
 
-// TestServedPrepare_POSIX — П-3, R-9, R-10 (rows #18, #140): the prepare
+// TestServedPrepare_POSIX — P-3, R-9, R-10 (rows #18, #140): the prepare
 // command the server serves checks the Python version first (an old one
 // gets prepare_failed with config_invalid and nothing is created), creates
 // the token directory new with mode 0700, owned by the caller, writes into

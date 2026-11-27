@@ -270,7 +270,7 @@ def loader_client_action(reason, issue):
             "refused the download. Run %s again later; the token and the state are kept." % (issue, command))
 
 
-# --- prepare mode (R-10, US-11 "До записи токена") ---------------------------
+# --- prepare mode (R-10, US-11 "Before the token is written") --------------
 # The Windows prepare runs the starter with SKEIN_MONITOR_MODE=prepare and
 # the starter text in SKEIN_PREPARE_STARTER (its own process only). Here the
 # loader creates the token directory new and private in one call (P-9 (a)),

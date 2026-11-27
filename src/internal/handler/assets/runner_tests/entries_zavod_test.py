@@ -2,17 +2,16 @@
 """SC-001 of the Zavod host record of wave 1 (matrix rows #78, #79), over
 the registry the server embeds.
 
-The expected values come from the closed documentation of Zavod and from a
-call of its CLI, not from the record. `zavod --json send <address>
+The expected values come from the Zavod CLI and a call of it, not from the
+record. `zavod --json send <address>
 --text-file -` takes the body on stdin and prints one JSON envelope whose
 top-level exit_code and code carry the outcome (a refused call printed
 {"zavod":1,"command":"send","outcome":"refused","exit_code":11,
 "code":"letter_too_large","message":"the body is 70000 bytes, the limit is
 65536; nothing was accepted",...}); exit 0 accepted, 10 partial effect, 11
 refused (caller_not_in_roster: the caller is no live agent;
-letter_too_large), 12 no connection, 13 unknown, 14 protocol error. The
-own limit of a letter: the send threshold of 65536 bytes and the direct
-ring of 10000 characters (skein-monitor-zavod-delivery.md, "Ограничения").
+letter_too_large), 12 no connection, 13 unknown, 14 protocol error. A
+letter holds at most 65536 bytes of body and 10000 characters.
 The address is ZAVOD_ME, a UUID equal to ZAVOD_AGENT_ID; the life of the
 agent is ZAVOD_AGENT_ROOT_PID, _START and _BOOT_ID.
 

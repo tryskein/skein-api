@@ -51,7 +51,7 @@ class SecView(object):
         self.attributes = attributes
 
 
-# Criterion (a) of P-9, the term "Приватный каталог Windows": the cause of
+# Criterion (a) of P-9, the term "private Windows directory": the cause of
 # a refusal as a PlatformRefusal reason, or None. A directory has a DACL
 # protected from inheritance; a file inside a private directory is judged
 # by its own DACL, read from the handle that is then read. Allow ACEs name
@@ -120,7 +120,7 @@ def path_components(path):
         path = parent
 
 
-# Criterion (b) of P-9 (US-11, "До записи токена") over the views of every
+# Criterion (b) of P-9 (US-11, "Before the token is written") over the views of every
 # component, root first, each with the path it was opened by: the cause of
 # a refusal, or None when no account but the user and the trusted system
 # accounts can replace a component. A component is replaced by deleting or

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""The prepare mode of the loader on Windows (R-10, US-11 "До записи
-токена"; P-9 (b)) on a fake source of security descriptors
+"""The prepare mode of the loader on Windows (R-10, US-11 "Before the
+token is written"; P-9 (b)) on a fake source of security descriptors
 (fake_secdesc.py): matrix rows #89 (the predicate of the path chain, as a
 table) and #128 (the outcome of prepare over the open handles of the
 chain). The Windows `prepare` of the response checks the Python version

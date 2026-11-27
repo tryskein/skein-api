@@ -535,7 +535,7 @@ func TestAgentScriptHandler_SHA256IsOfTheServedBytes(t *testing.T) {
 	}
 }
 
-// TestAgentScriptHandler_SHA256CoversEverySubstitution — П-2 (row #10): for
+// TestAgentScriptHandler_SHA256CoversEverySubstitution — P-2 (row #10): for
 // handlers built with independent timings and token windows (a zero and a
 // sub-second window among them), SHA256() is the digest of the bytes Script
 // serves, the served body carries no placeholder, and handlers with
@@ -571,7 +571,7 @@ func TestAgentScriptHandler_SHA256CoversEverySubstitution(t *testing.T) {
 	}
 }
 
-// TestAgentScript_ServedBodyCarriesWindowAndRegistry — П-2, Р-1: the served
+// TestAgentScript_ServedBodyCarriesWindowAndRegistry — P-2, R-1: the served
 // body carries the token renewal window as whole seconds and the registry
 // as base64 of registry.json. The references are independent of the
 // handler: the window in seconds computed here, the registry read from the

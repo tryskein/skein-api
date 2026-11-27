@@ -11,7 +11,7 @@ import (
 	"skein-api/internal/monitorregistry"
 )
 
-// TestBuildServingRouter_BrokenRegistryStopsStartup — П-1, Р-1: the startup
+// TestBuildServingRouter_BrokenRegistryStopsStartup — P-1, R-1: the startup
 // step that main calls before any listener opens refuses a broken registry
 // document: it returns the registry's validation error and never builds the
 // router, so main has nothing to serve and exits.

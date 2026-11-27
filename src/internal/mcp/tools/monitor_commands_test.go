@@ -48,7 +48,7 @@ func runWithFakePython(t *testing.T, command string) (args []string, env map[str
 	return args, env
 }
 
-// TestClientCommands_HostileInputsStayQuoted — П-3, ИНВ-5, R-10 (rows #15,
+// TestClientCommands_HostileInputsStayQuoted — P-3, INV-5, R-10 (rows #15,
 // #139): with a hostile issue id and token path (quotes, $(), spaces, a
 // newline), prepare and preflight (with client) and bootstrap (without it)
 // hand python3 exactly the intended values, and the injection's marker file
@@ -118,7 +118,7 @@ func TestClientCommands_HostileInputsStayQuoted(t *testing.T) {
 	}
 }
 
-// TestClientTokenInstruction — П-3, US-11 (row #16): with client the Write of
+// TestClientTokenInstruction — P-3, US-11 (row #16): with client the Write of
 // the token comes only after prepare's ready line, and the failed-prepare
 // branch has no Write step; without client the instruction is the previous
 // one.
@@ -149,7 +149,7 @@ func TestClientTokenInstruction(t *testing.T) {
 	}
 }
 
-// TestClientUsage_OnlyCommonSteps — US-13, ИНВ-17, С2 (rows #17, #139):
+// TestClientUsage_OnlyCommonSteps — US-13, INV-17, C2 (rows #17, #139):
 // usage with client carries only the steps common to every method — run
 // preflight, run its `command` as its `instruction` says, the literal path
 // of the echo exclusion file, the stop lines by their `action` — and none
