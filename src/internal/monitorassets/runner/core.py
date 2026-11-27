@@ -343,18 +343,20 @@ class StdoutSink(object):
     """Where the lines of a legacy monitor go: stdout, one JSON line each,
     beginning with its monitor_started line."""
 
-    def __init__(self, issue):
+    def __init__(self, issue, secrets=()):
         self.issue = issue
+        # The secrets of the monitor: no line on stdout carries one (INV-6).
+        self.secrets = [s for s in secrets if s]
 
     def started(self):
         emit({"event": "monitor_started", "issue": self.issue,
               "pollIntervalSec": POLL_INTERVAL_SEC})
 
     def lifecycle(self, line):
-        emit(line)
+        emit(_redact(line, self.secrets))
 
     def notification(self, n):
-        emit({"event": "notification", "notification": n})
+        emit({"event": "notification", "notification": _redact(n, self.secrets)})
 
 
 # Stands for "the state still keeps a rest of a page": the next persist
@@ -371,7 +373,7 @@ def work(executor, base, token, issue, exclude_session, token_file, sink=None, r
     monitor, which reads on after rootClosed (rootclosed.py); without it the
     first page with rootClosed ends the monitor."""
     if sink is None:
-        sink = StdoutSink(issue)
+        sink = StdoutSink(issue, monitor_secrets(token, os.environ, load_registry()))
     if hasattr(sink, "started"):
         sink.started()
 

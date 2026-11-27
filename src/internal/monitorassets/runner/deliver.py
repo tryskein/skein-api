@@ -564,7 +564,7 @@ class DeliverySink(object):
         command = check.get("command")
         if command:
             try:
-                env = child_env(self.env, self.executor.secrets)
+                env = child_env(self.env, self.executor.secrets, getattr(self.executor, "drop", ()))
                 argv = self._program(expand_argv(command.get("argv") or [], env))
                 limit = (channel.get("executor") or {}).get("timeoutSec") or PROBE_TIMEOUT_SEC
                 result = run_program(argv, env, None, limit if timeout is None else min(limit, timeout),
@@ -657,7 +657,7 @@ class DeliverySink(object):
         if idle.get("type") != "argv":
             return
         try:
-            env = child_env(self.env, self.executor.secrets)
+            env = child_env(self.env, self.executor.secrets, getattr(self.executor, "drop", ()))
             argv = self._program(expand_argv(idle.get("argv") or [], env))
             result = run_program(argv, env, None, min(idle.get("timeoutSec") or timeout, timeout),
                                  self.executor.secrets)

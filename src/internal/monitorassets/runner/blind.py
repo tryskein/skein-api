@@ -68,12 +68,12 @@ def with_delivery_name(spec, name):
     return out
 
 
-def pane_pid(channel, env, secrets=()):
+def pane_pid(channel, env, secrets=(), drop=()):
     """The PID of the process of the channel's pane by its panePid command
     (a bare PID on stdout, or the number at jsonField of its JSON answer);
     ProbeError when the command cannot run, fails, or gives no PID."""
     spec = channel.get("panePid") or {}
-    clean = child_env(env, secrets)
+    clean = child_env(env, secrets, drop)
     try:
         argv = expand_argv(spec.get("argv") or [], clean)
     except ExecutorRefusal as exc:
@@ -128,7 +128,7 @@ class PanePIDBinder(PaneBinder):
         if not channel.get("panePid"):
             return self._by_process(channel, multiplexer, chain, "its record gives no source of the pane PID")
         try:
-            pid = self.pid_of(channel, ctx.env, getattr(ctx.prober, "secrets", ()))
+            pid = self.pid_of(channel, ctx.env, getattr(ctx.prober, "secrets", ()), getattr(ctx.prober, "drop", ()))
         except ProbeError as exc:
             return self._by_process(channel, multiplexer, chain, "no pane PID: %s" % exc)
         depth = None

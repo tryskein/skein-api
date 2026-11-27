@@ -980,7 +980,7 @@ def preflight(token_file, env, registry, settings, detector=None, prober=None, p
         raise ConfigInvalid("python3", "Python %d.%d or newer is needed" % MIN_PYTHON)
     detector = detector or RegistryDetector()
     # The keys of the http channels are secrets: no probe program sees one.
-    prober = prober or SystemProbeRunner(http_key_secrets(registry, env))
+    prober = prober or SystemProbeRunner(http_key_secrets(registry, env), http_key_names(registry))
     journal, external = check_sandbox(token_file, env)
     if placement is None:
         placement = system_placement(registry, settings.record)

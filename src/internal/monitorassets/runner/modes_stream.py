@@ -204,8 +204,11 @@ def write_stdout(texts, out=None):
 class StreamOutput(object):
     """The stdout of a stream or exit-on-event monitor within its limits."""
 
-    def __init__(self, limits, journal, method, out=None, pacer=None, issue=""):
+    def __init__(self, limits, journal, method, out=None, pacer=None, issue="", secrets=()):
         self.limits = limits
+        # The secrets of the monitor (executors.py#monitor_secrets): no
+        # line on stdout carries one (INV-6).
+        self.secrets = [s for s in secrets if s]
         self.journal = journal
         self.method = method
         self.issue = issue
@@ -260,7 +263,7 @@ class StreamOutput(object):
     def line(self, obj):
         """A service line within the line limit, or None when not even its
         event and reason fit."""
-        return lifecycle_line(obj, self.limits.line_max, self.limits.line_unit)
+        return lifecycle_line(_redact(obj, self.secrets), self.limits.line_max, self.limits.line_unit)
 
     def lifecycle(self, obj, stop=False):
         """A service line: to the journal, and to stdout as a batch of its
@@ -314,6 +317,7 @@ class StreamOutput(object):
         (exit-on-event: the rest of the cycle) still holds beside the room
         of the stop line, when the batch limit is in characters or bytes."""
         lim = self.limits
+        n = _redact(n, self.secrets)
         text = notification_line(n, lim.line_max, lim.line_unit)
         if text is not None and self.fits([text] + self.room):
             return text, STATUS_PRINTED

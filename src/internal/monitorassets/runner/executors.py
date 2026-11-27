@@ -287,12 +287,13 @@ def expand_argv(argv, env, text=None, text_file=None):
     return out
 
 
-def child_env(env, secrets):
+def child_env(env, secrets, drop=()):
     """The environment of the agent process without any variable whose name
-    or value holds a secret of the monitor."""
+    or value holds a secret of the monitor, and without the variables named
+    in drop (the key variables of the http channels)."""
     secrets = [s for s in secrets if s]
     return dict((k, v) for k, v in env.items()
-                if not any(s in v or s in k for s in secrets))
+                if k not in drop and not any(s in v or s in k for s in secrets))
 
 
 def message_dir(token_file):
@@ -797,10 +798,12 @@ class _ProcessTree(object):
 class ArgvExecutor(object):
     """Delivers a text through the argv executor of a channel record."""
 
-    def __init__(self, token_file, env, secrets, programs=None):
+    def __init__(self, token_file, env, secrets, programs=None, drop=()):
         self.token_file = token_file
         self.env = env
         self.secrets = list(secrets)
+        # Variables no channel program gets (the http keys, by name).
+        self.drop = tuple(drop)
         # {name: absolute path}: the programs of the preflight result
         # (preflight.json "programs"). Given (the working runner), it is the
         # only way a program runs: a name it does not hold is refused, never
@@ -817,7 +820,7 @@ class ArgvExecutor(object):
         CallResult; raises ExecutorRefusal when nothing was handed over."""
         feed = executor.get("feed")
         text_file = None
-        env = child_env(self.env, self.secrets)
+        env = child_env(self.env, self.secrets, self.drop)
         text = redact_text(text, self.secrets) if text is not None else None
         program = resolve_program((executor.get("argv") or [""])[0], env, self.programs)
         batch = is_batch_program(program)
@@ -909,19 +912,44 @@ def http_key(http, env):
     return None
 
 
+# A key shorter than this is not redacted as a substring of texts, lines and
+# environments: a short value would wipe ordinary words. Its variable still
+# leaves every program environment by name (http_key_names).
+MIN_SECRET_CHARS = 16
+
+
 def http_key_secrets(registry, env):
-    """The value of every key variable of every http channel of the
-    registry that is set in this environment, the ones a request would not
-    send among them: secrets of the monitor."""
+    """The key each http channel of the registry would send in this
+    environment (the first variable of its keyEnv that is set), when it is
+    at least MIN_SECRET_CHARS long: secrets of the monitor."""
     keys = []
     for channel in (registry.channels.values() if registry is not None else []):
         spec = channel.get("executor") or {}
         if spec.get("type") == "http":
-            for name in (spec.get("http") or {}).get("keyEnv") or []:
-                key = (env or {}).get(name, "")
-                if key and key not in keys:
-                    keys.append(key)
+            key = http_key(spec.get("http") or {}, env or {})
+            if key and len(key) >= MIN_SECRET_CHARS and key not in keys:
+                keys.append(key)
     return keys
+
+
+def http_key_names(registry):
+    """The key variables of every http channel of the registry: no channel
+    program, probe or check gets them in its environment."""
+    names = []
+    for channel in (registry.channels.values() if registry is not None else []):
+        spec = channel.get("executor") or {}
+        if spec.get("type") == "http":
+            for name in (spec.get("http") or {}).get("keyEnv") or []:
+                if name not in names:
+                    names.append(name)
+    return names
+
+
+def monitor_secrets(token, env, registry):
+    """The secrets of the monitor, the one list every mode redacts its
+    journal and its stdout by (INV-6): the token and the keys of the http
+    channels (http_key_secrets)."""
+    return [s for s in [token] + http_key_secrets(registry, env) if s]
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -1008,7 +1036,8 @@ class ChannelExecutor(object):
 
     def __init__(self, token_file, env, secrets, programs=None, registry=None):
         self.secrets = [s for s in list(secrets) + http_key_secrets(registry, env) if s]
-        self.argv = ArgvExecutor(token_file, env, self.secrets, programs)
+        self.drop = tuple(http_key_names(registry))
+        self.argv = ArgvExecutor(token_file, env, self.secrets, programs, self.drop)
         self.http = HTTPExecutor(env, self.secrets)
         self.programs = self.argv.programs
         self.strict = self.argv.strict
@@ -1047,8 +1076,10 @@ def absolute_program(name, env):
 class SystemProbeRunner(ProbeRunner):
     """Runs the probes of a channel for the preflight (P-7)."""
 
-    def __init__(self, secrets=()):
+    def __init__(self, secrets=(), drop=()):
         self.secrets = list(secrets)
+        # Variables no probe or check gets (the http keys, by name).
+        self.drop = tuple(drop)
 
     def run(self, channel, probe, env):
         kind = probe.get("type")
@@ -1068,7 +1099,7 @@ class SystemProbeRunner(ProbeRunner):
 
     def _argv(self, channel, probe, env):
         timeout = min((channel.get("executor") or {}).get("timeoutSec") or PROBE_TIMEOUT_SEC, PROBE_TIMEOUT_SEC)
-        clean = child_env(env, self.secrets)
+        clean = child_env(env, self.secrets, self.drop)
         argv = expand_argv(probe.get("argv") or [], clean)
         # The program of the channel by the path it is found at (a path under
         # the home directory among them), as the working runner runs it.
@@ -1089,7 +1120,7 @@ class SystemProbeRunner(ProbeRunner):
         JSON document, else ProbeError."""
         command = (channel.get("addressee") or {}).get("command") or {}
         timeout = min((channel.get("executor") or {}).get("timeoutSec") or PROBE_TIMEOUT_SEC, PROBE_TIMEOUT_SEC)
-        clean = child_env(env, self.secrets)
+        clean = child_env(env, self.secrets, self.drop)
         try:
             argv = expand_argv(command.get("argv") or [], clean)
         except ExecutorRefusal as exc:
