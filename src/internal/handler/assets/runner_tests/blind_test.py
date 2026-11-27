@@ -343,6 +343,24 @@ class BlindBindingTest(unittest.TestCase):
         self.assertFalse(binding.confirmed)
         self.assertIn("terminal of its pane", binding.cause)
 
+    def test_only_a_confirmed_binding_gives_an_address(self):
+        # Warning 6 of wave 13 round 1 (INV-1): an inherited pane variable
+        # without a binding confirmed is no address of the agent, so it
+        # does not merge two agents' records in the ledger.
+        for name, pane_index, has in (("bound", 3, True), ("the runner is not in the pane", None, False)):
+            with self.subTest(case=name):
+                box = Box(self, [mux()])
+                source, pids = fake_proc.linear(RUNNER_PROC, ("bash", None), ("alpha", None), ("bash", None))
+                pane_pid = pids[pane_index] if pane_index is not None else 77
+                box.progs["mux"].respond([{"exit": 0, "stdout": "%d\n" % pane_pid}])
+                r = box.runner
+                record = r.resolve_record(box.reg, "alpha")
+                pl = r.place(r.ancestry(source, pids[0]), box.reg, record, self_pid=pids[0])
+                ctx = r.Context(box.reg, r.Settings(record=record, platform="posix"), box.env, pl,
+                                r.RegistryDetector(), r.ProbeRunner())
+                channels = [spec.channel for spec in ctx.detector.address_specs(ctx)]
+                self.assertEqual("mux" in channels, has, channels)
+
     def test_a_pane_pid_the_command_does_not_give_binds_nothing(self):
         for name, answer in (("failed", {"exit": 1}), ("no PID", {"exit": 0, "stdout": "\n"}),
                              ("not an ancestor", {"exit": 0, "stdout": "77\n"})):

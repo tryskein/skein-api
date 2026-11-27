@@ -197,6 +197,12 @@ class RegistryDetector(Detector):
                 a = c.get("address")
                 if not a or not records_hold(c.get("detect"), record):
                     continue
+                if step == 7 and self.binding(ctx, c["id"]) is None:
+                    # A blind address without a confirmed binding to the
+                    # pane is no address of this agent (INV-1): a pane's
+                    # variables inherited outside it must not merge two
+                    # agents' records in the ledger.
+                    continue
                 per_process = bool(a.get("perProcess"))
                 if step == 3:
                     own = [m for m in methods if m.get("kind") == "delivery" and m.get("channel") == c["id"]]
