@@ -16,10 +16,12 @@ Run on its own: python3 internal/handler/assets/runner_tests/entries_stream_w1_t
 Standard library of Python 3.6 only.
 """
 
+import json
 import os
 import sys
 import unittest
 from unittest import mock
+from urllib.parse import parse_qs, urlparse
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -150,6 +152,24 @@ class RearmTest(unittest.TestCase):
 
 
 @unittest.skipUnless(sys.platform.startswith("linux"), "the POSIX stream output")
+class BoundaryExecutor(ms.FakeExecutor):
+    """Answers each new cursor with the next page; a poll at a cursor already
+    answered is the access boundary after a pace pause (US-12) and gets an
+    empty page; after the pages, 401."""
+
+    def __init__(self, pages):
+        ms.FakeExecutor.__init__(self, pages)
+        self.answered = set()
+
+    def request(self, url, token):
+        since = parse_qs(urlparse(url).query).get("since_id", [None])[0]
+        if since in self.answered:
+            self.urls.append(url)
+            return {"status": 200, "body": json.dumps({"notifications": [], "cursor": None})}
+        self.answered.add(since)
+        return ms.FakeExecutor.request(self, url, token)
+
+
 class GrokPaceTest(unittest.TestCase):
     """A long series under the record's limits stays inside Grok's bucket:
     nothing is suppressed, so the monitor is never killed."""
@@ -160,7 +180,7 @@ class GrokPaceTest(unittest.TestCase):
         clock = ms.FakeClock()
         output = box.output(limits, "stream", clock=clock)
         pages = [ms.page(list(range(1 + 50 * i, 51 + 50 * i)), i + 1) for i in range(3)]
-        executor = ms.FakeExecutor(pages)
+        executor = BoundaryExecutor(pages)
         with mock.patch.object(ms.RUNNER.time, "sleep", lambda s: None):
             with self.assertRaises(ms.RUNNER.Stop):
                 ms.RUNNER.run_stream_loop(executor, "http://poll.test", "skm_x", ms.ISSUE, "", box.token,

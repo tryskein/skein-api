@@ -451,6 +451,39 @@ class KeptRestAnyMethodTest(unittest.TestCase):
         self.assertFalse(any("bodyPreview" in l for l in box.journal_lines() if l.get("event") == "delivery"))
 
 
+class BoundaryAfterThePaceTest(unittest.TestCase):
+    """Review of wave 8, row 14: a batch written after a pace pause longer
+    than two poll intervals waits for a fresh poll; 401 or 403 there gives
+    the events not printed yet access-lost without the preview."""
+
+    LIMITS = {"line": {"max": 400, "unit": "chars"}, "batch": {"max": 1, "unit": "lines"},
+              "rate": {"burst": 1, "intervalSec": 5}}
+
+    def test_a_401_after_the_pause_stops_before_the_next_batch(self):
+        box = Box(self)
+        clock = FakeClock()
+        out = Out(clock)
+        executor = FakeExecutor([page([1, 2], 2), 401])
+        stop, _ = box.cycle(executor, box.output(self.LIMITS, "stream", clock=clock, out=out), "stream")
+        self.assertEqual(stop.reason, "token_expired")
+        self.assertEqual([l["notification"]["id"] for l in out.lines() if l["event"] == "notification"], [1])
+        lost = [l for l in box.journal_lines()
+                if l.get("event") == "delivery" and l.get("status") == RUNNER.OUTCOME_ACCESS_LOST]
+        self.assertEqual([l["notificationId"] for l in lost], [2])
+        self.assertFalse(any("bodyPreview" in l for l in lost))
+        # The boundary poll asked at the page's own cursor.
+        self.assertNotIn("since_id", executor.urls[1])
+
+    def test_a_fresh_poll_after_the_pause_lets_the_batch_go(self):
+        box = Box(self)
+        clock = FakeClock()
+        out = Out(clock)
+        executor = FakeExecutor([page([1, 2], 2), page([1, 2], 2), 401])
+        stop, _ = box.cycle(executor, box.output(self.LIMITS, "stream", clock=clock, out=out), "stream")
+        self.assertEqual([l["notification"]["id"] for l in out.lines() if l["event"] == "notification"], [1, 2])
+        self.assertEqual(stop.reason, "token_expired")
+
+
 class ExitOnEventTest(unittest.TestCase):
     """Matrix row #41 (US-3 "the stdout guarantee", INV-11)."""
 

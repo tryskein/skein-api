@@ -123,6 +123,21 @@ class _Bucket(object):
         self.tokens = max(self.tokens - 1.0, 0.0)
 
 
+class BatchWithheld(Exception):
+    """The access boundary is not fresh after the pace pause and a poll
+    could not renew it: the batch is not written, its events wait."""
+
+
+class StreamAccessLost(Exception):
+    """A poll after the pace pause answered 401 or 403. done: the events
+    that got an outcome before it."""
+
+    def __init__(self, status):
+        Exception.__init__(self, status)
+        self.status = status
+        self.done = []
+
+
 class Pacer(object):
     """When the next batch may be written: a rate token, a window of the
     budget, and the previous window closed. clock and sleep are the
@@ -196,6 +211,10 @@ class StreamOutput(object):
         self.issue = issue
         self.out = out
         self.pacer = pacer or Pacer(limits)
+        # The access boundary asked after the pace pause, right before a
+        # batch is written (US-12): True to write, False to withhold the
+        # batch; it may raise StreamAccessLost. None: no boundary.
+        self.access_check = None
         # A line reserved in the batch just written (the stop line of an
         # exit-on-event cycle): it is written without a turn of its own, when
         # it still fits that batch.
@@ -227,10 +246,13 @@ class StreamOutput(object):
         if self.cycle:
             self.cycle_texts.extend(texts)
 
-    def batch(self, texts, reserve=False):
+    def batch(self, texts, reserve=False, events=True):
         """Write texts as one batch; reserve keeps a line of it for the stop
-        line that follows."""
+        line that follows. A batch of events (not a service line) is written
+        only once the access boundary holds after the pace pause."""
         self.pacer.wait_turn()
+        if events and self.access_check is not None and not self.access_check():
+            raise BatchWithheld()
         self._write(texts)
         self.reserved = reserve
         self.last_batch = list(texts)
@@ -263,7 +285,7 @@ class StreamOutput(object):
         else:
             # Not reserved, longer than the room kept, or later than the
             # window of that batch: a batch of its own.
-            self.batch([text])
+            self.batch([text], events=False)
         return True
 
     def _slot_open(self, text):
@@ -413,7 +435,14 @@ def print_events(output, events, exit_on_event, stop_lines, statuses=None):
         chunk = [c for c in chunk if c[2] != STATUS_UNFIT or output.record(c[0], STATUS_UNFIT)]
         if not chunk:
             continue
-        output.batch([t for _, t, _ in chunk], reserve=with_reserve)
+        try:
+            output.batch([t for _, t, _ in chunk], reserve=with_reserve)
+        except BatchWithheld:
+            # The chunk and the rest wait for the next round.
+            break
+        except StreamAccessLost as exc:
+            exc.done = list(done)
+            raise
         for n, _, status in chunk:
             if status == STATUS_PRINTED:
                 # Delivered by its line; a refused copy is said by degraded.
@@ -444,6 +473,22 @@ def run_stream_loop(executor, base, token, issue, exclusion, token_file, doc, ou
     # The close of the root: the sticky flag, the page budget and the
     # summary, kept with the cursor (rootclosed.py).
     root = RootClosed(token_file)
+
+    # When the last successful poll answered (the pacer's clock): a batch is
+    # written only while it is at most two poll intervals old (US-12).
+    fresh = [output.pacer.clock()]
+
+    def access_check():
+        if output.pacer.clock() - fresh[0] <= 2 * POLL_INTERVAL_SEC:
+            return True
+        status, payload, _ = poll_once(executor, base, token, cursor, exclude_session)
+        if status == 200 and poll_page_ok(payload):
+            fresh[0] = output.pacer.clock()
+            return True
+        if status in (401, 403):
+            raise StreamAccessLost(status)
+        return False
+    output.access_check = access_check
 
     def hold(save, *args):
         _save_or_hold(save, token_file, args, output, executor, base, token, cursor, exclude_session, issue,
@@ -491,6 +536,7 @@ def run_stream_loop(executor, base, token, issue, exclusion, token_file, doc, ou
                                   "failedForSec": int(time.monotonic() - series_started)})
             series_started = None
             series_degraded = False
+            fresh[0] = output.pacer.clock()
             if remainder is not None:
                 # The rest of a page already received: its events, not those
                 # of this poll, which only kept the access boundary (US-12).
@@ -507,7 +553,16 @@ def run_stream_loop(executor, base, token, issue, exclusion, token_file, doc, ou
             own = [n for n in events if exclusion.own(n)]
             others = [n for n in events if not exclusion.own(n)]
             statuses = []
-            printed = print_events(output, others, exit_on_event, slot_lines, statuses)
+            try:
+                printed = print_events(output, others, exit_on_event, slot_lines, statuses)
+            except StreamAccessLost as exc:
+                # Lost access wins over the events not printed yet (US-12).
+                reason = "token_expired" if exc.status == 401 else "visibility_lost"
+                printed_ids = set(id(n) for n in exc.done)
+                close_stored(output.journal, doc.get("method"),
+                             [(n, OUTCOME_ACCESS_LOST) for n in events if id(n) not in printed_ids],
+                             reason, env)
+                raise Stop(reason, status=exc.status, delete_token=True)
             root.tally(statuses)
             done = [n for n in own if output.record(n, OUTCOME_OWN_ECHO, channel=None)] + printed
             for n in done:
