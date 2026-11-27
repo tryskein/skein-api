@@ -119,6 +119,11 @@ class FakeDetector(RUNNER.Detector):
     def addressee_holds(self, ctx, channel):
         return channel["id"] in self._hosts
 
+    def blind_reachable(self, ctx):
+        # Every blind channel whose binding is confirmed reaches the pane:
+        # no multiplexer stands between.
+        return list(self._bound)
+
     def binding(self, ctx, channel_id):
         if channel_id not in self._bound:
             return None
