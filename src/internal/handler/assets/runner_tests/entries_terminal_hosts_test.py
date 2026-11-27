@@ -305,5 +305,50 @@ class ParadevRecordTest(ah.HostCase):
         self.assertEqual(mon.statuses(), [(1, "refused-before-send")])
 
 
+class _Captured(BaseException):
+    """Carries the environment an entry handed on, past its own handlers."""
+
+    def __init__(self, env):
+        BaseException.__init__(self)
+        self.env = env
+
+
+class AliasEntriesTest(unittest.TestCase):
+    """Warnings 9 and 17 of the wave 12 review, round 2: each entry of the
+    runner - the preflight, the detached child and the client run - reads
+    the agent's environment with the registry's aliases, so a Paradev that
+    sets only PARADEV_* is seen under the SUPERSET_* names; with both set,
+    SUPERSET_* is kept (notify-hook.template.sh: "SUPERSET_* wins")."""
+
+    BASE = {"SKEIN_TOKEN_FILE": "/nonexistent/token", "SKEIN_PUBLIC_URL": "https://skein.example",
+            "SKEIN_ISSUE": "sk-9", "PATH": os.defpath}
+
+    def entry_env(self, entry, step, variables):
+        def capture(*args, **kw):
+            env = [a for a in args if isinstance(a, dict) and "SKEIN_PUBLIC_URL" in a]
+            raise _Captured(env[0])
+        environ = dict(self.BASE, **variables)
+        with mock.patch.dict(os.environ, environ, clear=True), mock.patch.object(RUNNER, step, capture):
+            with self.assertRaises(_Captured) as caught:
+                getattr(RUNNER, entry)()
+        return caught.exception.env
+
+    def test_each_entry_reads_the_aliases(self):
+        for entry, step in (("run_preflight", "preflight"), ("run_detached_child", "read_settings"),
+                            ("run_client", "read_settings")):
+            for name, variables, terminal, workspace in (
+                    ("only the new names", {"PARADEV_TERMINAL_ID": "term-new", "PARADEV_WORKSPACE_ID": "ws-new"},
+                     "term-new", "ws-new"),
+                    ("both: the old names win", {"PARADEV_TERMINAL_ID": "term-new", "PARADEV_WORKSPACE_ID": "ws-new",
+                                                 "SUPERSET_TERMINAL_ID": "term-old",
+                                                 "SUPERSET_WORKSPACE_ID": "ws-old"}, "term-old", "ws-old"),
+                    ("an empty old name takes the new one", {"PARADEV_TERMINAL_ID": "term-new",
+                                                             "SUPERSET_TERMINAL_ID": ""}, "term-new", None)):
+                with self.subTest(entry=entry, case=name):
+                    env = self.entry_env(entry, step, variables)
+                    self.assertEqual(env.get("SUPERSET_TERMINAL_ID"), terminal)
+                    self.assertEqual(env.get("SUPERSET_WORKSPACE_ID"), workspace)
+
+
 if __name__ == "__main__":
     unittest.main()

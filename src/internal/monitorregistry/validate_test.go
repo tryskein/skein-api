@@ -1386,3 +1386,39 @@ func TestValidate_AnotherValueIsApartFromTheValue(t *testing.T) {
 		}
 	}
 }
+
+// TestValidate_EnvAliases — each rule of envAliases: a source, a variable
+// name, one entry per variable, at least one alias, each another variable
+// name (review of wave 12 round 2, warning 17).
+func TestValidate_EnvAliases(t *testing.T) {
+	good := EnvAlias{Name: "OLD_ID", Aliases: []string{"NEW_ID"}, Source: "fixture"}
+	r := validRegistry()
+	r.EnvAliases = []EnvAlias{good}
+	if err := r.Validate(); err != nil {
+		t.Fatalf("a valid alias was refused: %v", err)
+	}
+	for _, tc := range []struct {
+		name    string
+		aliases []EnvAlias
+		rule    Rule
+	}{
+		{"no source", []EnvAlias{{Name: "OLD_ID", Aliases: []string{"NEW_ID"}}}, RuleMissingSource},
+		{"a name that is no variable", []EnvAlias{{Name: "1OLD", Aliases: []string{"NEW_ID"}, Source: "fixture"}}, RuleInvalid},
+		{"one variable twice", []EnvAlias{good, good}, RuleDuplicateID},
+		{"no alias", []EnvAlias{{Name: "OLD_ID", Source: "fixture"}}, RuleInvalid},
+		{"an alias that is no variable", []EnvAlias{{Name: "OLD_ID", Aliases: []string{"NEW-ID"}, Source: "fixture"}}, RuleInvalid},
+		{"the variable as its own alias", []EnvAlias{{Name: "OLD_ID", Aliases: []string{"OLD_ID"}, Source: "fixture"}}, RuleInvalid},
+	} {
+		r := validRegistry()
+		r.EnvAliases = tc.aliases
+		err := r.Validate()
+		if err == nil {
+			t.Fatalf("%s: accepted", tc.name)
+		}
+		for _, got := range rulesOf(t, err) {
+			if got != tc.rule {
+				t.Fatalf("%s: %v, want only %s", tc.name, err, tc.rule)
+			}
+		}
+	}
+}
