@@ -276,7 +276,12 @@ class LostAccessTest(unittest.TestCase):
             t.start()
         for t in threads:
             t.join(120)
-        self.assertEqual(sorted(r[1][0]["reason"] for r in results), ["token_expired", "token_expired"])
+        # The start that took the lock ends the monitor (token_expired). The
+        # other one sees token_expired too when it read the token first, or
+        # token_file_missing when the token was already gone (review of wave
+        # 8, row 23: which one is up to the scheduler, both are right).
+        reasons = sorted(r[1][0]["reason"] for r in results)
+        self.assertIn(reasons, (["token_expired", "token_expired"], ["token_expired", "token_file_missing"]))
         self.assertIsNone(box.files())
         self.assertEqual([l["status"] for l in box.deliveries() if l["notificationId"] == 8], ["access-lost"])
 
