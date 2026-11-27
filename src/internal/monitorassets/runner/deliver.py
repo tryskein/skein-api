@@ -608,6 +608,11 @@ class DeliverySink(object):
                     raise RefusedBeforeSend(exc.reason)
                 if guard is not None:
                     guard.endpoint = endpoint
+                # A password registered after the start is a secret of the
+                # monitor from now on: the journal and the texts drop it.
+                if endpoint[2] and endpoint[2] not in self.executor.secrets:
+                    self.executor.secrets.append(endpoint[2])
+                    self.journal.add_secret(endpoint[2])
             if ((self.doc or {}).get("endpoints") or {}).get(channel.get("id")) != endpoint[0]:
                 raise AddresseeChanged()
         for a in self.identity.get("addresses") or []:

@@ -201,7 +201,8 @@ class WorkingStart(object):
             try:
                 if journal is None:
                     journal = Journal(self.token_file, self.issue,
-                                      secrets=monitor_secrets(self.token, self.env, load_registry()), env=self.env)
+                                      secrets=monitor_secrets(self.token, self.env, load_registry(),
+                                                             (self.doc or {}).get("record")), env=self.env)
                 journal.lifecycle("takeover_incomplete", reason=outcome.reason if outcome else None)
             except (JournalUnavailable, OSError, PlatformRefusal):
                 pass
@@ -472,7 +473,8 @@ def delivery_sink(journal, token_file, doc, env, base, issue, token, executor, e
     cancel = PollCancel(executor, base, token, exclusion, clock)
     registry = load_registry()
     return DeliverySink(journal, token_file, doc, registry, env, ledger,
-                        ChannelExecutor(token_file, env, [token], doc.get("programs") or {}, registry), issue,
+                        ChannelExecutor(token_file, env, [token], doc.get("programs") or {}, registry,
+                                        doc.get("record")), issue,
                         cancel=cancel, clock=clock, exclusion=exclusion)
 
 
@@ -498,7 +500,8 @@ def run_detached_child():
             env = agent_env(os.environ, load_registry())
             settings = read_settings(env, load_registry())
             held.begin(token_file, env, settings, issue)
-            journal = Journal(token_file, issue, secrets=monitor_secrets(held.token, env, load_registry()), env=env)
+            journal = Journal(token_file, issue, secrets=monitor_secrets(held.token, env, load_registry(),
+                                                                         held.doc.get("record")), env=env)
             # Ready means the journal took the monitor_started line: a
             # journal that refuses it is a refused start, before the receipt.
             fields = dict(held.line)
@@ -618,7 +621,7 @@ def run_foreground(token_file, issue, env, settings, doc=None):
         try:
             held.begin(token_file, env, settings, issue)
             limits = StreamLimits(held.doc.get("limits"))
-            secrets = monitor_secrets(held.token, env, load_registry())
+            secrets = monitor_secrets(held.token, env, load_registry(), held.doc.get("record"))
             journal = Journal(token_file, issue, secrets=secrets, env=env)
             output = StreamOutput(limits, journal, held.doc.get("method"), issue=issue, secrets=secrets)
             # exit-on-event: monitor_started is part of the cycle's output,

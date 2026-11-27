@@ -128,10 +128,29 @@ class EndpointFileTest(unittest.TestCase):
                     self.send()
         self.assertEqual(self.server.requests(), [])
 
+    def registry(self):
+        return RUNNER.Registry({"agents": [{"id": "agent", "methods": [{"kind": "delivery", "channel": "local-server"}]},
+                                           {"id": "other", "methods": [{"kind": "stream"}]}],
+                                "channels": [channel()]})
+
     def test_the_password_is_a_secret_of_the_monitor(self):
-        reg = mock.Mock()
-        reg.channels = {"local-server": channel()}
-        self.assertIn(PASSWORD, RUNNER.monitor_secrets("skm_" + "T" * 43, self.env, reg))
+        # The password of a channel of the monitor's record is a secret
+        # whatever its length; that of another record's channel only when
+        # it is long enough not to wipe ordinary words (as an http key).
+        reg = self.registry()
+        token = "skm_" + "T" * 43
+        self.assertIn(PASSWORD, RUNNER.monitor_secrets(token, self.env, reg, "agent"))
+        self.assertIn(PASSWORD, RUNNER.ChannelExecutor(self.root + "/token", self.env, [token], None, reg,
+                                                       "agent").secrets)
+        for record in ("other", None):
+            with self.subTest(record=record):
+                self.assertNotIn(PASSWORD, RUNNER.monitor_secrets(token, self.env, reg, record))
+                self.assertNotIn(PASSWORD, RUNNER.ChannelExecutor(self.root + "/token", self.env, [token], None, reg,
+                                                                  record).secrets)
+        long_password = "p" * RUNNER.MIN_SECRET_CHARS
+        self.register({"url": self.server.url, "pid": 1, "password": long_password})
+        self.assertIn(long_password, RUNNER.monitor_secrets(token, self.env, reg, "other"))
+        self.register({"url": self.server.url, "pid": 1, "password": PASSWORD})
         # A text that carries it does not carry it out.
         self.send("the password is " + PASSWORD)
         self.assertNotIn(PASSWORD, self.server.requests()[0]["body"])

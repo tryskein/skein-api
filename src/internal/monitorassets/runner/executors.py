@@ -1195,10 +1195,13 @@ def read_endpoint(http, env):
     return base, spec.get("user") or None, password or None
 
 
-def endpoint_secrets(registry, env):
-    """The passwords the endpoint files of the http channels hold now:
-    secrets of the monitor whatever their length (a password is no word of
-    a text)."""
+def endpoint_secrets(registry, env, channels=()):
+    """The passwords the endpoint files of the http channels hold now. The
+    password of a channel of the monitor's record (channels: the channels
+    its delivery methods name) is a secret whatever its length - it goes
+    into Authorization; the password of any other channel only when it is
+    at least MIN_SECRET_CHARS long (a short one would wipe ordinary words
+    of a text and drop ordinary variables of a program's environment)."""
     out = []
     for channel in (registry.channels.values() if registry is not None else []):
         http = (channel.get("executor") or {}).get("http") or {}
@@ -1207,7 +1210,8 @@ def endpoint_secrets(registry, env):
                 password = read_endpoint(http, env or {})[2]
             except ExecutorRefusal:
                 continue
-            if password and password not in out:
+            own = channel.get("id") in channels
+            if password and password not in out and (own or len(password) >= MIN_SECRET_CHARS):
                 out.append(password)
     return out
 
@@ -1265,11 +1269,13 @@ def http_key_names(registry):
     return names
 
 
-def monitor_secrets(token, env, registry):
+def monitor_secrets(token, env, registry, record=None):
     """The secrets of the monitor, the one list every mode redacts its
-    journal and its stdout by (INV-6): the token and the keys of the http
-    channels (http_key_secrets)."""
-    return [s for s in [token] + http_key_secrets(registry, env) + endpoint_secrets(registry, env) if s]
+    journal and its stdout by (INV-6): the token, the keys of the http
+    channels (http_key_secrets) and the passwords of their endpoint files
+    (endpoint_secrets; record: the id of the monitor's agent record)."""
+    channels = registry.record_channels(record) if registry is not None and record else ()
+    return [s for s in [token] + http_key_secrets(registry, env) + endpoint_secrets(registry, env, channels) if s]
 
 
 # The name of the thread of one http request, and of the name lookup it
@@ -1618,9 +1624,10 @@ class ChannelExecutor(object):
     secrets are the monitor's and the keys of the http channels, so no
     channel program sees a key."""
 
-    def __init__(self, token_file, env, secrets, programs=None, registry=None):
-        self.secrets = [s for s in list(secrets) + http_key_secrets(registry, env) + endpoint_secrets(registry, env)
-                        if s]
+    def __init__(self, token_file, env, secrets, programs=None, registry=None, record=None):
+        channels = registry.record_channels(record) if registry is not None and record else ()
+        self.secrets = [s for s in list(secrets) + http_key_secrets(registry, env)
+                        + endpoint_secrets(registry, env, channels) if s]
         self.drop = tuple(http_key_names(registry))
         # The environment the calls expand their variables from; a row of an
         # outcome table that names "{env:NAME}" reads it there too.

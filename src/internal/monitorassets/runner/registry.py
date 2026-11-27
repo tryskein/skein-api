@@ -30,6 +30,17 @@ class Registry(object):
         """The channel record with this id, or None."""
         return self.channels.get(channel_id)
 
+    def record_channels(self, record_id):
+        """The channels the delivery methods of the agent record record_id
+        name (none for an unknown id or the general record)."""
+        agent = self.agents.get(record_id) or {}
+        out = []
+        for method in agent.get("methods") or []:
+            channel = method.get("channel")
+            if channel and channel not in out:
+                out.append(channel)
+        return out
+
     def is_blind(self, channel_id):
         channel = self.channels.get(channel_id)
         return bool(channel and channel.get("blind"))

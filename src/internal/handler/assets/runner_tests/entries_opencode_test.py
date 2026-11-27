@@ -243,6 +243,34 @@ class OpenCodeTest(unittest.TestCase):
         basic = "Basic " + base64.b64encode(("opencode:" + PASSWORD).encode()).decode()
         self.assertEqual(methods, [("GET", basic), ("GET", basic), ("POST", basic)])
 
+    def test_a_password_registered_after_the_start_becomes_a_secret(self):
+        self.register({"url": self.service.url, "pid": 4242, "password": "n3w"})
+        self.service.respond([{"status": 200, "json": {"data": {"id": SESSION}}}])
+        sink = self.sink()
+        RUNNER.DeliverySink.check_addressee(sink, REG.channel("opencode-synthetic"))
+        self.assertIn("n3w", sink.executor.secrets)
+        sink.journal.add_secret.assert_called_with("n3w")
+
+    def test_the_probes_of_the_preflight_keep_the_password_of_the_record_out(self):
+        # The password of the record's endpoint file is a secret of every
+        # probe: a variable that holds it does not reach a probe program.
+        self.register()
+        self.service.respond([{"status": 200, "json": {"data": {"id": SESSION}}}])
+        seen = []
+        real = RUNNER.SystemProbeRunner
+
+        def spy(secrets, *args, **kw):
+            seen.append(list(secrets))
+            return real(secrets, *args, **kw)
+        with mock.patch.object(RUNNER, "SystemProbeRunner", spy):
+            placement, _ = pm.placement(REG, self.env["SKEIN_CLIENT"], ["opencode"])
+            settings = RUNNER.read_settings(self.env, REG, mode="client")
+            RUNNER.preflight(self.env["SKEIN_TOKEN_FILE"], self.env, REG, settings,
+                             detector=RUNNER.RegistryDetector(pm.Binder()), placement=placement)
+        self.assertEqual(len(seen), 1)
+        self.assertIn(PASSWORD, seen[0])
+        self.assertNotIn("SAME_AS_PASSWORD", RUNNER.child_env(dict(self.env, SAME_AS_PASSWORD=PASSWORD), seen[0]))
+
     def test_no_opencode_process_runs_on_any_path(self):
         self.register()
         spawned = []
