@@ -79,9 +79,6 @@ count = os.path.join(HERE, NAME + "." + sub + ".count")
 n = int(open(count).read()) if os.path.exists(count) else 0
 open(count, "w").write(str(n + 1))
 a = answers[min(n, len(answers) - 1)]
-if a.get("sleep"):
-    import time
-    time.sleep(a["sleep"])
 out = a.get("stdout", "")
 sys.stdout.write(out if isinstance(out, str) else json.dumps(out, indent=2))
 sys.exit(a.get("exit", 0))
@@ -396,19 +393,34 @@ class OrcaRecordTest(unittest.TestCase):
         # neither this terminal nor another (a failure, no JSON, no answer in
         # time) hands nothing over and is called again within the budget of
         # INV-8, then the send goes once the check holds.
-        cases = [("ok false", failed("runtime_unavailable")),
-                 ("no JSON", {"exit": 0, "stdout": "terminal term_7f2c41\n"}),
-                 ("no answer in time", dict(show(), sleep=5))]
-        for name, answer in cases:
+        # "No answer in time" is the result of a call its timeout ended,
+        # given without a real wait: the first check of the page.
+        real = RUNNER.run_program
+
+        def first_check_times_out(timed_out):
+            def run(argv, env, stdin_data, timeout_sec, secrets=()):
+                if "show" in argv and not timed_out:
+                    timed_out.append(timeout_sec)
+                    return RUNNER.CallResult(None, b"", b"", True)
+                return real(argv, env, stdin_data, timeout_sec, secrets)
+            return run
+        cases = [("ok false", failed("runtime_unavailable"), False),
+                 ("no JSON", {"exit": 0, "stdout": "terminal term_7f2c41\n"}, False),
+                 ("no answer in time", show(), True)]
+        for name, answer, late in cases:
             with self.subTest(case=name):
                 self.fresh()
                 mon = self.mon()
-                self.orca.respond(show_answers=[answer, show()])
-                with mock.patch.object(RUNNER, "_CHECK_SEC", 1):
+                timed_out = []
+                self.orca.respond(show_answers=[answer, show()] if not late else [show()])
+                with mock.patch.object(RUNNER, "run_program",
+                                       first_check_times_out(timed_out) if late else real):
                     mon.page([ft.note(1)])
                 self.assertEqual(mon.statuses(), [(1, "turn-started")])
                 self.assertEqual(len(self.orca.calls("send")), 1)
-                self.assertGreaterEqual(len(self.orca.calls("show")), 2)
+                self.assertGreaterEqual(len(self.orca.calls("show")) + len(timed_out), 2)
+                if late:
+                    self.assertEqual(len(timed_out), 1)
                 self.assertEqual([l for l in mon.lines() if l.get("cause") == "addressee_changed"], [])
 
     def test_the_stop_receipt_checks_the_addressee_again_after_the_wait(self):
