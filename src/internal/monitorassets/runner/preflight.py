@@ -1068,8 +1068,10 @@ def preflight(token_file, env, registry, settings, detector=None, prober=None, p
     # the `client` value "general" (the general record), not into warnings.
     record_warnings = settings.record.warnings if settings.record is not None else []
     warnings = [w for w in settings.warnings if w not in record_warnings] + list(detector.warnings)
-    # An environment without a channel says so; the choice is the same.
-    warnings.extend(detector.host_messages(ctx))
+    # An environment without a channel says so; the choice is the same. Its
+    # message is the line's own key hostMessage (C1), and a warning.
+    host_messages = detector.host_messages(ctx)
+    warnings.extend(host_messages)
     if not external:
         warnings.append("The ledger directory is not writable: no external channel is used.")
     binding = None
@@ -1106,6 +1108,7 @@ def preflight(token_file, env, registry, settings, detector=None, prober=None, p
                 "identity": _identity_doc(ctx.identity, dict(
                     (c, ctx.captures[c]) for c in [choice.channel] + list(choice.fallbacks) if c in ctx.captures)),
                 "binding": binding,
+                "hostMessage": "; ".join(host_messages) if host_messages else None,
                 "programs": _programs_doc(registry, [choice.channel] + list(choice.fallbacks), env,
                                           placement.agent),
                 "degraded": detector.degraded,
@@ -1113,7 +1116,7 @@ def preflight(token_file, env, registry, settings, detector=None, prober=None, p
     except (PlatformRefusal, OSError) as exc:
         raise ConfigInvalid(os.path.dirname(os.path.abspath(token_file)),
                             "the preflight result cannot be saved (%s)" % getattr(exc, "reason", exc))
-    return {
+    line = {
         "event": "preflight",
         "preflightId": number,
         "client": settings.record.id,
@@ -1125,3 +1128,7 @@ def preflight(token_file, env, registry, settings, detector=None, prober=None, p
         "command": working_command(env, token_file, number, settings),
         "instruction": instruction(registry, settings.record, choice),
     }
+    if host_messages:
+        # Only with an environment without a channel (C1: hostMessage?).
+        line["hostMessage"] = "; ".join(host_messages)
+    return line
