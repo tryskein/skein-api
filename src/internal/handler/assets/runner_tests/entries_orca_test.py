@@ -114,6 +114,11 @@ def failed(code, data=None):
     return {"exit": 1, "stdout": {"id": "local", "ok": False, "error": error, "_meta": {"runtimeId": None}}}
 
 
+# src/cli/runtime/connection/transport.ts#TRANSIENT_DISCONNECT_NEXT_STEPS.
+NEXT_STEPS = ["Orca is usually busy or restarting: wait a few seconds, then retry. If the command changes something, "
+              "first check whether it already took effect, and retry with the request ID this error names, if any.",
+              "Do not run 'orca open' to recover. Run it only if the user asks, or if 'orca status --json' reports "
+              "Orca is not running or still cannot connect after about 30 seconds of retries."]
 TURN = sent(["input_accepted", "turn_started"])
 IDLE = {"exit": 0, "stdout": {"ok": True, "result": {"wait": {"satisfied": True}}}}
 NOT_IDLE = {"exit": 1, "stdout": {"ok": True, "result": {"wait": {"satisfied": False}}}}
@@ -274,6 +279,8 @@ class OrcaRecordTest(unittest.TestCase):
             ("a refusal with an empty write settlement", refused_send(writeSettlement={}), "unknown"),
             ("a refusal with a null write settlement", refused_send(writeSettlement=None), "unknown"),
             ("unreachable with empty data", failed("runtime_unavailable", {}), "unknown"),
+            ("the connection closed after the request", failed("runtime_unavailable", {
+                "nextSteps": NEXT_STEPS, "orchestrationRequestId": "req-1"}), "unknown"),
             ("unreachable with null data", {"exit": 1, "stdout": {"id": "local", "ok": False, "error": {
                 "code": "runtime_unavailable", "message": "failure", "data": None}, "_meta": {"runtimeId": None}}},
              "unknown"),
@@ -302,6 +309,7 @@ class OrcaRecordTest(unittest.TestCase):
             "a write refused before the transport": refused_send(writeSettlement={"outcome": "refused",
                                                                                   "reason": "endpoint_disconnected"}),
             "the host unreachable before the send call": failed("runtime_unavailable"),
+            "the connection failed, no recovery data": failed("runtime_unavailable", {"nextSteps": NEXT_STEPS}),
         }
         for name, answer in refusals.items():
             with self.subTest(case=name):
