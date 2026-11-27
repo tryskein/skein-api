@@ -230,6 +230,31 @@ class ThreadWaitTest(ProgramWaitTest):
         patcher.start()
         self.addCleanup(patcher.stop)
 
+    # Review round 3 of wave 7, row 11: this wait blocks on Popen.wait and
+    # Thread.join, which read the real clock, so its bounds are taken on
+    # the real clock (the timeout of the call, then one grace of the
+    # readers), with a margin for a loaded machine - far below the minute a
+    # descendant holds the pipes.
+
+    def test_a_descendant_holding_the_pipes_after_the_program_ended(self):
+        argv = ["sh", "-c", "sleep 60 & echo $! > %s; echo done" % self.pidfile]
+        started = time.monotonic()
+        result = RUNNER.run_program(argv, dict(os.environ), None, 10)
+        took = time.monotonic() - started
+        self.assertEqual((result.exit_code, result.stdout.strip()), (0, b"done"))
+        self.assertLess(took, RUNNER._READER_GRACE_SEC + 5)
+        self.assertTrue(_wait_gone(self.descendant()), "a descendant on the pipes outlived the call")
+
+    def test_a_timeout_kills_every_process_of_the_program(self):
+        argv = ["sh", "-c", "sleep 60 & echo $! > %s; sleep 60" % self.pidfile]
+        started = time.monotonic()
+        result = RUNNER.run_program(argv, dict(os.environ), b"text", 1)
+        took = time.monotonic() - started
+        self.assertTrue(result.timed_out)
+        self.assertIsNone(result.exit_code)
+        self.assertLess(took, 1 + RUNNER._READER_GRACE_SEC + 5)
+        self.assertTrue(_wait_gone(self.descendant()), "a descendant outlived the timeout")
+
     def test_a_stop_signal_during_the_call_kills_the_program_and_its_descendants(self):
         argv = ["sh", "-c", "echo $$ > %s.prog; sleep 60 & echo $! > %s; sleep 60" % (self.pidfile, self.pidfile)]
         real_wait = RUNNER.subprocess.Popen.wait

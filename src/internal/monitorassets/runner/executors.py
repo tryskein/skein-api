@@ -436,34 +436,46 @@ def _run_threads(argv, env, stdin_data, timeout_sec):
     descendant outlives it. A pipe a reader still blocks on is never closed
     (closing waits for the reader): the call returns within timeout_sec plus
     the grace of the readers whatever the descendants do."""
-    try:
-        proc = subprocess.Popen(argv, stdin=subprocess.PIPE if stdin_data is not None else subprocess.DEVNULL,
-                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env, close_fds=True,
-                                start_new_session=(os.name == "posix"))
-    except OSError as exc:
-        raise ExecutorRefusal("the program cannot be started (%s)" % (exc.strerror or exc))
-    tree = _ProcessTree(proc)
+    extra = {"start_new_session": True} if os.name == "posix" else {"creationflags": _CREATE_SUSPENDED}
+    tree = None
+    proc = None
     timed_out = False
     readers = []
     try:
+        try:
+            # On Windows the program starts suspended: it runs only once it
+            # is in its job object, so no descendant is born outside it.
+            proc = subprocess.Popen(argv, stdin=subprocess.PIPE if stdin_data is not None else subprocess.DEVNULL,
+                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env, close_fds=True,
+                                    **extra)
+        except OSError as exc:
+            raise ExecutorRefusal("the program cannot be started (%s)" % (exc.strerror or exc))
+        tree = _ProcessTree(proc)
         readers = [_Reader(proc.stdout), _Reader(proc.stderr)]
         for r in readers:
             r.start()
         if stdin_data is not None:
             _Writer(proc.stdin, stdin_data).start()
+        tree.start()
         try:
             proc.wait(timeout=max(timeout_sec, 0))
         except subprocess.TimeoutExpired:
             timed_out = True
-        for r in readers:
-            r.join(_READER_GRACE_SEC)
     finally:
-        tree.kill()
-        if proc.returncode is None:
-            proc.wait()
+        # The tree goes first, then the readers get one grace together: a
+        # call lasts at most its timeout plus one grace.
+        if tree is not None:
+            tree.kill()
+        elif proc is not None:
+            _kill_quietly(proc)
+        if proc is not None and proc.returncode is None:
+            try:
+                proc.wait(timeout=_READER_GRACE_SEC)
+            except subprocess.TimeoutExpired:
+                pass
+    deadline = time.monotonic() + _READER_GRACE_SEC
     for r in readers:
-        # The tree is gone: its pipes are at their end.
-        r.join(_READER_GRACE_SEC)
+        r.join(max(deadline - time.monotonic(), 0))
     for r, pipe in zip(readers, (proc.stdout, proc.stderr)):
         if not r.is_alive():
             try:
@@ -474,47 +486,114 @@ def _run_threads(argv, env, stdin_data, timeout_sec):
                       readers[0].cut)
 
 
+# CreateProcess flag of a program started suspended (Windows).
+_CREATE_SUSPENDED = 0x00000004
+
+
+def _kill_quietly(proc):
+    try:
+        proc.kill()
+    except OSError:
+        pass
+
+
 class _ProcessTree(object):
     """The processes of one call: on POSIX the session the program leads,
-    on Windows a job object the program is assigned to as it starts (its
-    descendants join it); kill() ends them all."""
+    on Windows a job object the program is assigned to while it is still
+    suspended, so every descendant is born in it; kill() ends them all.
+    On Windows a job that cannot be made, or a program that cannot be
+    resumed in it, is a refusal before send: the suspended program is
+    killed and nothing ran (ExecutorRefusal names why)."""
 
     def __init__(self, proc):
         self.proc = proc
         self.job = None
         if os.name != "posix":
-            self.job = _windows_job(proc)
+            try:
+                self.job = _WINDOWS_JOBS.make(proc)
+            except ExecutorRefusal:
+                _kill_quietly(proc)
+                raise
+
+    def start(self):
+        """Let the program run (Windows: resume it inside its job)."""
+        if os.name != "posix":
+            _WINDOWS_JOBS.resume(self.job, self.proc)
 
     def kill(self):
         if os.name == "posix":
             _kill_group(self.proc.pid)
             return
         if self.job is not None:
-            import ctypes
-            ctypes.windll.kernel32.TerminateJobObject(self.job, 1)
-            ctypes.windll.kernel32.CloseHandle(self.job)
+            _WINDOWS_JOBS.close(self.job)
             self.job = None
+        _kill_quietly(self.proc)
+
+
+class _WindowsJobs(object):
+    """The job object calls of kernel32 and ntdll through ctypes, each with
+    its restype and argtypes, and every BOOL, HANDLE and NTSTATUS checked."""
+
+    def __init__(self):
+        self._k32 = None
+        self._nt = None
+
+    def _api(self):
+        if self._k32 is None:
+            import ctypes
+            from ctypes import wintypes
+            k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            k32.CreateJobObjectW.restype = wintypes.HANDLE
+            k32.CreateJobObjectW.argtypes = (wintypes.LPVOID, wintypes.LPCWSTR)
+            k32.AssignProcessToJobObject.restype = wintypes.BOOL
+            k32.AssignProcessToJobObject.argtypes = (wintypes.HANDLE, wintypes.HANDLE)
+            k32.TerminateJobObject.restype = wintypes.BOOL
+            k32.TerminateJobObject.argtypes = (wintypes.HANDLE, wintypes.UINT)
+            k32.CloseHandle.restype = wintypes.BOOL
+            k32.CloseHandle.argtypes = (wintypes.HANDLE,)
+            nt = ctypes.WinDLL("ntdll")
+            nt.NtResumeProcess.restype = wintypes.LONG
+            nt.NtResumeProcess.argtypes = (wintypes.HANDLE,)
+            self._k32, self._nt = k32, nt
+        return self._k32, self._nt
+
+    def make(self, proc):
+        """A job object holding the suspended proc."""
         try:
-            self.proc.kill()
-        except OSError:
+            import ctypes
+            k32, _ = self._api()
+            job = k32.CreateJobObjectW(None, None)
+            if not job:
+                raise ExecutorRefusal("no job object for the call (error %d)" % ctypes.get_last_error())
+            if not k32.AssignProcessToJobObject(job, int(proc._handle)):
+                err = ctypes.get_last_error()
+                k32.CloseHandle(job)
+                raise ExecutorRefusal("the program cannot join its job object (error %d)" % err)
+            return job
+        except ExecutorRefusal:
+            raise
+        except Exception as exc:  # ctypes.ArgumentError among them: the call is refused, not crashed
+            raise ExecutorRefusal("no job object for the call (%s)" % exc)
+
+    def resume(self, job, proc):
+        try:
+            _, nt = self._api()
+            status = nt.NtResumeProcess(int(proc._handle))
+        except Exception as exc:  # ctypes.ArgumentError among them
+            raise ExecutorRefusal("the program cannot be resumed (%s)" % exc)
+        if status != 0:
+            raise ExecutorRefusal("the program cannot be resumed (status 0x%08x)" % (status & 0xFFFFFFFF))
+
+    def close(self, job):
+        try:
+            k32, _ = self._api()
+            k32.TerminateJobObject(job, 1)
+            k32.CloseHandle(job)
+        except Exception:  # ctypes.ArgumentError among them: the program is killed anyway
             pass
 
 
-def _windows_job(proc):
-    """A job object holding proc (and, from now on, its descendants), or
-    None when it cannot be made (then only the program is killed)."""
-    try:
-        import ctypes
-        kernel32 = ctypes.windll.kernel32
-        job = kernel32.CreateJobObjectW(None, None)
-        if not job:
-            return None
-        if not kernel32.AssignProcessToJobObject(job, int(proc._handle)):
-            kernel32.CloseHandle(job)
-            return None
-        return job
-    except (AttributeError, OSError, ValueError):
-        return None
+_WINDOWS_JOBS = _WindowsJobs()
 
 
 class ArgvExecutor(object):
