@@ -513,6 +513,28 @@
           "instruction": "Start a background Task subagent that runs `command` in the foreground and returns its output. It ends after a batch of events with a stop line; the Task ends and its result comes to you as a turn. Handle the events, then follow the action of that line by starting such a Task again."
         }
       ]
+    },
+    {
+      "id": "opencode",
+      "about": "OpenCode: the runner exits after a batch of events, and the end of the background shell command wakes the session.",
+      "source": "github.com/anomalyco/opencode 2255b89 (2.4.1): packages/core/src/tool/plugin/shell.ts#Input (background: true returns at once; a background command without timeout runs without a deadline, a timeout stops it), #notify (the exit of a background command adds a synthetic message with its output), packages/core/src/session/synthetic.ts#make (a synthetic message wakes the session unless resume is false); shell commands get OPENCODE_SESSION_ID; packages/cli/package.json bin opencode (bin/opencode.cjs).",
+      "process": {
+        "executables": [
+          "opencode",
+          "opencode.exe"
+        ],
+        "argvBaseNames": [
+          "opencode",
+          "opencode.cjs"
+        ]
+      },
+      "methods": [
+        {
+          "kind": "exit-on-event",
+          "conditions": {},
+          "instruction": "Run `command` with the shell tool, background: true, and no timeout (a timeout would stop it). It ends after a batch of events with a stop line, and its end wakes you with its output: handle the events, then follow the action of that line."
+        }
+      ]
     }
   ],
   "channels": [
