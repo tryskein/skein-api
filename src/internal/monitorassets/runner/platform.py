@@ -52,10 +52,13 @@ class ProcessInfo(object):
     of the process's terminal (-1 without one); pgid is its own group.
     """
 
-    __slots__ = ("pid", "ppid", "start", "pgid", "tpgid", "name")
+    __slots__ = ("pid", "ppid", "start", "pgid", "tpgid", "name", "tty")
 
-    def __init__(self, pid, ppid, start, pgid, tpgid, name):
+    def __init__(self, pid, ppid, start, pgid, tpgid, name, tty=None):
         self.pid = pid
+        # The device of the process's controlling terminal (None: none, or
+        # not known); a pane's agent sits on the pane's own terminal.
+        self.tty = tty
         self.ppid = ppid
         self.start = start
         self.pgid = pgid

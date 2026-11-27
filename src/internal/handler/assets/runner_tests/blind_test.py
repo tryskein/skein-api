@@ -137,7 +137,12 @@ class Box(object):
         os.chmod(token, 0o600)
         identity = {"process": list(agent), "inherited": [], "terminal": None,
                     "addresses": [{"channel": channel, "value": PANE, "qualifiers": [], "env": "MUX_PANE"}]}
-        doc = {"method": "detached", "channel": channel, "fallbacks": [], "identity": identity, "preflightId": 1}
+        # The binding the preflight confirmed: the pane, its process and
+        # its terminal (the tty all fake processes sit on by default).
+        binding = {"channel": channel, "multiplexer": True, "depth": 2,
+                   "pane": {"id": PANE, "pid": 4241, "agent": list(agent), "tty": 1}}
+        doc = {"method": "detached", "channel": channel, "fallbacks": [], "identity": identity, "preflightId": 1,
+               "binding": binding}
         r = self.runner
         journal = r.Journal(token, dt.ISSUE, secrets=[dt.TOKEN], env=self.env)
         ledger = r.Ledger(dt.SERVER, name, r.identity_from_doc(identity), env=self.env, clock=self.clock.now)
@@ -237,6 +242,20 @@ class BlindAddresseeTest(unittest.TestCase):
         self.assertEqual([c[0] for c in self.box.calls()], ["load", "drop"])
         self.assertEqual([d[:2] for d in mon.deliveries()], [(1, "refused-before-send")])
 
+    def test_an_agent_on_another_terminal_of_the_pane_gets_nothing(self):
+        # K3 of wave 13 round 1 (P-8): the foreground of the agent's own
+        # terminal is not the pane's. An agent in an editor's terminal
+        # (nvim :terminal, vterm) on another PTY inside the pane is not its
+        # addressee: no stage, no insert, no Enter.
+        procs = fake_proc.FakeProcesses()
+        procs.add(4241, 1, "bash", start="s-shell", pgid=4241, tpgid=4241, tty=1)
+        procs.add(4242, 4241, "alpha", start="s-agent", pgid=4242, tpgid=4242, tty=2)
+        mon = self.mon(procs)
+        mon.page([dt.note(1)])
+        self.assertEqual(self.box.calls(), [])
+        self.assertEqual([d[:2] for d in mon.deliveries()], [(1, "unknown")])
+        self.assertEqual(len(mon.degraded("addressee_changed")), 1)
+
     def test_another_process_before_enter_withholds_it(self):
         procs = pane()
         mon = self.mon(procs)
@@ -306,6 +325,23 @@ class BlindBindingTest(unittest.TestCase):
         self.assertEqual((choice.method, choice.channel), ("journal", None))
         self.assertIn("mux: its record gives no source of the pane PID", choice.reason)
         self.assertEqual(box.calls(), [])
+
+    def test_an_agent_on_another_terminal_is_not_bound(self):
+        # The pane's process is an ancestor, but the agent runs on another
+        # PTY inside it: the binding is not confirmed.
+        box = Box(self, [mux()])
+        source, pids = fake_proc.linear(RUNNER_PROC, ("bash", None), ("alpha", None), ("bash", None))
+        source.procs[pids[2]].tty = 2
+        box.progs["mux"].respond([{"exit": 0, "stdout": "%d\n" % pids[3]}])
+        r = box.runner
+        record = r.resolve_record(box.reg, "alpha")
+        pl = r.place(r.ancestry(source, pids[0]), box.reg, record, self_pid=pids[0])
+        settings = r.Settings(record=record, platform="posix")
+        detector = r.RegistryDetector()
+        ctx = r.Context(box.reg, settings, box.env, pl, detector, r.ProbeRunner())
+        binding = detector.binding(ctx, box.reg.channel("mux"))
+        self.assertFalse(binding.confirmed)
+        self.assertIn("terminal of its pane", binding.cause)
 
     def test_a_pane_pid_the_command_does_not_give_binds_nothing(self):
         for name, answer in (("failed", {"exit": 1}), ("no PID", {"exit": 0, "stdout": "\n"}),

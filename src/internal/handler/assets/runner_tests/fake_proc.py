@@ -12,8 +12,11 @@ class FakeInfo(object):
     """The facts of one fake process, with the fields of the runner's
     ProcessInfo."""
 
-    def __init__(self, pid, ppid, start, pgid, tpgid, name):
+    def __init__(self, pid, ppid, start, pgid, tpgid, name, tty=1):
         self.pid = pid
+        # The controlling terminal: one for every process unless a test
+        # puts one on another (an agent in an editor's terminal).
+        self.tty = tty
         self.ppid = ppid
         self.start = start
         self.pgid = pgid
@@ -33,11 +36,11 @@ class FakeProcesses(object):
         self.argvs = {}
         self.executables = {}
 
-    def add(self, pid, ppid, name, argv=None, start=None, pgid=None, tpgid=-1, executable=None):
+    def add(self, pid, ppid, name, argv=None, start=None, pgid=None, tpgid=-1, executable=None, tty=1):
         """Add a process. argv defaults to [name]; start to "s<pid>"; the
         path of its executable to None (not read)."""
         self.procs[pid] = FakeInfo(pid, ppid, start if start is not None else "s%d" % pid,
-                                   pgid if pgid is not None else pid, tpgid, name)
+                                   pgid if pgid is not None else pid, tpgid, name, tty)
         self.argvs[pid] = list(argv) if argv is not None else [name]
         self.executables[pid] = executable
         return pid

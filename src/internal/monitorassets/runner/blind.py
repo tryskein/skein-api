@@ -106,6 +106,12 @@ def pane_pid(channel, env, secrets=(), drop=(), agent=None):
     return int(value)
 
 
+def _tty_of(proc):
+    """The controlling terminal of a process of the chain, or None."""
+    info = getattr(proc, "info", None)
+    return getattr(info, "tty", None) if info is not None else None
+
+
 class PanePIDBinder(PaneBinder):
     """Binds the runner to a pane of a blind channel by the PID its record's
     panePid command gives (pane_pid by default)."""
@@ -154,8 +160,14 @@ class PanePIDBinder(PaneBinder):
         agent = chain[agent_i]
         if not agent.start:
             return self._unbound(channel, multiplexer, "the start of the agent process is not known", depth)
+        # The terminal of the pane (P-8, "Addressee and check" item 3): the
+        # agent must be the foreground of THIS terminal, not of another one
+        # it runs on inside the pane (an editor's terminal, a vterm).
+        tty = _tty_of(chain[depth])
+        if tty is None or _tty_of(agent) != tty:
+            return self._unbound(channel, multiplexer, "the agent does not sit on the terminal of its pane", depth)
         return Binding(channel, True, multiplexer=multiplexer, depth=depth,
-                       pane={"id": pane_id, "pid": pid, "agent": [agent.pid, agent.start]})
+                       pane={"id": pane_id, "pid": pid, "agent": [agent.pid, agent.start], "tty": tty})
 
     @classmethod
     def _by_process(cls, channel, multiplexer, chain, cause):

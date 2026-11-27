@@ -499,26 +499,32 @@ def _parse_linux_stat(pid, raw, boot):
     if fields[0] == "Z":
         return None  # a zombie: it has ended
     # fields[0] is field 3 of proc(5) (state): ppid is field 4, pgrp 5,
-    # tpgid 8, starttime 22.
+    # tty_nr 7, tpgid 8, starttime 22.
+    tty = int(fields[4])
     return ProcessInfo(pid=pid, ppid=int(fields[1]), start="%s:%s" % (boot, fields[19]),
-                       pgid=int(fields[2]), tpgid=int(fields[5]), name=name)
+                       pgid=int(fields[2]), tpgid=int(fields[5]), name=name, tty=tty if tty else None)
 
 
 def _darwin_process_info(pid):
     env = dict(os.environ, LC_ALL="C")
     try:
-        proc = subprocess.run(["ps", "-o", "ppid=,pgid=,tpgid=,lstart=,comm=", "-p", str(pid)],
+        proc = subprocess.run(["ps", "-o", "ppid=,pgid=,tpgid=,tdev=,lstart=,comm=", "-p", str(pid)],
                               stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=env)
     except OSError:
         return None
-    fields = proc.stdout.decode("utf-8", "replace").split(None, 8)
-    if proc.returncode != 0 or len(fields) < 9:
+    fields = proc.stdout.decode("utf-8", "replace").split(None, 9)
+    if proc.returncode != 0 or len(fields) < 10:
         return None
     try:
         int(fields[0]), int(fields[1]), int(fields[2])
     except ValueError:
         return None
-    # lstart is five words in the C locale: "Wed Nov 26 11:00:00 2026".
-    return ProcessInfo(pid=pid, ppid=int(fields[0]), start=" ".join(fields[3:8]),
+    # tdev is the device number of the controlling terminal, "-" without
+    # one; lstart is five words in the C locale: "Wed Nov 26 11:00:00 2026".
+    try:
+        tty = int(fields[3])
+    except ValueError:
+        tty = None
+    return ProcessInfo(pid=pid, ppid=int(fields[0]), start=" ".join(fields[4:9]),
                        pgid=int(fields[1]), tpgid=int(fields[2]),
-                       name=os.path.basename(fields[8].strip()))
+                       name=os.path.basename(fields[9].strip()), tty=tty)

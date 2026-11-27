@@ -603,6 +603,12 @@ class DeliverySink(object):
                 info = None
             if info is None or info.start != process[1]:
                 raise AddresseeChanged()
+            if channel.get("blind"):
+                # The agent sits on the terminal of the bound pane (P-8): on
+                # another terminal it is not the pane's addressee.
+                pane = ((self.doc or {}).get("binding") or {}).get("pane") or {}
+                if pane.get("tty") is None or getattr(info, "tty", None) != pane.get("tty"):
+                    raise AddresseeChanged()
             if mode == "foreground" and not info.foreground():
                 raise RefusedBeforeSend("the agent process is not in the foreground")
         life = check.get("rootLife")
