@@ -218,6 +218,14 @@ class WorkingStart(object):
             self.lock = current_platform().acquire_runner_lock(self.token_file, 0, env)
         except (LockBusy, PlatformRefusal):
             return False
+        # The successor cleared the mark of the changed addressee when it
+        # took the lock; this runner still writes only the journal, so a
+        # later start may take it over again.
+        try:
+            mark_addressee_changed(self.token_file, (self.doc or {}).get("preflightId"))
+        except (OSError, PlatformRefusal) as exc:
+            log_stderr("monitor runner: cannot restore the mark of the changed addressee (%s)"
+                       % getattr(exc, "reason", exc))
         return True
 
     def release(self):
