@@ -61,6 +61,10 @@ type Registry struct {
 	// (step 3 of the method order), hosts (step 5), terminal environments
 	// (step 6) and blind channels (step 7).
 	Channels []Channel `json:"channels"`
+	// Environments are the environments without a channel (US-8): an agent
+	// that runs in one gets its host message in the preflight line, and the
+	// choice of the method does not change.
+	Environments []Environment `json:"environments,omitempty"`
 	// Shells is the list of shell executables that are never taken for the
 	// agent process of the general record.
 	Shells Shells `json:"shells"`
@@ -68,6 +72,30 @@ type Registry struct {
 	// runs. A Zavod host is detected only when its engine maps to the
 	// client's record (any mapped engine for the general record).
 	ZavodEngines map[string]string `json:"zavodEngines"`
+}
+
+// Host messages of an environment without a channel.
+const (
+	// HostMessageCannotWake: the environment cannot wake the agent; the
+	// agent's own method works.
+	HostMessageCannotWake = "cannot-wake"
+	// HostMessageUnsupported: a monitor inside the environment is not
+	// supported (its agent process lives for one turn).
+	HostMessageUnsupported = "unsupported"
+)
+
+// Environment is the record of an environment without a channel.
+type Environment struct {
+	ID string `json:"id"`
+	// Name is how the message names the environment.
+	Name   string `json:"name"`
+	About  string `json:"about"`
+	Source string `json:"source"`
+	// Detect recognises the environment by variables of the agent process
+	// only; every variable must hold.
+	Detect Conditions `json:"detect"`
+	// HostMessage is HostMessageCannotWake or HostMessageUnsupported.
+	HostMessage string `json:"hostMessage"`
 }
 
 // General is the record of an unknown client name.

@@ -204,6 +204,19 @@ func (r *Registry) Validate() error {
 		}
 	}
 
+	seenEnvironments := make(map[string]bool, len(r.Environments))
+	for i := range r.Environments {
+		e := &r.Environments[i]
+		path := fmt.Sprintf("environments[%d]", i)
+		v.environment(path, e)
+		if e.ID != "" {
+			if seenEnvironments[e.ID] || seenChannels[e.ID] {
+				v.add(RuleDuplicateID, path+".id", "environment id %q appears twice", e.ID)
+			}
+			seenEnvironments[e.ID] = true
+		}
+	}
+
 	for engine, target := range r.ZavodEngines {
 		path := "zavodEngines." + engine
 		if !idPattern.MatchString(engine) {
@@ -570,6 +583,25 @@ func count(argv []string, element string) int {
 // argv checks an argument list: non-empty, the program a literal, every
 // element a literal without braces or exactly one known placeholder; the
 // text placeholders only where allowText.
+func (v *validator) environment(path string, e *Environment) {
+	v.id(path+".id", e.ID)
+	v.text(RuleInvalid, path+".name", e.Name)
+	v.text(RuleMissingAbout, path+".about", e.About)
+	v.text(RuleMissingSource, path+".source", e.Source)
+	d := e.Detect
+	if len(d.Env) == 0 {
+		v.add(RuleInvalid, path+".detect", "the environment has no variable to be recognised by")
+	}
+	if len(d.Settings) > 0 || len(d.Programs) > 0 || len(d.AgentOptionsAbsent) > 0 || len(d.Records) > 0 ||
+		len(d.RecordsAbsent) > 0 {
+		v.add(RuleInvalid, path+".detect", "an environment is recognised by variables only")
+	}
+	v.conditions(path+".detect", d, false)
+	if e.HostMessage != HostMessageCannotWake && e.HostMessage != HostMessageUnsupported {
+		v.add(RuleInvalid, path+".hostMessage", "host message %q is not one of cannot-wake, unsupported", e.HostMessage)
+	}
+}
+
 // formatArgv validates the argument list of a command that never carries
 // a text, whose program reads braces of its own: an element that starts
 // with "{" is a placeholder, any other may hold braces ("#{pane_pid}").

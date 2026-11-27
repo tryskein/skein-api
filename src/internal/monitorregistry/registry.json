@@ -2271,6 +2271,196 @@
       }
     }
   ],
+  "environments": [
+    {
+      "id": "maestro",
+      "name": "Maestro",
+      "about": "Maestro runs agents as ACP subprocesses over pipes; its only external input, an automation webhook, starts a new run and wakes no live session.",
+      "source": "github.com/emdgroup/maestro de4e45d (0.49.0): maestro-server/src/agent/spawn.rs#spawn_agent_subprocess (MAESTRO_SESSION=1 marks an agent running inside Maestro, without a session id).",
+      "detect": {
+        "env": [
+          {
+            "name": "MAESTRO_SESSION",
+            "equals": "1"
+          }
+        ]
+      },
+      "hostMessage": "cannot-wake"
+    },
+    {
+      "id": "emdash",
+      "name": "Emdash",
+      "about": "Emdash Classic runs CLI agents in node-pty; its hook server takes events from the agent only, and its input path is internal.",
+      "source": "github.com/generalaction/emdash c876989 (desktop 1.2.14): runtime.ts#prepareHookEnv (EMDASH_PTY_ID, the conversation id, for an agent whose provider has hooks).",
+      "detect": {
+        "env": [
+          {
+            "name": "EMDASH_PTY_ID"
+          }
+        ]
+      },
+      "hostMessage": "cannot-wake"
+    },
+    {
+      "id": "emdash-task",
+      "name": "Emdash",
+      "about": "Emdash Classic, recognised by the task of its workspace.",
+      "source": "github.com/generalaction/emdash c876989 (desktop 1.2.14): apps/emdash-desktop/src/core/features/workspaces/api/node/workspace-env.ts (EMDASH_TASK_ID of the workspace).",
+      "detect": {
+        "env": [
+          {
+            "name": "EMDASH_TASK_ID"
+          }
+        ]
+      },
+      "hostMessage": "cannot-wake"
+    },
+    {
+      "id": "happy-remote",
+      "name": "Happy",
+      "about": "Happy in remote mode runs Claude through the Agent SDK; its server takes messages only with the end-to-end key the happy CLI holds.",
+      "source": "github.com/slopus/happy 164c325 (happy-cli 1.2.7): src/claude/sdk/happyEntrypoint.ts#HAPPY_DEFAULT_ENTRYPOINT (CLAUDE_CODE_ENTRYPOINT=remote_mobile in remote mode; the local mode leaves no sign).",
+      "detect": {
+        "env": [
+          {
+            "name": "CLAUDE_CODE_ENTRYPOINT",
+            "equals": "remote_mobile"
+          }
+        ]
+      },
+      "hostMessage": "cannot-wake"
+    },
+    {
+      "id": "warp",
+      "name": "Warp",
+      "about": "Warp has no id of a pane, and its input insertion submits nothing.",
+      "source": "github.com/warpdotdev/warp e3525c7: crates/warp_terminal/src/local_tty/unix.rs#build_host_shell_command (TERM_PROGRAM=WarpTerminal).",
+      "detect": {
+        "env": [
+          {
+            "name": "TERM_PROGRAM",
+            "equals": "WarpTerminal"
+          }
+        ]
+      },
+      "hostMessage": "cannot-wake"
+    },
+    {
+      "id": "zed",
+      "name": "Zed",
+      "about": "Zed's built-in terminal: its agent link opens a new thread and sends nothing.",
+      "source": "github.com/zed-industries/zed v1.29.3: crates/terminal/src/terminal.rs#insert_zed_terminal_env (ZED_TERM=true in the built-in terminal).",
+      "detect": {
+        "env": [
+          {
+            "name": "ZED_TERM"
+          }
+        ]
+      },
+      "hostMessage": "cannot-wake"
+    },
+    {
+      "id": "crystal",
+      "name": "Crystal",
+      "about": "Crystal runs claude -p per session and has no input path; the project is abandoned.",
+      "source": "github.com/stravu/crystal 1e18e0b (0.3.5): main/src/services/terminalPanelManager.ts (CRYSTAL_SESSION_ID in the environment of a terminal panel).",
+      "detect": {
+        "env": [
+          {
+            "name": "CRYSTAL_SESSION_ID"
+          }
+        ]
+      },
+      "hostMessage": "cannot-wake"
+    },
+    {
+      "id": "crystl",
+      "name": "crystl",
+      "about": "crystl sends by gem and shard, which are not known from inside, on a paid plan.",
+      "source": "crystl documentation (closed source): CRYSTL_SHARD in the agent's terminal; crystl send --gem --shard --wait.",
+      "detect": {
+        "env": [
+          {
+            "name": "CRYSTL_SHARD"
+          }
+        ]
+      },
+      "hostMessage": "cannot-wake"
+    },
+    {
+      "id": "parallel-code",
+      "name": "Parallel Code",
+      "about": "Parallel Code refuses a prompt an agent sends to itself (403).",
+      "source": "github.com/johannesjo/parallel-code 6a9675b (5.1.0): electron/agent-hooks/hook-script.ts#HOOK_ENV_AGENT_ID and electron/agent-hooks/server.ts (PARALLEL_CODE_AGENT_ID set on the agent).",
+      "detect": {
+        "env": [
+          {
+            "name": "PARALLEL_CODE_AGENT_ID"
+          }
+        ]
+      },
+      "hostMessage": "cannot-wake"
+    },
+    {
+      "id": "windows-terminal",
+      "name": "Windows Terminal",
+      "about": "Windows Terminal has no channel into a tab.",
+      "source": "github.com/microsoft/terminal bc5e242 (1.26): src/cascadia/TerminalConnection/ConptyConnection.cpp (WT_SESSION, the session GUID, in the environment of the connection).",
+      "detect": {
+        "env": [
+          {
+            "name": "WT_SESSION"
+          }
+        ]
+      },
+      "hostMessage": "cannot-wake"
+    },
+    {
+      "id": "agentastic",
+      "name": "Agentastic",
+      "about": "Agentastic documents dev send, but neither whether it presses Enter nor a receipt.",
+      "source": "Agentastic documentation (closed source): https://www.agentastic.dev/docs/reference/dev-system (AGENTASTIC_TERMINAL_ID and AGENTASTIC_SOCKET_PATH in the terminal).",
+      "detect": {
+        "env": [
+          {
+            "name": "AGENTASTIC_TERMINAL_ID"
+          },
+          {
+            "name": "AGENTASTIC_SOCKET_PATH"
+          }
+        ]
+      },
+      "hostMessage": "cannot-wake"
+    },
+    {
+      "id": "vibe-kanban",
+      "name": "Vibe Kanban",
+      "about": "Vibe Kanban runs an agent process per turn: a monitor would not outlive the turn.",
+      "source": "github.com/BloopAI/vibe-kanban 3f095f0 (0.1.46): crates/local-deployment/src/container.rs#start_execution_inner (VK_WORKSPACE_ID in the environment of an execution).",
+      "detect": {
+        "env": [
+          {
+            "name": "VK_WORKSPACE_ID"
+          }
+        ]
+      },
+      "hostMessage": "unsupported"
+    },
+    {
+      "id": "jean",
+      "name": "Jean",
+      "about": "Jean runs claude --print per turn, and the token of its MCP socket is not in the agent's environment.",
+      "source": "github.com/coollabsio/jean c2d9b7d (1.0.17): jean-core/src/chat/devin.rs#execute_devin and the other runners of jean-core/src/chat (JEAN_SESSION_ID on the agent of a turn).",
+      "detect": {
+        "env": [
+          {
+            "name": "JEAN_SESSION_ID"
+          }
+        ]
+      },
+      "hostMessage": "unsupported"
+    }
+  ],
   "shells": {
     "source": "POSIX: shells(5), the /etc/shells list of valid login shells (sh, bash, dash, zsh, ksh, mksh, fish, tcsh, csh, nu, pwsh are the names such lists carry); Windows: Microsoft Learn 'cmd' (cmd.exe), 'about_PowerShell_exe' (powershell.exe) and 'about_Pwsh' (pwsh.exe).",
     "names": [

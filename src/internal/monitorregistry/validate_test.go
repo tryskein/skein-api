@@ -784,3 +784,63 @@ func TestValidate_RejectsABlindCallOutOfItsPlace(t *testing.T) {
 		})
 	}
 }
+
+func withEnvironment(r *Registry) *Environment {
+	r.Environments = append(r.Environments, Environment{
+		ID: "env-x", Name: "Env X", About: "an environment without a channel", Source: "fixture",
+		Detect: Conditions{Env: []EnvCondition{{Name: "ENV_X_ID"}}}, HostMessage: HostMessageCannotWake,
+	})
+	return &r.Environments[len(r.Environments)-1]
+}
+
+// TestValidate_AcceptsAnEnvironmentWithoutAChannel — an environment known
+// by its variables with either host message passes.
+func TestValidate_AcceptsAnEnvironmentWithoutAChannel(t *testing.T) {
+	for _, kind := range []string{HostMessageCannotWake, HostMessageUnsupported} {
+		r := validRegistry()
+		e := withEnvironment(r)
+		e.HostMessage = kind
+		e.Detect.Env = append(e.Detect.Env, EnvCondition{Name: "ENV_X_MODE", Equals: new(string)})
+		*e.Detect.Env[1].Equals = "remote"
+		if err := r.Validate(); err != nil {
+			t.Fatalf("a correct environment with message %q was refused: %v", kind, err)
+		}
+	}
+}
+
+// TestValidate_RejectsAnEnvironmentOutOfShape — an environment is known by
+// variables only and says one of the two messages; each violation is
+// refused alone.
+func TestValidate_RejectsAnEnvironmentOutOfShape(t *testing.T) {
+	cases := []struct {
+		name   string
+		mutate func(e *Environment, r *Registry)
+		rule   Rule
+	}{
+		{"no variable", func(e *Environment, _ *Registry) { e.Detect.Env = nil }, RuleInvalid},
+		{"a setting among its signs", func(e *Environment, _ *Registry) {
+			e.Detect.Settings = []SettingCondition{{Path: "~/.x.json", Format: SettingJSON, Key: "k", Equals: json.RawMessage(`"v"`)}}
+		}, RuleInvalid},
+		{"a program among its signs", func(e *Environment, _ *Registry) { e.Detect.Programs = []string{"x"} }, RuleInvalid},
+		{"an unknown message", func(e *Environment, _ *Registry) { e.HostMessage = "wakes" }, RuleInvalid},
+		{"no name", func(e *Environment, _ *Registry) { e.Name = "" }, RuleInvalid},
+		{"no source", func(e *Environment, _ *Registry) { e.Source = "" }, RuleMissingSource},
+		{"the id of a channel", func(e *Environment, _ *Registry) { e.ID = "host" }, RuleDuplicateID},
+		{"the id of another environment", func(_ *Environment, r *Registry) { withEnvironment(r) }, RuleDuplicateID},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r := validRegistry()
+			tc.mutate(withEnvironment(r), r)
+			err := r.Validate()
+			if err == nil {
+				t.Fatalf("Validate accepted the violation, want rule %s", tc.rule)
+			}
+			for _, got := range rulesOf(t, err) {
+				if got != tc.rule {
+					t.Fatalf("Validate reported %v, want only %s", err, tc.rule)
+				}
+			}
+		})
+	}
+}
