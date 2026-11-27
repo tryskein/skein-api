@@ -29,6 +29,7 @@ import os
 import re
 import sys
 import unittest
+from urllib.parse import parse_qs, urlparse
 from unittest import mock
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -349,6 +350,53 @@ class RearmWithALiveHolderTest(unittest.TestCase):
         self.assertEqual([l.get("reason") for l in lines], ["already_running"], lines)
         self.assertGreaterEqual(waited, RUNNER.TAKEOVER_WAIT_SEC)
         self.assertLess(waited, RUNNER.TAKEOVER_WAIT_SEC + 2 * RUNNER.HOLDER_WAIT_STEP_SEC)
+
+
+class StoppingExecutor(ms.FakeExecutor):
+    """Answers the pages, then the agent cancels the run (a stop signal
+    while it polls)."""
+
+    def request(self, url, token):
+        if not self.answers:
+            self.urls.append(url)
+            raise RUNNER.StopSignal()
+        return ms.FakeExecutor.request(self, url, token)
+
+
+@unittest.skipUnless(sys.platform.startswith("linux"), "the POSIX working start")
+class RearmDeliversTheNextEventTest(unittest.TestCase):
+    """Row #110: after the re-arm the next event comes from the saved
+    cursor. The first run prints events 1 and 2 and is cancelled; the
+    working command runs again while the cancelled runner still holds the
+    lock (released at 10 s of the managed wait); the new run polls from
+    the cursor of event 2 and prints event 3, and only it."""
+
+    def test_the_next_event_after_the_re_arm_comes_from_the_saved_cursor(self):
+        box = pm.Box(self)
+        line = box.preflight(box.env("omp"), ["omp"])
+        env = box.env("omp", SKEIN_MONITOR_MODE="run", SKEIN_MONITOR_PREFLIGHT=str(line["preflightId"]))
+        first = StoppingExecutor([ms.page([1, 2], 1)])
+        with mock.patch.object(RUNNER, "Executor", lambda: first), \
+                mock.patch.object(RUNNER.time, "sleep", lambda s: None):
+            code, lines = box.run(env)
+        printed = [l["notification"]["id"] for l in lines if l.get("event") == "notification"]
+        self.assertEqual(printed, [1, 2], lines)
+        self.assertEqual(lines[-1].get("reason"), "stopped", lines)
+
+        held = RUNNER.PosixPlatform.acquire_runner_lock(box.token, 0, env)
+        self.addCleanup(held.release)
+        clock = StepClock({10: held.release})
+        second = StoppingExecutor([ms.page([3], 2)])
+        with mock.patch.object(RUNNER, "Executor", lambda: second), \
+                mock.patch.object(RUNNER, "HOLDER_WAIT_CLOCK", clock), \
+                mock.patch.object(RUNNER.time, "sleep", lambda s: None):
+            code, lines = box.run(env)
+        self.assertGreaterEqual(clock.t, 10)
+        self.assertEqual(lines[0]["event"], "monitor_started", lines)
+        printed = [l["notification"]["id"] for l in lines if l.get("event") == "notification"]
+        self.assertEqual(printed, [3], lines)
+        since = parse_qs(urlparse(second.urls[0]).query).get("since_id")
+        self.assertEqual(since, ["1"], second.urls[0])
 
 
 @unittest.skipUnless(sys.platform.startswith("linux"), "the POSIX working start")
