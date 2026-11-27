@@ -180,10 +180,37 @@ def loader_client_end(stop, token_file, issue, env, token=None):
             try:
                 if stop.reason in LOADER_ACCESS_STOPS:
                     finalize_stored(token_file, issue, stop.reason, env, secrets=[token] if token else [])
+                loader_client_journal_stop(stop, token_file, issue, env, token)
                 apply_file_fate(token_file, True)
             finally:
                 lock.release()
     return loader_client_line(stop, issue, token_file)
+
+
+def loader_client_journal_stop(stop, token_file, issue, env, token=None):
+    """The stop line of a monitor this start ends (under the one-runner
+    lock): to the journal, or to the deferred tail when the journal takes no
+    write, before the files go (P-12)."""
+    if stop.reason in LOADER_STOPS:
+        event, action = LOADER_STOPS[stop.reason][0], loader_client_action(stop.reason, issue)
+    else:
+        last = load_preflight(token_file)
+        event = STOPS[stop.reason][0]
+        action = stop_action(stop.reason, issue, stop.detail, last["preflightId"] if last else None)
+    line = {"reason": stop.reason, "action": action}
+    if stop.status is not None:
+        line["status"] = stop.status
+    try:
+        journal = Journal(token_file, issue, secrets=[token] if token else [], env=env)
+    except (JournalUnavailable, OSError, PlatformRefusal):
+        return
+    try:
+        journal.lifecycle(event, **line)
+    except JournalUnavailable:
+        try:
+            defer_lines(journal.path, [journal.render(dict(line, event=event), line_id=uuid.uuid4().hex)], env)
+        except (LedgerUnavailable, JournalUnavailable):
+            pass
 
 
 def loader_client_line(stop, issue, token_file):

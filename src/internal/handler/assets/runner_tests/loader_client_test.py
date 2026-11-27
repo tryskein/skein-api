@@ -191,6 +191,19 @@ class LostAccessTest(unittest.TestCase):
                 self.assertNotIn("bodyPreview", kept[0])
         self.assertNotEqual(actions["token_expired"], actions["visibility_lost"])
 
+    def test_the_journal_ends_with_the_stop_line_without_a_kept_tail(self):
+        # Review of wave 8, row 21: with nothing waiting, the monitor the
+        # loader ends still has its stop line in the journal.
+        for code, reason in ((401, "token_expired"), (403, "visibility_lost")):
+            with self.subTest(status=code):
+                box = Box(self, state={"version": 1, "cursor": CURSOR})
+                rc, lines, err = box.run(server(self, status(code)).url())
+                self.assertEqual(lines[0]["reason"], reason, err)
+                self.assertIsNone(box.files())
+                last = box.journal()[-1]
+                self.assertEqual((last["event"], last["reason"], last.get("status")), ("closed", reason, code))
+                self.assertEqual(last["action"], lines[0]["action"])
+
     def test_an_outcome_fixed_but_not_journaled_gets_its_line(self):
         box = Box(self, state={"version": 1, "cursor": CURSOR, "outcomes": {"9": "queued"}, "journaled": []})
         srv = server(self, status(401))
