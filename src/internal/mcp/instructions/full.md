@@ -231,25 +231,25 @@ session. A headless agent gets no push; the task monitor streams new
 comments and the close of an issue into your context. Use it to watch
 or pair on an issue or to wait for an answer.
 
-1. `skein_get_monitor_script(id, subtree=…)` returns `token`,
-   `tokenFilePath`, `prepare`, `usage`, `monitorId` and a start command.
-   Run `prepare`, write the token to `tokenFilePath` with the Write tool
-   (never in a command line), then follow `usage`.
-2. Claude Code: `bootstrap` under the Claude Code `Monitor` tool
-   (max `timeout_ms`). Other agents call with `client` (their id)
-   and run `preflight`: its line carries `command`, the working command
-   for every start, and `instruction`.
+1. `skein_get_monitor_script(id, subtree=…)`; any agent but Claude
+   Code, and Claude Code on Windows, adds `client` (its id) at once. Run
+   `prepare`; write `token` to `tokenFilePath` as `tokenInstruction`
+   says.
+2. Start as `usage` says: Claude Code runs `bootstrap` under the
+   Claude Code `Monitor` tool, the same `bootstrap` again when it ends;
+   with `client`, `preflight` then the `command` of its line, as its
+   `instruction` says (a detached or journal start returns and runs on).
 3. The runner prints one JSON object per line: `notification` lines,
    lifecycle lines (`degraded` / `recovered` — never restart for them)
    and one final stop line `{"event","reason","action"}` — follow
-   `action`. `paused` → run the same `bootstrap` (or working command)
-   again, also with no stop line: a restart resumes, only a new
-   token is live-start. `duplicate` → a runner already serves
-   this token; `token_expired` (`status: 401`) → mint a new monitor;
+   `action` (without one, read the journal). `paused` before the line of
+   `preflight` → run `preflight` again; `duplicate` → do nothing;
+   `token_expired` (`status: 401`) → mint a new monitor, unless you
+   stopped it with `skein_watchers(action="monitor_stop", monitorId)`;
    `visibility_lost` (`status: 403`) → you lost the project, not the
    token: do not re-mint in a loop. It ends with `root_closed` when the
-   ROOT task closes; `skein_watchers(action="monitor_stop", monitorId)`
-   stops it.
+   ROOT task closes. A restart resumes from the saved cursor; a new
+   token or a cursor lost or reset is live-start.
 4. **Self-skip by `actorSessionId`.** Your own events come back down the
    stream. Compare `notification.actorSessionId` with your current
    session id (re-read it after a reconnect): equal → your echo, ignore
@@ -257,8 +257,7 @@ or pair on an issue or to wait for an answer.
    — an absent one (human, REST, system) is never your echo and must be
    acted on. Lifecycle lines carry no `actorSessionId`.
 5. On a comment line read `bodyPreview`; if `truncated`,
-   `skein_comment_get(commentId)`; reply with `skein_comment`. Both
-   agents talk in the issue's comments: one timeline the human sees.
+   `skein_comment_get(commentId)`; reply with `skein_comment`.
 
 Auto-subscription: the assignee, except one filled in at create by the
 "assign agent-created issues to me" setting; the creator only for a
