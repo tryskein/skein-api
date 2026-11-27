@@ -143,6 +143,7 @@ class OpenCodeTest(unittest.TestCase):
 
     def test_opencode_in_paseo_is_woken_by_paseo(self):
         self.register()
+        fake_channel.FakeProgram(self.box.bin, "paseo")
         env = self.box.env("opencode", OPENCODE_SESSION_ID=SESSION,
                            PASEO_AGENT_ID="0f8fad5b-d9cb-469f-a165-70867728950e")
         line = self.box.preflight(env, ["opencode", "Paseo Daemon"], shell_between=False)

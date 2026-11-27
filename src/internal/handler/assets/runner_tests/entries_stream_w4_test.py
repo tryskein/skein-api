@@ -36,6 +36,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 
 import entries_stream_w1_test as w1  # noqa: E402
+import fake_channel  # noqa: E402
 import modes_stream_test as ms  # noqa: E402
 import preflight_matrix_test as pm  # noqa: E402
 
@@ -161,6 +162,7 @@ class InstructionTest(unittest.TestCase):
         # SC-002 "agent under Paseo - oh-my-pi": Paseo keeps no own method
         # of oh-my-pi, so its channel goes first.
         box = pm.Box(self)
+        fake_channel.FakeProgram(box.bin, "paseo")
         env = box.env("omp", PASEO_AGENT_ID="0f8fad5b-d9cb-469f-a165-70867728950e")
         line = box.preflight(env, ["omp", "Paseo Daemon"], shell_between=False)
         self.assertEqual((line["method"], line["channel"]), ("detached", "paseo"), line)
@@ -222,7 +224,12 @@ class OhMyPiPaceTest(unittest.TestCase):
 
     def test_the_runner_writes_at_most_25_batches_at_once_then_one_every_20_s(self):
         output = self.run_series()
-        batches = [t for t, _ in output.out.writes]
+        # A batch is the writes of one window of the tool: a service line
+        # written into the place its batch kept joins that batch.
+        batches = []
+        for t, _ in output.out.writes:
+            if not batches or t >= batches[-1] + OMP_BATCH_SEC:
+                batches.append(t)
         self.assertGreater(len(batches), 40)
         self.assertLess(batches[24] - batches[0], OMP_REFILL_SEC)
         # The 26th batch comes no sooner than 20 s after the first, and

@@ -26,6 +26,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 
 import entries_stream_w1_test as w1  # noqa: E402
+import fake_channel  # noqa: E402
 import preflight_matrix_test as pm  # noqa: E402
 
 RUNNER = pm.RUNNER
@@ -96,6 +97,7 @@ class JournalOnlyTest(unittest.TestCase):
         for client in ("kiro", "goose", "crush"):
             with self.subTest(client=client):
                 box = pm.Box(self)
+                fake_channel.FakeProgram(box.bin, "paseo")
                 env = box.env(client, PASEO_AGENT_ID=PASEO_ID)
                 line = box.preflight(env, [RECORDS[client][0], "Paseo Daemon"], shell_between=False)
                 self.assertEqual((line["method"], line["channel"]), ("detached", "paseo"), line)

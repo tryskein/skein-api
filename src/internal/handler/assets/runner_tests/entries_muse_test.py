@@ -46,6 +46,7 @@ class MuseTest(unittest.TestCase):
 
     def test_with_a_host_that_launched_it_the_host(self):
         box = pm.Box(self)
+        jo.fake_channel.FakeProgram(box.bin, "paseo")
         env = box.env("muse", PASEO_AGENT_ID=jo.PASEO_ID)
         line = box.preflight(env, ["muse", "Paseo Daemon"], shell_between=False)
         self.assertEqual((line["method"], line["channel"]), ("detached", "paseo"), line)

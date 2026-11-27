@@ -30,6 +30,7 @@ sys.path.insert(0, HERE)
 
 import entries_stream_w1_test as w1  # noqa: E402
 import entries_tmux_test as et  # noqa: E402
+import fake_channel  # noqa: E402
 import modes_stream_test as ms  # noqa: E402
 import preflight_matrix_test as pm  # noqa: E402
 
@@ -174,6 +175,7 @@ class AcpAgentsUnderPaseoTest(unittest.TestCase):
                                     ("antigravity", "agy", None)):
             with self.subTest(client=client):
                 box = pm.Box(self)
+                fake_channel.FakeProgram(box.bin, "paseo")
                 write_gemini_settings(box.root, GEMINI_SETTINGS)
                 line = box.preflight(box.env(client, PASEO_AGENT_ID=PASEO_ID), [agent, "Paseo Daemon"],
                                      shell_between=False, agent_argv=argv)
