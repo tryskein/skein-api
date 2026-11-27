@@ -117,7 +117,7 @@ class HermesPreflightTest(unittest.TestCase):
         # agent ("Addressee and check", item 2) gets no delivery to it, also
         # when the channel is forced.
         self.config("display:\n  background_process_notifications: off\n  busy_input_mode: queue\n")
-        chain = [("hermes", None), ("bash", None), ("hermes", None)]
+        chain = ["hermes", "hermes"]
         for env in ({}, {"SKEIN_MONITOR_CHANNEL": "hermes-resume"}):
             with self.subTest(env=env):
                 line = self.line(chain=chain, **env)

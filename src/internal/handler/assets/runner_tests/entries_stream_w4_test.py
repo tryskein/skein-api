@@ -110,9 +110,9 @@ class RecognitionTest(unittest.TestCase):
 class InstructionTest(unittest.TestCase):
     """The tool and parameters of the method each record's preflight takes."""
 
-    def line(self, client, chain, **env):
+    def line(self, client, chain, agent_argv=None, **env):
         box = pm.Box(self)
-        return box.preflight(box.env(client, **env), chain)
+        return box.preflight(box.env(client, **env), chain, agent_argv=agent_argv)
 
     def test_codebuddy_finds_monitor_and_runs_it_at_its_longest_deadline(self):
         line = self.line("codebuddy", ["codebuddy"])
@@ -149,7 +149,7 @@ class InstructionTest(unittest.TestCase):
             self.assertIn(part, line["instruction"])
 
     def test_qwen_runs_monitor_at_its_longest_idle_and_has_an_exit_on_event_method(self):
-        line = self.line("qwen-code", [("node", ["node", "/usr/bin/qwen"])])
+        line = self.line("qwen-code", ["node"], agent_argv=["node", "/usr/bin/qwen"])
         self.assertEqual((line["method"], line["channel"]), ("stream", "stdout"))
         self.assertIn("idle_timeout_ms %d" % QWEN_MAX_IDLE_MS, line["instruction"])
         self.assertIn("Idle timeout", line["instruction"])
@@ -162,7 +162,7 @@ class InstructionTest(unittest.TestCase):
         # of oh-my-pi, so its channel goes first.
         box = pm.Box(self)
         env = box.env("omp", PASEO_AGENT_ID="0f8fad5b-d9cb-469f-a165-70867728950e")
-        line = box.preflight(env, [("omp", None), ("node", ["node", "/opt/paseo/daemon-worker.js"])])
+        line = box.preflight(env, ["omp", "Paseo Daemon"], shell_between=False)
         self.assertEqual((line["method"], line["channel"]), ("detached", "paseo"), line)
 
 
