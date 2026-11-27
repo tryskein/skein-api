@@ -503,6 +503,16 @@ func (v *validator) channel(path string, c *Channel) {
 	v.delivery = c.Blind
 	v.executor(path+".executor", c.Executor)
 	v.delivery = false
+	// A program left to run past its window is the delivery call of an
+	// addressed or terminal channel that holds its text itself: never a
+	// blind channel's (its insert and submit follow a stage) and never one
+	// fed by a message file, which goes as soon as the window ends.
+	if c.Executor.Detach && c.Blind {
+		v.add(RuleInvalid, path+".executor.detach", "a call of a blind channel is never left to run")
+	}
+	if c.Executor.Detach && c.Executor.Feed == FeedFile {
+		v.add(RuleInvalid, path+".executor.detach", "a call fed by a message file is never left to run: the file goes at the end of its window")
+	}
 	v.idle(path+".idle", c.Idle)
 
 	if len(c.Outcomes) == 0 {
@@ -513,6 +523,11 @@ func (v *validator) channel(path string, c *Channel) {
 		rows[i] = row.Match
 		if !outcomes[row.Outcome] {
 			v.add(RuleUnknownOutcome, fmt.Sprintf("%s.outcomes[%d].outcome", path, i), "%q is not an outcome", row.Outcome)
+		}
+		// A program still running may have handed the text over and gives
+		// no sign of what it did: the outcome is unknown.
+		if row.Match.StillRunning != nil && row.Outcome != OutcomeUnknown {
+			v.add(RuleInvalid, fmt.Sprintf("%s.outcomes[%d].outcome", path, i), "a call still running may have handed the text over: its outcome is unknown, not %q", row.Outcome)
 		}
 		if row.Shorten && row.Outcome != OutcomeRefused {
 			v.add(RuleInvalid, fmt.Sprintf("%s.outcomes[%d].shorten", path, i), "only a refusal before send shortens the text")
@@ -811,6 +826,9 @@ func (v *validator) blindCalls(path string, c *Channel) {
 	argvOnly := func(p string, e Executor) {
 		if e.Type != ExecutorArgv {
 			v.add(RuleInvalid, p+".type", "a call of a blind channel runs its program")
+		}
+		if e.Detach {
+			v.add(RuleInvalid, p+".detach", "a call of a blind channel is never left to run")
 		}
 		v.executor(p, e)
 	}

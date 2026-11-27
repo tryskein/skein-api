@@ -292,6 +292,37 @@ func TestValidate_RejectsEachRule(t *testing.T) {
 			r.Channels[0].Outcomes = append(r.Channels[0].Outcomes,
 				OutcomeRow{Match: Match{StillRunning: boolp(true), ExitCode: intp(9)}, Outcome: OutcomeUnknown})
 		}, RuleInvalid},
+		{"a call still running refused before send", func(r *Registry) {
+			r.Channels[0].Executor.Detach = true
+			r.Channels[0].Outcomes = append(r.Channels[0].Outcomes,
+				OutcomeRow{Match: Match{StillRunning: boolp(true)}, Outcome: OutcomeRefused})
+		}, RuleInvalid},
+		{"a call still running queued", func(r *Registry) {
+			r.Channels[0].Executor.Detach = true
+			r.Channels[0].Outcomes = append(r.Channels[0].Outcomes,
+				OutcomeRow{Match: Match{StillRunning: boolp(true)}, Outcome: OutcomeQueued})
+		}, RuleInvalid},
+		{"a call still running shortened", func(r *Registry) {
+			r.Channels[0].Executor.Detach = true
+			r.Channels[0].Outcomes = append(r.Channels[0].Outcomes,
+				OutcomeRow{Match: Match{StillRunning: boolp(true)}, Outcome: OutcomeRefused, Shorten: true})
+		}, RuleInvalid},
+		{"a detached call fed by a message file", func(r *Registry) {
+			r.Channels[1].Executor.Detach = true
+			r.Channels[1].Outcomes = append(r.Channels[1].Outcomes,
+				OutcomeRow{Match: Match{StillRunning: boolp(true)}, Outcome: OutcomeUnknown})
+		}, RuleInvalid},
+		{"a detached insert of a blind channel", func(r *Registry) {
+			r.Channels[2].Executor.Detach = true
+			r.Channels[2].Outcomes = append(r.Channels[2].Outcomes,
+				OutcomeRow{Match: Match{StillRunning: boolp(true)}, Outcome: OutcomeUnknown})
+		}, RuleInvalid},
+		{"a detached stage of a blind channel", func(r *Registry) {
+			blindTwoStep(r).Stage.Detach = true
+		}, RuleInvalid},
+		{"a detached submit of a blind channel", func(r *Registry) {
+			blindTwoStep(r).Submit.Executor.Detach = true
+		}, RuleInvalid},
 		{"a call not still running as a sign", func(r *Registry) {
 			r.Channels[0].Executor.Detach = true
 			r.Channels[0].Outcomes = append(r.Channels[0].Outcomes,
@@ -390,7 +421,7 @@ func TestValidate_RejectsEachRule(t *testing.T) {
 			r.Channels[0].Executor.Detach = true
 			r.Channels[0].Outcomes = append(r.Channels[0].Outcomes,
 				OutcomeRow{Match: Match{StillRunning: boolp(true)}, Outcome: OutcomeUnknown},
-				OutcomeRow{Match: Match{StillRunning: boolp(true)}, Outcome: OutcomeQueued})
+				OutcomeRow{Match: Match{StillRunning: boolp(true)}, Outcome: OutcomeUnknown})
 		}, RuleAmbiguousSign},
 		{"stderr criterion in the table of an http channel", func(r *Registry) {
 			r.Channels[1].Executor = Executor{Type: ExecutorHTTP, TimeoutSec: 30,
