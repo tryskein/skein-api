@@ -333,6 +333,49 @@ class FileFateTest(unittest.TestCase):
         self.assertFalse(os.path.exists(os.path.join(box.dir, "state.json")))
         self.assertFalse(os.path.exists(box.starter_file))
 
+    def starter_elsewhere(self, box):
+        """Run the starter from a file outside the token directory (the
+        check looks at the token directory's starter.py)."""
+        other = os.path.join(box.root, "elsewhere.py")
+        shutil.copy(box.starter_file, other)
+        os.chmod(other, 0o600)
+        box.starter_file = other
+        return other
+
+    def test_the_starter_predicate_before_the_token_is_read(self):
+        # Matrix row #153 by the privacy predicate of the spec (P-5): the
+        # starter is a regular file of ours, not a link, and either has no
+        # group/other bits or sits in a directory of ours that has none.
+        # Refused: nothing downloads, which needs the token read.
+        def link(box):
+            real = self.starter_elsewhere(box)
+            os.remove(os.path.join(box.dir, "starter.py"))
+            os.symlink(real, os.path.join(box.dir, "starter.py"))
+
+        def missing(box):
+            self.starter_elsewhere(box)
+            os.remove(os.path.join(box.dir, "starter.py"))
+        for name, change in (("link", link), ("missing", missing)):
+            with self.subTest(starter=name):
+                box = Box(self)
+                change(box)
+                srv = server(self, status(401))
+                rc, lines, _ = box.run(srv.url())
+                self.assertEqual((rc, lines[0]["reason"]), (1, "token_file_insecure"))
+                self.assertEqual(srv.script_hits, 0, "the token was read and sent")
+
+    def test_group_bits_on_the_starter_in_a_private_directory_pass(self):
+        # The same predicate: 0644 in a 0700 directory of ours is private
+        # (no other user reaches the file), so the start goes on to the
+        # download. The matrix row words bits on the file as
+        # token_file_insecure; the predicate of the spec decides.
+        box = Box(self)
+        os.chmod(box.starter_file, 0o644)
+        srv = server(self, status(503))
+        rc, lines, _ = box.run(srv.url())
+        self.assertEqual(lines[0]["reason"], "server_unreachable")
+        self.assertEqual(srv.script_hits, 1)
+
     def test_misconfigured_deletes_a_known_path(self):
         box = Box(self)
         rc, lines, _ = box.run(server(self, status(500)).url(), drop=("SKEIN_RUNNER_SHA256",))
