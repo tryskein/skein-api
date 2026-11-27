@@ -560,7 +560,10 @@ type Executor struct {
 	// call waits that long for its exit, which the outcome table classifies
 	// as usual; a program still running then is left to run on its own and
 	// the call is classified by the row whose StillRunning is true (a
-	// command that holds its caller for a whole turn of the agent).
+	// command that holds its caller for a whole turn of the agent). The
+	// runner kills the program's tree at TimeoutSec plus one grace from its
+	// start and when the monitor stops; while it runs, a next call of the
+	// channel is refused before send (runner/executors.py#DetachedCalls).
 	Detach bool `json:"detach,omitempty"`
 }
 

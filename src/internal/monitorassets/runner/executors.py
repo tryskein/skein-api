@@ -548,16 +548,95 @@ def run_program(argv, env, stdin_data, timeout_sec, secrets=()):
     return _run_threads(argv, env, stdin_data, timeout_sec)
 
 
-# Programs of detached calls left to run on their own; reaped as they end.
-_DETACHED = []
+# A program a detached call left running past its window ends on its own
+# within one grace after it, or its tree is killed then: no detached call
+# lives longer than its window plus this.
+DETACHED_GRACE_SEC = 30.0
 
 
-def reap_detached():
-    """Reap the programs of detached calls that have ended (no zombie is
-    left of them); the others run on."""
-    for proc in list(_DETACHED):
-        if proc.poll() is not None:
-            _DETACHED.remove(proc)
+class DetachedCalls(object):
+    """The programs of detached calls that outlived their window
+    (registry.go#Executor.Detach), by channel: at most one lives per
+    channel. Each is reaped as it ends, killed with its tree at its hard
+    deadline (the window plus DETACHED_GRACE_SEC) and at the end of the
+    monitor (end_all). clock gives the monotonic time the deadlines are
+    kept by."""
+
+    def __init__(self, clock=time.monotonic):
+        self.clock = clock
+        self._lock = threading.Lock()
+        # {channel key: (proc, tree, deadline)}
+        self._calls = {}
+
+    def admit(self, key):
+        """Raise ExecutorRefusal when a call of this channel still runs: a
+        refusal before send, retried by the delivery's budget."""
+        self.reap()
+        with self._lock:
+            if key in self._calls:
+                raise ExecutorRefusal("a detached call of this channel is still running")
+
+    def leave(self, key, proc, tree, deadline):
+        """Leave proc running until deadline; a watcher reaps it as it ends
+        and kills it at its deadline."""
+        with self._lock:
+            self._calls[key] = (proc, tree, deadline)
+        watcher = threading.Thread(target=self._watch, args=(key, proc))
+        watcher.daemon = True
+        watcher.start()
+
+    def _watch(self, key, proc):
+        # It only looks: the program is reaped by reap(), after its group
+        # is killed, so the id of the group is never reused before.
+        while True:
+            with self._lock:
+                if self._calls.get(key, (None,))[0] is not proc:
+                    return
+            time.sleep(_DETACHED_WATCH_STEP_SEC)
+            self.reap()
+
+    def running(self):
+        """The channel keys whose program still runs."""
+        with self._lock:
+            return sorted(self._calls)
+
+    def reap(self):
+        """Reap the programs that ended and kill the trees of those past
+        their deadline; the others run on."""
+        now = self.clock()
+        with self._lock:
+            ended = [(k, c) for k, c in self._calls.items()
+                     if _ended_unreaped(c[0]) or now >= c[2]]
+            for key, _ in ended:
+                del self._calls[key]
+        for _, (proc, tree, _) in ended:
+            _end_tree(proc, tree)
+
+    def end_all(self):
+        """Kill and reap every program left running: the monitor stops."""
+        with self._lock:
+            calls, self._calls = list(self._calls.values()), {}
+        for proc, tree, _ in calls:
+            _end_tree(proc, tree)
+
+
+# How often a watcher of a detached call looks at its program and its
+# deadline: a program is killed at most this long after its deadline.
+_DETACHED_WATCH_STEP_SEC = 1.0
+
+
+def _end_tree(proc, tree):
+    """Kill what is left of a call's tree (its descendants too) and reap
+    its program."""
+    tree.kill()
+    try:
+        proc.wait(timeout=_READER_GRACE_SEC)
+    except subprocess.TimeoutExpired:
+        pass
+
+
+# The detached calls of this process.
+DETACHED_CALLS = DetachedCalls()
 
 
 def _read_capped(fh):
@@ -566,40 +645,64 @@ def _read_capped(fh):
     return data[:OUTPUT_CAP_BYTES], len(data) > OUTPUT_CAP_BYTES
 
 
-def run_detached(argv, env, stdin_data, wait_sec, secrets=()):
-    """Run argv (no shell) as run_program does, but wait at most wait_sec
-    for its exit and never kill it (registry.go#Executor.Detach). An exit in
-    that time gives its CallResult; a program still running is left to run
-    on its own (its own session or process group, stdout and stderr in
-    files only it still holds) and gives a CallResult with still_running.
-    Raises ExecutorRefusal as run_program does."""
+def run_detached(argv, env, stdin_data, wait_sec, secrets=(), key=None, calls=None):
+    """Run argv (no shell) as run_program does, as one tree of processes
+    (_ProcessTree: its own session on POSIX, a job object on Windows, with
+    the options of every call of a channel program), but wait at most
+    wait_sec for its exit (registry.go#Executor.Detach). An exit in that
+    time gives its CallResult and the tree goes. A program still running
+    is left to the detached calls (calls, DETACHED_CALLS by default) under
+    key, the channel: it is killed with its tree at wait_sec plus
+    DETACHED_GRACE_SEC from its start at the latest, and at the end of the
+    monitor; it gives a CallResult with still_running. A call of a channel
+    whose earlier program still runs is refused before send. Raises
+    ExecutorRefusal as run_program does."""
     for s in secrets:
         if s and (any(s in a for a in argv) or (stdin_data is not None and s.encode("utf-8") in stdin_data)):
             raise ExecutorRefusal("the call would carry a secret of the monitor")
-    reap_detached()
+    calls = DETACHED_CALLS if calls is None else calls
+    key = tuple(argv) if key is None else key
+    calls.admit(key)
     out, err = tempfile.TemporaryFile(), tempfile.TemporaryFile()
+    proc = None
+    tree = None
+    left = False
     try:
-        kwargs = {"start_new_session": True} if os.name == "posix" else {
-            "creationflags": getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)}
         try:
             proc = subprocess.Popen(argv, stdin=subprocess.PIPE if stdin_data is not None else subprocess.DEVNULL,
-                                    stdout=out, stderr=err, env=env, close_fds=True, **kwargs)
+                                    stdout=out, stderr=err, env=env, close_fds=True,
+                                    **current_platform().tree_popen_options())
         except OSError as exc:
             raise ExecutorRefusal("the program cannot be started (%s)" % (exc.strerror or exc))
+        started = calls.clock()
+        tree = _ProcessTree(proc)
+        tree.start()
         if stdin_data is not None:
             # A writer of its own: a program that reads its stdin late never
             # holds the call past its time.
-            writer = _Writer(proc.stdin, stdin_data)
-            writer.start()
+            _Writer(proc.stdin, stdin_data).start()
         try:
             exit_code = proc.wait(timeout=max(wait_sec, 0))
         except subprocess.TimeoutExpired:
-            _DETACHED.append(proc)
+            calls.leave(key, proc, tree, started + max(wait_sec, 0) + DETACHED_GRACE_SEC)
+            left = True
             return CallResult(None, b"", b"", False, still_running=True)
         stdout, cut = _read_capped(out)
         stderr, err_cut = _read_capped(err)
         return CallResult(exit_code, stdout, stderr, False, truncated=cut, stderr_truncated=err_cut)
     finally:
+        if not left and proc is not None:
+            # An exit within the window, an error or a stop signal: nothing
+            # of the call outlives it.
+            if tree is not None:
+                tree.kill()
+            else:
+                _kill_quietly(proc)
+            if proc.returncode is None:
+                try:
+                    proc.wait(timeout=_READER_GRACE_SEC)
+                except subprocess.TimeoutExpired:
+                    pass
         out.close()
         err.close()
 
@@ -970,7 +1073,8 @@ class ArgvExecutor(object):
                 if not all(BATCH_SAFE_ARG.match(a) for a in argv[1:]):
                     raise ExecutorRefusal("an argument of a .cmd program holds characters cmd.exe interprets")
             if executor.get("detach"):
-                return run_detached(argv, env, stdin_data, timeout_sec, self.secrets)
+                return run_detached(argv, env, stdin_data, timeout_sec, self.secrets,
+                                    key=tuple(executor.get("argv") or ()))
             return run_program(argv, env, stdin_data, timeout_sec, self.secrets)
         finally:
             if text_file is not None:

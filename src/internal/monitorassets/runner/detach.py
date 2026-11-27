@@ -539,6 +539,8 @@ def run_detached_child():
         outcome = Stop("internal_error")
     finally:
         executor.stop()
+        # The programs of detached calls do not outlive the monitor.
+        DETACHED_CALLS.end_all()
     held.failed(outcome, journal)
     try:
         # Before the receipt this is the receipt; after it, stdout is null.
@@ -640,6 +642,8 @@ def run_foreground(token_file, issue, env, settings, doc=None):
         outcome = Stop("internal_error")
     finally:
         executor.stop()
+        # The programs of detached calls do not outlive the monitor.
+        DETACHED_CALLS.end_all()
     held.failed(outcome, journal)
     try:
         # Before its output exists (a refused begin) the stop line keeps to

@@ -3,8 +3,10 @@ registry.go#Executor.Detach) and of the stillRunning sign
 (runner/classify.py) on a synthetic channel: a command that holds its caller
 for a whole turn of the agent (Hermes `chat --resume -Q`) is waited on only
 for an early exit, which the table classifies; a program still running then
-is left to run, never killed, and the call is classified by the row
-stillRunning.
+is left to run and the call is classified by the row stillRunning. A
+program left running lives at most its window plus one grace
+(DETACHED_GRACE_SEC): then its tree is killed, as it is when the monitor
+stops; one call of a channel runs at a time.
 
 Run on its own: python3 internal/handler/assets/runner_tests/executors_detach_test.py
 Standard library of Python 3.6 only.
@@ -35,6 +37,12 @@ mode = sys.argv[1]
 if mode == "refuse":
     sys.stderr.write("Error: No session found matching 'x'.\n")
     sys.exit(1)
+if mode == "tree":
+    # A descendant that would outlive the program if only it were killed.
+    child = __import__("subprocess").Popen([sys.executable, "-c", "import time; time.sleep(600)"])
+    with open(os.environ["MARK"] + ".pids", "w") as fh:
+        fh.write("%d %d" % (os.getpid(), child.pid))
+    time.sleep(600)
 if mode == "slow":
     while not os.path.exists(os.environ["MARK"] + ".go"):
         time.sleep(0.05)
@@ -108,29 +116,107 @@ class DetachedCallTest(unittest.TestCase):
         self.assertIsNone(result.exit_code)
         outcome, sign = RUNNER.classify_result(ROWS, result)
         self.assertEqual((outcome, sign), ("unknown", {"stillRunning": True}))
-        # Not killed: let go, it finishes its work after the call.
+        # Within its deadline it is not killed: let go, it finishes its work.
         self.assertFalse(os.path.exists(self.mark + ".done"))
         self.release()
         self.assertTrue(self.wait_for(self.mark + ".done"), "the detached program was killed")
 
-    def test_a_program_left_to_run_is_reaped_once_it_ends(self):
-        before = list(RUNNER._DETACHED)
-        result = self.call("slow", 1)
+    def detached(self, mode, calls, key="channel"):
+        spec_argv = [sys.executable, self.script, mode]
+        return RUNNER.run_detached(spec_argv, self.env, b"event text", 0.2, key=key, calls=calls)
+
+    def pids(self):
+        self.assertTrue(self.wait_for(self.mark + ".pids"))
+        for _ in range(400):
+            with open(self.mark + ".pids") as fh:
+                text = fh.read().split()
+            if len(text) == 2:
+                return [int(p) for p in text]
+            time.sleep(0.05)
+        self.fail("no pids written")
+
+    def test_a_hung_program_is_killed_with_its_tree_at_its_deadline(self):
+        now = [1000.0]
+        calls = RUNNER.DetachedCalls(clock=lambda: now[0])
+        self.addCleanup(calls.end_all)
+        result = self.detached("tree", calls)
         self.assertTrue(result.still_running)
-        left = [p for p in RUNNER._DETACHED if p not in before]
-        self.assertEqual(len(left), 1)
-        pid = left[0].pid
+        program, child = self.pids()
+        # One second before the window plus the grace: it runs on.
+        now[0] = 1000.0 + 0.2 + RUNNER.DETACHED_GRACE_SEC - 1
+        calls.reap()
+        self.assertTrue(alive(program) and alive(child))
+        self.assertEqual(calls.running(), ["channel"])
+        # At the deadline: the program and its descendant are gone.
+        now[0] = 1000.0 + 0.2 + RUNNER.DETACHED_GRACE_SEC
+        calls.reap()
+        self.assertEqual(calls.running(), [])
+        self.assertTrue(gone(program) and gone(child), "the tree of the hung call outlived its deadline")
+
+    def test_the_stop_of_the_monitor_leaves_no_descendant(self):
+        calls = RUNNER.DetachedCalls(clock=lambda: 0.0)
+        result = self.detached("tree", calls)
+        self.assertTrue(result.still_running)
+        program, child = self.pids()
+        calls.end_all()
+        self.assertEqual(calls.running(), [])
+        self.assertTrue(gone(program) and gone(child), "a detached call outlived the monitor")
+        # Reaped: no zombie of it is left.
+        with self.assertRaises(ChildProcessError):
+            os.waitpid(program, os.WNOHANG)
+
+    def test_one_call_of_a_channel_runs_at_a_time(self):
+        calls = RUNNER.DetachedCalls(clock=lambda: 0.0)
+        self.addCleanup(calls.end_all)
+        self.assertTrue(self.detached("slow", calls).still_running)
+        with self.assertRaises(RUNNER.ExecutorRefusal):
+            self.detached("ok", calls)
+        # Another channel is not held by it.
+        self.assertTrue(self.detached("slow", calls, key="other").still_running)
+        self.assertEqual(calls.running(), ["channel", "other"])
+
+    def test_a_program_left_to_run_is_reaped_once_it_ends(self):
+        calls = RUNNER.DetachedCalls(clock=lambda: 0.0)
+        self.addCleanup(calls.end_all)
+        self.assertTrue(self.detached("slow", calls).still_running)
         self.release()
         self.assertTrue(self.wait_for(self.mark + ".done"))
         for _ in range(400):
-            RUNNER.reap_detached()
-            if left[0] not in RUNNER._DETACHED:
+            calls.reap()
+            if not calls.running():
                 break
             time.sleep(0.05)
-        self.assertNotIn(left[0], RUNNER._DETACHED)
-        # Reaped: no zombie of it is left.
-        with self.assertRaises(ChildProcessError):
-            os.waitpid(pid, os.WNOHANG)
+        self.assertEqual(calls.running(), [])
+        # The channel takes a call again.
+        self.assertFalse(self.detached("ok", calls).still_running)
+
+
+def _state(pid):
+    """The state letter of pid from /proc, or None when it is gone."""
+    try:
+        with open("/proc/%d/stat" % pid) as fh:
+            return fh.read().rsplit(")", 1)[1].split()[0]
+    except (OSError, IndexError):
+        return None
+
+
+def alive(pid):
+    if os.path.isdir("/proc"):
+        return _state(pid) not in (None, "Z", "X")
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError:
+        return False
+
+
+def gone(pid):
+    # A killed descendant is reaped by whoever adopted it: wait for it.
+    for _ in range(100):
+        if not alive(pid):
+            return True
+        time.sleep(0.05)
+    return False
 
 
 class StillRunningSignTest(unittest.TestCase):
