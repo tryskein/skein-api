@@ -551,6 +551,10 @@ type Match struct {
 	// JSONAbsent are dotted paths (as in JSON) that must be absent from the
 	// document: a list shorter than the index, an object without the key.
 	JSONAbsent []string `json:"jsonAbsent,omitempty"`
+	// JSONType maps a dotted path of the JSON answer to the type of the
+	// value it must hold: object, list, string, number or boolean (a null
+	// is none of them). A receipt names the fields it must carry.
+	JSONType map[string]string `json:"jsonType,omitempty"`
 	// StderrJSON is JSON for the JSON document an argv program wrote to its
 	// stderr (a CLI that reports its errors there).
 	StderrJSON map[string]string `json:"stderrJson,omitempty"`

@@ -159,6 +159,13 @@ class ConductorRecordTest(unittest.TestCase):
             ("201 of a state of another version", created("delivered"), "unknown"),
             ("200 queued", dict(created("queued"), status=200), "unknown"),
             ("201 without a state", {"status": 201, "json": {"messageId": "m"}}, "unknown"),
+            # messageId, state and deepLink are required by the OpenAPI
+            # document: a receipt without one of them proves nothing.
+            ("201 queued without its messageId",
+             {"status": 201, "json": {"state": "queued", "deepLink": "https://app.conductor.build/s/1"}}, "unknown"),
+            ("201 sent without its deepLink", {"status": 201, "json": {"messageId": "m", "state": "sent"}}, "unknown"),
+            ("201 queued with a messageId of null",
+             {"status": 201, "json": dict(created("queued")["json"], messageId=None)}, "unknown"),
             ("400", {"status": 400, "json": {"error": "invalid"}}, "unknown"),
             ("401", {"status": 401, "json": {"error": "unauthorized"}}, "unknown"),
             ("404", {"status": 404, "json": {"error": "not found"}}, "unknown"),

@@ -188,6 +188,21 @@ def _wanted(want, env):
     return want
 
 
+def _json_type_is(value, kind):
+    """Whether a JSON value is of the type a jsonType criterion names."""
+    if kind == "object":
+        return isinstance(value, dict)
+    if kind == "list":
+        return isinstance(value, list)
+    if kind == "string":
+        return isinstance(value, str)
+    if kind == "boolean":
+        return isinstance(value, bool)
+    if kind == "number":
+        return isinstance(value, (int, float)) and not isinstance(value, bool)
+    return False
+
+
 def outcome_sign_matches(match, exit_code=None, doc=None, http_status=None, stderr=None, env=None):
     """Whether an answer carries the sign of a table row: every criterion
     the row states holds. A row without a criterion matches nothing. stderr
@@ -224,6 +239,12 @@ def outcome_sign_matches(match, exit_code=None, doc=None, http_status=None, stde
         for path, want in match["stderrJson"].items():
             if err_doc is None or json_path_value(err_doc, path) != want:
                 return False
+    for path, kind in (match.get("jsonType") or {}).items():
+        # The path holds a value of that JSON type (a null is none of them).
+        stated = True
+        found, value = json_path_lookup(doc, path) if doc is not None else (False, None)
+        if not found or not _json_type_is(value, kind):
+            return False
     for path in match.get("jsonAbsent") or []:
         # Absent from a JSON answer: an answer that is no JSON document
         # carries no sign of its fields.

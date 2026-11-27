@@ -1719,6 +1719,10 @@
             "httpStatus": 201,
             "json": {
               "state": "queued"
+            },
+            "jsonType": {
+              "messageId": "string",
+              "deepLink": "string"
             }
           },
           "outcome": "queued"
@@ -1728,6 +1732,10 @@
             "httpStatus": 201,
             "json": {
               "state": "sent"
+            },
+            "jsonType": {
+              "messageId": "string",
+              "deepLink": "string"
             }
           },
           "outcome": "input-written"

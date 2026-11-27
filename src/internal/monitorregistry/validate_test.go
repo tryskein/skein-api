@@ -973,3 +973,40 @@ func TestValidate_APhraseInsideAnotherOverlapsIt(t *testing.T) {
 		}
 	}
 }
+
+// TestValidate_ATypedPath — jsonType names the type a path must hold: a
+// known type, never at a path also absent; two types of one path are apart,
+// so are a typed path and its absence.
+func TestValidate_ATypedPath(t *testing.T) {
+	r := validRegistry()
+	r.Channels[1].Outcomes[0].Match.JSONType = map[string]string{"messageId": "string", "submit": "object"}
+	r.Channels[1].Outcomes = append(r.Channels[1].Outcomes,
+		OutcomeRow{Match: Match{ExitCode: intp(0), JSON: map[string]string{"status": "queued"}, JSONAbsent: []string{"submit"}},
+			Outcome: OutcomeQueued})
+	if err := r.Validate(); err != nil {
+		t.Fatalf("typed and absent rows of one path were refused: %v", err)
+	}
+	for name, m := range map[string]Match{
+		"an unknown type":      {ExitCode: intp(9), JSONType: map[string]string{"a": "map"}},
+		"a typed absent path":  {ExitCode: intp(9), JSONType: map[string]string{"a.b": "string"}, JSONAbsent: []string{"a"}},
+		"an object as a value": {ExitCode: intp(9), JSONType: map[string]string{"a": "object"}, JSON: map[string]string{"a": "x"}},
+	} {
+		r := validRegistry()
+		r.Channels[1].Outcomes = append(r.Channels[1].Outcomes, OutcomeRow{Match: m, Outcome: OutcomeUnknown})
+		err := r.Validate()
+		if err == nil {
+			t.Fatalf("%s was accepted", name)
+		}
+		for _, got := range rulesOf(t, err) {
+			if got != RuleInvalid {
+				t.Fatalf("%s: %v, want only %s", name, err, RuleInvalid)
+			}
+		}
+	}
+	a := Match{ExitCode: intp(0), JSONType: map[string]string{"submit": "object"}}
+	b := Match{ExitCode: intp(0), JSONType: map[string]string{"submit": "list"}}
+	c := Match{ExitCode: intp(0), JSONAbsent: []string{"submit"}}
+	if a.overlaps(b) || a.overlaps(c) || c.overlaps(a) {
+		t.Fatal("two types of one path, or a type and the absence, overlap")
+	}
+}

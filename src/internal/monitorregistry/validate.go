@@ -107,6 +107,7 @@ var (
 	probeResults     = set(ProbeAvailable, ProbeUnavailable)
 	addresseeResults = set(AddresseeSame, AddresseeChanged, AddresseeGone)
 	processChecks    = set(ProcessAlive, ProcessForeground, ProcessNone)
+	jsonTypes        = set("object", "list", "string", "number", "boolean")
 	idleTypes        = set(IdleNone, IdleBuiltin, IdleArgv)
 	kinds            = set(KindTerminal, KindAddressed)
 	steps            = map[int]bool{StepOwnDelivery: true, StepHost: true, StepTerminal: true, StepBlind: true}
@@ -867,6 +868,22 @@ func (v *validator) signs(path string, rows []Match) {
 		for _, k := range slices.Sorted(maps.Keys(m.StderrJSON)) {
 			v.jsonPath(rpath+".stderrJson", k)
 		}
+		for _, k := range slices.Sorted(maps.Keys(m.JSONType)) {
+			v.jsonPath(rpath+".jsonType", k)
+			if !jsonTypes[m.JSONType[k]] {
+				v.add(RuleInvalid, rpath+".jsonType."+k, "type %q is not one of object, list, string, number, boolean", m.JSONType[k])
+			}
+			if want, both := m.JSON[k]; both && m.JSONType[k] != "string" && !isEnvRef(want) {
+				// A value compared as text is a string, a number, a
+				// boolean or null: never an object or a list.
+				if m.JSONType[k] == "object" || m.JSONType[k] == "list" {
+					v.add(RuleInvalid, rpath+".jsonType."+k, "path %q is both a %s and a value", k, m.JSONType[k])
+				}
+			}
+			if absentAt(m.JSONAbsent, k) {
+				v.add(RuleInvalid, rpath+".jsonType."+k, "path %q is both typed and absent", k)
+			}
+		}
 		for j, k := range m.JSONAbsent {
 			v.jsonPath(fmt.Sprintf("%s.jsonAbsent[%d]", rpath, j), k)
 			if _, both := m.JSON[k]; both {
@@ -959,7 +976,7 @@ func (v *validator) noEnvRefs(path string, rows []Match) {
 
 // empty reports whether the sign states no criterion.
 func (m Match) empty() bool {
-	return m.ExitCode == nil && m.HTTPStatus == nil && len(m.JSON) == 0 && len(m.JSONAbsent) == 0 &&
+	return m.ExitCode == nil && m.HTTPStatus == nil && len(m.JSON) == 0 && len(m.JSONAbsent) == 0 && len(m.JSONType) == 0 &&
 		m.StderrEmpty == nil && len(m.StderrJSON) == 0 && m.StderrContains == nil
 }
 
@@ -1004,6 +1021,21 @@ func (m Match) overlaps(o Match) bool {
 		}
 	}
 	for k := range o.JSON {
+		if absentAt(m.JSONAbsent, k) {
+			return false
+		}
+	}
+	// A typed path: another type, or the path (or a parent) absent, is
+	// apart.
+	for k, kind := range m.JSONType {
+		if other, both := o.JSONType[k]; both && other != kind {
+			return false
+		}
+		if absentAt(o.JSONAbsent, k) {
+			return false
+		}
+	}
+	for k := range o.JSONType {
 		if absentAt(m.JSONAbsent, k) {
 			return false
 		}
