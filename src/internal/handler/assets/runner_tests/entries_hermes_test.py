@@ -132,7 +132,13 @@ class ResumeOutcomeTest(unittest.TestCase):
 
     def test_each_sign_gives_one_outcome(self):
         for exit_code, stderr, outcome in (
-                (0, b"Session: 20261127_091500_ab12cd\n", "queued"),
+                # A finished turn of -Q (gateway_chat_view.py#_print_exit_ids):
+                # the session line before the submit, the id line after it.
+                (0, b"Session: 20261127_091500_ab12cd\n\nsession_id: 20261127_091500_ab12cd\n", "queued"),
+                # Exit 0 with nothing admitted (#run, a voice stop phrase):
+                # no id line, so no sign the text was taken.
+                (0, b"Session: 20261127_091500_ab12cd\n", "unknown"),
+                (0, b"", "unknown"),
                 (1, b"Error: No session found matching 'x'. Use 'hermes sessions list' to see available sessions\n",
                  "refused-before-send"),
                 (2, b"Error: Resume retains gateway session policy; creation overrides are unsupported\n",

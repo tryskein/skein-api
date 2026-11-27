@@ -3350,7 +3350,7 @@
     {
       "id": "hermes-resume",
       "about": "hermes chat --resume: the own delivery command of Hermes, which submits the text to a session of its gateway by the session id; the command holds its caller until the turn ends, so the monitor waits only for an early refusal and leaves it running.",
-      "source": "github.com/NousResearch/hermes-agent 24b14819: hermes_cli/_parser.py (chat --resume SESSION_ID, --query-file - reads the query from stdin verbatim, -Q answers and exits), hermes_cli/gateway_chat.py#run_gateway_chat (resume by id; not found: 'No session found matching'), #launch_from_args (errors print 'Error: ' and exit 1, an unsupported option 2; a connection or read failure exits 1 with no proof of where it failed), #exit_on_resume_refusal ('Error: Resume retains gateway session policy', exit 2), hermes_cli/gateway_chat_view.py#run ('Your message was not sent.' before the submit, exit 3) and #submit (the prompt.submit receipt is not printed: no sign of acceptance comes out before the turn ends); agent/agent_init_session.py publishes HERMES_SESSION_ID, and a delegated child keeps its parent's id.",
+      "source": "github.com/NousResearch/hermes-agent 24b14819: hermes_cli/_parser.py (chat --resume SESSION_ID, --query-file - reads the query from stdin verbatim, -Q answers and exits), hermes_cli/gateway_chat.py#run_gateway_chat (resume by id; not found: 'No session found matching'), #launch_from_args (errors print 'Error: ' and exit 1, an unsupported option 2; a connection or read failure exits 1 with no proof of where it failed), #exit_on_resume_refusal ('Error: Resume retains gateway session policy', exit 2), hermes_cli/gateway_chat_view.py#run ('Your message was not sent.' before the submit, exit 3) and #submit (the prompt.submit receipt is not printed: no sign of acceptance comes out before the turn ends), #run (exit 0 also when nothing was admitted: 'return 0  # the voice chat ended; no turn was admitted, so none is awaited') and #_print_exit_ids (only a finished turn of -Q, not unattended, prints 'session_id: ' on stderr; the 'Session: ' line of hermes_cli/gateway_chat.py comes before the submit); agent/agent_init_session.py publishes HERMES_SESSION_ID, and a delegated child keeps its parent's id.",
       "step": 3,
       "order": 2,
       "kind": "addressed",
@@ -3383,7 +3383,8 @@
       "outcomes": [
         {
           "match": {
-            "exitCode": 0
+            "exitCode": 0,
+            "stderrContains": "session_id: "
           },
           "outcome": "queued"
         },
