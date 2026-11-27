@@ -252,6 +252,12 @@ class Guard(object):
             raise RefusedBeforeSend("the call would get less than its own time")
 
     def before_send(self):
+        self.prepare()
+        self.final()
+
+    def prepare(self):
+        """Everything of the transfer that may wait or use the network,
+        before the last check of the addressee."""
         self.boundary()
         # Counted first: a refusal of the checks below spends the budget of
         # INV-8 like a refusal of the channel.
@@ -266,9 +272,19 @@ class Guard(object):
         self.boundary()
         self.check_echo()
         self.attempt.confirm()
+
+    def final(self):
+        """The last check of the addressee, then only what is local and
+        waits for nothing until the hand-over: one's own echo read again,
+        the reservation looked at without waiting for the ledger's lock (a
+        lock held now is a refusal before send), the time kept for the
+        call, what is already known of access."""
         self.check()
-        # After the last check only what is local: the time kept for the
-        # call, what is already known of access, the hand-over.
+        self.check_echo()
+        try:
+            self.attempt.still_ours()
+        except LockBusy:
+            raise RefusedBeforeSend("the ledger is held by another monitor right now")
         self.keep_the_call()
         self.local_boundary()
         self.handed = True
@@ -336,11 +352,17 @@ class _ReceiptGuard(Guard):
         Guard.__init__(self, pipeline, channel, None, timeout)
 
     def before_send(self):
-        # The order of every transfer: the check, the wait, the last check
-        # (the agent of a PTY may change during the wait), then nothing that
-        # waits or goes to the network before the hand-over.
+        self.prepare()
+        self.final()
+
+    def prepare(self):
+        # The order of every transfer: the check, the wait (and a stage),
+        # then the last check (the agent of a PTY may change meanwhile) and
+        # nothing that waits or goes to the network before the hand-over.
         self.check()
         self.wait_and_keep_the_call()
+
+    def final(self):
         self.check()
         self.keep_the_call()
 
@@ -399,10 +421,16 @@ class TwoStepDriver(object):
         return self.executor.call(spec, text, min(left, spec.get("timeoutSec") or left) if own else left)
 
     def send(self, text, guard):
-        guard.before_send()
         name = delivery_name()
         insert = with_delivery_name(self.insert["executor"], name)
         taken = False
+        if not self.stage:
+            guard.before_send()
+        else:
+            # The stage hands the text to the channel without writing it
+            # into the pane; it may wait (its own timeout). So it goes
+            # before the last check: check -> insert has no wait between.
+            guard.prepare()
         try:
             if self.stage:
                 try:
@@ -414,8 +442,12 @@ class TwoStepDriver(object):
                     raise RefusedBeforeSend("the stage of the text failed (%s)" % (
                         "timeout" if staged.timed_out else "exit code %s" % staged.exit_code))
                 # The stage carried the text: the insert takes what the
-                # stage left (the buffer of this transfer), no text.
+                # stage left (the buffer of this transfer), no text. The
+                # last check and the access boundary come now, after the
+                # stage and right before the insert; a refusal removes the
+                # staged text.
                 text = ""
+                guard.final()
             try:
                 first = self.executor.call(insert, text, guard.call_timeout())
             except ExecutorRefusal as exc:

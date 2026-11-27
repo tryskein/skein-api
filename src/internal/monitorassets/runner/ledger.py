@@ -287,6 +287,19 @@ class Attempt(object):
         if not self.ledger._change(change):
             raise AttemptLost()
 
+    def still_ours(self):
+        """After the last check of the addressee, before the hand-over: a
+        local look, never a wait, that the attempt still holds the
+        reservation of every event (INV-1; a third monitor may have merged
+        the addressee's records during the check). LockBusy when the ledger
+        is held by another monitor right now; AttemptLost when the
+        reservation is no longer the attempt's."""
+        def ours(entry):
+            recs = [entry["events"].get(eid) for eid in self.events]
+            return all(rec and (rec.get("delivering") or {}).get("attempt") == self.key for rec in recs)
+        if not self.ledger._peek(ours):
+            raise AttemptLost()
+
     def finish(self, outcome):
         """Write the authoritative outcome of the attempt (step 5). Returns
         True when it starts a series of one session (degraded
@@ -573,6 +586,14 @@ class Ledger(object):
                 entry["addresses"].append(k)
         doc["addressees"] = rest + [entry]
         return entry
+
+    def _peek(self, look):
+        """look(entry) on this monitor's addressee under a lock taken without
+        waiting (LockBusy when another process holds it); nothing is
+        saved."""
+        with _FileLock(os.path.join(self._root(), LEDGER_LOCK_NAME), blocking=False):
+            doc = self._load()
+            return look(self._resolve(doc))
 
     def _change(self, change):
         """Run change(entry) on this monitor's addressee under ledger.lock and

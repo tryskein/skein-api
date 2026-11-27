@@ -953,5 +953,36 @@ class UnusableLedgerTest(Base):
             RUNNER._FileLock(os.path.join(self.root, "gone", "ledger.lock"))
 
 
+@unittest.skipUnless(os.name == "posix", "the POSIX ledger")
+class StillOursTest(Base):
+    """K9 of wave 11 round 3 and K2 of wave 13 round 1 (INV-1): after the
+    last check of the addressee the reservation is looked at without
+    waiting for the ledger's lock. Records merged meanwhile by another
+    monitor (the reservation is no longer the attempt's) hand nothing over;
+    a lock held right now is a refusal before send, never a wait."""
+
+    def test_a_reservation_taken_during_the_check_hands_nothing_over(self):
+        a = self.ledger("mon-a", ident([addr("orca", "t-1")]))
+        attempt = a.begin([ev("e1")], "c1").attempt
+        self.addCleanup(attempt.release)
+        attempt.confirm()
+        attempt.still_ours()
+        # A third monitor of the same addressee merges the records and the
+        # event's reservation becomes another attempt's.
+        c = self.ledger("mon-c", ident([addr("orca", "t-1")]))
+        c._change(lambda entry: entry["events"]["e1"]["delivering"].update(attempt="another-attempt"))
+        with self.assertRaises(RUNNER.AttemptLost):
+            attempt.still_ours()
+
+    def test_a_ledger_held_right_now_is_busy_without_a_wait(self):
+        a = self.ledger("mon-a", ident([addr("orca", "t-1")]))
+        attempt = a.begin([ev("e1")], "c1").attempt
+        self.addCleanup(attempt.release)
+        held = RUNNER._FileLock(os.path.join(RUNNER.ledger_dir(self.env), RUNNER.LEDGER_LOCK_NAME))
+        self.addCleanup(held.release)
+        with self.assertRaises(RUNNER.LockBusy):
+            attempt.still_ours()
+
+
 if __name__ == "__main__":
     unittest.main()

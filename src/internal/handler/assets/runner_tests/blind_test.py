@@ -222,6 +222,21 @@ class BlindAddresseeTest(unittest.TestCase):
         self.assertEqual(self.box.calls(), [])
         self.assertEqual([d[:2] for d in mon.deliveries()], [(1, "refused-before-send")])
 
+    def test_leaving_the_foreground_during_the_stage_inserts_nothing(self):
+        # K1 of wave 13 round 1: the last check comes after the stage and
+        # right before the insert. The agent leaves the foreground while
+        # the text is being staged: no insert, the staged text is removed.
+        procs = pane()
+        mon = self.mon(procs)
+
+        def after(sub):
+            if sub == "load":
+                procs.procs[4242].tpgid = procs.procs[4241].tpgid = 4241
+        mon.spy.after = after
+        mon.page([dt.note(1)])
+        self.assertEqual([c[0] for c in self.box.calls()], ["load", "drop"])
+        self.assertEqual([d[:2] for d in mon.deliveries()], [(1, "refused-before-send")])
+
     def test_another_process_before_enter_withholds_it(self):
         procs = pane()
         mon = self.mon(procs)
