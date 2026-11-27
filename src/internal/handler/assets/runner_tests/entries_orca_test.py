@@ -360,7 +360,9 @@ class OrcaRecordTest(unittest.TestCase):
         mon.sink.receipt("The monitor of sk-86 stopped.")
         self.assertEqual(len(self.orca.calls("wait")), 1)
         self.assertEqual(self.orca.calls("send"), [])
-        # The same terminal after the wait: the receipt goes.
+        # The same terminal after the wait (a world of its own): the receipt
+        # goes.
+        self.fresh()
         mon = self.mon("tok-same")
         self.orca.respond()
         mon.sink.receipt("The monitor of sk-86 stopped.")
@@ -388,18 +390,20 @@ class OrcaRecordTest(unittest.TestCase):
         # screen reader).
         cwd = os.getcwd()
         self.addCleanup(os.chdir, cwd)
-        os.chdir(self.world.root)
-        decoy_dir = os.path.join(self.world.root, "decoy")
-        os.mkdir(decoy_dir)
-        decoy = FakeOrca(decoy_dir, "orca")
-        wsl = FakeOrca(self.world.bin, "orca-wsl")
-        cases = [("a variable naming a relative path", "tok-var", {"ORCA_CLI_COMMAND": "bin/orca-wsl"}, wsl),
-                 ("a relative component of PATH", "tok-path",
-                  {"PATH": "bin" + os.pathsep + decoy_dir + os.pathsep + os.environ.get("PATH", os.defpath)},
-                  self.orca)]
-        for name, tok, env, program in cases:
+        for name in ("a variable naming a relative path", "a relative component of PATH"):
             with self.subTest(case=name):
-                mon = self.mon(tok, **env)
+                self.fresh()
+                os.chdir(self.world.root)
+                decoy_dir = os.path.join(self.world.root, "decoy")
+                os.mkdir(decoy_dir)
+                decoy = FakeOrca(decoy_dir, "orca")
+                if name.startswith("a variable"):
+                    program = FakeOrca(self.world.bin, "orca-wsl")
+                    env = {"ORCA_CLI_COMMAND": "bin/orca-wsl"}
+                else:
+                    program = self.orca
+                    env = {"PATH": "bin" + os.pathsep + decoy_dir + os.pathsep + os.environ.get("PATH", os.defpath)}
+                mon = self.mon("tok", **env)
                 self.assertEqual(mon.doc["programs"], {"orca": program.path})
                 self.assertTrue(os.path.isabs(mon.doc["programs"]["orca"]))
                 mon.page([ft.note(1)])
