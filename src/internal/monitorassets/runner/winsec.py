@@ -4,8 +4,8 @@
 # the Windows platform layer of the runner. A descriptor is read into a
 # SecView: whether the object is a reparse point, its owner SID, its DACL as
 # a list of (type, flags, mask, sid) ACEs (None: a NULL DACL, which grants
-# everyone everything), the final path of the handle and whether the DACL is
-# protected from inheritance. Everything after the reading is plain Python,
+# everyone everything), the final path of the handle, whether the DACL is
+# protected from inheritance and the file attributes. Everything after the reading is plain Python,
 # so the tests hand in a fake source of such views.
 #
 # Comments, not docstrings: the served prepare loses full-line comments, and
@@ -37,13 +37,44 @@ _FILE_GENERIC = ((0x80000000, 0x120089), (0x40000000, 0x120116),
                  (0x20000000, 0x1200A0), (0x10000000, 0x1F01FF))
 
 
+FILE_ATTRIBUTE_DIRECTORY = 0x10
+FILE_ATTRIBUTE_REPARSE_POINT = 0x400
+
+
 class SecView(object):
-    def __init__(self, reparse, owner, dacl, final, protected=False):
+    def __init__(self, reparse, owner, dacl, final, protected=False, attributes=0):
         self.reparse = reparse
         self.owner = owner
         self.dacl = dacl
         self.final = final
         self.protected = protected
+        self.attributes = attributes
+
+
+# Criterion (a) of P-9, the term "Приватный каталог Windows": the cause of
+# a refusal as a PlatformRefusal reason, or None. A directory has a DACL
+# protected from inheritance; a file inside a private directory is judged
+# by its own DACL, read from the handle that is then read. Allow ACEs name
+# only the user, SYSTEM and the administrators; a Creator Owner ACE is
+# allowed only as inherit-only; any other allow ACE, read-only too, refuses.
+# A NULL DACL and an ACE of an unknown type refuse; deny ACEs take nothing
+# away from the criterion. A reparse point is never followed.
+def private_refusal(view, me, directory):
+    if view.reparse:
+        return "symlink"
+    if view.dacl is None or (directory and not view.protected):
+        return "open_to_others"
+    for kind, flags, mask, sid in view.dacl:
+        if kind == ACE_DENY:
+            continue
+        if kind != ACE_ALLOW:
+            return "open_to_others"
+        if sid in (me, SID_SYSTEM, SID_ADMINS):
+            continue
+        if sid == SID_CREATOR_OWNER and flags & ACE_INHERIT_ONLY:
+            continue
+        return "open_to_others"
+    return None
 
 
 def secdesc_map_generic(mask):
@@ -201,9 +232,14 @@ class WinSecurity(object):
         finally:
             self._k.LocalFree(sd)
 
-    # A handle of an existing file or directory for reading its security.
-    def open(self, path):
-        h = self._k.CreateFileW(path, 0x20080, 0x3, None, 3, 0x02200000, None)
+    # A handle of an existing file or directory: READ_CONTROL and
+    # FILE_READ_ATTRIBUTES, and GENERIC_READ when data is asked for; shared
+    # for reading and writing, not for deletion; a reparse point is opened
+    # itself, not followed (FILE_FLAG_OPEN_REPARSE_POINT), a directory too
+    # (FILE_FLAG_BACKUP_SEMANTICS).
+    def open(self, path, data=False):
+        access = 0x20080 | (0x80000000 if data else 0)
+        h = self._k.CreateFileW(path, access, 0x3, None, 3, 0x02200000, None)
         if h is None or h == ctypes.c_void_p(-1).value:
             self._fail("CreateFileW")
         return h
@@ -215,7 +251,8 @@ class WinSecurity(object):
         info = ctypes.create_string_buffer(52)
         if not self._k.GetFileInformationByHandle(h, info):
             self._fail("GetFileInformationByHandle")
-        reparse = bool(ctypes.c_uint32.from_buffer(info).value & 0x400)
+        attributes = ctypes.c_uint32.from_buffer(info).value
+        reparse = bool(attributes & FILE_ATTRIBUTE_REPARSE_POINT)
         buf = ctypes.create_unicode_buffer(32768)
         if not self._k.GetFinalPathNameByHandleW(h, buf, 32768, 0):
             self._fail("GetFinalPathNameByHandleW")
@@ -229,7 +266,7 @@ class WinSecurity(object):
             control = ctypes.c_uint16.from_address(sd.value + 2).value
             return SecView(reparse, self._sid(owner) if owner.value else None,
                            self._aces(dacl.value) if dacl.value else None, buf.value,
-                           bool(control & 0x1000))
+                           bool(control & 0x1000), attributes)
         finally:
             self._k.LocalFree(sd)
 
