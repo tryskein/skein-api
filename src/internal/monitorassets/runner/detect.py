@@ -120,15 +120,18 @@ class RegistryDetector(Detector):
 
     def host_messages(self, ctx):
         """The host messages of the environments without a channel whose
-        variables are set, in registry order: "<code>: <text>"."""
+        variables are set, in registry order: "<code>: <text>", each once
+        (an environment known by either of two variables has two entries
+        of one name)."""
         out = []
         for e in ctx.registry.doc.get("environments") or []:
             conds = e.get("detect") or {}
             if not conds.get("env") or not all(env_holds(c, ctx.env) for c in conds["env"]):
                 continue
             kind = HOST_MESSAGES.get(e.get("hostMessage"))
-            if kind is not None:
-                out.append("%s: %s" % (kind[0], kind[1] % (e.get("name") or e.get("id"))))
+            message = "%s: %s" % (kind[0], kind[1] % (e.get("name") or e.get("id"))) if kind else None
+            if message is not None and message not in out:
+                out.append(message)
         return out
 
     def blind_causes(self, ctx):
