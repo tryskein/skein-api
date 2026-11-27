@@ -59,6 +59,8 @@ class SystemProcesses(object):
         if sys.platform == "darwin":
             procargs = _darwin_procargs(pid)
             return None if procargs is None else procargs[1]
+        if os.name == "nt":
+            return _windows_argv(pid)
         return None
 
     @staticmethod
@@ -169,3 +171,57 @@ def _windows_executable(pid):
         return buf.value or None
     finally:
         k.CloseHandle(handle)
+
+
+def _windows_argv(pid):
+    """The argument list of a process on Windows: its command line by
+    NtQueryInformationProcess (ProcessCommandLineInformation, with
+    PROCESS_QUERY_LIMITED_INFORMATION), split by CommandLineToArgvW, the
+    rules of the C runtime. None when it cannot be read: a condition on
+    the arguments then does not hold, with that cause."""
+    try:
+        import ctypes
+        k = ctypes.WinDLL("kernel32", use_last_error=True)
+        nt = ctypes.WinDLL("ntdll")
+        sh = ctypes.WinDLL("shell32", use_last_error=True)
+        k.OpenProcess.argtypes = (ctypes.c_uint32, ctypes.c_int, ctypes.c_uint32)
+        k.OpenProcess.restype = ctypes.c_void_p
+        k.CloseHandle.argtypes = (ctypes.c_void_p,)
+        k.CloseHandle.restype = ctypes.c_int
+        k.LocalFree.argtypes = (ctypes.c_void_p,)
+        k.LocalFree.restype = ctypes.c_void_p
+        nt.NtQueryInformationProcess.argtypes = (ctypes.c_void_p, ctypes.c_int, ctypes.c_void_p, ctypes.c_uint32,
+                                                 ctypes.POINTER(ctypes.c_uint32))
+        nt.NtQueryInformationProcess.restype = ctypes.c_long
+        sh.CommandLineToArgvW.argtypes = (ctypes.c_wchar_p, ctypes.POINTER(ctypes.c_int))
+        sh.CommandLineToArgvW.restype = ctypes.POINTER(ctypes.c_wchar_p)
+    except (OSError, AttributeError):
+        return None
+    handle = k.OpenProcess(0x1000, 0, pid)
+    if not handle:
+        return None
+    try:
+        size = ctypes.c_uint32(0)
+        nt.NtQueryInformationProcess(handle, 60, None, 0, ctypes.byref(size))
+        if not size.value:
+            return None
+        buf = ctypes.create_string_buffer(size.value)
+        if nt.NtQueryInformationProcess(handle, 60, buf, size.value, ctypes.byref(size)) != 0:
+            return None
+        # UNICODE_STRING: Length (bytes), MaximumLength, then the pointer
+        # to the text, aligned to the pointer size.
+        length = ctypes.c_uint16.from_buffer(buf).value
+        text_ptr = ctypes.c_void_p.from_buffer(buf, ctypes.sizeof(ctypes.c_void_p)).value
+        if not text_ptr or not length:
+            return None
+        line = ctypes.wstring_at(text_ptr, length // 2)
+    finally:
+        k.CloseHandle(handle)
+    argc = ctypes.c_int(0)
+    argv = sh.CommandLineToArgvW(line, ctypes.byref(argc))
+    if not argv:
+        return None
+    try:
+        return [argv[i] for i in range(argc.value)]
+    finally:
+        k.LocalFree(ctypes.cast(argv, ctypes.c_void_p))

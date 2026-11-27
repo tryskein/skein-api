@@ -300,7 +300,7 @@ def channel_program(name, env, agent):
         path = home_path(name, env)
         return path if path is not None and program_found(path, env) else None
     executable = agent.executable if agent is not None else None
-    if (not os.path.isabs(name) and executable and _program_name(executable) == name
+    if (not os.path.isabs(name) and executable and _program_name(executable) == _program_name(name)
             and os.path.isfile(executable) and os.access(executable, os.X_OK)):
         return executable
     if os.name == "nt" and not os.path.isabs(name):
@@ -311,8 +311,9 @@ def channel_program(name, env, agent):
 
 
 def _program_name(path):
-    """The name a channel record gives the program at path: its base name,
-    on Windows without ".exe" and in any case."""
+    """The name of a program for comparing a path with a name of a channel
+    record: its base name, on Windows without ".exe" and in any case (codex,
+    codex.exe and CODEX.EXE are one program there)."""
     base = os.path.basename(path)
     if os.name == "nt":
         base = base.lower()

@@ -19,9 +19,12 @@ Standard library of Python 3.6 only.
 
 import json
 import os
+import shutil
 import stat
 import sys
+import tempfile
 import unittest
+from unittest import mock
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -289,6 +292,50 @@ class AgentExecutableTest(unittest.TestCase):
         line, env = self.preflight(world, other)
         self.assertEqual((line["method"], line["channel"]), ("journal", None))
         self.assertEqual(RUNNER.load_preflight(env["SKEIN_TOKEN_FILE"])["programs"], {})
+
+
+@unittest.skipUnless(sys.platform.startswith("linux"), "the POSIX pipeline")
+class WindowsProgramAndLimitTest(unittest.TestCase):
+    """Review findings (lines 10, 24) of wave 9. Windows runs the native
+    codex.exe (the agent's own first, as on POSIX), the npm shim codex.cmd
+    otherwise; the process of the record is codex or codex.exe. The text
+    keeps to the smallest limit of the platforms: a Windows command line of
+    32767 UTF-16 code units, whose quoting can double the quotes of the
+    text (subprocess.list2cmdline)."""
+
+    def test_the_agent_codex_exe_on_windows(self):
+        root = tempfile.mkdtemp(prefix="skein-codex-win-")
+        self.addCleanup(shutil.rmtree, root, True)
+        exe = os.path.join(root, "codex.exe")
+        with open(exe, "w") as fh:
+            fh.write("")
+        os.chmod(exe, stat.S_IRWXU)
+
+        class Agent(object):
+            executable = exe
+
+        channel = REG.channel("codex-queue")
+        with mock.patch.object(os, "name", "nt"):
+            self.assertEqual(RUNNER.channel_program("codex.exe", {"PATH": ""}, Agent()), exe)
+            self.assertEqual(RUNNER.channel_programs(channel, {"PATH": ""}, Agent()), {"codex": exe})
+        source = fake_proc.FakeProcesses()
+        source.add(ft.RUNNER_PID, ft.RUNNER_PID - 1, "python3", ft.RUNNER_PROC_ARGV)
+        source.add(ft.RUNNER_PID - 1, 1, "codex.exe", None)
+        pl = RUNNER.place(RUNNER.ancestry(source, ft.RUNNER_PID), REG, RUNNER.resolve_record(REG, "codex"),
+                          self_pid=ft.RUNNER_PID)
+        self.assertEqual(pl.agent.pid, ft.RUNNER_PID - 1)
+
+    def test_a_long_text_keeps_to_the_windows_command_line(self):
+        world = ft.World(self)
+        fake_codex(world, [{"exit": 0, "stdout": QUEUED_OUT}])
+        mon = world.monitor("tok", "codex", "codex", CODEX_THREAD_ID=THREAD, CODEX_HOME=codex_home(world))
+        mon.page([ft.note(1, preview='"quoted" ' * 4000)])
+        calls = codex_calls(world)
+        self.assertEqual(len(calls), 1)
+        text = calls[0]["argv"][4]
+        self.assertLessEqual(len(text.encode("utf-16-le")) // 2, 32767 // 2)
+        self.assertIn("deliveryCut=true", text)
+        self.assertEqual(mon.statuses(), [(1, "queued")])
 
 
 @unittest.skipUnless(sys.platform.startswith("linux"), "the POSIX preflight")
