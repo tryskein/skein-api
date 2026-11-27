@@ -7,9 +7,12 @@ service).
 
 The expected values come from anomalyco/opencode 2255b89, not from the
 record: POST /api/session/:sessionID/synthetic with {text, description,
-delivery}, 200 on success, 404 SessionNotFoundError, 409 ConflictError
-(packages/protocol/src/groups/session.ts, errors.ts); GET
-/api/session/:sessionID; the registration file
+delivery}, 200 on success with {data: Session.Inbox.Synthetic} (type
+synthetic, the sessionID it went to: packages/schema/src/session-inbox.ts),
+404 SessionNotFoundError, 409 ConflictError (packages/protocol/src/groups/
+session.ts, errors.ts); GET /api/session/:sessionID, 200 with {data:
+Session.Info} whose id is the session (packages/schema/src/session.ts);
+the registration file
 $XDG_STATE_HOME/opencode/service.json, else ~/.local/state/opencode/
 service.json, {url, pid, password?} with mode 0600 (packages/client/src/
 effect/service.ts, service-probe.ts#fallback); Basic user opencode
@@ -38,6 +41,10 @@ RUNNER = pm.RUNNER
 REG = pm.REG
 
 SESSION = "ses_01JD0000000000000000000000"
+# The receipt of a synthetic message (session-inbox.ts#Synthetic).
+RECEIPT = {"data": {"id": "msg_01JD0000000000000000000001", "sessionID": SESSION,
+                    "time": {"created": 1764230400000}, "type": "synthetic",
+                    "payload": {"text": "event"}, "delivery": "queue"}}
 PASSWORD = "0b4f2c9e"
 
 
@@ -81,6 +88,10 @@ class OpenCodeTest(unittest.TestCase):
         # a registration file others may read, is no known server either.
         for name, prepare in (("session not found", lambda: (self.register(), self.service.respond(
                                   [{"status": 404, "json": {"_tag": "SessionNotFoundError"}}]))),
+                              ("a 200 without the session", lambda: (self.register(), self.service.respond(
+                                  [{"status": 200, "json": {}}]))),
+                              ("a 200 of another session", lambda: (self.register(), self.service.respond(
+                                  [{"status": 200, "json": {"data": {"id": "ses_01JD0000000000000000000099"}}}]))),
                               ("no registration", lambda: None),
                               ("registration open to others", lambda: self.register(mode=0o644))):
             with self.subTest(case=name):
@@ -96,6 +107,7 @@ class OpenCodeTest(unittest.TestCase):
         self.register()
         spec = REG.channel("opencode-synthetic")["executor"]
         text = 'a "quote", a closing "} and\na new line -- --resume'
+        self.service.respond([{"status": 200, "json": RECEIPT}])
         result = RUNNER.HTTPExecutor(self.env, []).call(spec, text, 10)
         request = self.service.requests()[0]
         self.assertEqual((request["method"], request["path"]), ("POST", "/api/session/%s/synthetic" % SESSION))
@@ -104,14 +116,60 @@ class OpenCodeTest(unittest.TestCase):
         self.assertEqual((body["text"], body["delivery"]), (text, "queue"))
         self.assertEqual(request["headers"]["Authorization"],
                          "Basic " + base64.b64encode(("opencode:" + PASSWORD).encode()).decode())
-        self.assertEqual(RUNNER.classify_result(REG.channel("opencode-synthetic")["outcomes"], result)[0], "queued")
+        self.assertEqual(RUNNER.classify_result(REG.channel("opencode-synthetic")["outcomes"], result,
+                                                env=self.env)[0], "queued")
 
     def test_each_sign_gives_one_outcome(self):
+        # Only the success the source declares, a 200 with the receipt of
+        # this session's synthetic message, is queued; a 200 whose body is
+        # empty, broken or another item's is a damaged receipt: unknown.
+        # Statuses the source does not declare (201, 202, 204) are unknown.
         rows = REG.channel("opencode-synthetic")["outcomes"]
-        for status, outcome in ((200, "queued"), (404, "refused-before-send"), (409, "unknown"), (500, "unknown"),
-                                (401, "unknown")):
-            with self.subTest(status=status):
-                self.assertEqual(RUNNER.classify(rows, http_status=status)[0], outcome)
+        other = {"data": dict(RECEIPT["data"], sessionID="ses_01JD0000000000000000000099")}
+        for name, status, doc, outcome in (
+                ("the receipt", 200, RECEIPT, "queued"),
+                ("an empty body", 200, None, "unknown"),
+                ("an empty object", 200, {}, "unknown"),
+                ("no data", 200, {"ok": True}, "unknown"),
+                ("another session's item", 200, other, "unknown"),
+                ("a user item", 200, {"data": dict(RECEIPT["data"], type="user")}, "unknown"),
+                ("a session instead of an item", 200, {"data": {"id": SESSION}}, "unknown"),
+                ("201", 201, RECEIPT, "unknown"),
+                ("202", 202, RECEIPT, "unknown"),
+                ("204", 204, None, "unknown"),
+                ("not found", 404, {"_tag": "SessionNotFoundError"}, "refused-before-send"),
+                ("conflict", 409, {}, "unknown"),
+                ("server error", 500, {}, "unknown"),
+                ("unauthorized", 401, {}, "unknown")):
+            with self.subTest(case=name):
+                self.assertEqual(RUNNER.classify(rows, http_status=status, doc=doc, env=self.env)[0], outcome)
+
+    def test_the_driver_of_a_delivery_reads_the_receipt_of_its_session(self):
+        # The outcome of a transfer is classified with the environment of
+        # the call: the receipt names the session it went to.
+        self.register()
+        channel = REG.channel("opencode-synthetic")
+        driver = RUNNER.ArgvDriver(channel, RUNNER.ChannelExecutor(self.box.token, self.env, [pm.TOKEN],
+                                                                   None, REG))
+        guard = mock.Mock()
+        guard.call_timeout.return_value = 10
+        other = {"data": dict(RECEIPT["data"], sessionID="ses_01JD0000000000000000000099")}
+        for answer, outcome in ((RECEIPT, "queued"), (other, "unknown"), ({}, "unknown")):
+            with self.subTest(outcome=outcome, answer=answer):
+                self.service.respond([{"status": 200, "json": answer}])
+                self.assertEqual(driver.send("event", guard)[0], outcome)
+
+    def test_a_broken_or_cut_body_of_a_200_is_unknown(self):
+        self.register()
+        spec = REG.channel("opencode-synthetic")["executor"]
+        rows = REG.channel("opencode-synthetic")["outcomes"]
+        whole = json.dumps(RECEIPT).encode("utf-8")
+        for name, raw in (("broken", b"{\"data\": {\"type\": \"synthetic\","), ("empty", b""),
+                          ("not JSON", b"queued"), ("cut", whole[:len(whole) // 2])):
+            with self.subTest(case=name):
+                self.service.respond([{"status": 200, "raw": raw}])
+                result = RUNNER.HTTPExecutor(self.env, []).call(spec, "event", 10)
+                self.assertEqual(RUNNER.classify_result(rows, result, env=self.env)[0], "unknown")
 
     def test_the_check_before_a_send_finds_the_session(self):
         self.register()
@@ -123,9 +181,16 @@ class OpenCodeTest(unittest.TestCase):
         channel = REG.channel("opencode-synthetic")
         self.service.respond([{"status": 200, "json": {"data": {"id": SESSION}}}])
         RUNNER.DeliverySink.check_addressee(sink, channel)
-        self.service.respond([{"status": 404, "json": {}}])
-        with self.assertRaises(RUNNER.RefusedBeforeSend):
-            RUNNER.DeliverySink.check_addressee(sink, channel)
+        # Only a 200 that names this session is the same addressee: any
+        # other body is no session found.
+        for answer in ({"status": 404, "json": {}}, {"status": 200, "json": {}},
+                       {"status": 200, "raw": b""}, {"status": 200, "raw": b"{\"data\": "},
+                       {"status": 200, "json": {"data": {"id": "ses_01JD0000000000000000000099"}}},
+                       {"status": 204, "raw": b""}):
+            with self.subTest(answer=answer):
+                self.service.respond([answer])
+                with self.assertRaises(RUNNER.RefusedBeforeSend):
+                    RUNNER.DeliverySink.check_addressee(sink, channel)
 
     def test_no_opencode_process_runs_on_any_path(self):
         self.register()

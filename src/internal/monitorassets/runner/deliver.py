@@ -383,7 +383,7 @@ class ArgvDriver(object):
             result = self.executor.call(spec, text, guard.call_timeout())
         except ExecutorRefusal as exc:
             raise RefusedBeforeSend(exc.reason)
-        return classify_result(self.channel.get("outcomes"), result)
+        return classify_result(self.channel.get("outcomes"), result, env=getattr(self.executor, "env", None))
 
 
 class TwoStepDriver(object):
@@ -444,7 +444,7 @@ class TwoStepDriver(object):
                 first = self.executor.call(insert, text, guard.call_timeout())
             except ExecutorRefusal as exc:
                 raise RefusedBeforeSend(exc.reason)
-            outcome, sign = classify_result(self.insert.get("outcomes"), first)
+            outcome, sign = classify_result(self.insert.get("outcomes"), first, env=getattr(self.executor, "env", None))
             taken = outcome in (OUTCOME_INPUT_WRITTEN, OUTCOME_INPUT_NO_RECEIPT)
             if not taken or not self.commit:
                 if self.unstage and not taken and not self._unstage(name):
@@ -466,7 +466,8 @@ class TwoStepDriver(object):
             second = self._call(commit, self.commit.get("text", ""), guard, own=True)
         except (ExecutorRefusal, RefusedBeforeSend):
             return OUTCOME_UNKNOWN, {"commit": "notStarted"}
-        return classify_result(self.commit.get("outcomes"), second, written=True)
+        return classify_result(self.commit.get("outcomes"), second, written=True,
+                               env=getattr(self.executor, "env", None))
 
     def _unstage(self, name):
         """Remove what the stage left. True when the call says it did (exit

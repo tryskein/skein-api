@@ -129,7 +129,7 @@ class _Server(socketserver.ThreadingMixIn, http.server.HTTPServer):
 
 class FakeHTTPChannel(object):
     """The HTTP side of a channel on 127.0.0.1. respond() scripts the
-    answers like FakeProgram: {"status": int, "json": value, "headers":
+    answers like FakeProgram: {"status": int, "json": value, "raw": bytes, "headers":
     {..}, "delay": sec, "hang": bool, "dribble": sec}. "hang" holds the
     request until close(); "dribble" sends the head and then the body one
     byte per interval until close(). requests() returns what came in."""
@@ -176,7 +176,8 @@ class FakeHTTPChannel(object):
                     return
                 if answer.get("delay"):
                     time.sleep(answer["delay"])
-                data = json.dumps(answer.get("json", {})).encode("utf-8")
+                # "raw": the body as these bytes, not a JSON document.
+                data = answer["raw"] if "raw" in answer else json.dumps(answer.get("json", {})).encode("utf-8")
                 self.send_response(answer.get("status", 200))
                 for k, v in (answer.get("headers") or {}).items():
                     self.send_header(k, v)

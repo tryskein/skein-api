@@ -3439,7 +3439,7 @@
     {
       "id": "opencode-synthetic",
       "about": "OpenCode synthetic message: the own delivery of OpenCode, a message the model reads as user input put into the session by its id through the shared OpenCode service, found by the service's registration file; no CLI runs, so no service is started.",
-      "source": "github.com/anomalyco/opencode 2255b89 (2.4.1): packages/protocol/src/groups/session.ts (POST /api/session/:sessionID/synthetic, body text, description, delivery queue; starts the agent unless resume is false; GET /api/session/:sessionID retrieves a session), packages/protocol/src/errors.ts (SessionNotFoundError 404, ConflictError 409), packages/client/src/effect/service.ts#Info and #discover (the service publishes url, pid, version and an optional password in its registration file, mode 0600; discovery never starts the service) and packages/client/src/service-probe.ts#fallback ($XDG_STATE_HOME/opencode/service.json, else ~/.local/state/opencode/service.json), packages/cli/src/services/server-connection.ts (Basic user opencode; `opencode api` without --server starts the service, so it is not called), packages/core/src/tool/plugin/shell.ts (shell commands get OPENCODE_SESSION_ID). A TUI with --standalone or --server keeps its session on another server: the shared service does not find it, and the channel is unavailable.",
+      "source": "github.com/anomalyco/opencode 2255b89 (2.4.1): packages/protocol/src/groups/session.ts (POST /api/session/:sessionID/synthetic, body text, description, delivery queue; starts the agent unless resume is false; its one success is 200 {data: Session.Inbox.Synthetic}, packages/schema/src/session-inbox.ts#Synthetic: type synthetic and the sessionID it went to; GET /api/session/:sessionID retrieves a session: 200 {data: Session.Info} whose id is that session, packages/schema/src/session.ts#Info), packages/protocol/src/errors.ts (SessionNotFoundError 404, ConflictError 409), packages/client/src/effect/service.ts#Info and #discover (the service publishes url, pid, version and an optional password in its registration file, mode 0600; discovery never starts the service) and packages/client/src/service-probe.ts#fallback ($XDG_STATE_HOME/opencode/service.json, else ~/.local/state/opencode/service.json), packages/cli/src/services/server-connection.ts (Basic user opencode; `opencode api` without --server starts the service, so it is not called), packages/core/src/tool/plugin/shell.ts (shell commands get OPENCODE_SESSION_ID). A TUI with --standalone or --server keeps its session on another server: the shared service does not find it, and the channel is unavailable.",
       "step": 3,
       "order": 3,
       "kind": "addressed",
@@ -3479,7 +3479,11 @@
       "outcomes": [
         {
           "match": {
-            "httpStatus": 200
+            "httpStatus": 200,
+            "json": {
+              "data.type": "synthetic",
+              "data.sessionID": "{env:OPENCODE_SESSION_ID}"
+            }
           },
           "outcome": "queued"
         },
@@ -3498,7 +3502,10 @@
           "results": [
             {
               "match": {
-                "httpStatus": 200
+                "httpStatus": 200,
+                "json": {
+                  "data.id": "{env:OPENCODE_SESSION_ID}"
+                }
               },
               "result": "available"
             }
@@ -3512,7 +3519,10 @@
           "results": [
             {
               "match": {
-                "httpStatus": 200
+                "httpStatus": 200,
+                "json": {
+                  "data.id": "{env:OPENCODE_SESSION_ID}"
+                }
               },
               "result": "same"
             }
