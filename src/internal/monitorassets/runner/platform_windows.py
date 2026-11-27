@@ -76,9 +76,14 @@ def _win_view(handle, path):
 
 
 def _win_check(view, path, directory):
-    """Refuse a view that fails criterion (a) or is of the wrong kind."""
+    """Refuse a view that fails criterion (a) or is of the wrong kind, or
+    whose final path is not the path opened: a junction or a link on a
+    component above it led elsewhere (the reparse check sees only the last
+    component)."""
     _, me = _win_security()
     if view.reparse:
+        raise PlatformRefusal("symlink", path)
+    if view.final and _norm_path(view.final) != _norm_path(os.path.abspath(path)):
         raise PlatformRefusal("symlink", path)
     is_dir = bool(view.attributes & FILE_ATTRIBUTE_DIRECTORY)
     if directory and not is_dir:

@@ -197,6 +197,24 @@ class PrivateCriterionTest(unittest.TestCase):
                         RUNNER.WindowsPlatform.read_token(world.token)
                 self.assertEqual(ctx.exception.reason, "open_to_others")
 
+    def test_a_path_that_resolves_elsewhere_is_refused(self):
+        # A junction on a component above the file: the reparse check of the
+        # last component does not see it, the final path of the handle does.
+        for target in ("token", "directory"):
+            with self.subTest(target=target):
+                world = WindowsWorld(self)
+                elsewhere = os.path.join(self.id().replace(".", "_"), "elsewhere")
+                if target == "token":
+                    world.fake.views[world.token] = fs.View(owner=ME, dacl=private_file_view().dacl,
+                                                            final=os.path.join("/elsewhere", "token"))
+                else:
+                    world.fake.views[world.token_dir] = fs.View(owner=ME, dacl=fs.private_dacl(), protected=True,
+                                                                final="/elsewhere/" + elsewhere)
+                with world.active(RUNNER.__dict__):
+                    with self.assertRaises(RUNNER.PlatformRefusal) as ctx:
+                        RUNNER.WindowsPlatform.read_token(world.token)
+                self.assertEqual(ctx.exception.reason, "symlink")
+
     def test_an_unreadable_descriptor_of_the_open_file_refuses(self):
         world = WindowsWorld(self, fail_view=[os.path.join(tempfile.gettempdir(), "never")])
         world.fake.fail_view = {world.token}
