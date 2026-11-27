@@ -227,6 +227,13 @@ class Decision(object):
         self.wait_until = None
 
 
+# The mark an attempt writes into its own lock file when the ledger refused
+# the withdrawal of a reservation that made no call (or ended refused before
+# send): the monitor that recovers the record frees it instead of turning it
+# into "unknown" - nothing reached the addressee.
+WITHDRAWN_MARK = b"withdrawn\n"
+
+
 class Attempt(object):
     """A published attempt: its key, the events it carries, the channel, and
     the calls already made for these events on this channel (prior budget).
@@ -328,9 +335,33 @@ class Attempt(object):
                     # This attempt's window is set anew (a series that ended
                     # with it shortens it); another's is only lengthened.
                     entry["window"] = {"until": until}
-        self.ledger._change(change)
+        try:
+            self.ledger._change(change)
+        except LedgerUnavailable:
+            if outcome == OUTCOME_REFUSED:
+                # Refused before send: nothing was handed over.
+                self._mark_withdrawn()
+            raise
         self.settled = True
         return result.get("burst", False)
+
+    def _mark_withdrawn(self):
+        """Write WITHDRAWN_MARK into the attempt's lock file through the
+        descriptor this process holds (the directory need not take a
+        write); quiet when even that fails - the record is then recovered
+        as unknown."""
+        lock = self._lock
+        if lock is None or lock.fd is None:
+            return
+        try:
+            os.ftruncate(lock.fd, 0)
+            os.pwrite(lock.fd, WITHDRAWN_MARK, 0)
+            os.fsync(lock.fd)
+        except OSError:
+            return
+        # The file must outlive this process: the monitor that recovers the
+        # record reads the mark and removes the file.
+        self._keep_file = True
 
     def abandon(self):
         """Withdraw a published attempt that made no call (a retry not due
@@ -346,15 +377,28 @@ class Attempt(object):
             window = entry.get("window") or {}
             if window.get("attempt") == self.key:
                 entry["window"] = {"until": window.get("prev", 0)}
-        self.ledger._change(change)
+        try:
+            self.ledger._change(change)
+        except LedgerUnavailable:
+            self._mark_withdrawn()
+            raise
         self.settled = True
 
     def release(self):
         """Release the attempt lock and remove its file (step 6)."""
         lock, self._lock = self._lock, None
         if lock is not None:
-            _remove_quietly(lock.path)
+            if not getattr(self, "_keep_file", False):
+                _remove_quietly(lock.path)
             lock.release()
+
+
+def _withdrawn(lock):
+    """Whether the attempt lock file holds WITHDRAWN_MARK."""
+    try:
+        return os.pread(lock.fd, len(WITHDRAWN_MARK) + 1, 0) == WITHDRAWN_MARK
+    except OSError:
+        return False
 
 
 def _budgets(mine):
@@ -631,6 +675,10 @@ class Ledger(object):
             # its key (we hold ledger.lock, so no one changes it now).
             rec.pop("delivering")
             rec["at"] = now
+            if other is not None and _withdrawn(other):
+                # The owner withdrew it without a call but could not write
+                # that down: the event has no outcome and is delivered anew.
+                return True
             rec["addressee"] = {"outcome": OUTCOME_UNKNOWN, "monitor": self.monitor,
                                 "channel": d.get("channel"), "at": now, "recovered": True}
         finally:
