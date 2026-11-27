@@ -247,8 +247,11 @@ class AgentDeckRecordTest(HostCase):
         mon = self.mon()
         self.cli.respond(session_current=[deck_current(session_id="deck-other")])
         mon.page([ft.note(1)])
+        # Another current session is another addressee (review of wave 12,
+        # round 2, warning 10): nothing is sent, the monitor keeps the journal.
         self.assertEqual(self.cli.calls("session send"), [])
-        self.assertEqual(mon.statuses(), [(1, "refused-before-send")])
+        self.assertEqual(mon.statuses(), [(1, "unknown")])
+        self.assertEqual(len([l for l in mon.lines() if l.get("cause") == "addressee_changed"]), 1)
 
     def test_a_session_recreated_under_the_same_id_gets_the_event(self):
         # SC-002: the channel does not tell the new session apart; it stays
@@ -325,11 +328,19 @@ class T3CodeRecordTest(HostCase):
 
     def test_the_check_before_each_send_is_the_thread_show(self):
         # thread show must name the very thread the send addresses
-        # (thread.threadId): another thread proves nothing, nothing is sent.
+        # (thread.threadId): another thread is another addressee, nothing is
+        # sent; an answer without the thread proves nothing.
         self.fresh()
         mon = self.mon()
         self.cli.respond(thread_show=[out(stdout={"thread": {"threadId": "thread-other"}})])
         mon.page([ft.note(1)])
+        self.assertEqual(self.cli.calls("thread send"), [])
+        self.assertEqual(mon.statuses(), [(1, "unknown")])
+        self.assertEqual(len([l for l in mon.lines() if l.get("cause") == "addressee_changed"]), 1)
+        self.fresh()
+        mon = self.mon()
+        self.cli.respond(thread_show=[out(stdout={"messages": []})])
+        mon.page([ft.note(1)], cursor={"ts": "t", "id": 2})
         self.assertEqual(self.cli.calls("thread send"), [])
         self.assertEqual(mon.statuses(), [(1, "refused-before-send")])
 
@@ -339,7 +350,7 @@ class T3CodeRecordTest(HostCase):
         line = self.mon().line
         self.assertEqual((line["method"], line["channel"]), ("journal", None))
         self.assertEqual(self.cli.calls("thread send"), [])
-        self.assertTrue(all(c["argv"] == ["thread", "show", THREAD, "--messages", "1", "--json"]
+        self.assertTrue(all(c["argv"] == ["thread", "show", THREAD, "--messages", "0", "--json"]
                             for c in self.cli.calls("thread show")))
 
 
@@ -416,7 +427,8 @@ class SculptorRecordTest(HostCase):
         self.cli.respond(agent_status=[out(stdout={"id": "agent-other"})])
         mon.page([ft.note(1)])
         self.assertEqual(self.cli.calls("agent send"), [])
-        self.assertEqual(mon.statuses(), [(1, "refused-before-send")])
+        self.assertEqual(mon.statuses(), [(1, "unknown")])
+        self.assertEqual(len([l for l in mon.lines() if l.get("cause") == "addressee_changed"]), 1)
         self.fresh()
         mon = self.mon()
         self.cli.respond(agent_status=[sculpt_error("Agent not found: %s" % SCULPT_ID)])

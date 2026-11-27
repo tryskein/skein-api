@@ -124,8 +124,11 @@ class AgentOrchestratorRecordTest(ah.HostCase):
         mon = self.mon()
         self.cli.respond(session_get=[out(stdout={"session": {"id": "ao-other", "isTerminated": False}})])
         mon.page([ft.note(1)])
+        # Another session is another addressee; a terminated one is a
+        # refusal before send.
         self.assertEqual(self.cli.calls("send"), [])
-        self.assertEqual(mon.statuses(), [(1, "refused-before-send")])
+        self.assertEqual(mon.statuses(), [(1, "unknown")])
+        self.assertEqual(len([l for l in mon.lines() if l.get("cause") == "addressee_changed"]), 1)
         self.fresh()
         mon = self.mon()
         self.cli.respond(session_get=[out(stdout={"session": {"id": AO_SESSION, "isTerminated": True}})])
