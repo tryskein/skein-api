@@ -251,16 +251,26 @@ class OpenCodeTest(unittest.TestCase):
         self.assertEqual(RUNNER.load_preflight(self.box.token)["endpoints"],
                          {"opencode-synthetic": self.service.url})
 
-    def test_another_end_than_the_preflight_s_is_another_addressee(self):
+    def test_another_end_than_the_preflight_s_is_a_refusal_before_send(self):
         # The service registered again elsewhere between the preflight and
-        # the attempt: nothing goes there.
+        # the attempt: nothing goes there. The addressee is the session, and
+        # the channel tells no other incarnation of it by its end (spec,
+        # "Addressee and check", item 4: an addressed channel's addressee
+        # changes only when the channel says so; review round 2 of wave 14,
+        # row 9): a refusal before send, the next attempt reads the file
+        # again and goes to the end the preflight saw once it is back.
         other = fake_channel.FakeHTTPChannel()
         self.addCleanup(other.close)
         self.register({"url": other.url, "pid": 4243, "password": "c0ffee11"})
         other.respond([{"status": 200, "json": SESSION_INFO}])
-        with self.assertRaises(RUNNER.AddresseeChanged):
-            RUNNER.DeliverySink.check_addressee(self.sink(), REG.channel("opencode-synthetic"))
+        sink = self.sink()
+        with self.assertRaises(RUNNER.RefusedBeforeSend):
+            RUNNER.DeliverySink.check_addressee(sink, REG.channel("opencode-synthetic"))
         self.assertEqual(other.requests(), [])
+        self.register()
+        self.service.respond([{"status": 200, "json": SESSION_INFO}])
+        RUNNER.DeliverySink.check_addressee(sink, REG.channel("opencode-synthetic"))
+        self.assertEqual([r["method"] for r in self.service.requests()], ["GET"])
 
     def test_the_check_and_the_request_of_an_attempt_go_to_one_end(self):
         # One read of the registration file per attempt: a registration

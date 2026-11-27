@@ -642,8 +642,11 @@ class DeliverySink(object):
         addressee the preflight saw (value and qualifiers) - and the
         record's own check where it has one, run within timeout. An http
         channel with an endpoint file reads it once per attempt (kept on
-        guard): an end other than the preflight's is another addressee,
-        and the check and the request of the attempt go to that one end."""
+        guard), and the check and the request of the attempt go to that one
+        end. An end other than the preflight's is a refusal before send, not
+        another addressee: the addressee is the session the channel names,
+        and the channel tells no other incarnation of it by its end; the
+        next attempt reads the file again."""
         http = (channel.get("executor") or {}).get("http") or {}
         endpoint = None
         if http.get("endpointFile"):
@@ -662,7 +665,7 @@ class DeliverySink(object):
                     if not hasattr(self.executor.secrets, "listen"):
                         self.journal.add_secret(endpoint[2])
             if ((self.doc or {}).get("endpoints") or {}).get(channel.get("id")) != endpoint[0]:
-                raise AddresseeChanged()
+                raise RefusedBeforeSend("the service is registered at another end than the preflight's")
         for a in self.identity.get("addresses") or []:
             if a.get("channel") != channel.get("id"):
                 continue
