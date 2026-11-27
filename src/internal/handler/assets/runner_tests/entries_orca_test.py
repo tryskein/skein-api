@@ -509,7 +509,8 @@ class OrcaRecordTest(unittest.TestCase):
                 removed.append(argv[0])
             return result
         with mock.patch.object(RUNNER, "run_program", remove_after_the_probe):
-            mon = self.mon("tok", PATH="bin" + os.pathsep + decoy_dir + os.pathsep + os.environ.get("PATH", os.defpath))
+            mon = self.mon("tok", PATH=self.world.bin + os.pathsep + decoy_dir + os.pathsep +
+                           os.environ.get("PATH", os.defpath))
         self.assertEqual(removed, [self.orca.path])
         self.assertNotEqual(mon.doc["channel"], "orca")
         self.assertNotIn(decoy.path, (mon.doc.get("programs") or {}).values())
