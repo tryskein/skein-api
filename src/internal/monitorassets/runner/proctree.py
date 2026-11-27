@@ -93,9 +93,32 @@ def ancestry(source, pid):
         info = source.info(pid)
         if info is None:
             break
+        if chain and _started_after(info.start, chain[-1].info.start):
+            # Created after its "child": the parent of the child ended and
+            # its PID went to another process (Windows keeps the ppid of a
+            # dead parent). The chain ends at the child.
+            break
         chain.append(Proc(info, source.argv(pid), source.executable(pid)))
         pid = info.ppid
     return chain
+
+
+def _start_key(start):
+    """(clock, value) of a start as ProcessInfo gives it, comparable within
+    one clock: "win:<FILETIME>" on Windows, "<boot id>:<ticks>" on Linux;
+    None for a form without an order here (macOS lstart)."""
+    if not isinstance(start, str):
+        return None
+    clock, sep, value = start.rpartition(":")
+    if not sep or not value.isdigit():
+        return None
+    return clock, int(value)
+
+
+def _started_after(parent, child):
+    """Whether the start parent is known to be later than the start child."""
+    p, c = _start_key(parent), _start_key(child)
+    return p is not None and c is not None and p[0] == c[0] and p[1] > c[1]
 
 
 def _linux_argv(pid):

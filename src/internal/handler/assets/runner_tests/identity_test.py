@@ -229,6 +229,25 @@ class AncestryTest(unittest.TestCase):
         source.end(11)
         self.assertEqual([p.pid for p in RUNNER.ancestry(source, 10)], [10])
 
+    def test_a_parent_created_after_its_child_ends_the_chain(self):
+        # The parent of 11 ended and its PID went to a newer process: on
+        # Windows the ppid of a dead parent stays.
+        for clock in ("win", "3f2c9a1e-boot"):
+            with self.subTest(clock=clock):
+                source = fake_proc.FakeProcesses()
+                source.add(10, 11, "python3", start="%s:300" % clock)
+                source.add(11, 12, "bash", start="%s:200" % clock)
+                source.add(12, 13, "alpha", start="%s:500" % clock)
+                source.add(13, 1, "explorer", start="%s:100" % clock)
+                self.assertEqual([p.pid for p in RUNNER.ancestry(source, 10)], [10, 11])
+
+    def test_starts_of_different_clocks_or_forms_are_not_ordered(self):
+        source = fake_proc.FakeProcesses()
+        source.add(10, 11, "python3", start="boot-a:300")
+        source.add(11, 12, "bash", start="boot-b:900")
+        source.add(12, 1, "alpha", start="Thu Nov 27 05:00:00 2026")
+        self.assertEqual([p.pid for p in RUNNER.ancestry(source, 10)], [10, 11, 12])
+
 
 if __name__ == "__main__":
     unittest.main()
