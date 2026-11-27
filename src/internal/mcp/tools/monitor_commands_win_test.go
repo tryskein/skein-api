@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -42,6 +43,30 @@ func needPython(t *testing.T) {
 	t.Helper()
 	if _, err := exec.LookPath("python3"); err != nil {
 		t.Skip("python3 not available")
+	}
+}
+
+// prepareMinPython is the lowest Python the Windows prepare runs on
+// (assets/monitor_prepare_windows.py).
+var prepareMinPython = [3]int{3, 12, 4}
+
+// prepareVersionFixture is Python run before the prepare code that makes it
+// see the lowest version it accepts.
+var prepareVersionFixture = fmt.Sprintf("import sys\nsys.version_info = (%d, %d, %d, 'final', 0)\n",
+	prepareMinPython[0], prepareMinPython[1], prepareMinPython[2])
+
+// needPrepareVersion skips a case that runs prepare on the real interpreter
+// without a version fixture (the Git Bash form takes no code before it)
+// when that interpreter is below the prepare minimum.
+func needPrepareVersion(t *testing.T) {
+	t.Helper()
+	needPython(t)
+	out, err := exec.Command("python3", "-c",
+		fmt.Sprintf("import sys; print(sys.version_info >= (%d, %d, %d))",
+			prepareMinPython[0], prepareMinPython[1], prepareMinPython[2])).Output()
+	if err != nil || strings.TrimSpace(string(out)) != "True" {
+		t.Skipf("python3 below %d.%d.%d: the Git Bash prepare runs on the real interpreter",
+			prepareMinPython[0], prepareMinPython[1], prepareMinPython[2])
 	}
 }
 
@@ -174,7 +199,14 @@ func TestWindowsCommands_PrepareHandsTheStarterOn(t *testing.T) {
 		t.Run(sh.shell, func(t *testing.T) {
 			cmds := buildWindowsClientCommands(winCommandInput(srv.URL, hex.EncodeToString(sum[:])), sh.shell)
 			outFile := filepath.Join(t.TempDir(), "handed")
-			stdout := runPrepare(t, sh.shell, cmds.prepare, []string{"OUT=" + outFile}, "")
+			// The lowest accepted version: by a fixture on the standard
+			// input, or the real interpreter for Git Bash.
+			pre := prepareVersionFixture
+			if sh.shell == monitorregistry.WindowsShellGitBash {
+				needPrepareVersion(t)
+				pre = ""
+			}
+			stdout := runPrepare(t, sh.shell, cmds.prepare, []string{"OUT=" + outFile}, pre)
 			if strings.TrimSpace(stdout) != `{"event":"prepare_ready"}` {
 				t.Fatalf("prepare printed %q", stdout)
 			}
