@@ -356,7 +356,8 @@ class PreflightLineTest(unittest.TestCase):
                          os.path.join(self.box.state_home, "skein-monitor", "journal"))
         variables = ("SKEIN_PUBLIC_URL='http://127.0.0.1:9' SKEIN_ISSUE='zz-77' SKEIN_TOKEN_FILE='%s' "
                      "SKEIN_EXCLUDE_SESSION='sess-1' SKEIN_RUNNER_SHA256='%s' SKEIN_LOADER_SHA256='%s' "
-                     "SKEIN_CLIENT='alpha' SKEIN_PLATFORM='posix' python3 '%s'"
+                     "SKEIN_CLIENT='alpha' SKEIN_PLATFORM='posix' SKEIN_SUBTREE='' SKEIN_EVENT_TYPES='' "
+                     "python3 '%s'"
                      % (self.box.token, "ab" * 32, "cd" * 32, os.path.join(self.box.token_dir, "starter.py")))
         self.assertEqual(line["command"],
                          "SKEIN_MONITOR_MODE=run SKEIN_MONITOR_PREFLIGHT=1 SKEIN_MONITOR_CHANNEL='journal' "
