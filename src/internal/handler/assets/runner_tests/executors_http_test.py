@@ -616,7 +616,7 @@ class ProxyTest(unittest.TestCase):
     def test_the_tunnel_names_the_host_and_carries_the_proxy_credentials(self):
         world = World(self)
         port, heads = self.proxy(b"HTTP/1.1 407 Proxy Authentication Required\r\n\r\n")
-        env = dict(world.env, HOST_URL="https://api.host.test", https_proxy="http://u%40x:p@127.0.0.1:%d" % port)
+        env = dict(world.env, HOST_URL="https://api.host.test", https_proxy="http://u%%40x:p@127.0.0.1:%d" % port)
         del env["no_proxy"]
         with self.assertRaises(world.runner.ExecutorRefusal):
             world.runner.HTTPExecutor(env, []).call(http_channel()["executor"], "hello", 2)

@@ -1471,7 +1471,11 @@ class HTTPExecutor(object):
                 raise _NotReached(type(exc).__name__)
             sock.settimeout(max(transfer.left(), 0.001))
             conn.request(method, path, body=body, headers=headers)
-            resp = conn.getresponse()
+            # The answer is read on this socket, which only this thread
+            # closes (the connection's own getresponse would close it on an
+            # answer that ends the connection, before its body is read).
+            resp = http.client.HTTPResponse(sock, method=method)
+            resp.begin()
             raw = b""
             while len(raw) <= OUTPUT_CAP_BYTES:
                 left = transfer.left()
