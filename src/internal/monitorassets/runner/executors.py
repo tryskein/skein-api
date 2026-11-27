@@ -332,6 +332,18 @@ def run_program(argv, env, stdin_data, timeout_sec, secrets=()):
     return _run_threads(argv, env, stdin_data, timeout_sec)
 
 
+def _ended_unreaped(proc):
+    """Whether the program has ended, leaving it unreaped where the system
+    allows it (waitid with WNOWAIT): its pid, the id of its group, cannot
+    be reused before the group is killed in the clean-up."""
+    if hasattr(os, "waitid") and hasattr(os, "WNOWAIT"):
+        try:
+            return os.waitid(os.P_PID, proc.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT) is not None
+        except ChildProcessError:
+            pass
+    return proc.poll() is not None
+
+
 def _kill_group(pgid):
     try:
         os.killpg(pgid, signal.SIGKILL)
@@ -369,7 +381,7 @@ def _run_posix(argv, env, stdin_data, timeout_sec):
         deadline = time.monotonic() + max(timeout_sec, 0)
         while True:
             now = time.monotonic()
-            if ended_at is None and proc.poll() is not None:
+            if ended_at is None and _ended_unreaped(proc):
                 ended_at = now
             if ended_at is None and now >= deadline:
                 timed_out = True
