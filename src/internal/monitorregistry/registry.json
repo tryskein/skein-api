@@ -1139,7 +1139,7 @@
             }
           ]
         },
-        "limitation": "An agent id is a UUID the daemon gives; the source does not say whether a session recreated under the same id is told apart."
+        "limitation": "An agent id is a UUID the daemon gives; the source does not say whether a session recreated under the same id is told apart. The daemon is known by its title Paseo Daemon (packages/server/src/server/daemon-worker.ts: process.title), which Linux shows as the process name; on Windows the process list gives the image name (node.exe or the app's executable) and on macOS the executable, not the title, and the daemon's arguments hold the path of daemon-worker.js only where it is installed (packages/server/scripts/supervisor-entrypoint.ts#resolveWorkerEntry): there an agent Paseo launched is not told from one in a terminal, and it keeps its own methods."
       },
       "binaries": {
         "linux": [
