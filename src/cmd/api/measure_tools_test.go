@@ -591,7 +591,108 @@ func measureMonitorRealRegistry(m *respMeasurer, pool *pgxpool.Pool, ctx context
 	t := m.t
 	t.Helper()
 	reg := monitorregistry.MustEmbedded()
-	s := server.NewMCPServer("measure-real", "0.1.0", server.WithToolCapabilities(false))
+	onReal := &respMeasurer{t: t, ctx: ctx, c: measureMonitorClient(t, ctx, pool, "measure-real", reg)}
+	largest := onReal.call("skein_get_monitor_script.client_general_real_posix",
+		"skein_get_monitor_script", map[string]any{"id": issueID, "client": "measure-unknown-agent"})
+	// The windows - posix growth of each record's response, by the shell its
+	// Windows commands are written for (SC-009).
+	growth := map[string][2]int{}
+	measureWindows := func(label, client, shell, posix string) {
+		resp := onReal.call("skein_get_monitor_script.client_"+label+"_windows", "skein_get_monitor_script",
+			map[string]any{"id": issueID, "client": client, "platform": "windows", "tokenDir": measureMonitorTokenDir})
+		d := [2]int{len(resp) - len(posix), utf8.RuneCountInString(resp) - utf8.RuneCountInString(posix)}
+		if old, ok := growth[shell]; !ok || d[0] > old[0] {
+			growth[shell] = d
+		}
+	}
+	// The general record runs Windows PowerShell.
+	measureWindows("general_real", "measure-unknown-agent", monitorregistry.WindowsShellPowerShell, largest)
+	for _, id := range reg.AgentIDs() {
+		resp := onReal.call("skein_get_monitor_script.client_"+id+"_posix",
+			"skein_get_monitor_script", map[string]any{"id": issueID, "client": id})
+		shell := reg.Resolve(id).WindowsShell()
+		if shell == "" {
+			shell = monitorregistry.WindowsShellPowerShell
+		}
+		measureWindows(id, id, shell, resp)
+		if len(resp) > len(largest) {
+			largest = resp
+		}
+	}
+	m.totalBytes += onReal.totalBytes
+	m.rows += onReal.rows
+	// No record of the registry names pwsh: its commands are measured on a
+	// copy of the registry with one more record that does, so the pwsh row
+	// is a response built by the pwsh rules, not a relabelled one.
+	onPwsh := &respMeasurer{t: t, ctx: ctx, c: measureMonitorClient(t, ctx, pool, "measure-pwsh", measurePwshRegistry(t))}
+	posixPwsh := onPwsh.call("skein_get_monitor_script.client_"+measurePwshRecord+"_posix",
+		"skein_get_monitor_script", map[string]any{"id": issueID, "client": measurePwshRecord})
+	respPwsh := onPwsh.call("skein_get_monitor_script.client_"+measurePwshRecord+"_windows", "skein_get_monitor_script",
+		map[string]any{"id": issueID, "client": measurePwshRecord, "platform": "windows", "tokenDir": measureMonitorTokenDir})
+	growth[monitorregistry.WindowsShellPwsh] = [2]int{len(respPwsh) - len(posixPwsh),
+		utf8.RuneCountInString(respPwsh) - utf8.RuneCountInString(posixPwsh)}
+	m.totalBytes += onPwsh.totalBytes
+	m.rows += onPwsh.rows
+	m.part("skein_get_monitor_script.client_posix_max", largest)
+	for _, sh := range []struct{ shell, label string }{
+		{monitorregistry.WindowsShellGitBash, "gitbash"},
+		{monitorregistry.WindowsShellPwsh, "pwsh"},
+		{monitorregistry.WindowsShellPowerShell, "powershell"},
+	} {
+		d, ok := growth[sh.shell]
+		if !ok {
+			t.Fatalf("no record of the real registry or general record runs %s", sh.shell)
+		}
+		m.figure("skein_get_monitor_script.windows_"+sh.label+"_delta_max", d[0], d[1])
+	}
+}
+
+// measurePwshRecord is the record the pwsh rows are measured on: a copy of
+// the general-purpose Claude record of the real registry that names pwsh.
+const measurePwshRecord = "measure-pwsh"
+
+// measurePwshRegistry is the real registry with measurePwshRecord added.
+func measurePwshRegistry(t *testing.T) *monitorregistry.Registry {
+	t.Helper()
+	var doc map[string]any
+	if err := json.Unmarshal(monitorregistry.Embedded(), &doc); err != nil {
+		t.Fatalf("embedded registry: %v", err)
+	}
+	agents, _ := doc["agents"].([]any)
+	var claude map[string]any
+	for _, a := range agents {
+		if rec, ok := a.(map[string]any); ok && rec["id"] == "claude" {
+			claude = rec
+		}
+	}
+	if claude == nil {
+		t.Fatal("the real registry has no claude record to copy")
+	}
+	rec := map[string]any{}
+	for k, v := range claude {
+		rec[k] = v
+	}
+	rec["id"] = measurePwshRecord
+	rec["windowsShell"] = monitorregistry.WindowsShellPwsh
+	rec["process"] = map[string]any{"executables": []any{measurePwshRecord}}
+	doc["agents"] = append(agents, rec)
+	raw, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	reg, err := monitorregistry.Load(raw)
+	if err != nil {
+		t.Fatalf("the registry with a pwsh record: %v", err)
+	}
+	return reg
+}
+
+// measureMonitorClient is an in-process MCP client of a server that has
+// skein_get_monitor_script over reg.
+func measureMonitorClient(t *testing.T, ctx context.Context, pool *pgxpool.Pool, name string,
+	reg *monitorregistry.Registry) *client.Client {
+	t.Helper()
+	s := server.NewMCPServer(name, "0.1.0", server.WithToolCapabilities(false))
 	mcptools.RegisterGetMonitorScript(s, pool, notifications.NewStore(pool),
 		monitorcreds.New(pool, measureMonitorIdleTTL), reg, measureMonitorPublicURL,
 		measureMonitorRunnerSHA256, measureMonitorLoaderSHA256, measureMonitorIdleTTL)
@@ -609,51 +710,7 @@ func measureMonitorRealRegistry(m *respMeasurer, pool *pgxpool.Pool, ctx context
 	if _, err := c.Initialize(ctx, initReq); err != nil {
 		t.Fatalf("initialize: %v", err)
 	}
-	onReal := &respMeasurer{t: t, ctx: ctx, c: c}
-	largest := onReal.call("skein_get_monitor_script.client_general_real_posix",
-		"skein_get_monitor_script", map[string]any{"id": issueID, "client": "measure-unknown-agent"})
-	// The windows - posix growth of each record's response, by the shell its
-	// Windows commands are written for (SC-009).
-	growth := map[string][2]int{}
-	measureWindows := func(label, client, shell, posix string) {
-		resp := onReal.call("skein_get_monitor_script.client_"+label+"_windows", "skein_get_monitor_script",
-			map[string]any{"id": issueID, "client": client, "platform": "windows", "tokenDir": measureMonitorTokenDir})
-		d := [2]int{len(resp) - len(posix), utf8.RuneCountInString(resp) - utf8.RuneCountInString(posix)}
-		if old, ok := growth[shell]; !ok || d[0] > old[0] {
-			growth[shell] = d
-		}
-	}
-	// The general record runs Windows PowerShell; pwsh takes the same
-	// commands, so it stands for pwsh as well (no record of the registry
-	// may name pwsh yet).
-	measureWindows("general_real", "measure-unknown-agent", monitorregistry.WindowsShellPowerShell, largest)
-	measureWindows("general_real_pwsh", "measure-unknown-agent", monitorregistry.WindowsShellPwsh, largest)
-	for _, id := range reg.AgentIDs() {
-		resp := onReal.call("skein_get_monitor_script.client_"+id+"_posix",
-			"skein_get_monitor_script", map[string]any{"id": issueID, "client": id})
-		shell := reg.Resolve(id).WindowsShell()
-		if shell == "" {
-			shell = monitorregistry.WindowsShellPowerShell
-		}
-		measureWindows(id, id, shell, resp)
-		if len(resp) > len(largest) {
-			largest = resp
-		}
-	}
-	m.totalBytes += onReal.totalBytes
-	m.rows += onReal.rows
-	m.part("skein_get_monitor_script.client_posix_max", largest)
-	for _, sh := range []struct{ shell, label string }{
-		{monitorregistry.WindowsShellGitBash, "gitbash"},
-		{monitorregistry.WindowsShellPwsh, "pwsh"},
-		{monitorregistry.WindowsShellPowerShell, "powershell"},
-	} {
-		d, ok := growth[sh.shell]
-		if !ok {
-			t.Fatalf("no record of the real registry or general record runs %s", sh.shell)
-		}
-		m.figure("skein_get_monitor_script.windows_"+sh.label+"_delta_max", d[0], d[1])
-	}
+	return c
 }
 
 // measureMonitorTokenDir is the tokenDir of the Windows rows: one fixed

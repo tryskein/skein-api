@@ -33,8 +33,9 @@
 #                windows_pwsh_delta_max and windows_powershell_delta_max (the
 #                largest windows - posix growth of one record's response with
 #                client, over every record whose commands are written for
-#                that shell and the general record, which stands for pwsh as
-#                well: both PowerShell shells take the same commands)
+#                that shell, the general record for powershell; no record of
+#                the registry names pwsh, so its row is measured on a copy of
+#                the registry with one record that does)
 # Rows of SC-009 and SC-012 their owner tasks have not filled yet are listed
 # as skipped TAP points "awaiting <task>" (see `pending` below): the run
 # names them, and a green run does not read as covering them. A task that
