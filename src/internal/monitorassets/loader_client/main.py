@@ -28,7 +28,6 @@
 # fate.
 
 import hashlib
-import ntpath
 import traceback
 import os
 import signal
@@ -313,7 +312,7 @@ def loader_client_prepare_dir(env, source):
     the open handles of the path. Raises PrepareRefused."""
     token_dir = env.get("SKEIN_TOKEN_DIR", "")
     starter = env.get("SKEIN_PREPARE_STARTER", "")
-    if not ntpath.isabs(token_dir) or not starter:
+    if not os.path.isabs(token_dir) or not starter:
         raise PrepareRefused("misconfigured", "The prepare command is broken (no absolute token directory "
                              "or no starter)." + LOADER_PREPARE_MINT)
     try:
