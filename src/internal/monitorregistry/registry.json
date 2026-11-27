@@ -1106,7 +1106,7 @@
     {
       "id": "agent-orchestrator",
       "about": "Agent Orchestrator: its daemon hands each event to the agent's own session (a TUI pane, or a Chat session).",
-      "source": "github.com/OrchestratorInc/agent-orchestrator 80c941f6 (0.10.0): backend/internal/cli/send.go#newSendCommand and #sendMessage (without --steer: POST sessions/<id>/send to the local daemon, retried while CHAT_INTERFACE_TRANSITION; with AO_SESSION_ID set the CLI prefixes \"[from <id>] \"; --steer is not used); backend/internal/session_manager/manager.go#Send and #sendWithConfirmationStop (a TUI pane gets paste and Enter and the call returns only once the user-prompt-submit hook marks the session active, else ErrDeliveryUnconfirmed; a session in an interface transition gets the message queued durably and the call returns at once; a Chat session gets it through the Chat relay; the guard refuses a session that is gone, terminated, exited or paused on a permission decision); backend/cmd/ao/main.go and backend/internal/cli/root.go#ExitCode (an error is a line of text on stderr: exit 2 for a usage error, which comes before the daemon is called, 1 for any other failure, so neither a refusal of the guard nor ErrDeliveryUnconfirmed is told apart from a failure after the send); backend/internal/cli/session.go (session get reads one session, sends nothing). Exit 0 does not tell a confirmed TUI turn from a queued or relayed message, so it proves the message queued only.",
+      "source": "github.com/OrchestratorInc/agent-orchestrator 80c941f6 (0.10.0): backend/internal/cli/send.go#newSendCommand and #sendMessage (without --steer: POST sessions/<id>/send to the local daemon, retried while CHAT_INTERFACE_TRANSITION; with AO_SESSION_ID set the CLI prefixes \"[from <id>] \"; --steer is not used); backend/internal/session_manager/manager.go#Send and #sendWithConfirmationStop (a TUI pane gets paste and Enter and the call returns only once the user-prompt-submit hook marks the session active, else ErrDeliveryUnconfirmed; a session in an interface transition gets the message queued durably and the call returns at once; a Chat session gets it through the Chat relay; the guard refuses a session that is gone, terminated, exited or paused on a permission decision); backend/cmd/ao/main.go and backend/internal/cli/root.go#ExitCode (an error is a line of text on stderr: exit 2 for a usage error, which comes before the daemon is called, 1 for any other failure); backend/internal/cli/client.go#apiError.String (the daemon's error is printed \"<message> (<code>) [request <id>]\"); backend/internal/service/session/service.go (the codes of the send: SESSION_COMPOSER_BUSY for ErrComposerBusy, an unsent human draft, SESSION_AWAITING_DECISION for ErrAwaitingDecision, a permission dialog, SESSION_STARTUP_PENDING for ErrStartupPending, all refused by the guard before the paste — manager.go#sendWithConfirmationStop: \"The check runs under the guard's held input lease, immediately before the write\"; SESSION_DELIVERY_UNCONFIRMED after the write); backend/internal/cli/session.go (session get reads one session, sends nothing). Exit 0 does not tell a confirmed TUI turn from a queued or relayed message, so it proves the message queued only.",
       "step": 5,
       "order": 4,
       "kind": "addressed",
@@ -1144,6 +1144,27 @@
         {
           "match": {
             "exitCode": 2
+          },
+          "outcome": "refused-before-send"
+        },
+        {
+          "match": {
+            "exitCode": 1,
+            "stderrContains": "(SESSION_COMPOSER_BUSY)"
+          },
+          "outcome": "refused-before-send"
+        },
+        {
+          "match": {
+            "exitCode": 1,
+            "stderrContains": "(SESSION_AWAITING_DECISION)"
+          },
+          "outcome": "refused-before-send"
+        },
+        {
+          "match": {
+            "exitCode": 1,
+            "stderrContains": "(SESSION_STARTUP_PENDING)"
           },
           "outcome": "refused-before-send"
         }
