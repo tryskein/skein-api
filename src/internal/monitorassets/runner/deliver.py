@@ -455,10 +455,18 @@ class TwoStepDriver(object):
             outcome, sign = classify_result(self.insert.get("outcomes"), first)
             taken = outcome in (OUTCOME_INPUT_WRITTEN, OUTCOME_INPUT_NO_RECEIPT)
             if not taken or not self.commit:
+                if self.unstage and not taken and not self._unstage(name):
+                    sign = dict(sign or {}, unstage="failed")
                 return outcome, sign
-        finally:
+        except RefusedBeforeSend as exc:
+            if self.unstage and not taken and not self._unstage(name):
+                # The journal says the staged text was left behind.
+                raise RefusedBeforeSend("%s; the staged text was not removed" % exc.reason)
+            raise
+        except BaseException:
             if self.unstage and not taken:
                 self._unstage(name)
+            raise
         if not guard.before_commit():
             return OUTCOME_UNKNOWN, {"commit": "withheld"}
         commit = with_delivery_name(self.commit["executor"], name)
@@ -469,12 +477,15 @@ class TwoStepDriver(object):
         return classify_result(self.commit.get("outcomes"), second, written=True)
 
     def _unstage(self, name):
-        """Remove what the stage left; its answer changes no outcome."""
+        """Remove what the stage left. True when the call says it did (exit
+        0 in its time); its answer changes no outcome, only the sign the
+        journal keeps."""
         spec = with_delivery_name(self.unstage, name)
         try:
-            self.executor.call(spec, "", spec.get("timeoutSec") or PROBE_TIMEOUT_SEC)
+            result = self.executor.call(spec, "", spec.get("timeoutSec") or PROBE_TIMEOUT_SEC)
         except (ExecutorRefusal, OSError):
-            pass
+            return False
+        return not result.timed_out and result.exit_code == 0 and not getattr(result, "tree_failure", None)
 
 
 class DeliverySink(object):

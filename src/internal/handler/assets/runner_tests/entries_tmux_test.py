@@ -27,6 +27,7 @@ Run on its own: python3 internal/handler/assets/runner_tests/entries_tmux_test.p
 Standard library of Python 3.6 only.
 """
 
+import json
 import os
 import sys
 import unittest
@@ -281,6 +282,87 @@ class TmuxEpicMatrixTest(TmuxCase):
         again = self.mon("tok-c", TMUX=SERVER_A)
         again.page([ft.note(1)])
         self.assertEqual(len(self.argvs("paste-buffer")), 2)
+
+
+_STATEFUL_TMUX = r"""#!%(python)s
+import json, os, sys
+HERE = %(here)r
+state_path = os.path.join(HERE, "tmux.buffers.json")
+config = json.load(open(os.path.join(HERE, "tmux.config.json")))
+try:
+    buffers = json.load(open(state_path))
+except (OSError, ValueError):
+    buffers = {}
+args = sys.argv[1:]
+def opt(flag):
+    return args[args.index(flag) + 1] if flag in args else None
+code = 0
+if args[0] == "display-message":
+    if "-F" in args:
+        sys.stdout.write(json.dumps({"inputOff": 0, "synchronized": 0, "modes": 0}))
+    else:
+        sys.stdout.write("%%d\n" %% config["pane_pid"])
+elif args[0] == "load-buffer":
+    buffers[opt("-b")] = sys.stdin.read()
+elif args[0] == "paste-buffer":
+    if config.get("paste_fails"):
+        code = 1
+    elif opt("-b") in buffers and "-d" in args:
+        del buffers[opt("-b")]
+elif args[0] == "delete-buffer":
+    if config.get("delete_fails"):
+        code = 1
+    else:
+        buffers.pop(opt("-b"), None)
+json.dump(buffers, open(state_path, "w"))
+sys.exit(code)
+"""
+
+
+class TmuxBuffersTest(TmuxCase):
+    """Warning 4 of wave 13 round 1: the buffer of a transfer whose insert
+    failed is really removed (the fake keeps tmux's buffers); a removal
+    that fails is said in the journal."""
+
+    def stateful(self, **config):
+        config["pane_pid"] = PANE_PID
+        with open(os.path.join(self.world.bin, "tmux.config.json"), "w") as fh:
+            json.dump(config, fh)
+        with open(os.path.join(self.world.bin, "tmux"), "w") as fh:
+            fh.write(_STATEFUL_TMUX % {"python": sys.executable, "here": self.world.bin})
+
+    def buffers(self):
+        try:
+            with open(os.path.join(self.world.bin, "tmux.buffers.json")) as fh:
+                return json.load(fh)
+        except OSError:
+            return {}
+
+    def test_a_failed_insert_leaves_no_buffer(self):
+        self.fresh()
+        self.stateful()
+        mon = self.mon()
+        self.stateful(paste_fails=True)
+        mon.page([ft.note(1)])
+        self.assertEqual(mon.statuses(), [(1, "unknown")])
+        self.assertEqual(self.buffers(), {})
+
+    def test_a_delivered_text_leaves_no_buffer(self):
+        self.fresh()
+        self.stateful()
+        mon = self.mon()
+        mon.page([ft.note(1)])
+        self.assertEqual(mon.statuses(), [(1, "input-written")])
+        self.assertEqual(self.buffers(), {})
+
+    def test_a_removal_that_fails_is_in_the_journal(self):
+        self.fresh()
+        self.stateful()
+        mon = self.mon()
+        self.stateful(paste_fails=True, delete_fails=True)
+        mon.page([ft.note(1)])
+        self.assertEqual(len(self.buffers()), 1)
+        self.assertIn('"unstage": "failed"', json.dumps(mon.lines()))
 
 
 if __name__ == "__main__":
