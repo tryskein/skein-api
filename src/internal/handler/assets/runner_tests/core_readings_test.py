@@ -182,6 +182,19 @@ class StderrJsonSignTest(unittest.TestCase):
         err = json.dumps({"error": {"code": "DAEMON_UNREACHABLE", "message": "x"}}, indent=2).encode()
         self.assertEqual(self.outcome(None, err), "refused-before-send")
 
+    def test_a_stderr_cut_at_the_cap_gives_no_sign(self):
+        # A prefix of a longer stderr is not its JSON, its emptiness or its
+        # phrase: the answer is unknown.
+        err = json.dumps({"error": {"code": "DAEMON_UNREACHABLE"}}).encode()
+        rows = self.ROWS + [{"match": {"exitCode": 2, "stderrEmpty": True}, "outcome": "queued"},
+                            {"match": {"exitCode": 3, "stderrContains": "nothing was sent"}, "outcome": "refused-before-send"}]
+        whole = RUNNER.CallResult(1, b"", err, False)
+        self.assertEqual(RUNNER.classify_result(rows, whole)[0], "refused-before-send")
+        for code, stderr in ((1, err), (2, b""), (3, b"so nothing was sent")):
+            with self.subTest(exit=code):
+                cut = RUNNER.CallResult(code, b"", stderr, False, stderr_truncated=True)
+                self.assertEqual(RUNNER.classify_result(rows, cut)[0], "unknown")
+
     def test_other_answers_are_unknown(self):
         cases = {
             "another code": (None, json.dumps({"error": {"code": "SEND_FAILED"}}).encode()),

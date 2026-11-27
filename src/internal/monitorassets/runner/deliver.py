@@ -473,7 +473,7 @@ class DeliverySink(object):
             if not result.timed_out:
                 for row in command.get("results") or []:
                     if outcome_sign_matches(row.get("match") or {}, exit_code=result.exit_code, doc=result.json,
-                                            stderr=result.stderr):
+                                            stderr=result.sign_stderr):
                         verdict = row.get("result")
                         break
             # Only "same" hands over (INV-4): "changed" is another

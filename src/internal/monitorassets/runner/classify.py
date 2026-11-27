@@ -65,5 +65,5 @@ def classify_result(rows, result, written=False, earlier_refused=True):
     if error is not None and not result.timed_out:
         return OUTCOME_UNKNOWN, {"httpError": error}
     return classify(rows, exit_code=result.exit_code, doc=result.json, timed_out=result.timed_out,
-                    http_status=getattr(result, "http_status", None), stderr=result.stderr,
+                    http_status=getattr(result, "http_status", None), stderr=getattr(result, "sign_stderr", None),
                     written=written, earlier_refused=earlier_refused)
