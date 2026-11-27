@@ -13,6 +13,7 @@ Standard library of Python 3.6 only.
 
 import os
 import sys
+import time
 import unittest
 from unittest import mock
 
@@ -698,7 +699,9 @@ class StopReceiptByDetachedCallTest(unittest.TestCase):
         rec = chan("A", "chan-a", table=self.ROWS)
         rec["executor"].update({"timeoutSec": 1, "detach": True})
         world = World(self, [rec])
-        world.prog("chan-a").respond([{"hang": True}])
+        # The program and a descendant of it (review round 3 of wave 14,
+        # row 11): the stop ends the whole tree, not only its leader.
+        world.prog("chan-a").respond([{"hang": True, "child": True}])
         r = world.runner
         mon = self.mon = world.monitor(fallbacks=())
         if tree_kill is not None:
@@ -743,6 +746,7 @@ class StopReceiptByDetachedCallTest(unittest.TestCase):
                 self.assertIn("reason=" + reason, receipt["stdin"])
                 self.assertEqual(calls.running(), [])
                 self.assertFalse(alive(receipt["pid"]), "the program of the receipt outlived the monitor")
+                self.assertTrue(gone(receipt["child"]), "a descendant of the receipt outlived the monitor")
 
     def test_no_program_of_an_event_outlives_the_monitor(self):
         # Review round 2 of wave 14, row 4: the call of an event left to run
@@ -752,9 +756,20 @@ class StopReceiptByDetachedCallTest(unittest.TestCase):
         self.assertIn("hello there", event["stdin"])
         self.assertEqual(calls.running(), [])
         self.assertFalse(alive(event["pid"]), "the program of an event outlived the monitor")
+        self.assertTrue(gone(event["child"]), "a descendant of an event outlived the monitor")
         # Reaped by the monitor: no zombie of it is left.
         with self.assertRaises(ChildProcessError):
             os.waitpid(event["pid"], os.WNOHANG)
+
+
+def gone(pid):
+    """Whether pid stops running within a few seconds (a killed descendant
+    is reaped by whoever adopted it)."""
+    for _ in range(100):
+        if not alive(pid):
+            return True
+        time.sleep(0.05)
+    return False
 
 
 def alive(pid):

@@ -48,8 +48,14 @@ except OSError:
 with open(count_path, "w") as fh:
     fh.write(str(n + 1))
 answer = script[min(n, len(script) - 1)] if script else {"exit": 0}
+child = None
+if answer.get("child"):
+    # A descendant that would outlive the program if only it were killed.
+    import subprocess
+    child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(600)"]).pid
 mark = {"program": NAME, "argv": sys.argv[1:], "stdin": data.decode("utf-8", "replace"), "files": files,
-        "env": dict((k, os.environ.get(k)) for k in WATCH), "time": time.time(), "pid": os.getpid()}
+        "env": dict((k, os.environ.get(k)) for k in WATCH), "time": time.time(), "pid": os.getpid(),
+        "child": child}
 with open(LOG, "a") as fh:
     fh.write(json.dumps(mark) + "\n")
 if answer.get("kill"):
@@ -74,7 +80,8 @@ class FakeProgram(object):
     """A program named name in directory bindir. respond() scripts its
     answers: the n-th call gets the n-th answer, later calls the last one.
     An answer is {"exit": int, "stdout": str or a JSON value, "delay": sec,
-    "hang": bool, "kill": pid (killed during the call)}."""
+    "hang": bool, "kill": pid (killed during the call), "child": bool (a
+    descendant left sleeping; its pid is in the call's mark)}."""
 
     def __init__(self, bindir, name, log=None, watch=()):
         self.dir = bindir
