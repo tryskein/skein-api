@@ -10,7 +10,9 @@
 #      config_invalid, without a poll or a delivery) and that the holder's
 #      addressee changed; else it waits up to TAKEOVER_WAIT_SEC for the
 #      holder to end (an earlier run being cancelled, US-10) and goes on, or
-#      answers already_running when the holder stays;
+#      answers already_running when the holder stays - or when a takeover
+#      request appears or the holder's addressee changes during that wait:
+#      the lock the holder releases then is the takeover's;
 #   2. it writes the takeover request (takeover.json, beside the token) and
 #      waits for the lock up to TAKEOVER_WAIT_SEC;
 #   3. the old runner sees the request between pages, when every outcome,
@@ -46,6 +48,22 @@ TAKEOVER_WAIT_SEC = 30
 TAKEOVER_FILE_NAME = "takeover.json"
 # How often a waiting runner looks for a takeover request.
 TAKEOVER_CHECK_SEC = 1.0
+# How often a start waiting for a live holder tries the lock again.
+HOLDER_WAIT_STEP_SEC = 0.1
+
+
+class _MonotonicClock(object):
+    def now(self):
+        return time.monotonic()
+
+    def sleep(self, sec):
+        if sec > 0:
+            time.sleep(sec)
+
+
+# The clock of the wait for a live holder (wait_for_holder): now() and
+# sleep(sec). A test puts a managed clock here.
+HOLDER_WAIT_CLOCK = _MonotonicClock()
 
 
 class TakenOver(Exception):
@@ -131,7 +149,7 @@ def take_over(token_file, env, settings, held=None):
         # earlier run being cancelled, US-10), then go on, or answer
         # already_running when it still holds the lock.
         try:
-            return wait_runner_lock(token_file, env, TAKEOVER_WAIT_SEC), None
+            return wait_for_holder(token_file, env, TAKEOVER_WAIT_SEC), None
         except LockBusy:
             raise Stop("already_running")
         except PlatformRefusal as exc:
@@ -232,6 +250,40 @@ def hand_over(token_file, env, release, retake, wait_sec=TAKEOVER_WAIT_SEC, cloc
                 # monitor by another way; nothing to go back to.
                 return True
         sleep(TAKEOVER_CHECK_SEC)
+
+
+def _takeover_pending(token_file):
+    """A takeover request waits for the lock (written, not yet taken), or
+    the holder's addressee changed: a lock released now is the takeover's."""
+    request = load_takeover(token_file)
+    return (request is not None and not request.get("taken")) or addressee_changed(token_file)
+
+
+def wait_for_holder(token_file, env, wait_sec, clock=None):
+    """Wait up to wait_sec for a live holder whose addressee did not change
+    to end, by a try of the one-runner lock every HOLDER_WAIT_STEP_SEC
+    (clock: HOLDER_WAIT_CLOCK). Returns the lock. A takeover request that
+    appears meanwhile, or a change of the holder's addressee, is not this
+    start's to take: it gives way (Stop already_running) and leaves the lock
+    to the takeover, also when it got the lock in that moment. Raises
+    LockBusy when the holder stays, PlatformRefusal."""
+    clock = clock or HOLDER_WAIT_CLOCK
+    end = clock.now() + max(wait_sec, 0)
+    while True:
+        if _takeover_pending(token_file):
+            raise Stop("already_running")
+        try:
+            lock = current_platform().acquire_runner_lock(token_file, 0, env)
+        except LockBusy:
+            left = end - clock.now()
+            if left <= 0:
+                raise
+            clock.sleep(min(HOLDER_WAIT_STEP_SEC, left))
+            continue
+        if _takeover_pending(token_file):
+            lock.release()
+            raise Stop("already_running")
+        return lock
 
 
 def wait_runner_lock(token_file, env, wait_sec):

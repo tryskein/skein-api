@@ -28,7 +28,6 @@ import json
 import os
 import re
 import sys
-import threading
 import unittest
 from unittest import mock
 
@@ -297,43 +296,102 @@ class OhMyPiAfterStoppedTest(unittest.TestCase):
         self.assertEqual(sorted(l.get("notificationId") for l in journal), [1, 2, 3])
 
 
+class StepClock(object):
+    """A managed clock of the holder wait (takeover.py#HOLDER_WAIT_CLOCK):
+    sleep() moves the time on and runs the actions due by then."""
+
+    def __init__(self, actions=None):
+        self.t = 0.0
+        self.actions = dict(actions or {})
+
+    def now(self):
+        return self.t
+
+    def sleep(self, sec):
+        self.t += sec
+        for when in sorted(self.actions):
+            if self.t >= when:
+                self.actions.pop(when)()
+
+
 @unittest.skipUnless(sys.platform.startswith("linux"), "the POSIX working start")
 class RearmWithALiveHolderTest(unittest.TestCase):
     """Row #110 (OST-2-1, US-10): the agent cancels the earlier job and runs
     the working command again while the cancelled runner still holds the
-    lock: the new start waits for it (TAKEOVER_WAIT_SEC, short here), then
-    goes on; a holder that stays gets one already_running."""
+    lock: the new start waits for it up to TAKEOVER_WAIT_SEC (30 s, on a
+    managed clock), then goes on; a holder that stays gets one
+    already_running at the end of the wait."""
 
-    def start_with_holder(self, release_after):
+    def start_with_holder(self, release_at):
         box = pm.Box(self)
         line = box.preflight(box.env("omp"), ["omp"])
         env = box.env("omp", SKEIN_MONITOR_MODE="run", SKEIN_MONITOR_PREFLIGHT=str(line["preflightId"]))
         held = RUNNER.PosixPlatform.acquire_runner_lock(box.token, 0, env)
-        timer = None
-        if release_after is not None:
-            timer = threading.Timer(release_after, held.release)
-            timer.start()
-        else:
-            self.addCleanup(held.release)
+        self.addCleanup(held.release)
+        clock = StepClock({release_at: held.release} if release_at is not None else {})
 
         def stream_until_stopped(*args, **kw):
             raise RUNNER.StopSignal()
-        try:
-            with mock.patch.object(RUNNER, "TAKEOVER_WAIT_SEC", 3), \
-                    mock.patch.object(RUNNER, "run_stream_loop", stream_until_stopped):
-                return box.run(env)
-        finally:
-            if timer is not None:
-                timer.join()
+        with mock.patch.object(RUNNER, "HOLDER_WAIT_CLOCK", clock), \
+                mock.patch.object(RUNNER, "run_stream_loop", stream_until_stopped):
+            return box.run(env) + (clock.t,)
 
     def test_a_holder_that_ends_within_the_wait_hands_the_work_over(self):
-        code, lines = self.start_with_holder(0.3)
+        code, lines, waited = self.start_with_holder(10)
         self.assertEqual(code, 0, lines)
         self.assertEqual(lines[0]["event"], "monitor_started", lines)
+        # It went on once the holder ended, not at the end of the wait.
+        self.assertGreaterEqual(waited, 10)
+        self.assertLess(waited, 10 + 2 * RUNNER.HOLDER_WAIT_STEP_SEC)
 
     def test_a_holder_that_stays_gets_one_already_running(self):
-        code, lines = self.start_with_holder(None)
+        code, lines, waited = self.start_with_holder(None)
         self.assertEqual([l.get("reason") for l in lines], ["already_running"], lines)
+        self.assertGreaterEqual(waited, RUNNER.TAKEOVER_WAIT_SEC)
+        self.assertLess(waited, RUNNER.TAKEOVER_WAIT_SEC + 2 * RUNNER.HOLDER_WAIT_STEP_SEC)
+
+
+@unittest.skipUnless(sys.platform.startswith("linux"), "the POSIX working start")
+class HolderWaitGivesWayToATakeoverTest(unittest.TestCase):
+    """A start B waits for a live holder A of the same addressee; meanwhile
+    a start C asks to take the monitor over (takeover.json), or A's
+    addressee changes, and A releases the lock to hand over: B gives way
+    (already_running) without taking the lock, which stays free for C
+    (T023, US-12)."""
+
+    def setUp(self):
+        self.box = pm.Box(self)
+        self.line = self.box.preflight(self.box.env("omp"), ["omp"])
+        self.env = self.box.env("omp", SKEIN_MONITOR_MODE="run",
+                                SKEIN_MONITOR_PREFLIGHT=str(self.line["preflightId"]))
+        self.held = RUNNER.PosixPlatform.acquire_runner_lock(self.box.token, 0, self.env)
+        self.addCleanup(self.held.release)
+
+    def wait_with(self, event):
+        def at_five():
+            event()
+            self.held.release()
+        clock = StepClock({5: at_five})
+        with self.assertRaises(RUNNER.Stop) as stop:
+            RUNNER.wait_for_holder(self.box.token, self.env, RUNNER.TAKEOVER_WAIT_SEC, clock)
+        self.assertEqual(stop.exception.reason, "already_running")
+        # The lock is free for the takeover: C takes it at once.
+        successor = RUNNER.PosixPlatform.acquire_runner_lock(self.box.token, 0, self.env)
+        successor.release()
+        self.assertLess(clock.t, 5 + 2 * RUNNER.HOLDER_WAIT_STEP_SEC)
+
+    def test_a_takeover_request_during_the_wait(self):
+        self.wait_with(lambda: RUNNER.request_takeover(self.box.token, self.line["preflightId"]))
+
+    def test_a_change_of_the_holder_s_addressee_during_the_wait(self):
+        self.wait_with(lambda: RUNNER.mark_addressee_changed(self.box.token, self.line["preflightId"]))
+
+    def test_a_request_already_taken_does_not_hold_the_wait(self):
+        request = RUNNER.request_takeover(self.box.token, self.line["preflightId"])
+        RUNNER.confirm_takeover(self.box.token, request)
+        clock = StepClock({5: self.held.release})
+        lock = RUNNER.wait_for_holder(self.box.token, self.env, RUNNER.TAKEOVER_WAIT_SEC, clock)
+        lock.release()
 
 
 if __name__ == "__main__":

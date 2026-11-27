@@ -250,8 +250,16 @@ class MonitorStartedTest(unittest.TestCase):
         cases.append(("journal open to others", journal_open, "config_invalid", 1))
 
         # A held lock is awaited up to TAKEOVER_WAIT_SEC before
-        # already_running: the child's body waits a second here.
-        short = BODY.replace("TAKEOVER_WAIT_SEC = 30\n", "TAKEOVER_WAIT_SEC = 1\n")
+        # already_running: the body of the child keeps that wait on a
+        # managed clock that moves on at each step instead of sleeping.
+        short = BODY.replace("HOLDER_WAIT_CLOCK = _MonotonicClock()\n",
+                             "class _ManagedClock(object):\n"
+                             "    t = 0.0\n\n"
+                             "    def now(self):\n"
+                             "        return self.t\n\n"
+                             "    def sleep(self, sec):\n"
+                             "        self.t += sec\n\n\n"
+                             "HOLDER_WAIT_CLOCK = _ManagedClock()\n")
         self.assertNotEqual(short, BODY)
         for name, spoil, reason, want_code in cases:
             with self.subTest(case=name), mock.patch.object(sys.modules[__name__], "BODY", short):
