@@ -493,7 +493,7 @@ def run_detached_child():
             if not token_file or not base:
                 held.lock = unowned_lock(token_file)
                 raise Stop("misconfigured", delete_token=held.lock is not None)
-            env = dict(os.environ)
+            env = agent_env(os.environ, load_registry())
             settings = read_settings(env, load_registry())
             held.begin(token_file, env, settings, issue)
             journal = Journal(token_file, issue, secrets=monitor_secrets(held.token, env, load_registry()), env=env)
@@ -561,7 +561,7 @@ def run_client():
             if not token_file or not os.environ.get("SKEIN_PUBLIC_URL", ""):
                 lock = unowned_lock(token_file)
                 raise Stop("misconfigured", delete_token=lock is not None)
-            env = dict(os.environ)
+            env = agent_env(os.environ, load_registry())
             settings = read_settings(env, load_registry())
             doc = check_start(token_file, env, settings)
             if doc["method"] in (METHOD_DETACHED, METHOD_JOURNAL):

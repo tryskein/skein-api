@@ -57,6 +57,22 @@ class Record(object):
         return self.agent["id"] if self.agent is not None else "general"
 
 
+def agent_env(environ, registry):
+    """The environment of the agent process as the records read it: a
+    variable of the registry's envAliases that is unset takes the value of
+    the first of its aliases that is set (a harness that renamed its
+    variables and sets either name)."""
+    env = dict(environ)
+    for entry in (registry.doc.get("envAliases") or []) if registry is not None else []:
+        name = entry.get("name") or ""
+        if name and not env.get(name):
+            for alias in entry.get("aliases") or []:
+                if env.get(alias):
+                    env[name] = env[alias]
+                    break
+    return env
+
+
 def load_registry(b64=None):
     """The registry of the body (REGISTRY_B64 unless b64 is given)."""
     raw = base64.b64decode(REGISTRY_B64 if b64 is None else b64)

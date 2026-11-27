@@ -61,6 +61,10 @@ type Registry struct {
 	// (step 3 of the method order), hosts (step 5), terminal environments
 	// (step 6) and blind channels (step 7).
 	Channels []Channel `json:"channels"`
+	// EnvAliases are variables a harness sets under either of two names: an
+	// unset Name takes the value of the first of its Aliases that is set,
+	// before any record reads the environment of the agent process.
+	EnvAliases []EnvAlias `json:"envAliases,omitempty"`
 	// Environments are the environments without a channel (US-8): an agent
 	// that runs in one gets its host message in the preflight line, and the
 	// choice of the method does not change.
@@ -72,6 +76,13 @@ type Registry struct {
 	// runs. A Zavod host is detected only when its engine maps to the
 	// client's record (any mapped engine for the general record).
 	ZavodEngines map[string]string `json:"zavodEngines"`
+}
+
+// EnvAlias is a variable with the other names its harness sets it under.
+type EnvAlias struct {
+	Name    string   `json:"name"`
+	Aliases []string `json:"aliases"`
+	Source  string   `json:"source"`
 }
 
 // Host messages of an environment without a channel.

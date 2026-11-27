@@ -207,6 +207,27 @@ func (r *Registry) Validate() error {
 		}
 	}
 
+	aliasNames := make(map[string]bool, len(r.EnvAliases))
+	for i, a := range r.EnvAliases {
+		path := fmt.Sprintf("envAliases[%d]", i)
+		v.text(RuleMissingSource, path+".source", a.Source)
+		if !envNamePattern.MatchString(a.Name) {
+			v.add(RuleInvalid, path+".name", "%q is not an environment variable name", a.Name)
+		}
+		if aliasNames[a.Name] {
+			v.add(RuleDuplicateID, path+".name", "variable %q has aliases twice", a.Name)
+		}
+		aliasNames[a.Name] = true
+		if len(a.Aliases) == 0 {
+			v.add(RuleInvalid, path+".aliases", "the variable has no alias")
+		}
+		for j, alias := range a.Aliases {
+			if !envNamePattern.MatchString(alias) || alias == a.Name {
+				v.add(RuleInvalid, fmt.Sprintf("%s.aliases[%d]", path, j), "%q is not another variable name", alias)
+			}
+		}
+	}
+
 	seenEnvironments := make(map[string]bool, len(r.Environments))
 	for i := range r.Environments {
 		e := &r.Environments[i]

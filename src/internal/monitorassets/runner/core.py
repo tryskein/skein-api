@@ -620,7 +620,7 @@ def run_preflight():
             raise Stop("misconfigured", delete_token=bool(token_file))
         registry = load_registry()
         settings = read_settings(os.environ, registry)
-        emit(preflight(token_file, dict(os.environ), registry, settings))
+        emit(preflight(token_file, agent_env(os.environ, registry), registry, settings))
         return 0
     except ConfigInvalid as exc:
         outcome = Stop("config_invalid", detail="%s (%s)" % (exc.variable, exc.detail))

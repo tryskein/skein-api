@@ -40,12 +40,16 @@ Standard library of Python 3.6 only.
 import os
 import sys
 import unittest
+from unittest import mock
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 
 import entries_addressed_hosts_test as ah  # noqa: E402
 import failures_test as ft  # noqa: E402
+
+RUNNER = ft.RUNNER
+REG = ft.REG
 
 out = ah.out
 AO_SESSION = "ao-17"
@@ -227,6 +231,26 @@ class ParadevRecordTest(ah.HostCase):
             with self.subTest(missing=name):
                 line = self.mon("tok-" + name.lower(), **{name: ""}).line
                 self.assertEqual((line["method"], line["channel"]), ("journal", None))
+
+    def test_the_paradev_names_fill_in_when_the_superset_ones_are_unset(self):
+        # notify-hook.template.sh: "SUPERSET_* wins so existing overrides
+        # keep working; PARADEV_* fills in when it is unset." The runner reads
+        # the agent's environment as agent_env gives it.
+        world_env = ft.World.env
+        for name, variables, terminal in (
+                ("only the new names", {"SUPERSET_TERMINAL_ID": "", "SUPERSET_WORKSPACE_ID": "",
+                                        "PARADEV_TERMINAL_ID": "term-new", "PARADEV_WORKSPACE_ID": "ws-new"}, "term-new"),
+                ("both: the old names win", {"PARADEV_TERMINAL_ID": "term-new", "PARADEV_WORKSPACE_ID": "ws-new"},
+                 TERMINAL)):
+            with self.subTest(case=name):
+                self.fresh()
+                with mock.patch.object(self.world, "env",
+                                       lambda n, c, **e: RUNNER.agent_env(world_env(self.world, n, c, **e), REG)):
+                    mon = self.mon(**variables)
+                self.assertEqual((mon.doc["method"], mon.doc["channel"]), ("detached", "paradev"))
+                mon.page([ft.note(1)])
+                [send] = self.cli.calls("terminals send")
+                self.assertEqual(send["argv"][6], terminal)
 
     def test_the_idle_wait_then_the_send(self):
         self.fresh()
