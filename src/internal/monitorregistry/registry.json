@@ -842,6 +842,181 @@
       }
     },
     {
+      "id": "cmux-message",
+      "about": "cmux (Claude): an agent message to the agent's own surface, which its hooks hand to Claude Code without typing into the terminal.",
+      "source": "github.com/manaflow-ai/cmux 079d294b (0.65.2): docs/agent-messages.md (\"cmux delivers it through that agent's own hooks, never by typing into its terminal\"; Claude Code gets a message by its asyncRewake hook, an idle session wakes up with it, a busy one sees it at its next step; delivery holds while a question, permission or plan prompt is open; a message starts queued; \"A refused send stores nothing\"); CLI/CMUXCLI+AgentMessages.swift#runAgentMessageSend and #parseAgentMessageSendArguments (after -- every word is the body, a body - is read from stdin; agent.message.send; under the global --json the stored message is printed); Sources/AgentMessageCenter.swift#payload (state of the stored message: queued at the send); Sources/TerminalController+AgentMessageSettings.swift (the refusals \"Agent messages are turned off (agentMessages.enabled is false).\", \"Recipient %@ has messages disabled.\", \"Recipient workspace %@ has messages disabled.\": nothing stored); CLI/cmux.swift#CMUXTermMain.main (an error is \"Error: <message>\" on stderr with a non-zero exit) and the socket connection (\"Socket not found at <path>\" before any request). The texts are the English defaults of localized strings: in another language a refusal is unknown. Only macOS.",
+      "step": 6,
+      "order": 4,
+      "kind": "addressed",
+      "blind": false,
+      "detect": {
+        "env": [
+          {
+            "name": "CMUX_SURFACE_ID"
+          },
+          {
+            "name": "CMUX_SOCKET_PATH"
+          }
+        ],
+        "records": [
+          "claude"
+        ]
+      },
+      "executor": {
+        "type": "argv",
+        "argv": [
+          "cmux",
+          "--json",
+          "agent",
+          "message",
+          "{env:CMUX_SURFACE_ID}",
+          "--from",
+          "skein-monitor",
+          "--",
+          "-"
+        ],
+        "feed": "stdin",
+        "timeoutSec": 30
+      },
+      "idle": {
+        "type": "builtin"
+      },
+      "outcomes": [
+        {
+          "match": {
+            "exitCode": 0,
+            "json": {
+              "state": "queued"
+            }
+          },
+          "outcome": "queued"
+        },
+        {
+          "match": {
+            "exitCode": 1,
+            "stderrContains": "Agent messages are turned off"
+          },
+          "outcome": "refused-before-send"
+        },
+        {
+          "match": {
+            "exitCode": 1,
+            "stderrContains": "has messages disabled."
+          },
+          "outcome": "refused-before-send"
+        },
+        {
+          "match": {
+            "exitCode": 1,
+            "stderrContains": "Socket not found at "
+          },
+          "outcome": "refused-before-send"
+        }
+      ],
+      "probes": [
+        {
+          "type": "socket-connect",
+          "source": "github.com/manaflow-ai/cmux 079d294b (0.65.2): CLI/cmux.swift (the CLI connects to the app's unix socket at CMUX_SOCKET_PATH; an absent socket is \"Socket not found at <path>\").",
+          "path": "{env:CMUX_SOCKET_PATH}"
+        }
+      ],
+      "addressee": {
+        "process": "none",
+        "limitation": "The surface id is the address; the source does not say whether a surface recreated under the same id is told apart."
+      },
+      "binaries": {
+        "macos": [
+          "cmux"
+        ]
+      },
+      "address": {
+        "env": "CMUX_SURFACE_ID"
+      }
+    },
+    {
+      "id": "cmux-paste",
+      "about": "cmux (agents other than Claude): the event is pasted into the agent's surface and submitted, unless a draft or a dialog holds the prompt.",
+      "source": "github.com/manaflow-ai/cmux 079d294b (0.65.2): CLI/CMUXCLI+Paste.swift#parsePasteCommandArguments (a - argument reads the text from stdin; --submit presses the submit key; without --force the prompt is checked first) and #deliverTerminalPaste (terminal.paste; when the submit key was not sent the text is already at the prompt: a warning on stderr and submitted false in the answer) and #ensureAgentPromptIsFree (before the paste: \"...is waiting on a question or dialog, so nothing was sent.\" and \"...holds text someone is typing, so nothing was sent.\"); CLI/cmux.swift#CMUXTermMain.main (an error is \"Error: <message>\" on stderr with a non-zero exit) and the socket connection (\"Socket not found at <path>\" before any request); the global --json prints the answer of terminal.paste. The texts are the English defaults of localized strings: in another language a refusal is unknown. Only macOS.",
+      "step": 6,
+      "order": 5,
+      "kind": "terminal",
+      "blind": false,
+      "detect": {
+        "env": [
+          {
+            "name": "CMUX_SURFACE_ID"
+          },
+          {
+            "name": "CMUX_SOCKET_PATH"
+          }
+        ],
+        "recordsAbsent": [
+          "claude"
+        ]
+      },
+      "executor": {
+        "type": "argv",
+        "argv": [
+          "cmux",
+          "--json",
+          "paste",
+          "--surface",
+          "{env:CMUX_SURFACE_ID}",
+          "--submit",
+          "-"
+        ],
+        "feed": "stdin",
+        "timeoutSec": 30
+      },
+      "idle": {
+        "type": "none"
+      },
+      "outcomes": [
+        {
+          "match": {
+            "exitCode": 0,
+            "json": {
+              "submitted": "true"
+            }
+          },
+          "outcome": "input-written"
+        },
+        {
+          "match": {
+            "exitCode": 1,
+            "stderrContains": "so nothing was sent."
+          },
+          "outcome": "refused-before-send"
+        },
+        {
+          "match": {
+            "exitCode": 1,
+            "stderrContains": "Socket not found at "
+          },
+          "outcome": "refused-before-send"
+        }
+      ],
+      "probes": [
+        {
+          "type": "socket-connect",
+          "source": "github.com/manaflow-ai/cmux 079d294b (0.65.2): CLI/cmux.swift (the CLI connects to the app's unix socket at CMUX_SOCKET_PATH; an absent socket is \"Socket not found at <path>\").",
+          "path": "{env:CMUX_SOCKET_PATH}"
+        }
+      ],
+      "addressee": {
+        "process": "alive",
+        "limitation": "cmux itself refuses a prompt that holds a draft or an open dialog."
+      },
+      "binaries": {
+        "macos": [
+          "cmux"
+        ]
+      },
+      "address": {
+        "env": "CMUX_SURFACE_ID"
+      }
+    },
+    {
       "id": "paseo",
       "about": "Paseo (agent): the daemon that launched the agent queues each event as a message to the agent's own session.",
       "source": "github.com/getpaseo/paseo c1b43ee571ee15f409b4f1374b279f2f94387448 (0.17.4): packages/server/src/server/agent/agent-manager.ts (every agent process the daemon launches gets PASEO_AGENT_ID, its agent UUID, and PASEO_AGENT_CWD); packages/server/src/server/daemon-worker.ts (the daemon process is titled 'Paseo Daemon'; it launches the provider processes: Claude through the Agent SDK, Codex app-server, ACP agents, OpenCode, Pi); packages/cli/src/commands/agent/send.ts#runSendCommand and #buildNoWaitResult (--prompt-file reads the text from a UTF-8 file; from a process with PASEO_AGENT_ID the default behaviour is queue; --no-wait prints {agentId, status, activeTurnBehavior, message}, status 'queued' when the daemon queued it); packages/server/src/server/agent/agent-messages/delivery.ts#QUIET_MS (the queue waits a 2 s quiet window and the end of the running turn, so no idle wait of the runner); packages/cli/src/utils/client.ts#connectToDaemon (DAEMON_UNREACHABLE and AUTH_REQUIRED come from connecting, before the message is sent); packages/cli/src/output/with-output.ts and render.ts#renderError (a result on stdout; an error as {\"error\":{code,message}} on stderr, exit 1); packages/cli/src/commands/agent/inspect.ts#runInspectCommand (the agent object on stdout: Id, Provider, Status, Archived, CreatedAt; AGENT_NOT_FOUND on stderr; it sends nothing); packages/server/src/server/agent/idle-runtime-cleanup/index.ts#IDLE_PERIOD_MS (an agent idle for an hour is unloaded with its process tree unless agents.idleRuntimeCleanup is false); packages/desktop/src/integrations/cli-install/install.ts#buildCmdTrampoline (the app installs the CLI as ~/.local/bin/paseo, on Windows %USERPROFILE%\\.local\\bin\\paseo.cmd, which the agent's PATH may lack; a .cmd takes the text only by file, US-11). No deduplication: every send is a new message.",
