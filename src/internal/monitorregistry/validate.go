@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"unicode"
 )
 
 // Rule names one rule of Validate. A violation carries its rule so callers
@@ -909,8 +910,12 @@ func (v *validator) signs(path string, rows []Match) {
 		}
 		for j, k := range m.JSONAbsent {
 			v.jsonPath(fmt.Sprintf("%s.jsonAbsent[%d]", rpath, j), k)
-			if _, both := m.JSON[k]; both {
-				v.add(RuleInvalid, fmt.Sprintf("%s.jsonAbsent[%d]", rpath, j), "path %q is both required and absent", k)
+		}
+		// A value at a path, or under it, cannot be read where the path
+		// is absent: such a row matches no answer.
+		for _, k := range slices.Sorted(maps.Keys(m.JSON)) {
+			if absentAt(m.JSONAbsent, k) {
+				v.add(RuleInvalid, rpath+".json."+k, "path %q is both required and absent (or under an absent one)", k)
 			}
 		}
 		for j := 0; j < i; j++ {
@@ -952,17 +957,18 @@ func (v *validator) criteriaOf(path string, rows []Match, executor string) {
 	}
 }
 
-// jsonPath checks a dotted path of a JSON answer: non-empty elements, each
-// of printable ASCII, so an element that indexes a list is ASCII digits the
-// runner reads alike ("²" is no index).
+// jsonPath checks a dotted path of a JSON answer: non-empty elements of
+// printable characters (a key of an object may be any printable text but
+// the separator); an element read as an index of a list is ASCII digits,
+// as the runner reads it ("²" is a key, never an index).
 func (v *validator) jsonPath(path, p string) {
 	if p == "" || slices.Contains(strings.Split(p, "."), "") {
 		v.add(RuleInvalid, path, "%q is not a dotted path of non-empty elements", p)
 		return
 	}
 	for _, r := range p {
-		if r < 0x21 || r > 0x7e {
-			v.add(RuleInvalid, path, "%q holds a character outside printable ASCII", p)
+		if !unicode.IsPrint(r) {
+			v.add(RuleInvalid, path, "%q holds a character that is not printable", p)
 			return
 		}
 	}

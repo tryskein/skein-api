@@ -182,8 +182,12 @@ func TestValidate_RejectsEachRule(t *testing.T) {
 				Results: []AddresseeResultRow{{Match: Match{ExitCode: intp(1)}, Result: AddresseeGone}},
 				Capture: []string{"id"}}
 		}, RuleInvalid},
-		{"a list index outside ASCII digits", func(r *Registry) {
-			r.Channels[1].Outcomes[0].Match.JSON = map[string]string{"stages.\u00b2": "turn_started"}
+		{"a path element that is not printable", func(r *Registry) {
+			r.Channels[1].Outcomes[0].Match.JSON = map[string]string{"stages.\u0007": "turn_started"}
+		}, RuleInvalid},
+		{"a value under a parent the same row wants absent", func(r *Registry) {
+			r.Channels[1].Outcomes[0].Match.JSON = map[string]string{"result.send.writeSettlement.outcome": "refused"}
+			r.Channels[1].Outcomes[0].Match.JSONAbsent = []string{"result.send.writeSettlement"}
 		}, RuleInvalid},
 		{"http channel that names programs", func(r *Registry) {
 			httpHost(r)
@@ -1008,5 +1012,18 @@ func TestValidate_ATypedPath(t *testing.T) {
 	c := Match{ExitCode: intp(0), JSONAbsent: []string{"submit"}}
 	if a.overlaps(b) || a.overlaps(c) || c.overlaps(a) {
 		t.Fatal("two types of one path, or a type and the absence, overlap")
+	}
+}
+
+// TestValidate_AKeyMayBeAnyPrintableText — a key of an object in a path may
+// hold any printable character but the separator (a space, Cyrillic, "²");
+// only an element read as a list index is ASCII digits, as the runner reads
+// it.
+func TestValidate_AKeyMayBeAnyPrintableText(t *testing.T) {
+	r := validRegistry()
+	r.Channels[1].Outcomes[0].Match.JSON = map[string]string{"result.agent name": "a", "result.сессия": "b",
+		"stages.\u00b2": "c"}
+	if err := r.Validate(); err != nil {
+		t.Fatalf("a path with printable Unicode keys was refused: %v", err)
 	}
 }
