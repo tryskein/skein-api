@@ -182,6 +182,9 @@ func TestValidate_RejectsEachRule(t *testing.T) {
 		{"address read from a variable of a bad name", func(r *Registry) {
 			r.Channels[0].Address = &AddressSpec{Env: "ALPHA_THREAD", Qualifiers: []string{"ALPHA HOME"}}
 		}, RuleInvalid},
+		{"root process variable outside the qualifiers", func(r *Registry) {
+			r.Channels[1].Address = &AddressSpec{Env: "HOST_ID", Qualifiers: []string{"HOST_ROOT_START"}, RootPIDEnv: "HOST_ROOT_PID"}
+		}, RuleInvalid},
 		{"path qualifier that is not a qualifier", func(r *Registry) {
 			r.Channels[0].Address = &AddressSpec{Env: "ALPHA_THREAD", Qualifiers: []string{"ALPHA_HOME"},
 				QualifierPaths: map[string]string{"ALPHA_DATA": "~/.alpha"}}

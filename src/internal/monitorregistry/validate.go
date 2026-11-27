@@ -429,6 +429,11 @@ func (v *validator) channel(path string, c *Channel) {
 		if a.RootPIDEnv != "" && !envNamePattern.MatchString(a.RootPIDEnv) {
 			v.add(RuleInvalid, path+".address.rootPidEnv", "%q is not an environment variable name", a.RootPIDEnv)
 		}
+		// The root process joins the identity the working runner checks
+		// before a transfer only through the qualifiers.
+		if a.RootPIDEnv != "" && !slices.Contains(a.Qualifiers, a.RootPIDEnv) {
+			v.add(RuleInvalid, path+".address.rootPidEnv", "%q is not one of the qualifiers", a.RootPIDEnv)
+		}
 		for _, q := range slices.Sorted(maps.Keys(a.QualifierPaths)) {
 			if !slices.Contains(a.Qualifiers, q) {
 				v.add(RuleInvalid, path+".address.qualifierPaths."+q, "%q is not one of the qualifiers", q)
