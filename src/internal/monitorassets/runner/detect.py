@@ -186,10 +186,19 @@ class RegistryDetector(Detector):
         HOST_FORM_AGENT) and the runner does not stand in the host's own
         terminal. A record the launcher does not name keeps no method."""
         identity = ctx.identity
-        if identity is None or identity.terminal is not None:
+        if identity is None:
+            return None
+        record = ctx.settings.record
+        if identity.terminal is not None:
+            # The terminal of a host that launches agents (the ACP terminal
+            # of Paseo): the addressee is the host's session, and the record
+            # keeps what the launcher says, as an agent the host launched.
+            c = ctx.registry.channel(identity.terminal)
+            if c and c.get("step") == 5 and c.get("launcher") and self.detected(ctx, c):
+                keeps = (c["launcher"].get("keeps") or {}).get(record.id if record is not None else "general") or []
+                return c["id"], tuple(keeps)
             return None
         owned = set(a.channel for a in identity.addresses)
-        record = ctx.settings.record
         for c in self._channels(ctx, 5):
             launcher = c.get("launcher")
             if launcher and c["id"] in owned and self.detected(ctx, c):

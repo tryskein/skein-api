@@ -324,6 +324,19 @@ class AgentUnderPaseoTest(unittest.TestCase):
         line = self.line("codex", nested, PASEO_AGENT_ID=AGENT_ID)
         self.assertEqual((line["method"], line["channel"]), ("journal", None))
 
+    def test_the_acp_terminal_keeps_only_what_the_launcher_names(self):
+        # The ACP terminal of Paseo (runner <- shell <- the daemon, no agent
+        # process between): the addressee is the Paseo session and the
+        # record keeps only the launcher's keeps, as an agent Paseo
+        # launched. Kimi keeps nothing (its exit-on-event is skipped, it
+        # gets paseo); Claude keeps its stream.
+        terminal = [("bash", None, None), DAEMON]
+        line = self.line("kimi", terminal, PASEO_AGENT_ID=AGENT_ID)
+        self.assertEqual((line["method"], line["channel"]), ("detached", "paseo"))
+        self.assertIn("exit-on-event: not used under host paseo", line["reason"])
+        line = self.line("claude", terminal, PASEO_AGENT_ID=AGENT_ID)
+        self.assertEqual(line["method"], "stream")
+
     def test_the_own_method_of_an_acp_agent_is_skipped(self):
         doc = copy.deepcopy(REG.doc)
         doc["agents"].append({"id": "acp-agent", "about": "synthetic ACP agent", "source": "test",
