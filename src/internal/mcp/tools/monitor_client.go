@@ -160,8 +160,6 @@ func localAppDataCommand(shell string) string {
 	switch shell {
 	case monitorregistry.WindowsShellGitBash:
 		return `echo "$LOCALAPPDATA"`
-	case monitorregistry.WindowsShellCmd:
-		return `echo %LOCALAPPDATA%`
 	default:
 		return `$env:LOCALAPPDATA`
 	}

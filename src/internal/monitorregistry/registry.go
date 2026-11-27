@@ -108,7 +108,6 @@ const (
 	WindowsShellPowerShell = "powershell"
 	WindowsShellPwsh       = "pwsh"
 	WindowsShellGitBash    = "git-bash"
-	WindowsShellCmd        = "cmd"
 )
 
 // ProcessSign recognises the agent process by its executable name or by an

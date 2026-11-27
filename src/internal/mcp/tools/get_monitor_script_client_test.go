@@ -251,12 +251,11 @@ func TestGetMonitorScriptClient_ResolvesRecords(t *testing.T) {
 // TestGetMonitorScriptClient_TokenDirHintNamesTheShellCommand — US-11: a
 // windows call without tokenDir names the command that prints
 // %LOCALAPPDATA% in the record's shell: Git Bash reads the variable with
-// $NAME, cmd with %NAME%, PowerShell (also for the general record and a
+// $NAME, PowerShell (also for the general record and a
 // record without a named shell) with $env:NAME.
 func TestGetMonitorScriptClient_TokenDirHintNamesTheShellCommand(t *testing.T) {
 	cases := []struct{ shell, want string }{
 		{monitorregistry.WindowsShellGitBash, `echo "$LOCALAPPDATA"`},
-		{monitorregistry.WindowsShellCmd, `echo %LOCALAPPDATA%`},
 		{monitorregistry.WindowsShellPwsh, `$env:LOCALAPPDATA`},
 		{monitorregistry.WindowsShellPowerShell, `$env:LOCALAPPDATA`},
 		{"", `$env:LOCALAPPDATA`},

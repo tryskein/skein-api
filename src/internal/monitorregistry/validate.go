@@ -108,7 +108,7 @@ var (
 	platforms        = set(PlatformLinux, PlatformMacOS, PlatformWindows)
 	units            = set(UnitChars, UnitBytes, UnitLines, UnitEvents)
 	settingFormats   = set(SettingJSON, SettingTOML, SettingYAML)
-	windowsShells    = set(WindowsShellPowerShell, WindowsShellPwsh, WindowsShellGitBash, WindowsShellCmd)
+	windowsShells    = set(WindowsShellPowerShell, WindowsShellPwsh, WindowsShellGitBash)
 	httpMethods      = set("POST", "PUT")
 )
 
@@ -235,7 +235,7 @@ func (v *validator) agent(path string, a *Agent, channelSteps map[string]int) {
 		}
 	}
 	if a.WindowsShell != "" && !windowsShells[a.WindowsShell] {
-		v.add(RuleInvalid, path+".windowsShell", "shell %q is not one of powershell, pwsh, git-bash, cmd", a.WindowsShell)
+		v.add(RuleInvalid, path+".windowsShell", "shell %q is not one of powershell, pwsh, git-bash", a.WindowsShell)
 	}
 	v.warnings(path+".warnings", a.Warnings)
 	for i := range a.Methods {

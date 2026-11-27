@@ -346,11 +346,29 @@ func TestValidate_EnvPatternSubset(t *testing.T) {
 // TestValidate_AcceptsEveryWindowsShell: each shell of the closed set, and
 // none named, passes.
 func TestValidate_AcceptsEveryWindowsShell(t *testing.T) {
-	for _, sh := range []string{"", WindowsShellPowerShell, WindowsShellPwsh, WindowsShellGitBash, WindowsShellCmd} {
+	for _, sh := range []string{"", WindowsShellPowerShell, WindowsShellPwsh, WindowsShellGitBash} {
 		r := validRegistry()
 		r.Agents[0].WindowsShell = sh
 		if err := r.Validate(); err != nil {
 			t.Fatalf("Windows shell %q was refused: %v", sh, err)
+		}
+	}
+}
+
+// TestValidate_RefusesAShellWithoutCommands — US-11: the monitor builds its
+// commands for Git Bash, pwsh and Windows PowerShell only, so a record that
+// names another shell (cmd among them) is refused with RuleInvalid instead
+// of being given commands of a shell it does not run.
+func TestValidate_RefusesAShellWithoutCommands(t *testing.T) {
+	for _, sh := range []string{"cmd", "bash", "PowerShell"} {
+		r := validRegistry()
+		r.Agents[0].WindowsShell = sh
+		err := r.Validate()
+		if err == nil {
+			t.Fatalf("Windows shell %q was accepted", sh)
+		}
+		if rules := rulesOf(t, err); len(rules) != 1 || rules[0] != RuleInvalid {
+			t.Fatalf("Windows shell %q: %v, want one %s", sh, err, RuleInvalid)
 		}
 	}
 }
