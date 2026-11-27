@@ -170,6 +170,10 @@ func TestValidate_RejectsEachRule(t *testing.T) {
 				OutcomeRow{Match: Match{ExitCode: intp(1), StderrContains: "busy"}, Outcome: OutcomeRefused},
 				OutcomeRow{Match: Match{ExitCode: intp(1), StderrContains: "busy"}, Outcome: OutcomeUnknown})
 		}, RuleAmbiguousSign},
+		{"empty stderr and a stderr JSON in one row", func(r *Registry) {
+			r.Channels[1].Outcomes[1].Match = Match{ExitCode: intp(1), StderrEmpty: boolp(true),
+				StderrJSON: map[string]string{"error.code": "X"}}
+		}, RuleInvalid},
 		{"http channel that names programs", func(r *Registry) {
 			httpHost(r)
 			r.Channels[1].Binaries = map[string][]string{PlatformLinux: {"host"}}
@@ -655,5 +659,19 @@ func TestValidate_AParentAbsentIsApartFromItsChild(t *testing.T) {
 	r.Channels[1].Outcomes[0].Match.JSONAbsent = []string{"result.settle"}
 	if err := r.Validate(); err == nil {
 		t.Fatal("rows one answer can match both were accepted")
+	}
+}
+
+// TestValidate_AnEmptyStderrIsApartFromAStderrJSON — one exit code, one row
+// for an empty stderr and one for a JSON document on it: no answer matches
+// both.
+func TestValidate_AnEmptyStderrIsApartFromAStderrJSON(t *testing.T) {
+	r := validRegistry()
+	r.Channels[0].Outcomes = append(r.Channels[0].Outcomes,
+		OutcomeRow{Match: Match{ExitCode: intp(1), StderrEmpty: boolp(true)}, Outcome: OutcomeRefused},
+		OutcomeRow{Match: Match{ExitCode: intp(1), StderrJSON: map[string]string{"error.code": "BUSY"}},
+			Outcome: OutcomeRefused})
+	if err := r.Validate(); err != nil {
+		t.Fatalf("rows apart by an empty stderr were refused: %v", err)
 	}
 }

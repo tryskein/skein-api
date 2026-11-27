@@ -726,6 +726,8 @@ func (v *validator) criteriaOf(path string, rows []Match, executor string) {
 			v.add(RuleInvalid, rpath+".stderrEmpty", "an http answer has no stderr")
 		case executor == ExecutorHTTP && len(m.StderrJSON) > 0:
 			v.add(RuleInvalid, rpath+".stderrJson", "an http answer has no stderr")
+		case m.StderrEmpty != nil && *m.StderrEmpty && len(m.StderrJSON) > 0:
+			v.add(RuleInvalid, rpath+".stderrJson", "an empty stderr holds no JSON document")
 		case executor == ExecutorHTTP && m.StderrContains != "":
 			v.add(RuleInvalid, rpath+".stderrContains", "an http answer has no stderr")
 		case m.StderrContains != "" && strings.ContainsAny(m.StderrContains, "\r\n"):
@@ -760,6 +762,11 @@ func (m Match) overlaps(o Match) bool {
 		return false
 	}
 	if m.StderrContains != "" && o.StderrContains != "" && m.StderrContains != o.StderrContains {
+		return false
+	}
+	// An empty stderr holds no JSON document.
+	if (len(m.StderrJSON) > 0 && o.StderrEmpty != nil && *o.StderrEmpty) ||
+		(len(o.StderrJSON) > 0 && m.StderrEmpty != nil && *m.StderrEmpty) {
 		return false
 	}
 	if (m.StderrContains != "" && o.StderrEmpty != nil && *o.StderrEmpty) ||
