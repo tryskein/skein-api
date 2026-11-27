@@ -313,6 +313,7 @@ class ForcedChannelTest(unittest.TestCase):
     the monitor is detached and its stdout carries no notification line;
     a refusing forced channel has the journal, never another channel."""
 
+    @harness.subprocess_runner
     def test_forced_zavod_for_claude_is_detached_without_stdout_delivery(self):
         box = Box(self)
         server = page_server(self, [{"notifications": [event(1)], "cursor": {"ts": "t", "id": 1}}])
@@ -570,6 +571,7 @@ class PreflightResultsTest(unittest.TestCase):
         self.assertIn("lock", got, got)
         got["lock"].release()
 
+    @harness.subprocess_runner
     def test_the_same_working_command_starts_again(self):
         # Re-arm and the cycle of exit-on-event: the same command, the same
         # number, is an ordinary start each time, in an environment that

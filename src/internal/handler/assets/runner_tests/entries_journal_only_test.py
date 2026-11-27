@@ -26,6 +26,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 
 import entries_stream_w1_test as w1  # noqa: E402
+import harness  # noqa: E402
 import fake_channel  # noqa: E402
 import preflight_matrix_test as pm  # noqa: E402
 import start_test as st  # noqa: E402
@@ -149,6 +150,7 @@ class JournalOnlyTest(unittest.TestCase):
                 started = RUNNER.monitor_started_line(RUNNER.load_preflight(env["SKEIN_TOKEN_FILE"]), pm.ISSUE, True)
                 self.assertEqual((started["method"], started["journal"]), ("journal", line["journal"]))
 
+    @harness.subprocess_runner
     def test_the_journal_runner_writes_the_events(self):
         # Row #116 by the product path: one record per form of the group.
         for client in ("pi", "kiro", "goose"):

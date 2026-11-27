@@ -137,6 +137,7 @@ class PreflightLineTest(unittest.TestCase):
         self.assertEqual(line["client"], "general")
         self.assertNotIn("WARN-general-4f19", json.dumps(line))
 
+    @harness.subprocess_runner
     def test_the_working_command_is_short_and_self_contained(self):
         line = self.box.preflight()
         command = line["command"]
@@ -216,6 +217,7 @@ class MonitorModeTest(unittest.TestCase):
             with self.subTest(mode=mode):
                 self.assertEqual(self.start("legacy", mode), (0, ["run"], []))
 
+    @harness.subprocess_runner
     def test_a_bootstrap_without_client_ignores_it(self):
         # The bootstrap without client, end to end: the starter text, the
         # served loader and the rendered runner. Whatever SKEIN_MONITOR_MODE

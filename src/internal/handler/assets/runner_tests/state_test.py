@@ -286,6 +286,7 @@ def notification_id(nid):
     return lambda o: o.get("event") == "notification" and o["notification"].get("id") == nid
 
 
+@harness.subprocess_runner
 class CursorTest(unittest.TestCase):
     """Matrix row #24: the cursor survives a restart with the same token."""
 
@@ -505,6 +506,7 @@ class StateDirectoryTest(unittest.TestCase):
         self.assertFalse(os.path.exists(tok.state))
 
 
+@harness.subprocess_runner
 class FileFateTest(unittest.TestCase):
     """Matrix row #25: the state file shares the token file's fate."""
 
@@ -622,6 +624,7 @@ class FileFateTest(unittest.TestCase):
         self.assertFalse(os.path.exists(tok.dir))
 
 
+@harness.subprocess_runner
 class LegacyModeTest(unittest.TestCase):
     """Matrix row #26: the inline loader runs the body in legacy mode, whatever
     the agent's environment holds."""

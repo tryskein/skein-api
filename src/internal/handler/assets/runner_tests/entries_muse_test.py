@@ -21,6 +21,7 @@ sys.path.insert(0, HERE)
 
 import entries_journal_only_test as jo  # noqa: E402
 import entries_stream_w1_test as w1  # noqa: E402
+import harness  # noqa: E402
 import preflight_matrix_test as pm  # noqa: E402
 
 REG = pm.REG
@@ -44,6 +45,7 @@ class MuseTest(unittest.TestCase):
         box = pm.Box(self)
         jo.check_journal_line(self, box.preflight(box.env("muse"), ["muse"]))
 
+    @harness.subprocess_runner
     def test_the_journal_runner_writes_the_events(self):
         # Row #117 by the product path: no method found, so the working
         # command runs the journal runner, which writes each event.

@@ -177,6 +177,7 @@ def mint_args(action):
 class LostAccessTest(unittest.TestCase):
     """Row #69."""
 
+    @harness.subprocess_runner
     def test_401_and_403_have_their_reasons_and_finish_the_kept_rest(self):
         actions = {}
         for code, reason in ((401, "token_expired"), (403, "visibility_lost")):
@@ -193,6 +194,7 @@ class LostAccessTest(unittest.TestCase):
                 self.assertNotIn("bodyPreview", kept[0])
         self.assertNotEqual(actions["token_expired"], actions["visibility_lost"])
 
+    @harness.subprocess_runner
     def test_the_journal_ends_with_the_stop_line_without_a_kept_tail(self):
         # Review of wave 8, row 21: with nothing waiting, the monitor the
         # loader ends still has its stop line in the journal.
@@ -206,6 +208,7 @@ class LostAccessTest(unittest.TestCase):
                 self.assertEqual((last["event"], last["reason"], last.get("status")), ("closed", reason, code))
                 self.assertEqual(last["action"], lines[0]["action"])
 
+    @harness.subprocess_runner
     def test_an_outcome_fixed_but_not_journaled_gets_its_line(self):
         box = Box(self, state={"version": 1, "cursor": CURSOR, "outcomes": {"9": "queued"}, "journaled": []})
         srv = server(self, status(401))
@@ -213,6 +216,7 @@ class LostAccessTest(unittest.TestCase):
         self.assertEqual(lines[0]["reason"], "token_expired")
         self.assertEqual([(l["notificationId"], l["status"]) for l in box.deliveries()], [("9", "queued")])
 
+    @harness.subprocess_runner
     def test_a_server_error_or_timeout_keeps_everything(self):
         for name, url_of in (("5xx", lambda: server(self, status(503)).url()), ("network", closed_url)):
             with self.subTest(case=name):
@@ -223,6 +227,7 @@ class LostAccessTest(unittest.TestCase):
                 self.assertEqual(box.snapshot(), before)
                 self.assertEqual(box.deliveries(), [])
 
+    @harness.subprocess_runner
     def test_a_download_that_trickles_ends_within_the_timeout(self):
         # Review of wave 8, row 20: the timeout bounds the whole download,
         # not each socket operation. The served loader here waits 2 s.
@@ -266,6 +271,7 @@ class LostAccessTest(unittest.TestCase):
             with self.subTest(reason=reason, preflight=3):
                 self.assertIn("working command of preflight 3", runner.stop_action(reason, ISSUE, preflight=3))
 
+    @harness.subprocess_runner
     def test_a_signal_during_the_download_names_the_working_command(self):
         stop = threading.Event()
         self.addCleanup(stop.set)
@@ -302,6 +308,7 @@ class LostAccessTest(unittest.TestCase):
         self.assertNotIn("bootstrap", line["action"])
         self.assertIn("working command of preflight 4", line["action"])
 
+    @harness.subprocess_runner
     def test_a_live_owner_of_the_lock_is_left_to_end_the_monitor(self):
         for code in (401, 403):
             with self.subTest(status=code):
@@ -314,6 +321,7 @@ class LostAccessTest(unittest.TestCase):
                 self.assertEqual(box.snapshot(), before)
                 self.assertEqual(box.deliveries(), [])
 
+    @harness.subprocess_runner
     def test_of_two_failed_restarts_the_one_with_the_lock_ends_it(self):
         box = Box(self)
         srv = server(self, status(401))
@@ -345,6 +353,7 @@ class FileFateTest(unittest.TestCase):
     def assert_gone(self, box):
         self.assertIsNone(box.files(), "token, state.json, exclude_session and starter.py go together")
 
+    @harness.subprocess_runner
     def test_runner_mismatch_deletes_the_token_with_its_files(self):
         box = Box(self)
         srv = server(self, lambda h: h.send_body(200, b"print('another runner')\n"))
@@ -353,6 +362,7 @@ class FileFateTest(unittest.TestCase):
         self.assertIn("skein_get_monitor_script(", lines[0]["action"])
         self.assert_gone(box)
 
+    @harness.subprocess_runner
     def test_token_file_missing_by_its_kind(self):
         srv = server(self, status(500))
         missing = Box(self)
@@ -371,6 +381,7 @@ class FileFateTest(unittest.TestCase):
             self.assertEqual((rc, lines[0]["reason"]), (1, "token_file_missing"))
             self.assertIn("token", unreadable.files())
 
+    @harness.subprocess_runner
     def test_an_insecure_token_of_ours_goes_with_its_files(self):
         box = Box(self)
         os.chmod(box.dir, 0o755)
@@ -392,6 +403,7 @@ class FileFateTest(unittest.TestCase):
         box.starter_file = other
         return other
 
+    @harness.subprocess_runner
     def test_the_starter_predicate_before_the_token_is_read(self):
         # Matrix row #153 by the privacy predicate of the spec (P-5): the
         # starter is a regular file of ours, not a link, and either has no
@@ -414,6 +426,7 @@ class FileFateTest(unittest.TestCase):
                 self.assertEqual((rc, lines[0]["reason"]), (1, "token_file_insecure"))
                 self.assertEqual(srv.script_hits, 0, "the token was read and sent")
 
+    @harness.subprocess_runner
     def test_group_bits_on_the_starter_in_a_private_directory_pass(self):
         # The same predicate: 0644 in a 0700 directory of ours is private
         # (no other user reaches the file), so the start goes on to the
@@ -426,12 +439,14 @@ class FileFateTest(unittest.TestCase):
         self.assertEqual(lines[0]["reason"], "server_unreachable")
         self.assertEqual(srv.script_hits, 1)
 
+    @harness.subprocess_runner
     def test_misconfigured_deletes_a_known_path(self):
         box = Box(self)
         rc, lines, _ = box.run(server(self, status(500)).url(), drop=("SKEIN_RUNNER_SHA256",))
         self.assertEqual((rc, lines[0]["reason"]), (1, "misconfigured"))
         self.assert_gone(box)
 
+    @harness.subprocess_runner
     def test_server_unreachable_names_the_working_command(self):
         box = Box(self)
         rc, lines, _ = box.run(server(self, status(503)).url())
@@ -439,6 +454,7 @@ class FileFateTest(unittest.TestCase):
         self.assertIn("working command", lines[0]["action"])
         self.assertIn("starter.py", box.files())
 
+    @harness.subprocess_runner
     def test_a_preflight_that_could_not_download_names_itself(self):
         # Warning 8 of wave 15: before the line of a preflight there is no
         # working command of it; the command that runs again is the
@@ -460,12 +476,14 @@ class FileFateTest(unittest.TestCase):
                 self.assertIn("preflight command", action)
                 self.assertNotIn("working command", action)
 
+    @harness.subprocess_runner
     def test_the_journal_outlives_the_token(self):
         box = Box(self)
         box.run(server(self, status(401)).url())
         self.assertIsNone(box.files())
         self.assertTrue(box.journal())
 
+    @harness.subprocess_runner
     def test_the_minimum_python_on_both_platforms(self):
         cases = (("posix", (3, 5, 9), True), ("posix", (3, 6, 0), False),
                  ("win32", (3, 12, 3), True), ("win32", (3, 12, 4), False))
@@ -511,6 +529,7 @@ class Pages(object):
             handler.send_body(200, json.dumps(answer).encode())
 
 
+@harness.subprocess_runner
 @unittest.skipUnless(os.name == "posix", "the POSIX client loader")
 class NamedPathTest(unittest.TestCase):
     """Row #71: prepare, a token written 0644 like the Write tool, the
@@ -612,6 +631,7 @@ class ReissueCommandTest(unittest.TestCase):
     """Row #72: the command of a new mint keeps the monitor's parameters;
     the command to go on is the working command."""
 
+    @harness.subprocess_runner
     def test_the_mint_keeps_the_parameters(self):
         cases = (({}, {"id": ISSUE, "client": "alpha", "platform": "posix"}),
                  ({"SKEIN_SUBTREE": "1", "SKEIN_EVENT_TYPES": "comment.created,issue.updated"},
@@ -632,6 +652,7 @@ class ReissueCommandTest(unittest.TestCase):
         self.assertEqual(args["tokenDir"], os.path.abspath("base"))
         self.assertEqual(args["platform"], "windows")
 
+    @harness.subprocess_runner
     def test_the_command_to_go_on_is_the_working_command(self):
         box = Box(self)
         _, lines, _ = box.run(server(self, status(503)).url())
@@ -657,6 +678,7 @@ class StarterRunsTheBytesTest(unittest.TestCase):
         self.assertLess(size, STARTER_LOADER_CAP)
         self.assertGreater(size, ARG_MAX_ONE, "the loader fits one argument: this test proves nothing")
 
+    @harness.subprocess_runner
     def test_both_starters_run_the_served_loader(self):
         for form in ("file", "text"):
             with self.subTest(form=form):
@@ -690,6 +712,7 @@ def loader_namespace():
 class LiveOwnerTraceTest(unittest.TestCase):
     """Row #129: two points of one trace."""
 
+    @harness.subprocess_runner
     def test_a_live_owner_keeps_its_files_under_a_failed_load(self):
         for code in (401, 403):
             with self.subTest(status=code):

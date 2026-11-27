@@ -59,6 +59,7 @@ def _write(path, text, mode):
 # descriptor through /proc/self/fd, which only Linux has.
 @unittest.skipUnless(sys.platform.startswith("linux"),
                      "the I/O counter resolves directory-relative opens through /proc/self/fd")
+@harness.subprocess_runner
 class CheckedReadTest(unittest.TestCase):
     """Matrix row #22: what is checked is what is read; another user's or an
     open file is not read."""

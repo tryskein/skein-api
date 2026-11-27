@@ -17,6 +17,7 @@ import socketserver
 import struct
 import threading
 import types
+import unittest
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import parse_qs, urlparse
 
@@ -53,6 +54,26 @@ DEFAULT_TOKEN_IDLE_SEC = 6 * 3600
 
 ROOT = "zz-77"
 EMPTY = {"notifications": [], "cursor": {"ts": "2026-01-01T00:00:00Z", "id": 0}}
+
+# Whether the tests run under mutmut. `mutmut run` (3.8.1) puts the variable
+# MUTANT_UNDER_TEST into its own environment before it collects any test
+# (`_run` calls `set_mutant_under_test("mutant_generation")` first, and
+# `set_mutant_under_test` of mutation/trampoline.py writes the name to
+# os.environ) and keeps it set in every later phase: the stats, the clean
+# run (an empty name), the forced failure and each mutant. Read once, at
+# import: a test may clear os.environ while it runs.
+UNDER_MUTMUT = "MUTANT_UNDER_TEST" in os.environ
+
+
+def subprocess_runner(test):
+    """Skip a test method or class when the tests run under mutmut.
+
+    For the tests that run the runner body, the loader, the starter, prepare
+    or the working command in a child interpreter: under mutmut the child
+    runs the mutated copy of the parts, mutmut credits no mutant killed
+    there to the test, and its stats run fails on such tests. Without
+    mutmut the test runs as usual."""
+    return unittest.skipIf(UNDER_MUTMUT, "runs the runner in a child interpreter, which mutmut does not measure")(test)
 
 
 def _join_manifest(manifest):

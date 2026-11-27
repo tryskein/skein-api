@@ -415,6 +415,7 @@ class SecretsOnTheOutputTest(unittest.TestCase):
         self.assert_clean(text, "stream stdout")
         self.assertIn(PREVIEW, text)
 
+    @harness.subprocess_runner
     def test_zavod_detached_start_stdin_argv_and_journal(self):
         world = World(self)
         world.progs["zavod"].respond([{"exit": 0, "stdout": dict(ZAVOD_OK["stdout"], message=CHANNEL_KEY)}])

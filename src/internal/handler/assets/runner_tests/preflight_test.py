@@ -549,6 +549,7 @@ class ConfigInvalidLineTest(unittest.TestCase):
         self.assertEqual(lines[0]["event"], "preflight")
 
 
+@harness.subprocess_runner
 @unittest.skipUnless(os.name == "posix", "the POSIX preflight")
 class PreflightProcessTest(unittest.TestCase):
     """Matrix rows #34, #141: the preflight as the agent runs it, through the

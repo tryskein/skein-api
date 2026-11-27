@@ -186,6 +186,7 @@ def one_stop(test, code, lines, reason, want_code):
     test.assertEqual(code, want_code)
 
 
+@harness.subprocess_runner
 @unittest.skipUnless(sys.platform.startswith("linux"), "the POSIX detached start")
 class MonitorStartedTest(unittest.TestCase):
     """Matrix row #37 (R-3, P-6, C1, SC-012): monitor_started if and only if
@@ -273,6 +274,7 @@ class MonitorStartedTest(unittest.TestCase):
                     self.assertTrue(wait_until(lambda: not alive(pid)), "a refused child is still running")
 
 
+@harness.subprocess_runner
 @unittest.skipUnless(sys.platform.startswith("linux"), "the POSIX detached start")
 class ReceiptTest(unittest.TestCase):
     """Review finding 8 of wave 6: the receipt is printed while the child
@@ -332,6 +334,7 @@ class AnnouncedTest(unittest.TestCase):
     its full monitor_started is printed, so a start whose line was not
     printed leaves the next start full."""
 
+    @harness.subprocess_runner
     def test_a_detached_receipt_that_cannot_be_printed_leaves_the_next_start_full(self):
         box = Box(self)
         pre = box.preflight()
@@ -389,6 +392,7 @@ class StaleResultTest(unittest.TestCase):
         self.assertEqual(box.journal_lines(), [], "the journal got lines of a refused start")
         self.assertTrue(os.path.exists(box.token), "the token was not kept")
 
+    @harness.subprocess_runner
     def test_a_result_replaced_before_the_child_holds_the_lock(self):
         box = Box(self)
         pre = box.preflight()
@@ -444,6 +448,7 @@ class StaleResultTest(unittest.TestCase):
 class JournalMethodTest(unittest.TestCase):
     """Matrix row #39 (US-8, the life of the journal method)."""
 
+    @harness.subprocess_runner
     def test_the_journal_method_starts_detached_and_writes_the_journal(self):
         page = {"notifications": [{"id": 5, "type": "comment_added", "entity": {"type": "issue", "id": ISSUE},
                                    "actor": {"username": "bob"}, "commentId": "c-5", "bodyPreview": "hello"}],
@@ -570,6 +575,7 @@ class ForegroundStartTest(unittest.TestCase):
         self.assertFalse(box.lock_busy())
 
 
+@harness.subprocess_runner
 @unittest.skipUnless(sys.platform.startswith("linux"), "the POSIX flock")
 class StaleLockSweepTest(unittest.TestCase):
     """P-5: the start of a monitor removes the files of locks/ older than

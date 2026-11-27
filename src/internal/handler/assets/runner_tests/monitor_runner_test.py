@@ -39,7 +39,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
 from harness import (EMPTY, ROOT, SITE_DIR, LoaderServer, PushServer,
-                     ScriptedServer, load_runner, render_runner, served_loader)
+                     ScriptedServer, load_runner, render_runner, served_loader,
+                     subprocess_runner)
 
 _TMPDIRS = []
 
@@ -230,6 +231,7 @@ class RunnerHarness:
         self.server.server_close()
 
 
+@subprocess_runner
 class MonitorRunnerTest(unittest.TestCase):
     def test_emits_lines_immediately_unbuffered(self):
         """monitor_started must reach the parent before the process exits."""
@@ -929,6 +931,7 @@ class StopLineAssertions:
         self.assertIn(ROOT, last["action"], "action must name the root issue")
 
 
+@subprocess_runner
 class StopLineTest(StopLineAssertions, unittest.TestCase):
 
     def test_token_expired_on_401(self):
@@ -1109,6 +1112,7 @@ def site_with(**hooks):
     return env
 
 
+@subprocess_runner
 class LoaderStopTest(StopLineAssertions, unittest.TestCase):
     """Row 49: every load-phase stop of the loader."""
 
@@ -1314,6 +1318,7 @@ class LoaderStopTest(StopLineAssertions, unittest.TestCase):
         self.assertIn("RuntimeError", err)
 
 
+@subprocess_runner
 class LoaderRunnerHandoverTest(StopLineAssertions, unittest.TestCase):
     """Row 50: after exec the runner owns the stop protocol — one stop line,
     the token file's fate by the runner's row of the table."""
@@ -1457,6 +1462,7 @@ def fresh_token(dirpath, name="tok"):
     return path
 
 
+@subprocess_runner
 class OneRunnerTest(StopLineAssertions, unittest.TestCase):
     """Row 43 (INV-13, R9, US-4 "one runner", SC-006) — POSIX."""
 
@@ -1507,6 +1513,7 @@ class OneRunnerTest(StopLineAssertions, unittest.TestCase):
             srv.stop()
 
 
+@subprocess_runner
 class NoFileLocksTest(unittest.TestCase):
     """Row 44 (INV-13 on a platform without fcntl, maintainers' decision)."""
 
@@ -1535,6 +1542,7 @@ class NoFileLocksTest(unittest.TestCase):
             srv.stop()
 
 
+@subprocess_runner
 class LockFailureTest(unittest.TestCase):
     """A flock failure other than «held by another runner» (ENOLCK, EINVAL on a
     filesystem without flock) is not a reason to stop: one diagnostic line on
@@ -1621,6 +1629,7 @@ class RootClosedTest(StopLineAssertions, unittest.TestCase):
         self.assertFalse(exists)
 
 
+@subprocess_runner
 class RestartTest(unittest.TestCase):
     """Row 46 (US-4 "restart", SC-006, INV-4) and row 47 (token file
     deleted from outside)."""
@@ -1677,6 +1686,7 @@ class RestartTest(unittest.TestCase):
             runner.kill()
             srv.stop()
 
+@subprocess_runner
 class RedirectTest(unittest.TestCase):
     """A 3xx from the poll door is not followed: the token never reaches the
     Location host."""

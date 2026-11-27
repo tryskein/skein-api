@@ -131,6 +131,7 @@ class KeyInEveryModeTest(unittest.TestCase):
         self.assertNotIn(KEY, box.journal_text())
         self.assertNotIn(KEY, box.stdout)
 
+    @harness.subprocess_runner
     def test_the_journal_method_of_a_detached_child(self):
         box = Box(self, serve("leak %s here" % KEY))
         code = box.start(box.preflight()["preflightId"])
