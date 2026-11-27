@@ -255,7 +255,12 @@ class WinSecurity(object):
     # (FILE_FLAG_BACKUP_SEMANTICS).
     def open(self, path, data=False):
         access = 0x20080 | (0x80000000 if data else 0)
-        h = self._k.CreateFileW(path, access, 0x3, None, 3, 0x02200000, None)
+        # A file opened to read its data shares deletion (FILE_SHARE_DELETE):
+        # a writer of the monitor replaces it by os.replace, which a handle
+        # without that share would make fail; the reader keeps the content
+        # it opened.
+        share = 0x7 if data else 0x3
+        h = self._k.CreateFileW(path, access, share, None, 3, 0x02200000, None)
         if h is None or h == ctypes.c_void_p(-1).value:
             self._fail("CreateFileW")
         return h
