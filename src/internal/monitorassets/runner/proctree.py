@@ -64,8 +64,7 @@ class SystemProcesses(object):
     @staticmethod
     def executable(pid):
         """The absolute path of the executable of a live process, or None
-        when it cannot be read (Windows: not read, no channel program there
-        is taken from the agent process)."""
+        when it cannot be read."""
         if sys.platform.startswith("linux"):
             try:
                 path = os.readlink("/proc/%d/exe" % pid)
@@ -76,6 +75,8 @@ class SystemProcesses(object):
         if sys.platform == "darwin":
             procargs = _darwin_procargs(pid)
             return None if procargs is None else procargs[0]
+        if os.name == "nt":
+            return _windows_executable(pid)
         return None
 
 
@@ -140,3 +141,31 @@ def _darwin_procargs(pid):
     executable = path.decode("utf-8", "replace")
     return (executable if os.path.isabs(executable) else None,
             [a.decode("utf-8", "replace") for a in args[:argc]])
+
+
+def _windows_executable(pid):
+    """QueryFullProcessImageNameW of a process opened with
+    PROCESS_QUERY_LIMITED_INFORMATION (ctypes), or None."""
+    try:
+        import ctypes
+        k = ctypes.WinDLL("kernel32", use_last_error=True)
+        k.OpenProcess.argtypes = (ctypes.c_uint32, ctypes.c_int, ctypes.c_uint32)
+        k.OpenProcess.restype = ctypes.c_void_p
+        k.QueryFullProcessImageNameW.argtypes = (ctypes.c_void_p, ctypes.c_uint32, ctypes.c_wchar_p,
+                                                 ctypes.POINTER(ctypes.c_uint32))
+        k.QueryFullProcessImageNameW.restype = ctypes.c_int
+        k.CloseHandle.argtypes = (ctypes.c_void_p,)
+        k.CloseHandle.restype = ctypes.c_int
+    except (OSError, AttributeError):
+        return None
+    handle = k.OpenProcess(0x1000, 0, pid)
+    if not handle:
+        return None
+    try:
+        buf = ctypes.create_unicode_buffer(32768)
+        size = ctypes.c_uint32(len(buf))
+        if not k.QueryFullProcessImageNameW(handle, 0, buf, ctypes.byref(size)):
+            return None
+        return buf.value or None
+    finally:
+        k.CloseHandle(handle)

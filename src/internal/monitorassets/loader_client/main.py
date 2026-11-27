@@ -48,16 +48,21 @@ LOADER_ACCESS_STOPS = ("token_expired", "visibility_lost")
 def loader_client_trusted(token_file):
     """The token directory and starter.py pass the token predicate (P-4):
     checked before the token is read."""
-    if not hasattr(os, "getuid"):
-        # Windows: its own predicate comes with its platform layer.
-        return True
     directory = os.path.dirname(os.path.abspath(token_file))
     try:
         dst = os.lstat(directory)
     except OSError:
         # No directory: the token is missing, the read says so.
         return True
-    if not stat.S_ISDIR(dst.st_mode) or dst.st_uid != os.getuid() or dst.st_mode & 0o077:
+    if os.name != "posix":
+        # Windows (P-9 (a)): the token directory and starter.py, checked on
+        # their handles; starter.py is read through the checked handle.
+        try:
+            current_platform().read_checked(os.path.join(directory, CLIENT_STARTER_FILE), None)
+        except PlatformRefusal:
+            return False
+        return True
+    if not stat.S_ISDIR(dst.st_mode) or not current_platform().owns(dst) or dst.st_mode & 0o077:
         return False
     starter = os.path.join(directory, CLIENT_STARTER_FILE)
     try:
@@ -75,14 +80,21 @@ def loader_client_trusted(token_file):
 def loader_client_ours(path):
     """The token file is ours (looked at, not opened)."""
     try:
-        return hasattr(os, "getuid") and os.lstat(path).st_uid == os.getuid()
+        st = os.lstat(path)
     except OSError:
         return False
+    if os.name != "posix":
+        # Windows: the token file of a token directory prepare created new
+        # and private (R-10) is ours.
+        return stat.S_ISREG(st.st_mode)
+    return current_platform().owns(st)
 
 
 def loader_client_read_token(path):
     """Read the token by the token predicate. Nothing is deleted here: a
     stop that deletes takes the one-runner lock first. Raises Stop."""
+    if os.name != "posix":
+        return loader_client_read_token_windows(path)
     try:
         fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
     except FileNotFoundError:
@@ -95,7 +107,7 @@ def loader_client_read_token(path):
             raise Stop("token_file_missing")
         if not token_file_private(path, st):
             # The token is burnt: ours goes under the lock.
-            raise Stop("token_file_insecure", delete_token=hasattr(os, "getuid") and st.st_uid == os.getuid())
+            raise Stop("token_file_insecure", delete_token=current_platform().owns(st))
         chunks = []
         while True:
             chunk = os.read(fd, 65536)
@@ -107,6 +119,26 @@ def loader_client_read_token(path):
         raise Stop("token_file_missing")
     finally:
         os.close(fd)
+    if not token:
+        raise Stop("token_file_missing", delete_token=True)
+    return token
+
+
+def loader_client_read_token_windows(path):
+    """Read the token on Windows: its directory and the opened file pass
+    criterion (a) of P-9 (platform layer, the handle closed before return)."""
+    try:
+        raw = current_platform().read_token(path)
+    except PlatformRefusal as exc:
+        if exc.reason == "not_found":
+            raise Stop("token_file_missing", delete_token=True)
+        if exc.reason in ("open_to_others", "symlink"):
+            raise Stop("token_file_insecure", delete_token=loader_client_ours(path))
+        raise Stop("token_file_missing")
+    try:
+        token = raw.decode("utf-8").strip()
+    except UnicodeDecodeError:
+        raise Stop("token_file_missing")
     if not token:
         raise Stop("token_file_missing", delete_token=True)
     return token

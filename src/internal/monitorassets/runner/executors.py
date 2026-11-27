@@ -41,10 +41,12 @@
 
 import json
 import os
+import re
 import select
-import sys
+import shutil
 import socket
 import subprocess
+import sys
 import threading
 import time
 
@@ -214,15 +216,80 @@ def message_dir(token_file):
     return os.path.dirname(os.path.abspath(token_file))
 
 
-def write_message_file(token_file, text):
+# --- batch programs of Windows (US-11, INV-5) ---------------------------------
+# cmd.exe parses the command line of a .cmd or .bat program by rules of its
+# own (%, ^, &, |, <, >, !, quotes), which no quoting of Python makes safe.
+# Such a program gets no byte of untrusted text in its arguments: every
+# argument after the program is of a narrow character set, a message file
+# goes by a path of ASCII letters, digits and \ : . _ - only, in the first
+# private directory whose path is of that kind, and a text in an argument
+# is the id-only form (text.py#ids_only_batch).
+
+BATCH_EXTENSIONS = (".cmd", ".bat")
+BATCH_SAFE_ARG = re.compile(r"\A[A-Za-z0-9 ._:\\/=,+-]*\Z")
+BATCH_SAFE_PATH = re.compile(r"\A[A-Za-z0-9\\:._-]+\Z")
+# The private subdirectory of the user directory for message files of
+# batch programs, when the token directory has no ASCII path.
+BATCH_MESSAGE_DIR_NAME = "messages"
+
+
+def is_batch_program(path):
+    """Whether the program at path is run by cmd.exe (Windows only)."""
+    return (os.name == "nt" and isinstance(path, str)
+            and os.path.splitext(path)[1].lower() in BATCH_EXTENSIONS)
+
+
+def resolve_program(name, env, programs=None):
+    """The path a channel program runs from: the path the preflight result
+    names (programs), an absolute name, else the PATH of env; None when it
+    is not found."""
+    if programs and name in programs:
+        return programs[name]
+    if os.path.isabs(name):
+        return name
+    return shutil.which(name, path=env.get("PATH", os.defpath))
+
+
+def batch_message_dir(token_file, env):
+    """The directory of message files for a batch program: the first of the
+    token directory and the private skein-monitor/messages whose absolute
+    path is of BATCH_SAFE_PATH, or None when neither is."""
+    first = message_dir(token_file)
+    if BATCH_SAFE_PATH.match(first):
+        return first
+    try:
+        second = os.path.join(user_dir(env), BATCH_MESSAGE_DIR_NAME)
+    except PlatformRefusal:
+        return None
+    if not BATCH_SAFE_PATH.match(second):
+        return None
+    try:
+        current_platform().ensure_private_dir(second)
+    except PlatformRefusal:
+        return None
+    return second
+
+
+def channel_takes_ids_only(channel, programs, env):
+    """Whether the text of a channel goes as the id-only form: its program
+    is a batch program and the text is an argument."""
+    executor = channel.get("executor") or {}
+    argv = executor.get("argv") or []
+    if executor.get("feed") != "arg" or not argv:
+        return False
+    return is_batch_program(resolve_program(argv[0], env, programs if isinstance(programs, dict) else None))
+
+
+def write_message_file(token_file, text, directory=None):
     """Write text into a new private file msg-<random> of the token
-    directory and return its path. The file is created exclusively with mode
-    0600 and never follows a link."""
-    directory = message_dir(token_file)
+    directory (or of directory) and return its path. The file is created
+    exclusively with mode 0600 and never follows a link."""
+    directory = directory or message_dir(token_file)
     for _ in range(8):
         path = os.path.join(directory, MESSAGE_FILE_PREFIX + os.urandom(8).hex())
         try:
-            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+                         | getattr(os, "O_BINARY", 0), 0o600)
         except FileExistsError:
             continue
         except OSError as exc:
@@ -654,10 +721,17 @@ class ArgvExecutor(object):
         feed = executor.get("feed")
         text_file = None
         env = child_env(self.env, self.secrets)
-        text = redact_text(text, self.secrets)
+        text = redact_text(text, self.secrets) if text is not None else None
+        program = resolve_program((executor.get("argv") or [""])[0], env, self.programs)
+        batch = is_batch_program(program)
         try:
             if feed == "file":
-                text_file = write_message_file(self.token_file, text)
+                directory = None
+                if batch:
+                    directory = batch_message_dir(self.token_file, self.env)
+                    if directory is None:
+                        raise ExecutorRefusal("no private message directory of an ASCII path for a .cmd program")
+                text_file = write_message_file(self.token_file, text, directory)
                 argv = expand_argv(executor["argv"], env, text_file=text_file)
                 stdin_data = None
             elif feed == "arg":
@@ -670,6 +744,11 @@ class ArgvExecutor(object):
                 raise ExecutorRefusal("feed %r is not one of stdin, file, arg" % feed)
             if argv and argv[0] in self.programs:
                 argv[0] = self.programs[argv[0]]
+            if batch:
+                if text_file is not None and not BATCH_SAFE_PATH.match(text_file):
+                    raise ExecutorRefusal("the message path of a .cmd program is not ASCII")
+                if not all(BATCH_SAFE_ARG.match(a) for a in argv[1:]):
+                    raise ExecutorRefusal("an argument of a .cmd program holds characters cmd.exe interprets")
             return run_program(argv, env, stdin_data, timeout_sec, self.secrets)
         finally:
             if text_file is not None:

@@ -118,6 +118,38 @@ def echo_phrase(exclude_file):
             "session id to the file %s and do not reply." % _quoted(exclude_file))
 
 
+# The id-only form (US-11): what a batch program of Windows may get in an
+# argument. Only fields that are ids of the poll go in, each checked by
+# this pattern; an event with any other value has no id-only form.
+IDS_ONLY_LABEL = "Skein monitor notification, automated, not a user message:"
+IDS_ONLY_TAIL = "Read it with skein_notifications or skein_comment_get."
+_ID_VALUE = re.compile(r"\A[A-Za-z0-9._:-]{1,128}\Z")
+
+
+def ids_only_batch(notifications, limit=None, unit=UNIT_CHARS):
+    """The id-only text of a batch: the label, each event's type,
+    notification id, issue and comment id, and where to read it. The batch
+    takes the longest run of the events, in order, that fits the limit.
+    Returns (text, count, False), or (None, 0, False) when the first event
+    has no id-only form or it does not fit."""
+    parts = []
+    for n in notifications or ():
+        fields = [("type", n.get("type")), ("notification", n.get("id")), ("issue", _issue_id(n))]
+        if "commentId" in n:
+            fields.append(("commentId", n["commentId"]))
+        values = ["%s" % v for _, v in fields]
+        if not all(_ID_VALUE.match(v) for v in values):
+            break
+        part = " ".join("%s=%s" % (k, v) for (k, _), v in zip(fields, values))
+        candidate = " ".join([IDS_ONLY_LABEL] + parts + [part, IDS_ONLY_TAIL])
+        if limit is not None and measure(candidate, unit) > limit:
+            break
+        parts.append(part)
+    if not parts:
+        return None, 0, False
+    return " ".join([IDS_ONLY_LABEL] + parts + [IDS_ONLY_TAIL]), len(parts), False
+
+
 def plain_batch(notifications, exclude_file, limit=None, unit=UNIT_CHARS, notes=(), minimal=False):
     """The plain text of a batch of events for one delivery: the label
     once, each event's fields, the echo phrase once (INV-17, US-13). The

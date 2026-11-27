@@ -107,7 +107,7 @@
     {
       "id": "codex-queue",
       "about": "codex queue: the own delivery command of Codex, which puts a user message into the queue of a thread by its id; the thread takes it when idle.",
-      "source": "github.com/openai/codex ae21235afbd5ba6556c2ab4b64f6afc96a139ef8 (codex-rs): cli/src/queue_cmd.rs#QueueCommand and tui/src/session_queue_commands.rs#run_session_queue_command (prints 'Queued message <id> for thread <id>.' and exits 0; the only warning, on stderr, belongs to --resume, which is not passed; an error exits non-zero after the request may have been sent); tui/src/lib.rs#maybe_probe_default_daemon_socket and #app_server_target_for_launch (the local app-server daemon socket is used when it answers, otherwise an embedded app server writes the queue, so the socket is no boundary of the delivery); uds/src/daemon_directory.rs#shared_daemon_socket_directory (the socket lives under /tmp/codex-daemon-<uid>, hidden by sandboxes); state/src/lib.rs#SQLITE_HOME_ENV and utils/home-dir find_codex_home (the queue is in the SQLite state database under CODEX_SQLITE_HOME, else CODEX_HOME, else ~/.codex); protocol/src/user_input.rs#MAX_USER_INPUT_TEXT_CHARS (1048576 characters); Linux execve(2) MAX_ARG_STRLEN (131072 bytes per argument, the terminating NUL included).",
+      "source": "github.com/openai/codex ae21235afbd5ba6556c2ab4b64f6afc96a139ef8 (codex-rs): cli/src/queue_cmd.rs#QueueCommand and tui/src/session_queue_commands.rs#run_session_queue_command (prints 'Queued message <id> for thread <id>.' and exits 0; the only warning, on stderr, belongs to --resume, which is not passed; an error exits non-zero after the request may have been sent); tui/src/lib.rs#maybe_probe_default_daemon_socket and #app_server_target_for_launch (the local app-server daemon socket is used when it answers, otherwise an embedded app server writes the queue, so the socket is no boundary of the delivery); uds/src/daemon_directory.rs#shared_daemon_socket_directory (the socket lives under /tmp/codex-daemon-<uid>, hidden by sandboxes); state/src/lib.rs#SQLITE_HOME_ENV and utils/home-dir find_codex_home (the queue is in the SQLite state database under CODEX_SQLITE_HOME, else CODEX_HOME, else ~/.codex); protocol/src/user_input.rs#MAX_USER_INPUT_TEXT_CHARS (1048576 characters); Linux execve(2) MAX_ARG_STRLEN (131072 bytes per argument, the terminating NUL included); cli/src/queue_cmd.rs has no platform branch, so Windows runs the same command, by the native codex.exe of the agent process or the codex that PATH finds (a codex.cmd shim of npm takes the id-only text, US-11).",
       "step": 3,
       "order": 1,
       "kind": "addressed",
@@ -171,6 +171,9 @@
           "codex"
         ],
         "macos": [
+          "codex"
+        ],
+        "windows": [
           "codex"
         ]
       },

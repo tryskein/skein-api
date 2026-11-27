@@ -707,7 +707,12 @@ class DeliverySink(object):
             batch = [n for n in batch if str(n["id"]) in attempt.events]
         limit, unit = _line_limit(channel)
         minimal = all(str(n["id"]) in self._shorten for n in batch)
-        text, _, _ = plain_batch(batch, self.exclude_file, limit, unit, channel.get("textNotes"), minimal)
+        if channel_takes_ids_only(channel, self.doc.get("programs"), self.env):
+            # A batch program of Windows gets no untrusted text (US-11): the
+            # id-only form, or no text at all (a refusal before send).
+            text, _, _ = ids_only_batch(batch, limit, unit)
+        else:
+            text, _, _ = plain_batch(batch, self.exclude_file, limit, unit, channel.get("textNotes"), minimal)
         guard = Guard(self, channel, attempt, timeout, batch)
         driver = self.drivers.get(channel_id) or ArgvDriver(channel, self.executor)
         try:

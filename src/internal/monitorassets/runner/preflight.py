@@ -153,7 +153,10 @@ class Context(object):
     channels that need the ledger may be used."""
 
     def __init__(self, registry, settings, env, placement, detector, prober, external=True,
-                 identity=None):
+                 identity=None, token_file=None):
+        # token_file names the token directory (the message directory of a
+        # .cmd program, US-11); None in a context without a token.
+        self.token_file = token_file
         self.registry = registry
         self.settings = settings
         self.env = env
@@ -278,10 +281,24 @@ def channel_program(name, env, agent):
     shell of the agent's commands rebuilds its PATH without the wrapper's
     directory, while the program is the build that owns the agent's thread."""
     executable = agent.executable if agent is not None else None
-    if (not os.path.isabs(name) and executable and os.path.basename(executable) == name
+    if (not os.path.isabs(name) and executable and _program_name(executable) == name
             and os.path.isfile(executable) and os.access(executable, os.X_OK)):
         return executable
+    if os.name == "nt" and not os.path.isabs(name):
+        # Windows runs a program by the path PATH and PATHEXT give, a .cmd
+        # shim among them: that path is the program, kept as found.
+        return shutil.which(name, path=env.get("PATH", os.defpath))
     return name if program_found(name, env) else None
+
+
+def _program_name(path):
+    """The name a channel record gives the program at path: its base name,
+    on Windows without ".exe" and in any case."""
+    base = os.path.basename(path)
+    if os.name == "nt":
+        base = base.lower()
+        return base[:-4] if base.endswith(".exe") else base
+    return base
 
 
 def channel_programs(channel, env, agent):
@@ -355,8 +372,14 @@ def channel_available(ctx, channel_id):
     binaries = (channel.get("binaries") or {}).get(_platform_key())
     if not binaries:
         return False, "channel %s has no program for this platform" % channel_id
-    if not any(channel_program(b, ctx.env, ctx.placement.agent) is not None for b in binaries):
+    programs = [channel_program(b, ctx.env, ctx.placement.agent) for b in binaries]
+    if not any(p is not None for p in programs):
         return False, "no program of channel %s found" % channel_id
+    if any(is_batch_program(p) for p in programs if p is not None) and \
+            (channel.get("executor") or {}).get("feed") == "file" and \
+            ctx.token_file is not None and batch_message_dir(ctx.token_file, ctx.env) is None:
+        # US-11: a .cmd program takes a message file only by an ASCII path.
+        return False, "no private message directory of an ASCII path for the .cmd program of %s" % channel_id
     if channel.get("probeUndefined"):
         return True, None
     for probe in channel.get("probes") or []:
@@ -786,7 +809,7 @@ def preflight(token_file, env, registry, settings, detector=None, prober=None, p
     journal, external = check_sandbox(token_file, env)
     if placement is None:
         placement = system_placement(registry, settings.record)
-    ctx = Context(registry, settings, env, placement, detector, prober, external)
+    ctx = Context(registry, settings, env, placement, detector, prober, external, token_file=token_file)
     ctx.identity = identity(placement, registry, env, detector.address_specs(ctx))
     choice = choose(ctx)
     # The record's warnings go into the instruction (a named record) or are
