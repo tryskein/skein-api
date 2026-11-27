@@ -367,9 +367,9 @@ class RearmWithALiveHolderTest(unittest.TestCase):
     def test_a_holder_that_stays_gets_one_already_running(self):
         code, lines, waited = self.start_with_holder(None)
         self.assertEqual([l.get("reason") for l in lines], ["already_running"], lines)
-        # Review round 2 of wave 14, row 18: the wait the spec promises.
-        self.assertGreaterEqual(waited, HOLDER_WAIT_SPEC_SEC)
-        self.assertLess(waited, HOLDER_WAIT_SPEC_SEC + 2 * RUNNER.HOLDER_WAIT_STEP_SEC)
+        # Review round 2 of wave 14, row 18, and round 3, row 8: the wait the
+        # spec promises, exactly: the last step of the wait is cut at it.
+        self.assertAlmostEqual(waited, HOLDER_WAIT_SPEC_SEC, places=6)
 
 
 class StoppingExecutor(ms.FakeExecutor):
