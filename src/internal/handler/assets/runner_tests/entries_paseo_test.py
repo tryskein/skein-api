@@ -120,10 +120,11 @@ class FakePaseo(object):
         return [c for c in calls if sub is None or c["argv"][1] == sub]
 
 
-def launched(name, argv=None):
-    """The runner under a shell under an agent process (this process) the
+def launched(name, pid):
+    """The runner under a shell under an agent process (pid, a live process
+    other than this one: the runner's own pid is never an agent's) the
     Paseo daemon launched."""
-    return [("bash", None, None), (name, argv or [name], os.getpid()), DAEMON]
+    return [("bash", None, None), (name, [name], pid), DAEMON]
 
 
 def in_terminal(name):
@@ -139,20 +140,23 @@ class PaseoRecordTest(unittest.TestCase):
     PATH, and Paseo after Stop."""
 
     def fresh(self, outside_path=False):
+        self.agent = ft.Sleeper(self)
         self.world = eo.new_world(self)
         directory = os.path.join(self.world.root, ".local", "bin") if outside_path else self.world.bin
         self.paseo = FakePaseo(directory)
 
     def mon(self, client="codex", procs=None, **extra):
-        return eo.monitor(self.world, "tok", client, procs or launched(client), PASEO_AGENT_ID=AGENT_ID, **extra)
+        return eo.monitor(self.world, "tok", client, procs or launched(client, self.agent.pid),
+                          PASEO_AGENT_ID=AGENT_ID, **extra)
 
     def test_recognised_by_the_agent_id_under_the_daemon(self):
         self.fresh()
         mon = self.mon()
         self.assertEqual((mon.doc["method"], mon.doc["channel"]), ("detached", "paseo"))
-        line = eo.monitor(self.world, "tok-none", "codex", launched("codex")).line
+        line = eo.monitor(self.world, "tok-none", "codex", launched("codex", self.agent.pid)).line
         self.assertEqual((line["method"], line["channel"]), ("journal", None))
-        line = eo.monitor(self.world, "tok-bad", "codex", launched("codex"), PASEO_AGENT_ID="agent-7").line
+        line = eo.monitor(self.world, "tok-bad", "codex", launched("codex", self.agent.pid),
+                          PASEO_AGENT_ID="agent-7").line
         self.assertEqual((line["method"], line["channel"]), ("journal", None))
 
     def test_the_text_goes_in_a_file_that_is_removed(self):
@@ -209,7 +213,7 @@ class PaseoRecordTest(unittest.TestCase):
         # (delivery.ts): the receipt is still "queued" — no repeat, no
         # fallback (Zavod stands behind it).
         self.fresh()
-        mon = self.mon(**self.world.zavod_env("codex"))
+        mon = self.mon(**self.world.zavod_env("codex", root_pid=self.agent.pid))
         self.assertEqual(mon.doc["fallbacks"], ["zavod"])
         mon.page([ft.note(1)])
         self.assertEqual(mon.statuses(), [(1, "queued")])
@@ -249,6 +253,7 @@ class AgentUnderPaseoTest(unittest.TestCase):
     def setUp(self):
         self.world = eo.new_world(self)
         self.paseo = FakePaseo(self.world.bin)
+        self.agent = ft.Sleeper(self)
         self.n = 0
 
     def line(self, client, procs, **extra):
@@ -259,16 +264,17 @@ class AgentUnderPaseoTest(unittest.TestCase):
         env = dict(PASEO_AGENT_ID=AGENT_ID, CODEX_THREAD_ID=THREAD)
         line = self.line("codex", in_terminal("codex"), **env)
         self.assertEqual(line["channel"], "codex-queue")
-        line = self.line("codex", launched("codex"), **env)
+        line = self.line("codex", launched("codex", self.agent.pid), **env)
         self.assertEqual((line["method"], line["channel"]), ("detached", "paseo"))
         self.assertIn("delivery: not used under host paseo", line["reason"])
 
     def test_claude_in_paseo_keeps_its_monitor(self):
-        line = self.line("claude", launched("claude"), PASEO_AGENT_ID=AGENT_ID)
+        line = self.line("claude", launched("claude", self.agent.pid), PASEO_AGENT_ID=AGENT_ID)
         self.assertEqual(line["method"], "stream")
 
     def test_paseo_before_zavod(self):
-        line = self.line("codex", launched("codex"), PASEO_AGENT_ID=AGENT_ID, **self.world.zavod_env("codex"))
+        line = self.line("codex", launched("codex", self.agent.pid), PASEO_AGENT_ID=AGENT_ID,
+                         **self.world.zavod_env("codex", root_pid=self.agent.pid))
         self.assertEqual(line["channel"], "paseo")
         self.assertEqual(RUNNER.load_preflight(self.world.env("tok-%d" % self.n, "codex")["SKEIN_TOKEN_FILE"])
                          ["fallbacks"], ["zavod"])
@@ -276,13 +282,13 @@ class AgentUnderPaseoTest(unittest.TestCase):
     def test_kimi_tui_against_kimi_in_paseo(self):
         line = self.line("kimi", in_terminal("kimi-code"), PASEO_AGENT_ID=AGENT_ID)
         self.assertEqual(line["method"], "exit-on-event")
-        line = self.line("kimi", launched("kimi-code"), PASEO_AGENT_ID=AGENT_ID)
+        line = self.line("kimi", launched("kimi-code", self.agent.pid), PASEO_AGENT_ID=AGENT_ID)
         self.assertEqual((line["method"], line["channel"]), ("detached", "paseo"))
 
     def test_the_acp_terminal_and_an_agent_nested_in_it(self):
         line = self.line("gemini", [("bash", None, None), DAEMON], PASEO_AGENT_ID=AGENT_ID)
         self.assertEqual((line["method"], line["channel"]), ("detached", "paseo"))
-        nested = [("bash", None, None), ("codex", ["codex"], os.getpid()), ("bash", None, None), DAEMON]
+        nested = [("bash", None, None), ("codex", ["codex"], self.agent.pid), ("bash", None, None), DAEMON]
         line = self.line("codex", nested, PASEO_AGENT_ID=AGENT_ID)
         self.assertEqual((line["method"], line["channel"]), ("journal", None))
 
@@ -305,7 +311,7 @@ class AgentUnderPaseoTest(unittest.TestCase):
             ctx.identity = runner.identity(pl, reg, env, detector.address_specs(ctx), self_pid=ft.RUNNER_PID)
             return runner.choose(ctx)
 
-        launched_choice = choose(launched("acp-agent"))
+        launched_choice = choose(launched("acp-agent", self.agent.pid))
         self.assertEqual(launched_choice.channel, "paseo")
         self.assertIn("exit-on-event: not used under host paseo", launched_choice.reasons)
         self.assertEqual(choose(in_terminal("acp-agent")).method, "exit-on-event")
