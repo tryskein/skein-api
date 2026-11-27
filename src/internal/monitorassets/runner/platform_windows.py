@@ -205,7 +205,15 @@ class WindowsPlatform(object):
 
     @staticmethod
     def tree_popen_options():
-        return {"creationflags": _CREATE_SUSPENDED}
+        # A detached runner has no console: its programs get none either
+        # (no window opens for a call).
+        return {"creationflags": _CREATE_SUSPENDED | _CREATE_NO_WINDOW}
+
+    @staticmethod
+    def child_popen_options():
+        """Options of a helper process of the runner (the request
+        executor): no console window."""
+        return {"creationflags": _CREATE_NO_WINDOW}
 
     @staticmethod
     def tree_make(proc):
@@ -490,8 +498,10 @@ def _win_creation_time(pid):
         k.CloseHandle(handle)
 
 
-# CreateProcess flag of a program started suspended.
+# CreateProcess flags: a program started suspended; a console program
+# without a console window.
 _CREATE_SUSPENDED = 0x00000004
+_CREATE_NO_WINDOW = 0x08000000
 
 
 def _win_kill_quietly(proc):

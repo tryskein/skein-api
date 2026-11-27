@@ -170,7 +170,10 @@ class Executor:
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             close_fds=True,
+            **current_platform().child_popen_options()
         )
+        # Non-blocking reads: POSIX, and Windows pipes from Python 3.12 on
+        # (the lowest Python of a Windows monitor with client, R-9).
         os.set_blocking(self.proc.stdout.fileno(), False)
         self.pending = []
 

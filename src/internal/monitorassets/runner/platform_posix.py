@@ -125,6 +125,12 @@ class PosixPlatform(object):
         return {"start_new_session": True}
 
     @staticmethod
+    def child_popen_options():
+        """Options of a helper process of the runner (the request
+        executor): none."""
+        return {}
+
+    @staticmethod
     def tree_make(proc):
         return None
 

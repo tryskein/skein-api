@@ -42,6 +42,7 @@
 import json
 import os
 import select
+import sys
 import socket
 import subprocess
 import threading
@@ -328,6 +329,9 @@ def run_program(argv, env, stdin_data, timeout_sec, secrets=()):
             raise ExecutorRefusal("the call would carry a secret of the monitor")
     if os.name == "posix":
         return _run_posix(argv, env, stdin_data, timeout_sec)
+    if sys.version_info >= (3, 12):
+        # Pipes of Windows can be set non-blocking from Python 3.12 on.
+        return _run_polled(argv, env, stdin_data, timeout_sec)
     return _run_threads(argv, env, stdin_data, timeout_sec)
 
 
@@ -435,6 +439,111 @@ def _run_posix(argv, env, stdin_data, timeout_sec):
                     pass
         if proc is not None and proc.returncode is None:
             proc.wait()
+    return CallResult(None if timed_out else proc.returncode, b"".join(chunks[out_fd]), b"".join(chunks[err_fd]),
+                      timed_out, cut[out_fd])
+
+
+def _run_polled(argv, env, stdin_data, timeout_sec):
+    """The wait of a platform without select on pipes whose pipes can be set
+    non-blocking (Windows, Python 3.12+): every _WAIT_STEP_SEC the pipes
+    are read and written without blocking. The processes of the call are
+    one tree (_ProcessTree, a job object on Windows): it is killed on the
+    timeout, at the end of the call and on any error or stop signal. The
+    output is read for one grace after the program ended, so a call lasts
+    at most its timeout plus one grace."""
+    tree = None
+    proc = None
+    timed_out = False
+    try:
+        try:
+            proc = subprocess.Popen(argv, stdin=subprocess.PIPE if stdin_data is not None else subprocess.DEVNULL,
+                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env, close_fds=True,
+                                    **current_platform().tree_popen_options())
+        except OSError as exc:
+            raise ExecutorRefusal("the program cannot be started (%s)" % (exc.strerror or exc))
+        tree = _ProcessTree(proc)
+        out_fd, err_fd = proc.stdout.fileno(), proc.stderr.fileno()
+        chunks = {out_fd: [], err_fd: []}
+        sizes = {out_fd: 0, err_fd: 0}
+        cut = {out_fd: False, err_fd: False}
+        reading = set([out_fd, err_fd])
+        in_fd = proc.stdin.fileno() if stdin_data is not None else None
+        pending = memoryview(stdin_data) if stdin_data is not None else None
+        for fd in list(reading) + ([in_fd] if in_fd is not None else []):
+            os.set_blocking(fd, False)
+        tree.start()
+        ended_at = None
+        deadline = time.monotonic() + max(timeout_sec, 0)
+        while True:
+            now = time.monotonic()
+            if ended_at is None and proc.poll() is not None:
+                ended_at = now
+            if ended_at is None and now >= deadline:
+                timed_out = True
+                tree.kill()
+                proc.wait()
+                ended_at = time.monotonic()
+            if ended_at is not None and (not reading or time.monotonic() >= ended_at + _READER_GRACE_SEC):
+                break
+            progress = False
+            for fd in list(reading):
+                try:
+                    chunk = os.read(fd, 65536)
+                except BlockingIOError:
+                    continue
+                except OSError:
+                    chunk = b""
+                if not chunk:
+                    reading.discard(fd)
+                    continue
+                progress = True
+                room = OUTPUT_CAP_BYTES - sizes[fd]
+                if len(chunk) > room:
+                    cut[fd] = True
+                if room > 0:
+                    chunks[fd].append(chunk[:room])
+                    sizes[fd] += min(len(chunk), room)
+            if in_fd is not None and ended_at is None:
+                try:
+                    # A non-blocking pipe of Windows may take part of a
+                    # write, or none of it.
+                    written = os.write(in_fd, pending[:4096])
+                    pending = pending[written:]
+                    progress = progress or written > 0
+                except BlockingIOError:
+                    pass
+                except OSError:
+                    pending = memoryview(b"")
+                if not pending:
+                    proc.stdin.close()
+                    in_fd = None
+            if in_fd is not None and ended_at is not None:
+                proc.stdin.close()
+                in_fd = None
+            if not progress:
+                time.sleep(_WAIT_STEP_SEC)
+    except BaseException:
+        # A stop signal (or any error) during the call: the program and its
+        # descendants do not outlive it.
+        if tree is not None:
+            tree.kill()
+        elif proc is not None:
+            _kill_quietly(proc)
+        raise
+    finally:
+        if tree is not None:
+            tree.kill()
+        for f in ((proc.stdin, proc.stdout, proc.stderr) if proc is not None else ()):
+            if f is not None:
+                try:
+                    f.close()
+                except OSError:
+                    pass
+        if proc is not None and proc.returncode is None:
+            try:
+                proc.wait(timeout=_READER_GRACE_SEC)
+            except subprocess.TimeoutExpired:
+                pass
     return CallResult(None if timed_out else proc.returncode, b"".join(chunks[out_fd]), b"".join(chunks[err_fd]),
                       timed_out, cut[out_fd])
 
