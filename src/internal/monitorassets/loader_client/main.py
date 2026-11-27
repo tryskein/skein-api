@@ -28,6 +28,7 @@
 # fate.
 
 import hashlib
+import traceback
 import os
 import signal
 import stat
@@ -219,8 +220,11 @@ def loader_client_line(stop, issue, token_file):
         event, code = LOADER_STOPS[stop.reason]
         emit({"event": event, "reason": stop.reason, "action": loader_client_action(stop.reason, issue)})
         return code
-    # The runner's line, with the files already given their fate.
-    return finish(Stop(stop.reason, status=stop.status, detail=stop.detail), issue, token_file)
+    # The runner's line, with the files already given their fate; a stop the
+    # working command resumes names its preflight result.
+    last = load_preflight(token_file) if token_file else None
+    return finish(Stop(stop.reason, status=stop.status, detail=stop.detail,
+                       preflight=last["preflightId"] if last else None), issue, token_file)
 
 
 def loader_client_action(reason, issue):
@@ -259,6 +263,12 @@ def loader_client_main():
             sys.exit(loader_client_end(stop, token_file, issue, env, token))
     except StopSignal:
         sys.exit(loader_client_line(Stop("stopped"), issue, token_file))
+    except Exception:
+        # An error of this branch ends in the client-mode line (its working
+        # command, its mint call), not in the outer loader's bootstrap text.
+        _stopping = True
+        log_stderr("monitor loader: unexpected error\n" + traceback.format_exc())
+        sys.exit(loader_client_line(Stop("internal_error"), issue, token_file))
     # The runner runs in this namespace (it reads the mode and hands its own
     # bytes to a detached child from here) and leaves through SystemExit.
     globals()[RUNNER_BODY_NAME] = body

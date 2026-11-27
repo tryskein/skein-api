@@ -228,6 +228,13 @@ def stop_action(reason, issue, detail=None, preflight=None):
         return ("The monitor for issue %s %s. Run the working command of preflight %s again to resume "
                 "it." % (issue, "was stopped by a signal" if reason == "stopped" else "hit an unexpected error",
                          preflight))
+    if LOADER_MODE == "client" and reason in ("stopped", "internal_error"):
+        # No result to name (its file is gone or unreadable): a call with
+        # `client` has a working command, not a bootstrap.
+        return ("The monitor for issue %s %s. Run the same working command again to resume it; if it "
+                "fails again, mint a new monitor with %s." % (
+                    issue, "was stopped by a signal" if reason == "stopped" else "hit an unexpected error",
+                    mint))
     if reason == "addressee_gone":
         return ("The agent the monitor for issue %s delivered to has ended, so the monitor stopped. "
                 "If the work goes on in another agent, mint a new monitor there with %s." % (issue, mint))

@@ -30,6 +30,7 @@ import json
 import os
 import re
 import shutil
+import signal
 import socket
 import stat
 import subprocess
@@ -251,6 +252,54 @@ class LostAccessTest(unittest.TestCase):
         self.assertLess(time.monotonic() - started, 15)
         self.assertEqual((rc, lines[0]["event"], lines[0]["reason"]), (1, "paused", "server_unreachable"))
         self.assertEqual(box.snapshot(), before)
+
+    def test_client_stop_lines_name_the_working_command(self):
+        # Review of wave 8, row 26: a call with `client` has no bootstrap.
+        runner = harness.load_runner()
+        runner.LOADER_MODE = "client"
+        for reason in ("stopped", "internal_error"):
+            with self.subTest(reason=reason, preflight="none"):
+                action = runner.stop_action(reason, ISSUE)
+                self.assertNotIn("bootstrap", action)
+                self.assertIn("working command", action)
+            with self.subTest(reason=reason, preflight=3):
+                self.assertIn("working command of preflight 3", runner.stop_action(reason, ISSUE, preflight=3))
+
+    def test_a_signal_during_the_download_names_the_working_command(self):
+        stop = threading.Event()
+        self.addCleanup(stop.set)
+        asked = threading.Event()
+
+        def slow(h):
+            asked.set()
+            h.send_response(200)
+            h.send_header("Content-Length", str(1 << 20))
+            h.end_headers()
+            try:
+                while not stop.is_set():
+                    h.wfile.write(b"x")
+                    h.wfile.flush()
+                    time.sleep(0.2)
+            except OSError:
+                pass
+        srv = server(self, slow)
+        box = Box(self)
+        with open(os.path.join(box.dir, "preflight.json"), "w") as fh:
+            json.dump({"version": harness.load_runner().PREFLIGHT_VERSION, "preflightId": 4}, fh)
+        os.chmod(os.path.join(box.dir, "preflight.json"), 0o600)
+        proc = subprocess.Popen([sys.executable, box.starter_file], stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE, env=box.env(srv.url()), universal_newlines=True)
+        try:
+            self.assertTrue(asked.wait(30), "the download never started")
+            proc.send_signal(signal.SIGTERM)
+            out, err = proc.communicate(timeout=30)
+        finally:
+            if proc.poll() is None:
+                proc.kill()
+        line = json.loads(out.splitlines()[-1])
+        self.assertEqual(line["reason"], "stopped", err)
+        self.assertNotIn("bootstrap", line["action"])
+        self.assertIn("working command of preflight 4", line["action"])
 
     def test_a_live_owner_of_the_lock_is_left_to_end_the_monitor(self):
         for code in (401, 403):
