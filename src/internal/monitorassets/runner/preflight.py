@@ -192,6 +192,10 @@ class Context(object):
         # {channel id: [[path, value], ...]}: what the addressee command of
         # an available channel gave at its capture paths.
         self.captures = {}
+        # {channel id: {name: absolute path}}: the programs of each channel
+        # this preflight checked, resolved once (checked_programs); the
+        # probes, the capture and preflight.json take them from here.
+        self.programs = {}
 
 
 class Choice(object):
@@ -406,6 +410,36 @@ def channel_programs(channel, env, agent):
     return {}
 
 
+def _step_argvs(channel):
+    """The argument lists of a channel's own check, wait and blind steps."""
+    return (((channel.get("addressee") or {}).get("command") or {}).get("argv"),
+            (channel.get("idle") or {}).get("argv"),
+            (channel.get("stage") or {}).get("argv"),
+            (channel.get("unstage") or {}).get("argv"),
+            ((channel.get("submit") or {}).get("executor") or {}).get("argv"))
+
+
+def checked_programs(ctx, channel):
+    """The programs this preflight runs the channel by, resolved once per
+    preflight: its own program (channel_programs) and the programs of its
+    check, wait and blind steps that name another one, found on the PATH of
+    the agent process. A name that is not found is absent. The probes, the
+    capture and preflight.json all use this one map, so a program that is
+    gone after it was found is not replaced by another of that name."""
+    channel_id = channel.get("id")
+    if channel_id not in ctx.programs:
+        agent = ctx.placement.agent if ctx.placement is not None else None
+        programs = dict(channel_programs(channel, ctx.env, agent))
+        for argv in _step_argvs(channel):
+            name = argv[0] if argv else None
+            if name and name not in programs:
+                path = absolute_program(name, ctx.env)
+                if path is not None:
+                    programs[name] = path
+        ctx.programs[channel_id] = programs
+    return ctx.programs[channel_id]
+
+
 def _missing_programs_cause(channel_id, binaries, env):
     """Why no program of the channel was found, naming a path under the
     home directory that HOME does not give."""
@@ -538,20 +572,17 @@ def channel_available(ctx, channel_id):
     binaries = (channel.get("binaries") or {}).get(_platform_key())
     if not binaries:
         return False, "channel %s has no program for this platform" % channel_id
-    programs = [channel_program(b, ctx.env, ctx.placement.agent) for b in binaries]
-    if not any(p is not None for p in programs):
+    found = checked_programs(ctx, channel)
+    own = (spec.get("argv") or [""])[0]
+    if own not in found:
         return False, _missing_programs_cause(channel_id, binaries, ctx.env)
+    programs = [found[own]]
     # The programs of its own check, wait and blind steps: one that is not
     # found leaves the channel unavailable here, not every attempt refused
     # by the working runner.
-    own = (spec.get("argv") or [""])[0]
-    for argv in (((channel.get("addressee") or {}).get("command") or {}).get("argv"),
-                 (channel.get("idle") or {}).get("argv"),
-                 (channel.get("stage") or {}).get("argv"),
-                 (channel.get("unstage") or {}).get("argv"),
-                 ((channel.get("submit") or {}).get("executor") or {}).get("argv")):
+    for argv in _step_argvs(channel):
         name = argv[0] if argv else None
-        if name and name != own and absolute_program(name, ctx.env) is None:
+        if name and name not in found:
             return False, "channel %s: program %s of its check or wait is not found" % (channel_id, name)
     if any(is_batch_program(p) for p in programs if p is not None) and \
             (channel.get("executor") or {}).get("feed") == "file" and \
@@ -1012,28 +1043,16 @@ def _binding_doc(binding):
             "depth": binding.depth, "pane": dict(binding.pane)}
 
 
-def _programs_doc(registry, channel_ids, env, agent):
-    """The programs of the chosen channel and its fallbacks that run from a
-    path of the agent process, as preflight.json keeps them."""
+def _programs_doc(ctx, channel_ids):
+    """The programs of the chosen channel and its fallbacks as preflight.json
+    keeps them: the paths this preflight checked them by (checked_programs),
+    never found again - the working runner runs them by these absolute
+    paths, its own program and those of its check, wait and blind steps,
+    never by a bare name."""
     programs = {}
     for channel_id in channel_ids:
-        channel = registry.channel(channel_id) if channel_id is not None else None
-        if channel is not None:
-            programs.update(channel_programs(channel, env, agent))
-            # The programs of its addressee check and its idle wait, when
-            # they name another one: the working runner runs them by these
-            # absolute paths too, never by a bare name.
-            # So do the stage, unstage and submit of a blind record.
-            for argv in (((channel.get("addressee") or {}).get("command") or {}).get("argv"),
-                         (channel.get("idle") or {}).get("argv"),
-                         (channel.get("stage") or {}).get("argv"),
-                         (channel.get("unstage") or {}).get("argv"),
-                         ((channel.get("submit") or {}).get("executor") or {}).get("argv")):
-                name = argv[0] if argv else None
-                if name and name not in programs:
-                    path = absolute_program(name, env)
-                    if path is not None:
-                        programs[name] = path
+        if channel_id is not None:
+            programs.update(ctx.programs.get(channel_id) or {})
     return programs
 
 
@@ -1062,6 +1081,9 @@ def preflight(token_file, env, registry, settings, detector=None, prober=None, p
         # with the agent process.
         prober.agent = placement.agent
     ctx = Context(registry, settings, env, placement, detector, prober, external, token_file=token_file)
+    if hasattr(prober, "programs"):
+        # The probes and the capture run the programs the preflight checked.
+        prober.programs = ctx.programs
     ctx.identity = identity(placement, registry, env, detector.address_specs(ctx))
     choice = choose(ctx)
     # The record's warnings go into the instruction (a named record) or are
@@ -1109,8 +1131,7 @@ def preflight(token_file, env, registry, settings, detector=None, prober=None, p
                     (c, ctx.captures[c]) for c in [choice.channel] + list(choice.fallbacks) if c in ctx.captures)),
                 "binding": binding,
                 "hostMessage": "; ".join(host_messages) if host_messages else None,
-                "programs": _programs_doc(registry, [choice.channel] + list(choice.fallbacks), env,
-                                          placement.agent),
+                "programs": _programs_doc(ctx, [choice.channel] + list(choice.fallbacks)),
                 "degraded": detector.degraded,
             })
     except (PlatformRefusal, OSError) as exc:

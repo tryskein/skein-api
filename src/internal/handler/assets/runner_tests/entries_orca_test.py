@@ -491,6 +491,30 @@ class OrcaRecordTest(unittest.TestCase):
                 self.assertEqual(len(program.calls("send")), 1)
                 self.assertEqual(decoy.calls(), [])
 
+    def test_a_program_gone_after_its_probe_is_not_replaced(self):
+        # Warning 7 of the wave 11 review, round 3: the preflight finds the
+        # programs of a channel once; a program gone between its probe and
+        # the capture leaves the channel unavailable, and preflight.json
+        # never names another program of that name (a system orca).
+        decoy_dir = os.path.join(self.world.root, "decoy")
+        os.mkdir(decoy_dir)
+        decoy = FakeOrca(decoy_dir, "orca")
+        real = RUNNER.run_program
+        removed = []
+
+        def remove_after_the_probe(argv, env, stdin_data, timeout_sec, secrets=()):
+            result = real(argv, env, stdin_data, timeout_sec, secrets)
+            if argv[0] == self.orca.path and not removed:
+                os.remove(self.orca.path)
+                removed.append(argv[0])
+            return result
+        with mock.patch.object(RUNNER, "run_program", remove_after_the_probe):
+            mon = self.mon("tok", PATH="bin" + os.pathsep + decoy_dir + os.pathsep + os.environ.get("PATH", os.defpath))
+        self.assertEqual(removed, [self.orca.path])
+        self.assertNotEqual(mon.doc["channel"], "orca")
+        self.assertNotIn(decoy.path, (mon.doc.get("programs") or {}).values())
+        self.assertEqual(decoy.calls(), [])
+
     def test_the_working_runner_runs_no_name_the_preflight_did_not_find(self):
         executor = RUNNER.ArgvExecutor(self.world.token("tok-strict"), self.world.env("tok-strict", "codex"),
                                        [ft.TOKEN], {})
