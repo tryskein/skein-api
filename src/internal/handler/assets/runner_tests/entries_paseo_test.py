@@ -218,7 +218,8 @@ class PaseoRecordTest(unittest.TestCase):
         mon.page([ft.note(1)])
         self.assertEqual(mon.statuses(), [(1, "queued")])
         self.assertEqual(len(self.paseo.calls("send")), 1)
-        self.assertEqual(self.world.calls("zavod"), [])
+        # The preflight probed Zavod (version); nothing was sent there.
+        self.assertEqual([c for c in self.world.calls("zavod") if "send" in c["argv"]], [])
 
     def test_the_probe_is_the_inspection_of_the_agent(self):
         self.fresh()
