@@ -340,26 +340,30 @@ def _kill_group(pgid):
 
 
 def _run_posix(argv, env, stdin_data, timeout_sec):
-    try:
-        proc = subprocess.Popen(argv, stdin=subprocess.PIPE if stdin_data is not None else subprocess.DEVNULL,
-                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env, close_fds=True,
-                                start_new_session=True)
-    except OSError as exc:
-        raise ExecutorRefusal("the program cannot be started (%s)" % (exc.strerror or exc))
-    # The program leads its own session and group: the group is named by
-    # its pid while any member is left. The clean-up is armed from here: the
-    # set-up of the pipes below is inside it.
-    group = proc.pid
-    out_fd, err_fd = proc.stdout.fileno(), proc.stderr.fileno()
-    chunks = {out_fd: [], err_fd: []}
-    sizes = {out_fd: 0, err_fd: 0}
-    cut = {out_fd: False, err_fd: False}
-    reading = set([out_fd, err_fd])
-    in_fd = proc.stdin.fileno() if stdin_data is not None else None
-    pending = memoryview(stdin_data) if stdin_data is not None else None
-    ended_at = None
+    proc = None
+    group = None
     timed_out = False
     try:
+        # The clean-up is armed before the program starts: a stop signal
+        # right after it started, or during the set-up of its pipes, still
+        # kills its group.
+        try:
+            proc = subprocess.Popen(argv, stdin=subprocess.PIPE if stdin_data is not None else subprocess.DEVNULL,
+                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env, close_fds=True,
+                                    start_new_session=True)
+        except OSError as exc:
+            raise ExecutorRefusal("the program cannot be started (%s)" % (exc.strerror or exc))
+        # The program leads its own session and group: the group is named by
+        # its pid while any member is left.
+        group = proc.pid
+        out_fd, err_fd = proc.stdout.fileno(), proc.stderr.fileno()
+        chunks = {out_fd: [], err_fd: []}
+        sizes = {out_fd: 0, err_fd: 0}
+        cut = {out_fd: False, err_fd: False}
+        reading = set([out_fd, err_fd])
+        in_fd = proc.stdin.fileno() if stdin_data is not None else None
+        pending = memoryview(stdin_data) if stdin_data is not None else None
+        ended_at = None
         for fd in list(reading) + ([in_fd] if in_fd is not None else []):
             os.set_blocking(fd, False)
         deadline = time.monotonic() + max(timeout_sec, 0)
@@ -411,19 +415,21 @@ def _run_posix(argv, env, stdin_data, timeout_sec):
     except BaseException:
         # A stop signal (or any error) during the call: the program and its
         # group do not outlive it.
-        _kill_group(group)
+        if group is not None:
+            _kill_group(group)
         raise
     finally:
         # Nothing of the call outlives it: the descendants of the program go
         # with its group, whether or not they still hold its pipes.
-        _kill_group(group)
-        for f in (proc.stdin, proc.stdout, proc.stderr):
+        if group is not None:
+            _kill_group(group)
+        for f in ((proc.stdin, proc.stdout, proc.stderr) if proc is not None else ()):
             if f is not None:
                 try:
                     f.close()
                 except OSError:
                     pass
-        if proc.returncode is None:
+        if proc is not None and proc.returncode is None:
             proc.wait()
     return CallResult(None if timed_out else proc.returncode, b"".join(chunks[out_fd]), b"".join(chunks[err_fd]),
                       timed_out, cut[out_fd])
