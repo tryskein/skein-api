@@ -57,7 +57,7 @@ RECORDS = {
 PASEO_ID = "0f8fad5b-d9cb-469f-a165-70867728950e"
 
 
-def check_journal_run(test, client):
+def check_journal_run(test, client, exe):
     """The working command of a journal-only record runs the journal
     runner of the product: it returns after monitor_started, the detached
     process holds the one-runner lock, polls, and writes each event to the
@@ -75,7 +75,12 @@ def check_journal_run(test, client):
         served.append(1)
 
     box = st.Box(test, respond)
-    pre = box.preflight(SKEIN_CLIENT=client)
+    # The preflight of the record as its agent process runs it (the chain
+    # runner -> shell -> the agent), on this box's token and poll server.
+    env = box.env(SKEIN_CLIENT=client)
+    placement, _ = pm.placement(REG, client, [exe])
+    pre = RUNNER.preflight(box.token, env, REG, RUNNER.read_settings(env, REG, mode="client"),
+                           detector=RUNNER.RegistryDetector(pm.Binder()), placement=placement)
     test.assertEqual((pre["client"], pre["method"]), (client, "journal"), pre)
     code, lines = box.start(pre["preflightId"], SKEIN_CLIENT=client)
     test.assertEqual((code, [l["event"] for l in lines]), (0, ["monitor_started"]), lines)
@@ -148,7 +153,7 @@ class JournalOnlyTest(unittest.TestCase):
         # Row #116 by the product path: one record per form of the group.
         for client in ("pi", "kiro", "goose"):
             with self.subTest(client=client):
-                check_journal_run(self, client)
+                check_journal_run(self, client, RECORDS[client][0])
 
     def test_with_a_host_that_launched_it_the_host(self):
         # SC-002 "Kiro under Paseo": Paseo keeps no own method of these
