@@ -168,9 +168,10 @@ func wholeSecondsAtLeastOne(d time.Duration) int {
 // Script handles GET /agent/v1/monitor-script.
 //
 // @Summary      Serve the agent task-monitor poll runner (Python)
-// @Description  Returns the Python 3 stdlib poll-runner body, ready to be
-// @Description  executed by the calling agent under Claude Code's Monitor
-// @Description  tool. The body is generic — it carries no secret; the runner
+// @Description  Returns the Python 3 stdlib poll-runner body of the agent
+// @Description  task monitor. The loader downloads it under the monitor token
+// @Description  and runs it only when its SHA-256 equals SKEIN_RUNNER_SHA256
+// @Description  of the start command. The body carries no secret; the runner
 // @Description  reads its skm_ token from a private file (SKEIN_TOKEN_FILE) at
 // @Description  runtime. The operator-configured timings — poll cadence,
 // @Description  backoff ceiling, per-request limit and stall threshold
@@ -299,8 +300,9 @@ func wholeSecondsAtLeastOne(d time.Duration) int {
 // @Description  — the only line with `reason` and `action` together (the
 // @Description  preflight line also has a `reason`: why the method was
 // @Description  chosen, never a stop). `event` is `closed`
-// @Description  (this bootstrap cannot restart the monitor), `paused` (the
-// @Description  same bootstrap can) or `duplicate` (a second runner on a
+// @Description  (the same start command cannot restart the monitor),
+// @Description  `paused` (it can: the `bootstrap` without `client`, the
+// @Description  working command with it) or `duplicate` (a second runner on a
 // @Description  token file that already has one). `action` is a finished
 // @Description  instruction naming the root issue. Reasons and token-file
 // @Description  fate: `token_expired` (401, `status` 401, file deleted, exit
