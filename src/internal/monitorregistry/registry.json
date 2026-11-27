@@ -783,8 +783,8 @@
     },
     {
       "id": "muse",
-      "about": "Muse Code: the tool and parameters of its monitor and the command that sends to a session are not published, so it takes a host or the journal until they are No own way to wake the agent: a host or the journal delivers.",
-      "source": "dev.meta.ai/docs/muse-code (closed source): interactive (long shell commands or monitors); github.com/meta-models/muse-code-sdk e6ef4a6 (@muse-code/sdk 1.4.25): schema/msp/msp.d.ts (session messages up to 8192 bytes; monitorInbox keeps 200 lines; not on Windows), the host muse serve; executable muse.",
+      "about": "Muse Code: it has a Monitor and background commands, but neither the tool's name nor its parameters are published, so a host or the journal delivers. No own way to wake the agent until they are.",
+      "source": "Review of the published sources (wave 4): dev.meta.ai/docs/muse-code (closed source) - interactive (\"long shell commands or monitors\" managed through /tasks, /stop), workflows, permissions, session-messaging (sending is asked of the model in plain language, no command; up to 8192 bytes; unavailable on Windows), changelog 1.4.15 (a session parked on a Monitor watcher resumes on its change lines), 1.4.23 (a no-deadline persistent monitor), 1.4.24 (Monitor events and background command notices); github.com/meta-models/muse-code-sdk e6ef4a6 (@muse-code/sdk 1.4.25): schema/msp/msp.d.ts and experimental/msp.schema.json describe the client protocol of muse serve (monitorFeed, monitor/inboxItemAdmitted, monitorInbox of 200 lines), not the tool the model calls. The Monitor tool's name and parameters and a background shell parameter are not stated anywhere, so no method can be given without inventing them; executable muse.",
       "process": {
         "executables": [
           "muse",
