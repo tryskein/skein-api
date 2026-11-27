@@ -535,6 +535,263 @@
           "instruction": "Run `command` with the shell tool, background: true, and no timeout (a timeout would stop it). It ends after a batch of events with a stop line, and its end wakes you with its output: handle the events, then follow the action of that line."
         }
       ]
+    },
+    {
+      "id": "goose",
+      "about": "Goose: neither the output nor the exit of a background command starts a turn, and no command puts a message into a live session No own way to wake the agent: a host or the journal delivers.",
+      "source": "github.com/block/goose 03a343f (1.60.0): crates/goose-cli/src/cli.rs (goose acp and goose serve speak ACP to their own host; the REST server goosed and /reply are gone); executable goose.",
+      "process": {
+        "executables": [
+          "goose",
+          "goose.exe"
+        ]
+      },
+      "methods": []
+    },
+    {
+      "id": "cline",
+      "about": "Cline CLI: run_commands waits for the command and background children are no longer read; the hub is an internal protocol No own way to wake the agent: a host or the journal delivers.",
+      "source": "github.com/cline/cline 34c104e (@cline/cli 3.0.75): sdk/packages/core/src/extensions/tools/executors/bash.ts (no background tool, nothing wakes the agent), @cline/core/hub (session.send_input over an internal WebSocket); npm bin cline.",
+      "process": {
+        "executables": [
+          "cline",
+          "cline.exe"
+        ],
+        "argvBaseNames": [
+          "cline"
+        ]
+      },
+      "methods": []
+    },
+    {
+      "id": "continue",
+      "about": "Continue CLI: a background job is only checked by a tool, nothing it does starts a turn No own way to wake the agent: a host or the journal delivers.",
+      "source": "github.com/continuedev/continue 5522c6f (extensions/cli, read-only repository): src/tools/runTerminalCommand.ts (moveToBackground on the user's signal), src/services/BackgroundJobService.ts (publishes nothing); npm @continuedev/cli bin cn (dist/cn.js).",
+      "process": {
+        "executables": [
+          "cn"
+        ],
+        "argvBaseNames": [
+          "cn",
+          "cn.js"
+        ]
+      },
+      "methods": []
+    },
+    {
+      "id": "codebuff",
+      "about": "Codebuff: a background command only writes its output and exit to files, nothing wakes the agent No own way to wake the agent: a host or the journal delivers.",
+      "source": "github.com/CodebuffAI/codebuff c8f080f (cli 1.0.688): sdk/src/tools/run-terminal-command.ts#startBackgroundCommand (stdout.log, stderr.log, exit.json; the process is killed on abort and on exit of the CLI); Git Bash on Windows (WINDOWS.md); npm bin codebuff.",
+      "process": {
+        "executables": [
+          "codebuff",
+          "codebuff.exe"
+        ],
+        "argvBaseNames": [
+          "codebuff"
+        ]
+      },
+      "methods": [],
+      "windowsShell": "git-bash"
+    },
+    {
+      "id": "freebuff",
+      "about": "Freebuff: the Codebuff code built free-only, so a background command wakes nothing No own way to wake the agent: a host or the journal delivers.",
+      "source": "github.com/CodebuffAI/codebuff c8f080f (freebuff 0.2.38): freebuff/cli/build.ts (cli/scripts/build-binary.ts with FREEBUFF_MODE=true), sdk/src/tools/run-terminal-command.ts#startBackgroundCommand; Git Bash on Windows; npm bin freebuff.",
+      "process": {
+        "executables": [
+          "freebuff",
+          "freebuff.exe"
+        ],
+        "argvBaseNames": [
+          "freebuff"
+        ]
+      },
+      "methods": [],
+      "windowsShell": "git-bash"
+    },
+    {
+      "id": "autohand",
+      "about": "Autohand: peer messages need a client of its own with an Ed25519 key, and nothing else starts a turn from outside No own way to wake the agent: a host or the journal delivers.",
+      "source": "github.com/autohandai/code-cli 28c58e5 (autohand-cli 0.9.13): peer IPC (sessions.communication.enabled, idleBehavior auto; UNSUPPORTED_PLATFORM on Windows; 8 automatic messages per conversation); npm bin autohand, autohand-code (dist/index.js).",
+      "process": {
+        "executables": [
+          "autohand"
+        ],
+        "argvBaseNames": [
+          "autohand",
+          "autohand-code"
+        ]
+      },
+      "methods": []
+    },
+    {
+      "id": "roo",
+      "about": "Roo Code CLI: the project is shut down and its IPC socket belongs to the VS Code extension only No own way to wake the agent: a host or the journal delivers.",
+      "source": "github.com/RooCodeInc/Roo-Code b867ec9 (2026-05-15, @roo-code/cli 0.1.17): README (the extension was shut down on May 15th), ROO_CODE_IPC_SOCKET_PATH set by VS Code only; apps/cli/package.json bin roo (dist/index.js); Windows through WSL only.",
+      "process": {
+        "executables": [
+          "roo"
+        ],
+        "argvBaseNames": [
+          "roo"
+        ]
+      },
+      "methods": []
+    },
+    {
+      "id": "mistral-vibe",
+      "about": "Mistral Vibe: the end of a background process in an idle session is assumed not to start a turn; cron polls at most every 30 s No own way to wake the agent: a host or the journal delivers.",
+      "source": "github.com/mistralai/mistral-vibe fb7511a (3.1.5): vibe/cli/launcher.py#exec_rust_cli (vibe starts the Rust TUI, which runs vibe-app-server as a child over stdio), enable_background_processes, the cron tool (at least 30 s, at most 50 schedules); git_bash or powershell on Windows.",
+      "process": {
+        "executables": [
+          "vibe",
+          "vibe-app-server",
+          "vibe.exe"
+        ],
+        "argvBaseNames": [
+          "vibe",
+          "vibe-app-server"
+        ]
+      },
+      "methods": []
+    },
+    {
+      "id": "devin",
+      "about": "Devin CLI: a background shell is only read by get_output; whether its end wakes the agent is not documented No own way to wake the agent: a host or the journal delivers.",
+      "source": "docs.devin.ai/cli (closed source, v3000.14.30821): essential-commands (a command past the wait goes to the background with an id; get_output, kill_shell), extensibility/hooks/lifecycle-hooks; PowerShell on Windows by default; executable devin.",
+      "process": {
+        "executables": [
+          "devin",
+          "devin.exe"
+        ]
+      },
+      "methods": []
+    },
+    {
+      "id": "aug",
+      "about": "Auggie: whether the output or the end of a background process wakes the agent is not documented No own way to wake the agent: a host or the journal delivers.",
+      "source": "docs.augmentcode.com/cli (closed source, 1.2.2): cli/whats-new (shell tool bash), CHANGELOG 1.2.0 (background commands on Windows); bash timeout 600 s; npm @augmentcode/auggie bin auggie (auggie-v2.mjs).",
+      "process": {
+        "executables": [
+          "auggie",
+          "auggie.exe"
+        ],
+        "argvBaseNames": [
+          "auggie",
+          "auggie-v2.mjs"
+        ]
+      },
+      "methods": []
+    },
+    {
+      "id": "kiro",
+      "about": "Kiro CLI: its shell tool runs commands to their end and delegate reports only on request No own way to wake the agent: a host or the journal delivers.",
+      "source": "kiro.dev/docs/cli (closed source; ancestor github.com/aws/amazon-q-developer-cli 15cc8f3): reference/built-in-tools (shell, no background run), cli/acp (kiro-cli acp serves its own host); executable kiro-cli.",
+      "process": {
+        "executables": [
+          "kiro-cli",
+          "kiro-cli.exe"
+        ]
+      },
+      "methods": []
+    },
+    {
+      "id": "rovo",
+      "about": "Rovo Dev CLI: nothing in the documentation wakes the interactive agent; acli rovodev serve is a separate server mode No own way to wake the agent: a host or the journal delivers.",
+      "source": "support.atlassian.com/rovo/docs (closed source): rovo-dev-cli-commands, use-server-mode-in-rovo-dev-cli (POST /v3/set_chat_message for acli rovodev serve only), use-tools-in-rovo-dev-cli; executable acli (acli rovodev run).",
+      "process": {
+        "executables": [
+          "acli",
+          "acli.exe"
+        ]
+      },
+      "methods": []
+    },
+    {
+      "id": "crush",
+      "about": "Crush: the output and the exit of a background bash job are read only by job_output, nothing wakes the agent; a channel is out of scope No own way to wake the agent: a host or the journal delivers.",
+      "source": "github.com/charmbracelet/crush cd645ef (v0.102.0): internal/agent/tools/bash.go and job_output.go (BackgroundShell.Done is heard only there), internal/shell/background.go; Go executable crush, npm @charmland/crush bin crush (run-crush.js).",
+      "process": {
+        "executables": [
+          "crush",
+          "crush.exe"
+        ],
+        "argvBaseNames": [
+          "crush",
+          "run-crush.js"
+        ]
+      },
+      "methods": []
+    },
+    {
+      "id": "pi",
+      "about": "Pi: its bash tool has no background run; an extension could wake it, and plugins are deferred No own way to wake the agent: a host or the journal delivers.",
+      "source": "github.com/badlogic/pi-mono 27a40ea (@earendil-works/pi-coding-agent 1.6.0): packages/coding-agent/src/core/tools/bash.ts#bashSchema (command and timeout only), agent-session.ts#sendCustomMessage (an extension's triggerTurn); executable pi.",
+      "process": {
+        "executables": [
+          "pi"
+        ],
+        "argvBaseNames": [
+          "pi"
+        ]
+      },
+      "methods": []
+    },
+    {
+      "id": "amp",
+      "about": "Amp: only a plugin of its own appends a message to a thread, and plugins are deferred No own way to wake the agent: a host or the journal delivers.",
+      "source": "ampcode.com/manual (closed source): plugins (appendUserMessage with steer), amp threads continue for orb threads; maxContinuations 5 by default; npm @sourcegraph/amp bin amp (a native amp.exe).",
+      "process": {
+        "executables": [
+          "amp",
+          "amp.exe"
+        ]
+      },
+      "methods": []
+    },
+    {
+      "id": "kilo",
+      "about": "Kilo Code CLI: prompt_async needs its daemon or --port with a password the shell does not get, and no session id reaches the shell No own way to wake the agent: a host or the journal delivers.",
+      "source": "github.com/Kilo-Org/kilocode 4008ac3 (@kilocode/cli 7.8.32): src/server/routes/instance/httpapi/groups/session.ts#promptAsync, src/kilocode/daemon/daemon.ts#file (url and token in daemon.json), src/kilocode/process/env.ts#model (KILO_SERVER_PASSWORD removed from the shell); npm bin kilo, kilocode (bin/kilo).",
+      "process": {
+        "executables": [
+          "kilo",
+          "kilocode"
+        ],
+        "argvBaseNames": [
+          "kilo",
+          "kilocode"
+        ]
+      },
+      "methods": []
+    },
+    {
+      "id": "mimo-code",
+      "about": "MiMo Code: its bash has no background run, and prompt_async needs --port with a password No own way to wake the agent: a host or the journal delivers.",
+      "source": "github.com/XiaomiMiMo/MiMo-Code c538fab (@mimo-ai/cli 0.1.17): packages/cli/src/tool/bash.ts#Parameters (no background), server/routes/instance/session.ts (prompt_async), flag/flag.ts#generateServerPassword; Git Bash or powershell.exe on Windows; packages/cli/package.json bin mimo (mimo.js).",
+      "process": {
+        "executables": [
+          "mimo"
+        ],
+        "argvBaseNames": [
+          "mimo",
+          "mimo.js"
+        ]
+      },
+      "methods": []
+    },
+    {
+      "id": "muse",
+      "about": "Muse Code: the tool and parameters of its monitor and the command that sends to a session are not published, so it takes a host or the journal until they are No own way to wake the agent: a host or the journal delivers.",
+      "source": "dev.meta.ai/docs/muse-code (closed source): interactive (long shell commands or monitors); github.com/meta-models/muse-code-sdk e6ef4a6 (@muse-code/sdk 1.4.25): schema/msp/msp.d.ts (session messages up to 8192 bytes; monitorInbox keeps 200 lines; not on Windows), the host muse serve; executable muse.",
+      "process": {
+        "executables": [
+          "muse",
+          "muse.exe"
+        ]
+      },
+      "methods": []
     }
   ],
   "channels": [
