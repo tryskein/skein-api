@@ -542,8 +542,14 @@ class DeliverySink(object):
         # The secrets of the channels (the keys of the http channels) are
         # the journal's too: a preview that carries one is journaled
         # redacted (INV-6).
-        for secret in getattr(executor, "secrets", None) or []:
-            journal.add_secret(secret)
+        secrets = getattr(executor, "secrets", None)
+        if hasattr(secrets, "listen"):
+            # The journal reads the one list of the monitor: a secret added
+            # later is the journal's at once.
+            secrets.listen(journal.add_secret)
+        else:
+            for secret in secrets or []:
+                journal.add_secret(secret)
         self.issue = issue
         self.cancel = cancel or NoCancel()
         self.clock = clock or SystemClock()
@@ -651,7 +657,8 @@ class DeliverySink(object):
                 # monitor from now on: the journal and the texts drop it.
                 if endpoint[2] and endpoint[2] not in self.executor.secrets:
                     self.executor.secrets.append(endpoint[2])
-                    self.journal.add_secret(endpoint[2])
+                    if not hasattr(self.executor.secrets, "listen"):
+                        self.journal.add_secret(endpoint[2])
             if ((self.doc or {}).get("endpoints") or {}).get(channel.get("id")) != endpoint[0]:
                 raise AddresseeChanged()
         for a in self.identity.get("addresses") or []:

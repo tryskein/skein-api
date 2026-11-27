@@ -1016,13 +1016,47 @@ class _ProcessTree(object):
             self.failure = failure
 
 
+class MonitorSecrets(list):
+    """The one list of the secrets of a monitor (INV-6), read by every
+    executor that holds it, by the texts they redact and, through its
+    listeners, by the journal: a secret added after the start (a password
+    registered later) is a secret of all of them at once, never only of the
+    copy it was added to."""
+
+    def __init__(self, values=()):
+        list.__init__(self, [])
+        self._listeners = []
+        for value in values:
+            self.add(value)
+
+    def add(self, value):
+        if value and value not in self:
+            list.append(self, value)
+            for listener in self._listeners:
+                listener(value)
+
+    def append(self, value):
+        self.add(value)
+
+    def listen(self, listener):
+        """Call listener(value) with every secret, now and when added."""
+        self._listeners.append(listener)
+        for value in list(self):
+            listener(value)
+
+
+def _secrets_of(secrets):
+    """A MonitorSecrets is shared as it is; any other list is copied."""
+    return secrets if isinstance(secrets, MonitorSecrets) else [s for s in secrets if s]
+
+
 class ArgvExecutor(object):
     """Delivers a text through the argv executor of a channel record."""
 
     def __init__(self, token_file, env, secrets, programs=None, drop=()):
         self.token_file = token_file
         self.env = env
-        self.secrets = list(secrets)
+        self.secrets = _secrets_of(secrets)
         # Variables no channel program gets (the http keys, by name).
         self.drop = tuple(drop)
         # {name: absolute path}: the programs of the preflight result
@@ -1479,7 +1513,7 @@ class HTTPExecutor(object):
 
     def __init__(self, env, secrets):
         self.env = env
-        self.secrets = [s for s in secrets if s]
+        self.secrets = _secrets_of(secrets)
 
     def call(self, executor, text, timeout_sec, endpoint=None):
         """Send the request. Returns an HTTPResult; raises ExecutorRefusal
@@ -1626,8 +1660,10 @@ class ChannelExecutor(object):
 
     def __init__(self, token_file, env, secrets, programs=None, registry=None, record=None):
         channels = registry.record_channels(record) if registry is not None and record else ()
-        self.secrets = [s for s in list(secrets) + http_key_secrets(registry, env)
-                        + endpoint_secrets(registry, env, channels) if s]
+        # One list for the argv and the http executor and the checks that
+        # run with this executor's secrets.
+        self.secrets = MonitorSecrets(list(secrets) + http_key_secrets(registry, env)
+                                      + endpoint_secrets(registry, env, channels))
         self.drop = tuple(http_key_names(registry))
         self.argv = ArgvExecutor(token_file, env, self.secrets, programs, self.drop)
         self.http = HTTPExecutor(env, self.secrets)

@@ -253,6 +253,39 @@ class OpenCodeTest(unittest.TestCase):
         self.assertIn("n3w", sink.executor.secrets)
         sink.journal.add_secret.assert_called_with("n3w")
 
+    def test_a_password_registered_after_the_start_is_every_executor_s_secret(self):
+        # K5 of wave 14 round 2 (INV-6): the monitor has one list of
+        # secrets. A password read by an attempt after the start is a secret
+        # of the argv and the http executors of the same monitor at once: a
+        # fallback argv channel gets neither a variable nor a text that
+        # holds it, an http request has it in no body.
+        self.register()
+        executor = RUNNER.ChannelExecutor(self.box.token, dict(self.env, SAME_AS_NEW="n3wpass9"), [pm.TOKEN],
+                                          None, REG, "opencode")
+        sink = self.sink()
+        sink.executor = executor
+        # The journal reads that list as DeliverySink makes it do.
+        executor.secrets.listen(sink.journal.add_secret)
+        self.register({"url": self.service.url, "pid": 4242, "password": "n3wpass9"})
+        self.service.respond([{"status": 200, "json": {"data": {"id": SESSION}}}])
+        RUNNER.DeliverySink.check_addressee(sink, REG.channel("opencode-synthetic"))
+        fallback = fake_channel.FakeProgram(self.box.bin, "fallback", watch=("SAME_AS_NEW",))
+        executor.argv.call({"type": "argv", "argv": [os.path.join(self.box.bin, "fallback")], "feed": "stdin",
+                            "timeoutSec": 10}, "a preview holding n3wpass9", 10)
+        call, = fallback.calls()
+        self.assertIsNone(call["env"]["SAME_AS_NEW"])
+        self.assertNotIn("n3wpass9", call["stdin"])
+        other = fake_channel.FakeHTTPChannel()
+        self.addCleanup(other.close)
+        executor.http.call({"type": "http", "timeoutSec": 10,
+                            "http": {"method": "POST", "url": other.url + "/hook", "bodyField": "text"}},
+                           "a preview holding n3wpass9", 10)
+        request, = other.requests()
+        self.assertNotIn("n3wpass9", request["body"])
+        self.assertNotIn("n3wpass9", json.dumps(request["headers"]))
+        # And the journal of the monitor, through the same list.
+        sink.journal.add_secret.assert_any_call("n3wpass9")
+
     def test_the_probes_of_the_preflight_keep_the_password_of_the_record_out(self):
         # The password of the record's endpoint file is a secret of every
         # probe: a variable that holds it does not reach a probe program.
