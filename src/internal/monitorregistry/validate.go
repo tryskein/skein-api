@@ -884,10 +884,32 @@ func (v *validator) formatArgv(path string, argv []string) {
 		v.add(RuleInvalid, path+"[0]", "the program must be a literal name")
 	}
 	for i, a := range argv[1:] {
-		if placeholderShaped(a) || !strings.ContainsAny(a, "{}") {
-			v.value(fmt.Sprintf("%s[%d]", path, i+1), a, false)
+		apath := fmt.Sprintf("%s[%d]", path, i+1)
+		switch {
+		case placeholderShaped(a) || !strings.ContainsAny(a, "{}"):
+			v.value(apath, a, false)
+		case namesPlaceholder(a):
+			// The program's own braces never hold one of ours: a placeholder
+			// that is not one element (two variables, one cut short) would
+			// reach the program literally.
+			v.add(RuleInvalid, apath, "%q holds a placeholder that is not one element of its own", a)
 		}
 	}
+}
+
+// ownPlaceholders are the starts of the placeholders the runner expands.
+var ownPlaceholders = []string{PlaceholderEnvPrefix, PlaceholderText, PlaceholderTextFile, PlaceholderDelivery,
+	PlaceholderEndpoint}
+
+// namesPlaceholder reports whether a holds the start of a placeholder of
+// the runner.
+func namesPlaceholder(a string) bool {
+	for _, p := range ownPlaceholders {
+		if strings.Contains(a, strings.TrimSuffix(p, "}")) {
+			return true
+		}
+	}
+	return false
 }
 
 // placeholderShaped reports whether an element reads as a placeholder of
@@ -1166,6 +1188,12 @@ func (v *validator) pathValue(path, s string) {
 		if hasRest && strings.ContainsAny(rest, "{}") {
 			v.add(RuleInvalid, path, "only the first element of %q may be a placeholder", s)
 		}
+		return
+	}
+	if strings.ContainsAny(s, "{}") {
+		// The runner expands a placeholder only as the first element of a
+		// path ("{env:NAME}/..."): a prefixed one would be read literally.
+		v.add(RuleInvalid, path, "%q: a placeholder is the whole first element of a path", s)
 		return
 	}
 	v.value(path, s, false)

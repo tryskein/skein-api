@@ -905,6 +905,54 @@ func TestValidate_ThePlaceAndFoldReadingsRefuseTheirMisuse(t *testing.T) {
 	})
 }
 
+// TestValidate_APlaceholderIsOneElementOfItsOwn — warnings 9 and 10 of
+// wave 13 round 2: a program format (the pane PID command, the addressee
+// command) keeps its own braces, but a placeholder of the runner in it is
+// a whole element; a probe path takes a placeholder only as its whole
+// first element, as the runner expands it.
+func TestValidate_APlaceholderIsOneElementOfItsOwn(t *testing.T) {
+	r := validRegistry()
+	blindTwoStep(r)
+	r.Channels[2].PanePID.Argv = []string{"mux", "show", "-F", `{"pid":#{pane_pid}}`, "id:{env:PANE}"}
+	if err := r.Validate(); err != nil {
+		t.Fatalf("a format with the program's own braces was refused: %v", err)
+	}
+	for name, mutate := range map[string]func(r *Registry){
+		"two variables in one element": func(r *Registry) {
+			blindTwoStep(r).PanePID.Argv = []string{"mux", "show", "{env:PANE}{env:SERVER}"}
+		},
+		"a variable cut short": func(r *Registry) {
+			blindTwoStep(r).PanePID.Argv = []string{"mux", "show", "pane={env:PANE"}
+		},
+		"a variable inside a format": func(r *Registry) {
+			blindTwoStep(r).PanePID.Argv = []string{"mux", "show", `{"pane":"{env:PANE}"}`}
+		},
+		"the text inside a format": func(r *Registry) {
+			blindTwoStep(r).PanePID.Argv = []string{"mux", "show", "#{x}{text}"}
+		},
+		"a prefixed variable as a probe path": func(r *Registry) {
+			r.Channels[0].Probes[0] = Probe{Type: ProbeDirWritable, Source: "fixture", Path: "q-{env:ALPHA_HOME}"}
+		},
+		"a prefixed variable first in a probe path": func(r *Registry) {
+			r.Channels[0].Probes[0] = Probe{Type: ProbeDirWritable, Source: "fixture", Path: "q-{env:ALPHA_HOME}/queue"}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := validRegistry()
+			mutate(r)
+			err := r.Validate()
+			if err == nil {
+				t.Fatal("Validate accepted the violation")
+			}
+			for _, got := range rulesOf(t, err) {
+				if got != RuleInvalid {
+					t.Fatalf("Validate reported %v, want only %s", err, RuleInvalid)
+				}
+			}
+		})
+	}
+}
+
 // endpointChannel makes the second fixture channel an http channel whose
 // address and password come from an endpoint file, with an http-get probe
 // and a GET check (the OpenCode readings).
