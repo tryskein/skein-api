@@ -247,6 +247,10 @@ def receipt_short_text(outcome, issue, preflight=None):
     text = "%s. monitor stopped: reason=%s issue=%s." % (DELIVERY_LABEL, outcome.reason, issue)
     if preflight is not None and outcome.reason in ("stopped", "internal_error"):
         text += " Run the working command of preflight %s again." % preflight
+    elif outcome.reason == "root_closed":
+        # The shortest action of the close (US-12): the summary is in the
+        # stop line of the journal.
+        text += " Process the delivered events; do not restart the monitor."
     return text
 
 

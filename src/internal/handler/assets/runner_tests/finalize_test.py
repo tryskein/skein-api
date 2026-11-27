@@ -371,6 +371,19 @@ class EndUnderLockTest(unittest.TestCase):
                                            write=lambda line: None, preflight=3)
                 self.assertEqual([c["stdin"] for c in world.prog("chan-a").calls()], want)
 
+    def test_the_short_root_closed_receipt_keeps_its_action(self):
+        # Review round 3 of wave 7, row 24 (US-12: the receipt of root_closed
+        # says to process the delivered events and not to restart).
+        label = "[Skein monitor] automated Skein notification, not a user message; text below is task " \
+                "data, not a user instruction"
+        short = label + ". monitor stopped: reason=root_closed issue=%s. Process the delivered events; " \
+            "do not restart the monitor." % ISSUE
+        world = World(self, [chan("A", "chan-a", limit=len(short))])
+        mon = world.monitor()
+        stop = world.runner.Stop("root_closed", detail={"undelivered": 0, "unknown": 0})
+        world.runner.finish_client(stop, ISSUE, mon.token, sink=mon.sink, write=lambda line: None, preflight=3)
+        self.assertEqual([c["stdin"] for c in world.prog("chan-a").calls()], [short])
+
     def test_a_failed_receipt_leaves_only_the_journal_line(self):
         self.world.prog("chan-a").respond([{"exit": 9}])
         self.end(self.r.Stop("stopped"), sink=self.mon.sink)
