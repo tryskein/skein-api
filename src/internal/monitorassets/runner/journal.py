@@ -16,6 +16,7 @@ import json
 import os
 import re
 import stat
+import threading
 
 # The subdirectory of the journals in the user directory.
 JOURNAL_DIR_NAME = "journal"
@@ -107,6 +108,12 @@ def notification_fields(notification, with_preview=True):
     return out
 
 
+# One write of a journal line at a time in this process, with the rotation
+# it may make: the watcher of a detached call writes from its own thread
+# (detach.py#detached_failure_line) while the main thread writes deliveries.
+_JOURNAL_WRITE_LOCK = threading.Lock()
+
+
 class Journal(object):
     """The journal of one monitor."""
 
@@ -173,15 +180,16 @@ class Journal(object):
             raise JournalUnavailable("too_large", self.path)
         directory = os.path.dirname(self.path)
         plat = current_platform()
-        try:
-            plat.ensure_private_dir(os.path.dirname(directory))
-            plat.ensure_private_dir(directory)
-        except PlatformRefusal as exc:
-            raise JournalUnavailable(exc.reason, exc.path)
-        try:
-            self._append(data)
-        except OSError:
-            raise JournalUnavailable("write_failed", self.path)
+        with _JOURNAL_WRITE_LOCK:
+            try:
+                plat.ensure_private_dir(os.path.dirname(directory))
+                plat.ensure_private_dir(directory)
+            except PlatformRefusal as exc:
+                raise JournalUnavailable(exc.reason, exc.path)
+            try:
+                self._append(data)
+            except OSError:
+                raise JournalUnavailable("write_failed", self.path)
 
     def _append(self, data):
         fd = self._open()
