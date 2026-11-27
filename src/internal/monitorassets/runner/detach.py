@@ -497,7 +497,8 @@ def run_detached_child():
         try:
             base = os.environ.get("SKEIN_PUBLIC_URL", "")
             if not token_file or not base:
-                raise Stop("misconfigured", delete_token=bool(token_file))
+                held.lock = unowned_lock(token_file)
+                raise Stop("misconfigured", delete_token=held.lock is not None)
             env = dict(os.environ)
             settings = read_settings(env, load_registry())
             held.begin(token_file, env, settings, issue)
@@ -559,10 +560,13 @@ def run_client():
     global _stopping
     issue = os.environ.get("SKEIN_ISSUE", "")
     token_file = os.environ.get("SKEIN_TOKEN_FILE", "")
+    # The one-runner lock a misconfigured start took to delete the files.
+    lock = None
     try:
         try:
             if not token_file or not os.environ.get("SKEIN_PUBLIC_URL", ""):
-                raise Stop("misconfigured", delete_token=bool(token_file))
+                lock = unowned_lock(token_file)
+                raise Stop("misconfigured", delete_token=lock is not None)
             env = dict(os.environ)
             settings = read_settings(env, load_registry())
             doc = check_start(token_file, env, settings)
@@ -581,7 +585,25 @@ def run_client():
         outcome = Stop("internal_error")
     # A stream or exit-on-event result keeps its stop line within its line
     # limit even when the start failed before the result was checked.
-    return finish(outcome, issue, token_file, write=limited_write(load_preflight(token_file) if token_file else None))
+    try:
+        return finish(outcome, issue, token_file,
+                      write=limited_write(load_preflight(token_file) if token_file else None))
+    finally:
+        if lock is not None:
+            lock.release()
+
+
+def unowned_lock(token_file):
+    """The one-runner lock of token_file when no runner holds it (taken
+    without waiting), else None. A misconfigured start deletes the files of
+    the token only under it: a live runner's files are not touched (P-5,
+    P-12)."""
+    if not token_file:
+        return None
+    try:
+        return take_runner_lock(token_file, dict(os.environ))
+    except (LockBusy, PlatformRefusal, OSError):
+        return None
 
 
 def run_foreground(token_file, issue, env, settings, doc=None):

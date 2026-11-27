@@ -27,6 +27,7 @@ Standard library of Python 3.6 only.
 """
 
 import base64
+import io
 import json
 import os
 import shutil
@@ -391,6 +392,31 @@ class TakeoverTest(unittest.TestCase):
         self.assertIsNotNone(old.lock)
         self.assertFalse(world.request_file())
         self.assertGreaterEqual(clock.t - 1000.0, r.TAKEOVER_WAIT_SEC)
+
+    def test_a_misconfigured_start_leaves_a_live_runner_its_files(self):
+        # Review of wave 8, row 16: a working start without SKEIN_PUBLIC_URL
+        # deletes the token only under the one-runner lock.
+        world = World(self)
+        world.old_runner()
+        env = dict(world.env)
+        env["SKEIN_PUBLIC_URL"] = ""
+        with mock.patch.dict(os.environ, env, clear=True), mock.patch("sys.stdout", io.StringIO()) as out:
+            code = world.runner.run_client()
+        self.assertEqual(json.loads(out.getvalue().splitlines()[-1])["reason"], "misconfigured")
+        self.assertEqual(code, 1)
+        self.assertTrue(os.path.exists(world.token))
+
+    def test_a_misconfigured_start_without_a_runner_deletes_the_token(self):
+        world = World(self)
+        self.assertEqual(world.preflight(), 1)
+        env = dict(world.env)
+        env["SKEIN_PUBLIC_URL"] = ""
+        with mock.patch.dict(os.environ, env, clear=True), mock.patch("sys.stdout", io.StringIO()):
+            code = world.runner.run_client()
+        self.assertEqual(code, 1)
+        self.assertFalse(os.path.exists(world.token))
+        # The lock was released: a start can take it.
+        world.runner.take_runner_lock(world.token, world.env).release()
 
     def test_the_old_runner_hands_over_from_its_wait_between_pages(self):
         world = World(self)
