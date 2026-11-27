@@ -446,9 +446,10 @@ def delivery_sink(journal, token_file, doc, env, base, issue, token, executor, e
     ledger = Ledger(base, monitor, identity_from_doc(doc.get("identity")), env=env)
     clock = SystemClock()
     cancel = PollCancel(executor, base, token, exclusion, clock)
-    return DeliverySink(journal, token_file, doc, load_registry(), env, ledger,
-                        ArgvExecutor(token_file, env, [token], doc.get("programs")), issue, cancel=cancel, clock=clock,
-                        exclusion=exclusion)
+    registry = load_registry()
+    return DeliverySink(journal, token_file, doc, registry, env, ledger,
+                        ChannelExecutor(token_file, env, [token], doc.get("programs"), registry), issue,
+                        cancel=cancel, clock=clock, exclusion=exclusion)
 
 
 def run_detached_child():

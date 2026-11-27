@@ -413,14 +413,24 @@ type Executor struct {
 }
 
 // HTTPRequest is the request of an http executor. The text of an event is
-// the string value of BodyField in a JSON object body.
+// the string value of BodyField in a JSON object body. An http channel runs
+// no program, so it names no Binaries.
 type HTTPRequest struct {
 	Method string `json:"method"`
-	// URL is a literal or a "{env:NAME}" placeholder.
+	// URL is a template of literals and "{env:NAME}" placeholders of the
+	// agent process. A placeholder that starts the template is the base (a
+	// scheme, a host and maybe a path, taken as is); every later one is
+	// escaped as one element of the path. The scheme is https, or http for
+	// localhost and 127.0.0.1 only; an unset variable leaves the channel
+	// unavailable.
 	URL string `json:"url"`
-	// KeyFileEnv names the variable that holds the path of the file with
-	// the key; empty when the channel takes no key.
-	KeyFileEnv string `json:"keyFileEnv,omitempty"`
+	// KeyEnv names, in order, the variables whose value is the key; the
+	// first one set gives it, sent as "Authorization: Bearer <key>". Empty
+	// when the channel takes no key; when it takes one and none is set, the
+	// channel is unavailable. The key never goes to an argument list or a
+	// stdin, it is redacted like the token and taken out of the environment
+	// of every channel program.
+	KeyEnv []string `json:"keyEnv,omitempty"`
 	// BodyField is the field of the JSON body that carries the text.
 	BodyField string `json:"bodyField"`
 }

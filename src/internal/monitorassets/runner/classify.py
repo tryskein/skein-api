@@ -53,7 +53,12 @@ def classify(rows, exit_code=None, doc=None, http_status=None, timed_out=False,
 
 
 def classify_result(rows, result, written=False, earlier_refused=True):
-    """classify for a CallResult of the argv executor."""
+    """classify for a CallResult of the argv executor or an HTTPResult of
+    the http executor; a request that failed without a status is
+    "unknown"."""
+    error = getattr(result, "error", None)
+    if error is not None and not result.timed_out:
+        return OUTCOME_UNKNOWN, {"httpError": error}
     return classify(rows, exit_code=result.exit_code, doc=result.json, timed_out=result.timed_out,
-                    stderr=result.stderr,
+                    http_status=getattr(result, "http_status", None), stderr=result.stderr,
                     written=written, earlier_refused=earlier_refused)

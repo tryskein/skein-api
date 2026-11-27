@@ -144,6 +144,22 @@ func TestValidate_RejectsEachRule(t *testing.T) {
 				HTTP: &HTTPRequest{Method: "POST", URL: "{env:HOST_URL}", BodyField: "text"}}
 		}, RuleInvalid},
 		{"Windows shell outside the closed set", func(r *Registry) { r.Agents[0].WindowsShell = "gitbash" }, RuleInvalid},
+		{"http channel that names programs", func(r *Registry) {
+			httpHost(r)
+			r.Channels[1].Binaries = map[string][]string{PlatformLinux: {"host"}}
+		}, RuleInvalid},
+		{"http URL of another host without TLS", func(r *Registry) {
+			httpHost(r)
+			r.Channels[1].Executor.HTTP.URL = "http://api.example.com/{env:HOST_ID}"
+		}, RuleInvalid},
+		{"http URL with a brace that is no placeholder", func(r *Registry) {
+			httpHost(r)
+			r.Channels[1].Executor.HTTP.URL = "{env:HOST_URL}/sessions/{id}"
+		}, RuleInvalid},
+		{"key variable that is no variable name", func(r *Registry) {
+			httpHost(r)
+			r.Channels[1].Executor.HTTP.KeyEnv = []string{"HOST_KEY", "host key"}
+		}, RuleInvalid},
 		{"two rows one answer can match", func(r *Registry) {
 			// exit 0 alone, and exit 0 with a JSON field: an answer with exit 0
 			// and that field matches both.
@@ -545,5 +561,36 @@ func TestValidate_AcceptsTheOrcaAndPaseoReadings(t *testing.T) {
 		Keeps: map[string][]string{"alpha": {MethodStream}}}
 	if err := r.Validate(); err != nil {
 		t.Fatalf("a correct record with the Orca and Paseo readings was refused: %v", err)
+	}
+}
+
+// httpHost turns the host channel of validRegistry into a correct http
+// channel: a URL template, an ordered key, a status table and no programs.
+func httpHost(r *Registry) {
+	c := &r.Channels[1]
+	c.Executor = Executor{Type: ExecutorHTTP, TimeoutSec: 30, HTTP: &HTTPRequest{Method: "POST",
+		URL:    "{env:HOST_URL}/v0/sessions/{env:HOST_ID}/messages",
+		KeyEnv: []string{"HOST_KEY", "HOST_TOKEN"}, BodyField: "message"}}
+	c.Outcomes = []OutcomeRow{
+		{Match: Match{HTTPStatus: intp(201), JSON: map[string]string{"state": "queued"}}, Outcome: OutcomeQueued},
+		{Match: Match{HTTPStatus: intp(201), JSON: map[string]string{"state": "sent"}}, Outcome: OutcomeInputWritten},
+	}
+	c.Binaries = nil
+}
+
+// TestValidate_AcceptsAnHTTPChannel — P-7 http: a record of the http
+// executor (a URL template with a base variable, a key by an ordered list
+// of variables, no programs) passes, and so does a literal URL of a local
+// test server.
+func TestValidate_AcceptsAnHTTPChannel(t *testing.T) {
+	for _, url := range []string{"{env:HOST_URL}/v0/sessions/{env:HOST_ID}/messages",
+		"https://api.example.com/v0/sessions/{env:HOST_ID}/messages",
+		"http://127.0.0.1:8080/sessions/{env:HOST_ID}", "http://localhost/sessions/{env:HOST_ID}"} {
+		r := validRegistry()
+		httpHost(r)
+		r.Channels[1].Executor.HTTP.URL = url
+		if err := r.Validate(); err != nil {
+			t.Fatalf("a correct http record with URL %q was refused: %v", url, err)
+		}
 	}
 }

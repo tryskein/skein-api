@@ -428,7 +428,10 @@ func (v *validator) channel(path string, c *Channel) {
 		v.argv(path+".panePid.argv", c.PanePID.Argv, false)
 	}
 
-	if len(c.Binaries) == 0 {
+	switch {
+	case c.Executor.Type == ExecutorHTTP && len(c.Binaries) > 0:
+		v.add(RuleInvalid, path+".binaries", "an http channel runs no program")
+	case c.Executor.Type != ExecutorHTTP && len(c.Binaries) == 0:
 		v.add(RuleInvalid, path+".binaries", "the channel names no platform")
 	}
 	for p, bins := range c.Binaries {
@@ -523,9 +526,11 @@ func (v *validator) executor(path string, e Executor) {
 		if !httpMethods[e.HTTP.Method] {
 			v.add(RuleInvalid, path+".http.method", "method %q is not one of POST, PUT", e.HTTP.Method)
 		}
-		v.value(path+".http.url", e.HTTP.URL, false)
-		if e.HTTP.KeyFileEnv != "" && !envNamePattern.MatchString(e.HTTP.KeyFileEnv) {
-			v.add(RuleInvalid, path+".http.keyFileEnv", "%q is not an environment variable name", e.HTTP.KeyFileEnv)
+		v.url(path+".http.url", e.HTTP.URL)
+		for i, name := range e.HTTP.KeyEnv {
+			if !envNamePattern.MatchString(name) {
+				v.add(RuleInvalid, fmt.Sprintf("%s.http.keyEnv[%d]", path, i), "%q is not an environment variable name", name)
+			}
 		}
 		v.text(RuleInvalid, path+".http.bodyField", e.HTTP.BodyField)
 	}
@@ -575,6 +580,53 @@ func (v *validator) value(path, s string, allowText bool) {
 	case s == "":
 		v.add(RuleInvalid, path, "value is empty")
 	}
+}
+
+// url checks the URL template of an http executor: literals and
+// "{env:NAME}" placeholders; a template that does not start with a
+// placeholder starts with "https://", or with "http://" for localhost or
+// 127.0.0.1 (the runner checks the scheme of a placeholder base when it
+// expands it).
+func (v *validator) url(path, s string) {
+	if s == "" {
+		v.add(RuleInvalid, path, "value is empty")
+		return
+	}
+	rest := s
+	for rest != "" {
+		open := strings.IndexAny(rest, "{}")
+		if open < 0 {
+			break
+		}
+		end := strings.Index(rest[open:], "}")
+		if rest[open] != '{' || end < 0 {
+			v.add(RuleInvalid, path, "%q is not a template of literals and {env:NAME}", s)
+			return
+		}
+		v.value(path, rest[open:open+end+1], false)
+		rest = rest[open+end+1:]
+	}
+	if strings.HasPrefix(s, PlaceholderEnvPrefix) {
+		return
+	}
+	if !strings.HasPrefix(s, "https://") && !localHTTP(s) {
+		v.add(RuleInvalid, path, "%q is neither https nor http of localhost or 127.0.0.1", s)
+	}
+}
+
+// localHTTP reports whether an http URL names localhost or 127.0.0.1.
+func localHTTP(s string) bool {
+	host, ok := strings.CutPrefix(s, "http://")
+	if !ok {
+		return false
+	}
+	if i := strings.IndexAny(host, "/?#"); i >= 0 {
+		host = host[:i]
+	}
+	if i := strings.LastIndex(host, ":"); i >= 0 {
+		host = host[:i]
+	}
+	return host == "localhost" || host == "127.0.0.1"
 }
 
 // pathValue checks a probe path: a literal, or "{env:NAME}" optionally

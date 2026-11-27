@@ -274,7 +274,8 @@ class _ReceiptGuard(Guard):
 
 
 class ArgvDriver(object):
-    """One call of the channel program carries the text."""
+    """One call of the channel's executor (its program, or its request)
+    carries the text."""
 
     def __init__(self, channel, executor):
         self.channel = channel
@@ -283,7 +284,7 @@ class ArgvDriver(object):
     def send(self, text, guard):
         guard.before_send()
         spec = self.channel.get("executor") or {}
-        if spec.get("type") != "argv":
+        if spec.get("type") not in ("argv", "http"):
             raise RefusedBeforeSend("executor %s is not available" % spec.get("type"))
         try:
             result = self.executor.call(spec, text, guard.remaining())

@@ -433,6 +433,18 @@ def channel_available(ctx, channel_id):
     ok, cause = conditions_hold(channel.get("detect"), ctx.env)
     if not ok:
         return False, cause
+    spec = channel.get("executor") or {}
+    if spec.get("type") == "http":
+        # An http channel runs no program: its URL and its key must be
+        # given by the variables of the agent process.
+        http = spec.get("http") or {}
+        try:
+            expand_url(http.get("url") or "", ctx.env)
+        except ExecutorRefusal as exc:
+            return False, "channel %s: %s" % (channel_id, exc.reason)
+        if http.get("keyEnv") and http_key(http, ctx.env) is None:
+            return False, "channel %s: no key variable is set: %s" % (channel_id, ", ".join(http["keyEnv"]))
+        return _probe(ctx, channel_id, channel)
     # Every channel names its programs per platform; a platform it names
     # none for has no program, so the channel is unavailable there.
     binaries = (channel.get("binaries") or {}).get(_platform_key())
@@ -446,6 +458,11 @@ def channel_available(ctx, channel_id):
             ctx.token_file is not None and batch_message_dir(ctx.token_file, ctx.env) is None:
         # US-11: a .cmd program takes a message file only by an ASCII path.
         return False, "no private message directory of an ASCII path for the .cmd program of %s" % channel_id
+    return _probe(ctx, channel_id, channel)
+
+
+def _probe(ctx, channel_id, channel):
+    """The probes of an available channel, then its capture."""
     if channel.get("probeUndefined"):
         return _capture(ctx, channel_id, channel)
     for probe in channel.get("probes") or []:
@@ -915,7 +932,8 @@ def preflight(token_file, env, registry, settings, detector=None, prober=None, p
     if sys.version_info < MIN_PYTHON:
         raise ConfigInvalid("python3", "Python %d.%d or newer is needed" % MIN_PYTHON)
     detector = detector or RegistryDetector()
-    prober = prober or SystemProbeRunner()
+    # The keys of the http channels are secrets: no probe program sees one.
+    prober = prober or SystemProbeRunner(http_key_secrets(registry, env))
     journal, external = check_sandbox(token_file, env)
     if placement is None:
         placement = system_placement(registry, settings.record)

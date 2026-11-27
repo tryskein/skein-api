@@ -32,6 +32,21 @@
 # most OUTPUT_CAP_BYTES of stdout and of stderr are kept. A stdout that is
 # one JSON object is parsed for the outcome table (Match.json).
 #
+# An http executor sends one request of the record: its method, its URL (a
+# template of literals and {env:NAME}: a placeholder that starts it is the
+# base, taken as is; every later one is escaped as one element of the path)
+# and a JSON object body whose field bodyField carries the text. The scheme
+# is https, or http for localhost and 127.0.0.1 only. The key (the first
+# variable of keyEnv that is set) goes as "Authorization: Bearer"; it is a
+# secret of the monitor like the token: redacted from the text and taken
+# out of the environment of every channel program. Redirects are not
+# followed, so the key is never sent to another address: a 3xx is the
+# answer, and a table without its row makes it "unknown". A variable of the
+# URL or the key that is not set, a URL of another scheme, or a connection
+# that is refused or whose host does not resolve hands nothing over (a
+# refusal); a timeout or a failure after the connection is made is
+# "unknown". The answer is the status and the JSON object of the body.
+#
 # Probes check the boundary of a channel without delivering (P-7): argv (the
 # command without the text of an event: no stdin, no message file),
 # dir-writable (create and remove a probe file), socket-connect (connect to a
@@ -49,6 +64,9 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.error
+import urllib.parse
+import urllib.request
 
 # The prefix of a message file in the token directory.
 MESSAGE_FILE_PREFIX = "msg-"
@@ -780,6 +798,168 @@ class ArgvExecutor(object):
         finally:
             if text_file is not None:
                 remove_quietly(text_file)
+
+
+# A placeholder of an http URL template.
+_URL_PLACEHOLDER = re.compile(r"(\{env:[A-Za-z_][A-Za-z0-9_]*\})")
+# The hosts an http URL may name without TLS (a server of this machine).
+_LOCAL_HTTP_HOSTS = ("localhost", "127.0.0.1")
+
+
+class HTTPResult(object):
+    """What a request of an http executor gave: its status (None when no
+    answer came), the JSON object of its body (None when it held none or
+    was cut at the cap), whether the timeout ended it, and error, the name
+    of the failure that left no status (None otherwise). exit_code and
+    stderr are None: no program ran."""
+
+    exit_code = None
+    stderr = None
+
+    def __init__(self, status, body, timed_out, error=None, truncated=False):
+        self.http_status = status
+        self.stdout = body
+        self.timed_out = timed_out
+        self.error = error
+        self.truncated = truncated
+        self.json = None if truncated or body is None else parse_json_object(body)
+
+
+def expand_url(template, env):
+    """The URL of an http executor. ExecutorRefusal when a variable is not
+    set or the URL is neither https nor http of a local host."""
+    out = []
+    for i, part in enumerate(_URL_PLACEHOLDER.split(template)):
+        if i % 2 == 0:
+            out.append(part)
+        elif i == 1 and out == [""]:
+            out.append(env_value(part, env))
+        else:
+            out.append(urllib.parse.quote(env_value(part, env), safe=""))
+    url = "".join(out)
+    parts = urllib.parse.urlsplit(url)
+    if parts.scheme == "https" and parts.hostname:
+        return url
+    if parts.scheme == "http" and parts.hostname in _LOCAL_HTTP_HOSTS:
+        return url
+    raise ExecutorRefusal("the URL of the channel is neither https nor http of localhost")
+
+
+def http_key(http, env):
+    """The key of an http request: the value of the first variable of its
+    keyEnv that is set, or None."""
+    for name in http.get("keyEnv") or []:
+        value = env.get(name, "")
+        if value:
+            return value
+    return None
+
+
+def http_key_secrets(registry, env):
+    """The keys every http channel of the registry would send from this
+    environment: secrets of the monitor."""
+    keys = []
+    for channel in (registry.channels.values() if registry is not None else []):
+        spec = channel.get("executor") or {}
+        if spec.get("type") == "http":
+            key = http_key(spec.get("http") or {}, env)
+            if key and key not in keys:
+                keys.append(key)
+    return keys
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """A 3xx is the answer: the request is never sent again elsewhere."""
+
+    def redirect_request(self, *args):
+        return None
+
+
+class HTTPExecutor(object):
+    """Delivers a text through the http executor of a channel record."""
+
+    def __init__(self, env, secrets):
+        self.env = env
+        self.secrets = [s for s in secrets if s]
+
+    def call(self, executor, text, timeout_sec):
+        """Send the request. Returns an HTTPResult; raises ExecutorRefusal
+        when nothing was handed over."""
+        http = executor.get("http") or {}
+        url = expand_url(http.get("url") or "", self.env)
+        key = http_key(http, self.env)
+        if http.get("keyEnv") and key is None:
+            raise ExecutorRefusal("no key variable is set: %s" % ", ".join(http["keyEnv"]))
+        secrets = self.secrets + ([key] if key else [])
+        if key and ("\r" in key or "\n" in key):
+            raise ExecutorRefusal("the key is not one header line")
+        body = json.dumps({http.get("bodyField") or "text": redact_text(text or "", secrets)}).encode("utf-8")
+        headers = {"Content-Type": "application/json", "Accept": "application/json"}
+        if key:
+            headers["Authorization"] = "Bearer " + key
+        request = urllib.request.Request(url, data=body, headers=headers, method=http.get("method") or "POST")
+        handlers = [_NoRedirect]
+        if urllib.parse.urlsplit(url).scheme == "http":
+            # A local server: no proxy sees the key in the clear.
+            handlers.append(urllib.request.ProxyHandler({}))
+        opener = urllib.request.build_opener(*handlers)
+        answer = {}
+        worker = threading.Thread(target=self._send, args=(opener, request, timeout_sec, answer))
+        worker.daemon = True
+        worker.start()
+        worker.join(timeout_sec)
+        if worker.is_alive() or "timeout" in answer:
+            return HTTPResult(None, None, True)
+        if "refused" in answer:
+            raise ExecutorRefusal("the server was not reached: %s" % answer["refused"])
+        if "error" in answer:
+            return HTTPResult(None, None, False, error=answer["error"])
+        return HTTPResult(answer["status"], answer["body"], False, truncated=answer["truncated"])
+
+    @staticmethod
+    def _send(opener, request, timeout_sec, answer):
+        try:
+            try:
+                resp = opener.open(request, timeout=timeout_sec)
+            except urllib.error.HTTPError as exc:
+                resp = exc
+            try:
+                raw = resp.read(OUTPUT_CAP_BYTES + 1) or b""
+            finally:
+                resp.close()
+            answer["status"] = resp.code
+            answer["body"] = raw[:OUTPUT_CAP_BYTES]
+            answer["truncated"] = len(raw) > OUTPUT_CAP_BYTES
+        except urllib.error.URLError as exc:
+            reason = exc.reason
+            if isinstance(reason, (ConnectionRefusedError, socket.gaierror)):
+                # No connection: not a byte of the request went out.
+                answer["refused"] = type(reason).__name__
+            elif isinstance(reason, socket.timeout):
+                answer["timeout"] = True
+            else:
+                answer["error"] = type(reason).__name__
+        except socket.timeout:
+            answer["timeout"] = True
+        except Exception as exc:  # any failure after the connection: unknown
+            answer["error"] = type(exc).__name__
+
+
+class ChannelExecutor(object):
+    """The executor of every channel type: argv or http by the record. Its
+    secrets are the monitor's and the keys of the http channels, so no
+    channel program sees a key."""
+
+    def __init__(self, token_file, env, secrets, programs=None, registry=None):
+        self.secrets = [s for s in list(secrets) + http_key_secrets(registry, env) if s]
+        self.argv = ArgvExecutor(token_file, env, self.secrets, programs)
+        self.http = HTTPExecutor(env, self.secrets)
+        self.programs = self.argv.programs
+
+    def call(self, executor, text, timeout_sec):
+        if executor.get("type") == "http":
+            return self.http.call(executor, text, timeout_sec)
+        return self.argv.call(executor, text, timeout_sec)
 
 
 class SystemProbeRunner(ProbeRunner):
