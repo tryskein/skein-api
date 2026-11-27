@@ -303,6 +303,11 @@ class StdoutSink(object):
         emit({"event": "notification", "notification": n})
 
 
+# Stands for "the state still keeps a rest of a page": the next persist
+# writes the cursor whatever it is.
+_REST_KEPT = object()
+
+
 def work(executor, base, token, issue, exclude_session, token_file, sink=None, root=None):
     """The polling loop. Never returns: it ends by raising Stop. sink takes
     the lines (stdout by default); a sink with page(cursor, notifications)
@@ -323,6 +328,10 @@ def work(executor, base, token, issue, exclude_session, token_file, sink=None, r
     # later page until the file matches the cursor in memory again.
     saved = [cursor]
     state_failed = [False]
+    # The rest of a page an exit-on-event cycle of an earlier result kept
+    # (a new preflight may choose another method): it is taken first, from
+    # the state, not from a new poll of the same page (US-12).
+    rest = load_remainder(token_file, cursor)
 
     def persist(value):
         # The cursor is saved only after its page was printed. A state that
@@ -360,7 +369,7 @@ def work(executor, base, token, issue, exclude_session, token_file, sink=None, r
                                                  POLL_PAGE_LIMIT if root is not None else None)
 
         if status == 200 and poll_page_ok(payload):
-            if root is not None:
+            if root is not None and rest is None:
                 root.received(cursor, payload.get("notifications") or [], payload.get("rootClosed") is True)
             if hasattr(sink, "note_poll_ok"):
                 sink.note_poll_ok()
@@ -369,7 +378,11 @@ def work(executor, base, token, issue, exclude_session, token_file, sink=None, r
                                 "failedForSec": int(time.monotonic() - series_started)})
             series_started = None
             series_degraded = False
-            notifs = payload.get("notifications") or []
+            if rest is not None:
+                # This poll only kept the access boundary.
+                notifs = list(rest[0])
+            else:
+                notifs = payload.get("notifications") or []
             new_count = 0
             try:
                 if hasattr(sink, "page"):
@@ -398,8 +411,13 @@ def work(executor, base, token, issue, exclude_session, token_file, sink=None, r
                            "polled again" % exc.reason)
                 time.sleep(jitter(float(POLL_INTERVAL_SEC)))
                 continue
-            nxt = payload.get("cursor")
-            nxt = nxt if isinstance(nxt, dict) else cursor
+            if rest is not None:
+                nxt = rest[1]
+                root_closed = rest[2]
+            else:
+                nxt = payload.get("cursor")
+                nxt = nxt if isinstance(nxt, dict) else cursor
+                root_closed = payload.get("rootClosed") is True
             if root is not None:
                 # Every event of the page has its outcome: count them, then
                 # stop or read on (rootclosed.py).
@@ -409,13 +427,18 @@ def work(executor, base, token, issue, exclude_session, token_file, sink=None, r
                     if hasattr(sink, "journal"):
                         note_read_limited(sink.journal, root)
                     raise Stop("root_closed", delete_token=True, detail=root.summary())
-            elif payload.get("rootClosed") is True:
+            elif root_closed:
                 # The root issue is closed and everything owed is delivered
                 # (the server decides, INV-12): stop only after printing
                 # this page.
                 raise Stop("root_closed", delete_token=True)
             # Advance the watermark cursor to whatever the server returned.
             cursor = nxt
+            if rest is not None:
+                # The kept rest is done: the state drops it even when the
+                # cursor does not move (a rest kept after a cursor reset).
+                rest = None
+                saved[0] = _REST_KEPT
             persist(cursor)
             if new_count > 0:
                 # Active dialog → reset to the base cadence.
@@ -428,6 +451,12 @@ def work(executor, base, token, issue, exclude_session, token_file, sink=None, r
             sleep_or_hand_over(max(jitter(backoff), float(POLL_INTERVAL_SEC)), sink)
             continue
 
+        if status in (401, 403) and rest is not None and hasattr(sink, "journal"):
+            # The kept rest of a page loses its delivery with the access:
+            # "access lost" without the preview (US-12).
+            close_stored(sink.journal, (load_preflight(token_file) or {}).get("method"),
+                         [(n, OUTCOME_ACCESS_LOST) for n in rest[0]],
+                         "token_expired" if status == 401 else "visibility_lost", getattr(sink, "env", None))
         if status in (401, 403) and hasattr(sink, "end_open_page"):
             # A page the journal left undone gets its outcomes by the lost
             # access before the stop.

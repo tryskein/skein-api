@@ -403,6 +403,54 @@ class AccessLostInTheHoldTest(unittest.TestCase):
         self.assertFalse(os.path.exists(box.token))
 
 
+class KeptRestAnyMethodTest(unittest.TestCase):
+    """Review of wave 8, row 13: the rest of a page an exit-on-event cycle
+    kept is taken first, from the state, whatever method the next preflight
+    chose; the cursor then moves past its page."""
+
+    def keep_rest(self, box):
+        RUNNER.save_remainder(box.token, None, [event(5), event(6)], page([], 6)["cursor"], False)
+
+    def journal_ids(self, box, status=None):
+        return [l["notificationId"] for l in box.journal_lines()
+                if l.get("event") == "delivery" and (status is None or l.get("status") == status)]
+
+    def run_journal(self, box, executor):
+        sink = RUNNER.JournalSink(box.journal, "journal", None, box.env)
+        with mock.patch.object(RUNNER.time, "sleep", lambda s: None):
+            with self.assertRaises(RUNNER.Stop) as caught:
+                RUNNER.work(executor, "http://poll.test", "skm_x", ISSUE, "", box.token, sink=sink)
+        return caught.exception
+
+    def test_a_journal_monitor_takes_the_kept_rest(self):
+        box = Box(self)
+        self.keep_rest(box)
+        executor = FakeExecutor([page([7], 7), 401])
+        stop = self.run_journal(box, executor)
+        self.assertEqual(stop.reason, "token_expired")
+        self.assertEqual(self.journal_ids(box), [5, 6])
+        self.assertIn("since_id=6", executor.urls[1])
+        self.assertIsNone(RUNNER.load_remainder(box.token, page([], 6)["cursor"]))
+
+    def test_a_stream_monitor_takes_the_kept_rest(self):
+        box = Box(self)
+        self.keep_rest(box)
+        out = Out()
+        executor = FakeExecutor([page([7], 7), 401])
+        stop, _ = box.cycle(executor, box.output(None, "stream", out=out), "stream")
+        self.assertEqual(stop.reason, "token_expired")
+        self.assertEqual([l["notification"]["id"] for l in out.lines() if l["event"] == "notification"], [5, 6])
+        self.assertIn("since_id=6", executor.urls[1])
+
+    def test_lost_access_on_the_first_poll_closes_the_kept_rest(self):
+        box = Box(self)
+        self.keep_rest(box)
+        stop = self.run_journal(box, FakeExecutor([401]))
+        self.assertEqual(stop.reason, "token_expired")
+        self.assertEqual(self.journal_ids(box, RUNNER.OUTCOME_ACCESS_LOST), [5, 6])
+        self.assertFalse(any("bodyPreview" in l for l in box.journal_lines() if l.get("event") == "delivery"))
+
+
 class ExitOnEventTest(unittest.TestCase):
     """Matrix row #41 (US-3 "the stdout guarantee", INV-11)."""
 

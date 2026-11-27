@@ -455,7 +455,7 @@ def run_stream_loop(executor, base, token, issue, exclusion, token_file, doc, ou
         # the state already keeps - gets "access lost" without the preview
         # before the stop deletes the token (US-12).
         waiting = list(args[1]) if save is save_remainder else []
-        stored = load_remainder(token_file, cursor) if exit_on_event else None
+        stored = load_remainder(token_file, cursor)
         if stored is not None:
             waiting.extend(n for n in stored[0] if not isinstance(n, dict) or n.get("id") not in seen)
         items, ids = [], set()
@@ -471,7 +471,9 @@ def run_stream_loop(executor, base, token, issue, exclusion, token_file, doc, ou
     # (events, cursor after the page, rootClosed) of a page received but not
     # yet given an outcome in full; an exit-on-event cycle resumes it from
     # the state.
-    remainder = load_remainder(token_file, cursor) if exit_on_event else None
+    # A stream monitor takes such a rest too: a new preflight may have chosen
+    # stream after an exit-on-event cycle kept it.
+    remainder = load_remainder(token_file, cursor)
     # Ids given an outcome by this process, the most recent SEEN_IDS_CAP of
     # them (a monitor lives up to 12 h).
     seen = set()

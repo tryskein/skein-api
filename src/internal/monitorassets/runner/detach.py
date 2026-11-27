@@ -441,6 +441,8 @@ class JournalSink(object):
         self.channel = channel
         # The exclusion of one's own echo in force (echo.py), or None.
         self.exclusion = exclusion
+        # The environment of the deferred tails (a stop with the journal down).
+        self.env = env
         self.tails = TailTimer(env) if env is not None else None
 
     def maybe_tails(self):
