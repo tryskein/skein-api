@@ -787,8 +787,13 @@ type RootLife struct {
 	BootIDEnv string `json:"bootIdEnv"`
 }
 
-// AddresseeCommand runs Argv; Results classify its answer, anything else is
-// "changed" for a terminal channel and not proven for an addressed one.
+// AddresseeCommand runs Argv (or sends HTTPGet); Results classify its
+// answer: "same" hands over, "changed" is another addressee. Any other
+// answer - no row of the table, a timeout, a failed check - is a refusal
+// before send for every kind of channel, retried within the budget of
+// INV-8 and then the next channel or the journal (spec "Addressee and
+// check", item 4); a check never ends the addressee, only an outcome of a
+// delivery does.
 type AddresseeCommand struct {
 	Argv []string `json:"argv,omitempty"`
 	// HTTPGet replaces Argv for a channel with an http executor: the URL

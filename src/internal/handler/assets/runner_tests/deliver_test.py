@@ -1274,10 +1274,10 @@ class LastBoundaryTest(unittest.TestCase):
         def check(channel, timeout=None):
             calls.append(1)
             if len(calls) == 2:
-                raise r.AddresseeGone()
+                raise r.AddresseeChanged()
         self.mon.sink.check_addressee = check
         self.mon.sink.wait_idle = lambda channel, timeout: None
-        with self.assertRaises(r.AddresseeGone):
+        with self.assertRaises(r.AddresseeChanged):
             guard.before_send()
         self.assertFalse(guard.handed)
 

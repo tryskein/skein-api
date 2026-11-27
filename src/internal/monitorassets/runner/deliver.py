@@ -71,10 +71,6 @@ class AddresseeChanged(Exception):
     transfer)."""
 
 
-class AddresseeGone(Exception):
-    """The channel's check says the addressee has ended."""
-
-
 class EchoNow(Exception):
     """An event of the batch became one's own echo after the batch was
     assembled (the exclusion file changed): nothing is handed over, the
@@ -195,9 +191,8 @@ class Guard(object):
         # Set when before_commit failed because access was lost: the
         # journal line goes without the preview.
         self.access_lost = False
-        # Set when before_commit found another or an ended addressee.
+        # Set when before_commit found another addressee.
         self.changed = False
-        self.gone = False
         # Set once the text may be handed to the channel (every check held).
         self.handed = False
         # The stop answer before_commit saw: the monitor stops on it once
@@ -325,9 +320,6 @@ class Guard(object):
         except AddresseeChanged:
             self.changed = True
             return False
-        except AddresseeGone:
-            self.gone = True
-            return False
         except RefusedBeforeSend:
             return False
         # Last, right before the final step and without the network: a stop
@@ -369,7 +361,7 @@ class _ReceiptGuard(Guard):
     def before_commit(self):
         try:
             self.check()
-        except (AddresseeChanged, AddresseeGone, RefusedBeforeSend):
+        except (AddresseeChanged, RefusedBeforeSend):
             return False
         return True
 
@@ -531,7 +523,8 @@ class DeliverySink(object):
         self._shorten = set()
         # After "addressee changed" the process writes only the journal.
         self.journal_only = False
-        # Set when the channel's check says the addressee has ended.
+        # Set when a delivery's outcome says the addressee has ended (Zavod's
+        # caller_not_in_roster): the monitor stops once the page is done.
         self.gone = False
         # Set once the ledger could not be used: no external delivery.
         self.ledger_off = False
@@ -986,8 +979,6 @@ class DeliverySink(object):
             outcome, sign = OUTCOME_REFUSED, {_NOT_SENT: exc.reason}
         except AddresseeChanged:
             outcome, sign = "addressee-changed", {_NOT_SENT: "addressee changed"}
-        except AddresseeGone:
-            outcome, sign = OUTCOME_ADDRESSEE_GONE, None
         except DeliveryCancelled:
             self._ledger_step(attempt.abandon)
             raise
@@ -1053,7 +1044,7 @@ class DeliverySink(object):
             raise DeliveryCancelled(guard.cancel_reason)
         self._close_batch(cursor, outcomes, journaled, batch, outcome, channel_id, sign,
                           with_preview=not guard.access_lost)
-        if outcome == OUTCOME_ADDRESSEE_GONE or guard.gone:
+        if outcome == OUTCOME_ADDRESSEE_GONE:
             # The stop follows when the page loop returns (page()).
             self.gone = True
         elif changed:
@@ -1121,7 +1112,7 @@ class DeliverySink(object):
                 outcome, _ = driver.send(text, guard)
             except (RefusedBeforeSend, PollStale):
                 continue
-            except (AddresseeChanged, AddresseeGone, DeliveryCancelled):
+            except (AddresseeChanged, DeliveryCancelled):
                 return
             if outcome != OUTCOME_REFUSED:
                 return
