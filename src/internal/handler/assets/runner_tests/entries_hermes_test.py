@@ -236,6 +236,8 @@ class ResumeCallTest(unittest.TestCase):
         self.env = self.box.env("hermes", HERMES_SESSION_ID=SESSION)
         self.executor = RUNNER.ArgvExecutor(self.box.token, self.env, [pm.TOKEN])
         self.spec = REG.channel("hermes-resume")["executor"]
+        # A call left running ends with the test, as with the monitor.
+        self.addCleanup(RUNNER.DETACHED_CALLS.end_all)
 
     def test_the_text_goes_to_stdin_of_a_resume_of_the_session(self):
         text = "--model x\nquote \" and $(id)"
