@@ -789,6 +789,18 @@ func (v *validator) blindCalls(path string, c *Channel) {
 			v.add(RuleInvalid, path+".unstage.feed", "the unstage takes no text: its feed is stdin")
 		}
 	}
+	if c.Submit != nil {
+		// The insert leads to Enter only when it wrote the text; an outcome
+		// that ends the delivery without Enter is a refusal or unknown.
+		for i, row := range c.Outcomes {
+			switch row.Outcome {
+			case OutcomeInputWritten, OutcomeInputNoReceipt, OutcomeRefused, OutcomeUnknown:
+			default:
+				v.add(RuleInvalid, fmt.Sprintf("%s.outcomes[%d].outcome", path, i),
+					"the insert of a channel with a submit writes the text or not: %q skips Enter", row.Outcome)
+			}
+		}
+	}
 	if s := c.Submit; s != nil {
 		argvOnly(path+".submit.executor", s.Executor)
 		if s.Executor.Feed == FeedFile {

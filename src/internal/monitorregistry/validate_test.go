@@ -378,6 +378,11 @@ func TestValidate_RejectsEachRule(t *testing.T) {
 			c.Binaries = nil
 			c.Outcomes = []OutcomeRow{{Match: Match{HTTPStatus: intp(200)}, Outcome: OutcomeInputWritten}}
 		}, RuleInvalid},
+		{"an insert that ends with Enter not sent", func(r *Registry) {
+			r.Channels[2].Submit = &Submit{Executor: Executor{Type: ExecutorArgv, Argv: []string{"mux", "enter", "{env:PANE}"},
+				Feed: FeedStdin, TimeoutSec: 5}, Outcomes: []OutcomeRow{{Match: Match{ExitCode: intp(0)}, Outcome: OutcomeInputWritten}}}
+			r.Channels[2].Outcomes = []OutcomeRow{{Match: Match{ExitCode: intp(0)}, Outcome: OutcomeQueued}}
+		}, RuleInvalid},
 		{"two rows of a call still running", func(r *Registry) {
 			r.Channels[0].Executor.Detach = true
 			r.Channels[0].Outcomes = append(r.Channels[0].Outcomes,
