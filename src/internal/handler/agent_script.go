@@ -190,7 +190,8 @@ func wholeSecondsAtLeastOne(d time.Duration) int {
 // @Description  `recovered` line on the first success after it (both
 // @Description  non-terminal; `degraded` names its cause in `cause`).
 // @Description  The poll cursor is saved next to the token file (state.json)
-// @Description  after every printed page: the first run of a new token is
+// @Description  after every printed page: the first run of a new token, or
+// @Description  of a token whose cursor is lost, unreadable or reset, is
 // @Description  live-start, a restart with the same token file resumes from
 // @Description  the saved cursor, at most one page per poll interval. The
 // @Description  state file shares the token file's fate below. The loader
@@ -302,9 +303,13 @@ func wholeSecondsAtLeastOne(d time.Duration) int {
 // @Description  — the only line with `reason` and `action` together (the
 // @Description  preflight line also has a `reason`: why the method was
 // @Description  chosen, never a stop). `event` is `closed`
-// @Description  (the same start command cannot restart the monitor),
-// @Description  `paused` (it can: the `bootstrap` without `client`, the
-// @Description  working command with it) or `duplicate` (a second runner on a
+// @Description  (the monitor ended: a new mint starts another, except
+// @Description  `config_invalid`, whose `action` names what to fix before
+// @Description  the same command runs again; the token and the cursor
+// @Description  stay), `paused` (the command that stopped runs again: the
+// @Description  `bootstrap` without `client`, the working command with it,
+// @Description  the preflight command when it stopped before its line) or
+// @Description  `duplicate` (a second runner on a
 // @Description  token file that already has one). `action` is a finished
 // @Description  instruction naming the root issue. Reasons and token-file
 // @Description  fate: `token_expired` (401, `status` 401, file deleted, exit
