@@ -107,6 +107,7 @@ class TmuxCase(unittest.TestCase):
         """The preflight line of the agent agent under tmux; the platform
         layer answers by the fake chain from here on."""
         source = processes(agent, foreground, agent_pid)
+        self.source = source
         patch = mock.patch.object(RUNNER.PosixPlatform, "process_info", staticmethod(source.info))
         patch.start()
         self.addCleanup(patch.stop)
@@ -207,6 +208,35 @@ class TmuxRecordTest(TmuxCase):
                 mon = self.mon()
                 self.tmux.respond(**{"display-message -p -F": [out(stdout=st) for st in states]})
                 mon.page([ft.note(1)])
+                self.assertEqual(mon.statuses(), [(1, outcome)])
+                self.assertEqual([c[0] for c in self.argvs() if c[0] not in ("display-message", "delete-buffer")],
+                                 calls)
+                self.assertEqual(self.argvs("send-keys"), [])
+
+    def test_leaving_the_foreground_during_the_pane_check_hands_nothing_over(self):
+        # K6 of wave 13 round 2: the pane's state comes from the server
+        # (display-message, up to its check time); the last look before the
+        # insert and before Enter is the local one. The agent leaves the
+        # foreground while the n-th display-message runs: nothing more goes.
+        for name, at, outcome, calls in (
+                ("during the last check before the insert", 2, "refused-before-send", ["load-buffer"]),
+                ("during the check before Enter", 3, "unknown", ["load-buffer", "paste-buffer"])):
+            with self.subTest(case=name):
+                self.fresh()
+                mon = self.mon()
+                real = RUNNER.run_program
+                seen = []
+
+                def watched(argv, *args, **kw):
+                    result = real(argv, *args, **kw)
+                    if "display-message" in argv and "-F" in argv:
+                        seen.append(1)
+                        if len(seen) == at:
+                            for pid in (AGENT_PID, PANE_PID):
+                                self.source.procs[pid].tpgid = PANE_PID
+                    return result
+                with mock.patch.object(RUNNER, "run_program", watched):
+                    mon.page([ft.note(1)])
                 self.assertEqual(mon.statuses(), [(1, outcome)])
                 self.assertEqual([c[0] for c in self.argvs() if c[0] not in ("display-message", "delete-buffer")],
                                  calls)

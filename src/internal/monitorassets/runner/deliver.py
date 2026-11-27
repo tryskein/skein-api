@@ -630,28 +630,11 @@ class DeliverySink(object):
                 if len(q) == 2 and qualifier_value(q[0], self.env, paths, defaults) != q[1]:
                     raise AddresseeChanged()
         check = channel.get("addressee") or {}
-        mode = check.get("process")
-        if mode in ("alive", "foreground"):
-            process = self.identity.get("process")
-            if not process:
-                raise AddresseeChanged()
-            try:
-                info = current_platform().process_info(process[0])
-            except PlatformRefusal:
-                info = None
-            if info is None or info.start != process[1]:
-                raise AddresseeChanged()
-            if channel.get("blind"):
-                # The agent sits on the terminal of the bound pane (P-8): on
-                # another terminal it is not the pane's addressee.
-                pane = ((self.doc or {}).get("binding") or {}).get("pane") or {}
-                if pane.get("tty") is None or getattr(info, "tty", None) != pane.get("tty"):
-                    raise AddresseeChanged()
-            if mode == "foreground" and not info.foreground():
-                raise RefusedBeforeSend("the agent process is not in the foreground")
-        life = check.get("rootLife")
-        if life:
-            self._check_root_life(channel, life)
+        # The record's own check goes first: it calls a program or a server
+        # and may wait. The last observation before the hand-over is local
+        # (the agent process, its terminal, the foreground), so nothing that
+        # waits stands between it and the insert or Enter (one order for
+        # every channel).
         command = check.get("command")
         if command:
             limit = _CHECK_SEC if timeout is None else min(_CHECK_SEC, timeout)
@@ -697,6 +680,29 @@ class DeliverySink(object):
                 if path not in saved or result.timed_out or result.json is None or \
                         capture_value(result.json, path) != saved[path]:
                     raise AddresseeChanged()
+        # The local observation, last.
+        mode = check.get("process")
+        if mode in ("alive", "foreground"):
+            process = self.identity.get("process")
+            if not process:
+                raise AddresseeChanged()
+            try:
+                info = current_platform().process_info(process[0])
+            except PlatformRefusal:
+                info = None
+            if info is None or info.start != process[1]:
+                raise AddresseeChanged()
+            if channel.get("blind"):
+                # The agent sits on the terminal of the bound pane (P-8): on
+                # another terminal it is not the pane's addressee.
+                pane = ((self.doc or {}).get("binding") or {}).get("pane") or {}
+                if pane.get("tty") is None or getattr(info, "tty", None) != pane.get("tty"):
+                    raise AddresseeChanged()
+            if mode == "foreground" and not info.foreground():
+                raise RefusedBeforeSend("the agent process is not in the foreground")
+        life = check.get("rootLife")
+        if life:
+            self._check_root_life(channel, life)
 
     def _program(self, argv):
         """argv with its program as the preflight found it (preflight.json
