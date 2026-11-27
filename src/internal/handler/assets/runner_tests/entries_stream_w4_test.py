@@ -160,6 +160,12 @@ class InstructionTest(unittest.TestCase):
         # #MAX_CONCURRENT_MONITORS) is the agent's state, not a condition the
         # preflight reads: the instruction says what to do when it refuses.
         self.assertIn("maximum of concurrent monitors", line["instruction"])
+        # Review round 2 of wave 14, row 12: no condition of the source makes
+        # the stream unavailable, so a refused start never reaches the
+        # exit-on-event method: the instruction of the stream does not send
+        # the agent to it.
+        self.assertNotIn("run_shell_command", line["instruction"])
+        self.assertNotIn("is_background", line["instruction"])
         second = REG.agents["qwen-code"]["methods"][1]
         self.assertEqual(second["kind"], "exit-on-event")
         self.assertIn("is_background: true", second["instruction"])
