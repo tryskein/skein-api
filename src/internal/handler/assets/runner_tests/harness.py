@@ -76,6 +76,16 @@ def subprocess_runner(test):
     return unittest.skipIf(UNDER_MUTMUT, "runs the runner in a child interpreter, which mutmut does not measure")(test)
 
 
+def source_size(test):
+    """Skip a test method or class when the tests run under mutmut.
+
+    For the tests that measure the size of the text of the parts (the body,
+    the served loader): mutmut's copy of a part holds every mutant of its
+    functions, so the size measured there is not the size the server
+    serves. Without mutmut the test runs as usual."""
+    return unittest.skipIf(UNDER_MUTMUT, "measures the text of the parts, which mutmut's copy inflates")(test)
+
+
 def _join_manifest(manifest):
     """The parts a manifest lists (paths relative to its directory), each
     ending with a newline, joined in order."""

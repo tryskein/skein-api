@@ -673,6 +673,7 @@ class StarterRunsTheBytesTest(unittest.TestCase):
     to a new program. A starter that handed the loader on by argv would fail
     here (E2BIG) as soon as the loader outgrew one argument."""
 
+    @harness.source_size
     def test_the_loader_fits_the_starter_and_not_an_argument(self):
         size = len(harness.served_loader().encode("utf-8"))
         self.assertLess(size, STARTER_LOADER_CAP)
