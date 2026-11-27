@@ -983,6 +983,23 @@ def monitor_secrets(token, env, registry):
     return [s for s in [token] + http_key_secrets(registry, env) if s]
 
 
+# The name of the thread of one http request.
+HTTP_WORKER_NAME = "skein-http-request"
+
+
+def _shorten_socket_wait(resp, left):
+    """Let the next read of an answer wait at most left seconds: the socket
+    under the response, when the library shows it."""
+    fp = getattr(resp, "fp", None)
+    raw = getattr(fp, "raw", None)
+    sock = getattr(raw, "_sock", None)
+    if sock is not None:
+        try:
+            sock.settimeout(left)
+        except OSError:
+            pass
+
+
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
     """A 3xx is the answer: the request is never sent again elsewhere."""
 
@@ -1023,7 +1040,9 @@ class HTTPExecutor(object):
             handlers.append(urllib.request.ProxyHandler({}))
         opener = urllib.request.build_opener(*handlers)
         answer = {}
-        worker = threading.Thread(target=self._send, args=(opener, request, timeout_sec, answer))
+        deadline = time.monotonic() + timeout_sec
+        worker = threading.Thread(target=self._send, args=(opener, request, deadline, answer),
+                                  name=HTTP_WORKER_NAME)
         worker.daemon = True
         worker.start()
         worker.join(timeout_sec)
@@ -1036,14 +1055,27 @@ class HTTPExecutor(object):
         return HTTPResult(answer["status"], answer["body"], False, truncated=answer["truncated"])
 
     @staticmethod
-    def _send(opener, request, timeout_sec, answer):
+    def _send(opener, request, deadline, answer):
+        """The request within one deadline: the connection and every read of
+        the answer wait at most what is left of it, so the thread ends by
+        the deadline plus one socket wait whatever the server does (a name
+        lookup of the system resolver is the one wait no timeout bounds)."""
         try:
             try:
-                resp = opener.open(request, timeout=timeout_sec)
+                resp = opener.open(request, timeout=max(deadline - time.monotonic(), 0.001))
             except urllib.error.HTTPError as exc:
                 resp = exc
             try:
-                raw = resp.read(OUTPUT_CAP_BYTES + 1) or b""
+                raw = b""
+                while len(raw) <= OUTPUT_CAP_BYTES:
+                    left = deadline - time.monotonic()
+                    if left <= 0:
+                        raise socket.timeout("the answer outlasted the timeout")
+                    _shorten_socket_wait(resp, left)
+                    chunk = resp.read(min(8192, OUTPUT_CAP_BYTES + 1 - len(raw)))
+                    if not chunk:
+                        break
+                    raw += chunk
             finally:
                 resp.close()
             answer["status"] = resp.code

@@ -21,6 +21,8 @@ import shutil
 import socket
 import sys
 import tempfile
+import threading
+import time
 import unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -66,6 +68,14 @@ def argv_channel():
             "idle": {"type": "none"}, "outcomes": [{"match": {"exitCode": 0}, "outcome": "queued"}],
             "addressee": {"process": "none"}, "binaries": {"linux": ["chan-p"], "macos": ["chan-p"]},
             "probeUndefined": True}
+
+
+def http_channel_b():
+    """The next channel of the preflight after the http one: a program."""
+    rec = argv_channel()
+    rec.update({"id": "B", "executor": {"type": "argv", "argv": ["chan-b"], "feed": "stdin", "timeoutSec": 2},
+                "binaries": {"linux": ["chan-b"], "macos": ["chan-b"]}})
+    return rec
 
 
 def note(i, preview="hello there"):
@@ -246,36 +256,71 @@ class KeyIsASecretTest(unittest.TestCase):
         self.assertEqual([d[:3] for d in mon.deliveries()], [(1, "queued", "P")])
 
 
+def http_workers(runner):
+    return [t for t in threading.enumerate() if t.name == runner.HTTP_WORKER_NAME and t.is_alive()]
+
+
 class BudgetTest(unittest.TestCase):
     """Row #97: a request is bounded by its timeout within the idle window;
-    a request that runs out is unknown; a request that could not reach the
-    server is a refusal before send."""
+    a request that runs out is unknown and its thread ends; a request that
+    could not reach the server is a refusal before send, repeated within the
+    budget of INV-8 like any refusal; unknown is never repeated and never
+    moves to another channel."""
 
-    def test_a_request_past_its_timeout_is_unknown(self):
+    def test_a_request_past_its_timeout_is_unknown_and_its_thread_ends(self):
         world = World(self, [http_channel(timeout=1)])
-        world.server.respond([{"status": 201, "json": {"state": "queued"}, "delay": 3}])
+        # The server takes the request and never answers.
+        world.server.respond([{"hang": True}])
         mon = world.monitor()
         mon.page([note(1)])
         self.assertEqual([d[:3] for d in mon.deliveries()], [(1, "unknown", "H")])
         self.assertEqual(len(mon.spy.calls), 1)
+        # The thread of the request ends by its deadline plus one socket
+        # wait: nothing can still go out later.
+        done = threading.Event()
 
-    def test_the_timeout_stays_within_the_idle_window(self):
+        def ended():
+            while http_workers(world.runner):
+                time.sleep(0.02)
+            done.set()
+        threading.Thread(target=ended, daemon=True).start()
+        self.assertTrue(done.wait(1 + 2), "the thread of the request outlived its deadline")
+
+    def test_the_idle_window_bounds_a_longer_timeout(self):
+        # The channel's own timeout (30 s) is longer than the idle window
+        # (1 s): the request ends with the window, unknown.
         world = World(self, [http_channel(timeout=30)])
-        mon = world.monitor(idle=5)
-        mon.page([note(1)])
-        self.assertEqual(len(mon.spy.calls), 1)
-        self.assertLessEqual(mon.spy.calls[0][2], 5)
+        world.server.respond([{"hang": True}])
+        mon = world.monitor(idle=1)
+        page = threading.Thread(target=mon.page, args=([note(1)],), daemon=True)
+        page.start()
+        page.join(1 + 2)
+        self.assertFalse(page.is_alive(), "the request outlived the idle window")
+        self.assertEqual([d[:3] for d in mon.deliveries()], [(1, "unknown", "H")])
 
-    def test_a_closed_port_is_a_refusal_before_send(self):
-        world = World(self)
+    def test_a_closed_port_is_refused_before_send_within_the_budget(self):
+        world = World(self, [http_channel(), http_channel_b()])
         sock = socket.socket()
         sock.bind(("127.0.0.1", 0))
         port = sock.getsockname()[1]
         sock.close()
         world.env["HOST_URL"] = "http://127.0.0.1:%d" % port
-        executor = world.runner.HTTPExecutor(world.env, [TOKEN])
-        with self.assertRaises(world.runner.ExecutorRefusal):
-            executor.call(http_channel()["executor"], "hello", 2)
+        fake_channel.FakeProgram(world.bin, "chan-b").respond([{"exit": 0}])
+        mon = world.monitor(fallbacks=("B",))
+        mon.page([note(1)])
+        # At most four calls (INV-8), then the next channel of the preflight.
+        self.assertEqual([kind for kind, _, _ in mon.spy.calls], ["http"] * 4 + ["argv"])
+        self.assertEqual([d[:3] for d in mon.deliveries()], [(1, "queued", "B")])
+
+    def test_unknown_is_not_repeated_and_moves_to_no_other_channel(self):
+        world = World(self, [http_channel(), http_channel_b()])
+        world.server.respond([{"status": 500, "json": {"error": "boom"}}])
+        program = fake_channel.FakeProgram(world.bin, "chan-b")
+        mon = world.monitor(fallbacks=("B",))
+        mon.page([note(1)])
+        self.assertEqual([kind for kind, _, _ in mon.spy.calls], ["http"])
+        self.assertEqual(program.calls(), [])
+        self.assertEqual([d[:3] for d in mon.deliveries()], [(1, "unknown", "H")])
 
 
 class AvailabilityTest(unittest.TestCase):
