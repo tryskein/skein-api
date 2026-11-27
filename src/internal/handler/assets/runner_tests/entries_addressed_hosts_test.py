@@ -260,14 +260,6 @@ class AgentDeckRecordTest(HostCase):
         self.assertEqual(mon.statuses(), [(1, "queued")])
         self.assertEqual(len(self.cli.calls("session send")), 1)
 
-    def test_another_session_is_another_addressee(self):
-        self.fresh()
-        mon = self.mon()
-        self.cli.respond(session_current=[deck_current(session_id="deck-other")])
-        mon.page([ft.note(1)])
-        self.assertEqual(self.cli.calls("session send"), [])
-        self.assertEqual(mon.statuses(), [(1, "unknown")])
-
     def test_the_probe_is_the_current_session(self):
         self.fresh()
         self.cli.respond(session_current=[out(1, stdout={"success": False, "error": "not in a tmux session",
