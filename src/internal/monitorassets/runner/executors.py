@@ -1396,21 +1396,29 @@ def read_endpoint(http, env):
     return base, spec.get("user") or None, password or None
 
 
-def endpoint_secrets(registry, env, channels=()):
+def endpoint_secrets(registry, env, channels=(), snapshot=None):
     """The passwords the endpoint files of the http channels hold now. The
     password of a channel of the monitor's record (channels: the channels
     its delivery methods name) is a secret whatever its length - it goes
     into Authorization; the password of any other channel only when it is
     at least MIN_SECRET_CHARS long (a short one would wipe ordinary words
-    of a text and drop ordinary variables of a program's environment)."""
+    of a text and drop ordinary variables of a program's environment).
+    snapshot, a dict, keeps each file read here by channel id - the
+    (base URL, user, password) or the ExecutorRefusal of its read - so a
+    preflight speaks of these very reads afterwards (preflight_endpoint)."""
     out = []
     for channel in (registry.channels.values() if registry is not None else []):
         http = (channel.get("executor") or {}).get("http") or {}
         if http.get("endpointFile"):
             try:
-                password = read_endpoint(http, env or {})[2]
-            except ExecutorRefusal:
+                endpoint = read_endpoint(http, env or {})
+            except ExecutorRefusal as exc:
+                if snapshot is not None:
+                    snapshot[channel.get("id")] = exc
                 continue
+            if snapshot is not None:
+                snapshot[channel.get("id")] = endpoint
+            password = endpoint[2]
             own = channel.get("id") in channels
             if password and password not in out and (own or len(password) >= MIN_SECRET_CHARS):
                 out.append(password)
@@ -1930,6 +1938,9 @@ class SystemProbeRunner(ProbeRunner):
         # The end the preflight read for the channel; outside a preflight,
         # the endpoint file now.
         endpoint = (self.endpoints or {}).get(channel.get("id"))
+        if isinstance(endpoint, ExecutorRefusal):
+            # The file the preflight read gave no end.
+            raise endpoint
         result = HTTPExecutor(env, self.secrets).get(executor.get("http") or {}, probe.get("url") or "", timeout,
                                                       endpoint=endpoint)
         if result.timed_out:

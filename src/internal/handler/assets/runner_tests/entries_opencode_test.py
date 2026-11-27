@@ -274,6 +274,31 @@ class OpenCodeTest(unittest.TestCase):
         self.assertEqual([r["method"] for r in self.service.requests()], ["GET"])
         self.assertEqual(other.requests(), [])
 
+    def test_the_passwords_of_the_preflight_come_from_its_one_read(self):
+        # Review round 3 of wave 14, row 13: the secrets of the probes come
+        # from the same read of the registration as the check, the probe and
+        # the result; a registration moved after it changes none of them.
+        self.register()
+        self.service.respond([{"status": 200, "json": SESSION_INFO}])
+        other = fake_channel.FakeHTTPChannel()
+        self.addCleanup(other.close)
+        other.respond([{"status": 200, "json": SESSION_INFO}])
+        real = RUNNER.endpoint_secrets
+
+        def read_then_move(*args, **kw):
+            secrets = real(*args, **kw)
+            self.register({"url": other.url, "pid": 4243, "password": "c0ffee11"})
+            return secrets
+        with mock.patch.object(RUNNER, "endpoint_secrets", read_then_move):
+            line = self.line()
+        self.assertEqual(line["channel"], "opencode-synthetic", line)
+        self.assertEqual(RUNNER.load_preflight(self.box.token)["endpoints"],
+                         {"opencode-synthetic": self.service.url})
+        basic = "Basic " + base64.b64encode(("opencode:" + PASSWORD).encode()).decode()
+        self.assertEqual([(r["method"], r["headers"]["Authorization"]) for r in self.service.requests()],
+                         [("GET", basic)])
+        self.assertEqual(other.requests(), [])
+
     def test_another_end_than_the_preflight_s_is_a_refusal_before_send(self):
         # The service registered again elsewhere between the preflight and
         # the attempt: nothing goes there. The addressee is the session, and

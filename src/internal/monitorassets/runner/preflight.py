@@ -799,8 +799,14 @@ def preflight_endpoint(ctx, channel_id, http):
     channel, read once per preflight and kept in ctx.endpoints;
     ExecutorRefusal when it cannot be read."""
     if channel_id not in ctx.endpoints:
-        ctx.endpoints[channel_id] = read_endpoint(http, ctx.env)
-    return ctx.endpoints[channel_id]
+        try:
+            ctx.endpoints[channel_id] = read_endpoint(http, ctx.env)
+        except ExecutorRefusal as exc:
+            ctx.endpoints[channel_id] = exc
+    endpoint = ctx.endpoints[channel_id]
+    if isinstance(endpoint, ExecutorRefusal):
+        raise endpoint
+    return endpoint
 
 
 def _probe(ctx, channel_id, channel):
@@ -1300,9 +1306,13 @@ def preflight(token_file, env, registry, settings, detector=None, prober=None, p
     detector = detector or RegistryDetector()
     # The keys of the http channels and the passwords of their endpoint
     # files are secrets: no probe program sees one.
-    prober = prober or SystemProbeRunner(
-        http_key_secrets(registry, env) + endpoint_secrets(registry, env, registry.record_channels(settings.record.id)),
-        http_key_names(registry))
+    # One read of every endpoint file for the whole preflight: the secrets
+    # of the probes, the check of availability, the probes and the result
+    # all take it from here.
+    endpoints = {}
+    secrets = http_key_secrets(registry, env) + endpoint_secrets(
+        registry, env, registry.record_channels(settings.record.id), snapshot=endpoints)
+    prober = prober or SystemProbeRunner(secrets, http_key_names(registry))
     journal, external = check_sandbox(token_file, env)
     if placement is None:
         placement = system_placement(registry, settings.record)
@@ -1311,6 +1321,7 @@ def preflight(token_file, env, registry, settings, detector=None, prober=None, p
         # with the agent process.
         prober.agent = placement.agent
     ctx = Context(registry, settings, env, placement, detector, prober, external, token_file=token_file)
+    ctx.endpoints = endpoints
     if hasattr(prober, "programs"):
         # The probes and the capture run the programs the preflight checked.
         prober.programs = ctx.programs
