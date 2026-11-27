@@ -896,18 +896,36 @@ class HTTPResult(object):
 
 
 def expand_url(template, env):
-    """The URL of an http executor. ExecutorRefusal when a variable is not
-    set or the URL is neither https nor http of a local host."""
+    """The URL of an http executor. A leading placeholder is the base
+    (scheme, host, maybe a path, taken as is); every later one is one
+    element of the path, escaped. ExecutorRefusal when a variable is not
+    set, the URL cannot be parsed, the base carries a query or a fragment,
+    the authority has user information or a port that is no number, or the
+    URL is neither https of a host nor http of a local host."""
     out = []
+    base = None
     for i, part in enumerate(_URL_PLACEHOLDER.split(template)):
         if i % 2 == 0:
             out.append(part)
         elif i == 1 and out == [""]:
-            out.append(env_value(part, env))
+            base = env_value(part, env)
+            out.append(base)
         else:
             out.append(urllib.parse.quote(env_value(part, env), safe=""))
     url = "".join(out)
-    parts = urllib.parse.urlsplit(url)
+    try:
+        if base is not None:
+            given = urllib.parse.urlsplit(base)
+            if given.query or given.fragment or "?" in base or "#" in base:
+                raise ExecutorRefusal("the base of the URL carries a query or a fragment")
+        parts = urllib.parse.urlsplit(url)
+        port = parts.port
+    except ValueError as exc:
+        raise ExecutorRefusal("the URL of the channel cannot be parsed (%s)" % exc)
+    if parts.username is not None or parts.password is not None or "@" in parts.netloc:
+        raise ExecutorRefusal("the URL of the channel carries user information")
+    if port is not None and not 0 < port < 65536:
+        raise ExecutorRefusal("the URL of the channel has no valid port")
     if parts.scheme == "https" and parts.hostname:
         return url
     if parts.scheme == "http" and parts.hostname in _LOCAL_HTTP_HOSTS:

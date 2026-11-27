@@ -3,9 +3,11 @@ package monitorregistry
 import (
 	"fmt"
 	"maps"
+	"net/url"
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 )
 
@@ -737,7 +739,9 @@ func (v *validator) url(path, s string) {
 		v.add(RuleInvalid, path, "value is empty")
 		return
 	}
-	rest := s
+	// The placeholders, each a whole {env:NAME}, and where they stand.
+	var at []int
+	rest, offset := s, 0
 	for rest != "" {
 		open := strings.IndexAny(rest, "{}")
 		if open < 0 {
@@ -749,29 +753,63 @@ func (v *validator) url(path, s string) {
 			return
 		}
 		v.value(path, rest[open:open+end+1], false)
+		at = append(at, offset+open)
+		offset += open + end + 1
 		rest = rest[open+end+1:]
 	}
-	if strings.HasPrefix(s, PlaceholderEnvPrefix) {
+	// A placeholder past the base is one element of the path: none in the
+	// query or the fragment.
+	if q := strings.IndexAny(s, "?#"); q >= 0 {
+		for _, i := range at {
+			if i > q {
+				v.add(RuleInvalid, path, "%q: a placeholder stands in the query or the fragment", s)
+				return
+			}
+		}
+	}
+	if len(at) > 0 && at[0] == 0 {
+		// A leading placeholder is the base (scheme, host, maybe a path),
+		// checked by the runner once substituted; what follows it is path.
+		after := s[strings.Index(s, "}")+1:]
+		if after != "" && !strings.HasPrefix(after, "/") {
+			v.add(RuleInvalid, path, "%q: the base is followed by its path", s)
+		}
 		return
 	}
-	if !strings.HasPrefix(s, "https://") && !localHTTP(s) {
-		v.add(RuleInvalid, path, "%q is neither https nor http of localhost or 127.0.0.1", s)
+	// A literal base: scheme and authority come before any placeholder.
+	literal := s
+	if len(at) > 0 {
+		literal = s[:at[0]]
+		if !strings.Contains(strings.TrimPrefix(strings.TrimPrefix(literal, "https://"), "http://"), "/") {
+			v.add(RuleInvalid, path, "%q: a placeholder stands in the authority", s)
+			return
+		}
+	}
+	if !secureURL(literal) {
+		v.add(RuleInvalid, path, "%q is neither https of a host nor http of localhost or 127.0.0.1", s)
 	}
 }
 
-// localHTTP reports whether an http URL names localhost or 127.0.0.1.
-func localHTTP(s string) bool {
-	host, ok := strings.CutPrefix(s, "http://")
-	if !ok {
+// secureURL reports whether the literal start of a URL is https with a
+// host, or http of localhost or 127.0.0.1, by the standard parse of its
+// authority: no user information, a numeric port if any.
+func secureURL(s string) bool {
+	u, err := url.Parse(s)
+	if err != nil || u.User != nil || u.Opaque != "" {
 		return false
 	}
-	if i := strings.IndexAny(host, "/?#"); i >= 0 {
-		host = host[:i]
+	if p := u.Port(); p != "" {
+		if _, err := strconv.ParseUint(p, 10, 16); err != nil {
+			return false
+		}
 	}
-	if i := strings.LastIndex(host, ":"); i >= 0 {
-		host = host[:i]
+	switch u.Scheme {
+	case "https":
+		return u.Hostname() != ""
+	case "http":
+		return u.Hostname() == "localhost" || u.Hostname() == "127.0.0.1"
 	}
-	return host == "localhost" || host == "127.0.0.1"
+	return false
 }
 
 // pathValue checks a probe path: a literal, or "{env:NAME}" optionally

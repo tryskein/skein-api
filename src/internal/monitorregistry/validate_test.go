@@ -911,3 +911,36 @@ func TestValidate_AUserAgentIsALiteralHeaderValue(t *testing.T) {
 		}
 	}
 }
+
+// TestValidate_RejectsAURLOutOfItsRules — the authority is read by the
+// standard parse: user information, a missing host or a port that is no
+// number are refused; a placeholder past the base is one element of the
+// path, never the authority, the query or the fragment.
+func TestValidate_RejectsAURLOutOfItsRules(t *testing.T) {
+	for _, u := range []string{
+		"http://localhost:80@evil.example/v0/{env:HOST_ID}",
+		"http://127.0.0.1:80@evil.example/v0/{env:HOST_ID}",
+		"https://user@api.example.com/v0/{env:HOST_ID}",
+		"https://",
+		"https:///v0/{env:HOST_ID}",
+		"http://localhost:port/{env:HOST_ID}",
+		"https://{env:HOST_ID}.example.com/v0",
+		"https://api.example.com/v0?session={env:HOST_ID}",
+		"https://api.example.com/v0#{env:HOST_ID}",
+		"{env:HOST_URL}?{env:HOST_ID}",
+		"{env:HOST_URL}{env:HOST_ID}",
+	} {
+		r := validRegistry()
+		httpHost(r)
+		r.Channels[1].Executor.HTTP.URL = u
+		err := r.Validate()
+		if err == nil {
+			t.Fatalf("URL %q was accepted", u)
+		}
+		for _, got := range rulesOf(t, err) {
+			if got != RuleInvalid {
+				t.Fatalf("URL %q: %v, want only %s", u, err, RuleInvalid)
+			}
+		}
+	}
+}

@@ -293,7 +293,17 @@ class AvailabilityTest(unittest.TestCase):
         for name, change in [("no URL", {"HOST_URL": ""}), ("no session", {"HOST_SESSION": ""}),
                              ("no key", {"HOST_KEY": "", "HOST_TOKEN": ""}),
                              ("http of another host", {"HOST_URL": "http://api.example.com"}),
-                             ("another scheme", {"HOST_URL": "ftp://127.0.0.1"})]:
+                             ("another scheme", {"HOST_URL": "ftp://127.0.0.1"}),
+                             # The authority by the standard parse (urlsplit).
+                             ("user information before localhost", {"HOST_URL": "http://localhost:80@evil.example"}),
+                             ("user information before 127.0.0.1",
+                              {"HOST_URL": "http://127.0.0.1:80@evil.example"}),
+                             ("https without a host", {"HOST_URL": "https://"}),
+                             ("a port that is no number", {"HOST_URL": "https://api.example.com:abc"}),
+                             ("a port out of range", {"HOST_URL": "https://api.example.com:99999"}),
+                             ("a URL that cannot be parsed", {"HOST_URL": "http://["}),
+                             ("a base with a query", {"HOST_URL": "https://api.example.com/?x=1"}),
+                             ("a base with a fragment", {"HOST_URL": "https://api.example.com/#f"})]:
             with self.subTest(case=name):
                 world.env.update(change)
                 ok, cause = self.available(world)
