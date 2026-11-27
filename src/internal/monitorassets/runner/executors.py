@@ -1019,6 +1019,31 @@ class ChannelExecutor(object):
         return self.argv.call(executor, text, timeout_sec)
 
 
+def _probe_program(channel, argv, env):
+    """argv with its program as an absolute path: the channel's program as
+    the preflight finds it, or a program of another name found on the PATH
+    of the agent process (a check or a probe of its own); never a bare name.
+    ProbeError when none is found."""
+    programs = channel_programs(channel, env, None)
+    name = argv[0] if argv else ""
+    path = programs.get(name) or absolute_program(name, env)
+    if path is None:
+        raise ProbeError("program %s not found" % name)
+    return [path] + list(argv[1:])
+
+
+def absolute_program(name, env):
+    """The absolute path name runs from: itself when absolute and present,
+    else what the PATH of env finds, made absolute from the runner's
+    directory; None when not found."""
+    if not name:
+        return None
+    if os.path.isabs(name):
+        return name if os.path.isfile(name) else None
+    found = shutil.which(name, path=env.get("PATH", os.defpath))
+    return os.path.abspath(found) if found else None
+
+
 class SystemProbeRunner(ProbeRunner):
     """Runs the probes of a channel for the preflight (P-7)."""
 
@@ -1047,10 +1072,7 @@ class SystemProbeRunner(ProbeRunner):
         argv = expand_argv(probe.get("argv") or [], clean)
         # The program of the channel by the path it is found at (a path under
         # the home directory among them), as the working runner runs it.
-        programs = channel_programs(channel, env, None)
-        if not argv or argv[0] not in programs:
-            raise ProbeError("program %s not found" % (argv[0] if argv else ""))
-        argv[0] = programs[argv[0]]
+        argv = _probe_program(channel, argv, env)
         result = run_program(argv, clean, None, timeout, self.secrets)
         if result.timed_out:
             raise ProbeError("timed out after %d s" % timeout)
@@ -1072,10 +1094,7 @@ class SystemProbeRunner(ProbeRunner):
             argv = expand_argv(command.get("argv") or [], clean)
         except ExecutorRefusal as exc:
             raise ProbeError(exc.reason)
-        programs = channel_programs(channel, env, None)
-        if not argv or argv[0] not in programs:
-            raise ProbeError("program %s not found" % (argv[0] if argv else ""))
-        argv[0] = programs[argv[0]]
+        argv = _probe_program(channel, argv, env)
         result = run_program(argv, clean, None, timeout, self.secrets)
         if result.timed_out:
             raise ProbeError("timed out after %d s" % timeout)

@@ -934,6 +934,16 @@ def _programs_doc(registry, channel_ids, env, agent):
         channel = registry.channel(channel_id) if channel_id is not None else None
         if channel is not None:
             programs.update(channel_programs(channel, env, agent))
+            # The programs of its addressee check and its idle wait, when
+            # they name another one: the working runner runs them by these
+            # absolute paths too, never by a bare name.
+            for argv in (((channel.get("addressee") or {}).get("command") or {}).get("argv"),
+                         (channel.get("idle") or {}).get("argv")):
+                name = argv[0] if argv else None
+                if name and name not in programs:
+                    path = absolute_program(name, env)
+                    if path is not None:
+                        programs[name] = path
     return programs
 
 
