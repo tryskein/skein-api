@@ -75,6 +75,12 @@ class AddresseeGone(Exception):
     """The channel's check says the addressee has ended."""
 
 
+class EchoNow(Exception):
+    """An event of the batch became one's own echo after the batch was
+    assembled (the exclusion file changed): nothing is handed over, the
+    attempt is withdrawn and the events are taken again (US-13)."""
+
+
 class PollStale(Exception):
     """The last successful poll is older than two intervals: no send until a
     fresh one (US-12); not a refusal of the channel."""
@@ -134,10 +140,13 @@ class Guard(object):
     the step, and what failed is kept (access lost, addressee changed or
     gone)."""
 
-    def __init__(self, pipeline, channel, attempt, timeout):
+    def __init__(self, pipeline, channel, attempt, timeout, batch=()):
         self.pipeline = pipeline
         self.channel = channel
         self.attempt = attempt
+        # The events of the text, checked against the exclusion in force
+        # right before the hand-over.
+        self.batch = list(batch)
         self.deadline = pipeline.clock.now() + timeout
         # Set when before_commit failed because access was lost: the
         # journal line goes without the preview.
@@ -181,6 +190,7 @@ class Guard(object):
         # merge of the addressee's records may have taken one meanwhile).
         self.boundary()
         self.pipeline.check_addressee(self.channel, self.remaining())
+        self.check_echo()
         self.attempt.confirm()
         # Last, right before the hand-over and without the network: what is
         # already known of access (a stop answer, the age of the last poll).
@@ -188,6 +198,17 @@ class Guard(object):
         self.remaining()
         self.handed = True
         self.attempt.handed = True
+
+    def check_echo(self):
+        """Read the exclusion file again (local, no poll): EchoNow when an
+        event of the text is now one's own echo."""
+        exclusion = getattr(self.pipeline, "exclusion", None)
+        current = getattr(exclusion, "current", None)
+        if current is None:
+            return
+        current()
+        if any(exclusion.own(n) for n in self.batch):
+            raise EchoNow()
 
     def local_boundary(self):
         """The access boundary from what is known now, without a poll:
@@ -687,13 +708,17 @@ class DeliverySink(object):
         limit, unit = _line_limit(channel)
         minimal = all(str(n["id"]) in self._shorten for n in batch)
         text, _, _ = plain_batch(batch, self.exclude_file, limit, unit, channel.get("textNotes"), minimal)
-        guard = Guard(self, channel, attempt, timeout)
+        guard = Guard(self, channel, attempt, timeout, batch)
         driver = self.drivers.get(channel_id) or ArgvDriver(channel, self.executor)
         try:
             outcome, sign = driver.send(text, guard)
         except PollStale:
             self._ledger_step(attempt.abandon)
             self._wait(self.clock.now() + WAIT_STEP_SEC)
+            return
+        except EchoNow:
+            # The page loop gives those events "own echo" and sends the rest.
+            self._ledger_step(attempt.abandon)
             return
         except RefusedBeforeSend as exc:
             outcome, sign = OUTCOME_REFUSED, {_NOT_SENT: exc.reason}

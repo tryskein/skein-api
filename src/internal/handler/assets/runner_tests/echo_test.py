@@ -146,6 +146,27 @@ class OwnEchoDeliveryTest(unittest.TestCase):
         self.assertFalse(any("c1" in t for t in texts))
         self.assertTrue(any("c3" in t for t in texts))
 
+    def test_an_exclusion_written_during_the_checks_holds_back_the_text(self):
+        # Review of wave 8, row 12: the file is written after the page loop
+        # read it and before the hand-over; the event of the new session is
+        # not sent, the other one is.
+        world = EchoWorld(self, dt.two_channels())
+        mon = world.monitor()
+        real = mon.sink.check_addressee
+        written = []
+
+        def check_addressee(*args):
+            if not written:
+                world.write_exclusion(mon, NEW)
+                written.append(True)
+            return real(*args)
+        mon.sink.check_addressee = check_addressee
+        mon.page([dt.note(1, session=NEW), dt.note(2, session=OTHER)])
+        self.assertEqual(outcomes(mon), {1: "own-echo", 2: "queued"})
+        texts = [t for _, _, t in mon.spy.calls]
+        self.assertFalse(any("c1" in t for t in texts))
+        self.assertTrue(any("c2" in t for t in texts))
+
     def test_the_new_session_before_the_file_is_delivered(self):
         # The agent learns of its new session from this very event.
         world = EchoWorld(self, dt.two_channels())
