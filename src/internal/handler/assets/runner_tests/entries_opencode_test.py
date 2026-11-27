@@ -364,15 +364,19 @@ class OpenCodeTest(unittest.TestCase):
         # fallback argv channel gets neither a variable nor a text that
         # holds it, an http request has it in no body.
         self.register()
-        executor = RUNNER.ChannelExecutor(self.box.token, dict(self.env, SAME_AS_NEW="n3wpass9"), [pm.TOKEN],
-                                          None, REG, "opencode")
-        sink = self.sink()
-        sink.executor = executor
-        # The journal reads that list as DeliverySink makes it do.
-        executor.secrets.listen(sink.journal.add_secret)
+        env = dict(self.env, SAME_AS_NEW="n3wpass9")
+        executor = RUNNER.ChannelExecutor(self.box.token, env, [pm.TOKEN], None, REG, "opencode")
+        # The monitor's own sink: its journal hears the list of secrets as
+        # DeliverySink subscribes it (review round 3 of wave 14, row 7).
+        journal = mock.Mock()
+        doc = {"method": "detached", "channel": "opencode-synthetic", "fallbacks": [], "preflightId": 1,
+               "identity": {"addresses": [{"channel": "opencode-synthetic", "env": "OPENCODE_SESSION_ID",
+                                           "value": SESSION}]},
+               "endpoints": {"opencode-synthetic": self.service.url}}
+        sink = RUNNER.DeliverySink(journal, self.box.token, doc, REG, env, mock.Mock(), executor, "sk-1")
         self.register({"url": self.service.url, "pid": 4242, "password": "n3wpass9"})
         self.service.respond([{"status": 200, "json": SESSION_INFO}])
-        RUNNER.DeliverySink.check_addressee(sink, REG.channel("opencode-synthetic"))
+        sink.check_addressee(REG.channel("opencode-synthetic"))
         fallback = fake_channel.FakeProgram(self.box.bin, "fallback", watch=("SAME_AS_NEW",))
         executor.argv.call({"type": "argv", "argv": [os.path.join(self.box.bin, "fallback")], "feed": "stdin",
                             "timeoutSec": 10}, "a preview holding n3wpass9", 10)
@@ -388,7 +392,7 @@ class OpenCodeTest(unittest.TestCase):
         self.assertNotIn("n3wpass9", request["body"])
         self.assertNotIn("n3wpass9", json.dumps(request["headers"]))
         # And the journal of the monitor, through the same list.
-        sink.journal.add_secret.assert_any_call("n3wpass9")
+        journal.add_secret.assert_any_call("n3wpass9")
 
     def test_the_probes_of_the_preflight_keep_the_password_of_the_record_out(self):
         # The password of the record's endpoint file is a secret of every
