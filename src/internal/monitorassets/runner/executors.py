@@ -62,6 +62,7 @@ import shutil
 import socket
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import urllib.error
@@ -101,8 +102,11 @@ class CallResult(object):
     timeout ended it and whether stdout was cut."""
 
     def __init__(self, exit_code, stdout, stderr, timed_out, truncated=False, tree_failure=None,
-                 stderr_truncated=False):
+                 stderr_truncated=False, still_running=False):
         self.exit_code = exit_code
+        # A detached call whose program had not exited when its time ran out
+        # (registry.go#Executor.Detach): no exit code, no output yet.
+        self.still_running = still_running
         self.stdout = stdout
         self.stderr = stderr
         # stderr was cut at the cap: a prefix of it is not its JSON, its
@@ -204,13 +208,18 @@ def _json_type_is(value, kind):
     return False
 
 
-def outcome_sign_matches(match, exit_code=None, doc=None, http_status=None, stderr=None, env=None):
+def outcome_sign_matches(match, exit_code=None, doc=None, http_status=None, stderr=None, env=None,
+                         still_running=False):
     """Whether an answer carries the sign of a table row: every criterion
     the row states holds. A row without a criterion matches nothing. stderr
     is what an argv program wrote there (bytes; None: no program ran). A
     JSON value "{env:NAME}" is the value of that variable in env: the
-    answer of a check names the very id the delivery addresses."""
-    stated = False
+    answer of a check names the very id the delivery addresses.
+    still_running: a detached call whose program has not exited, which
+    only the row stillRunning matches."""
+    if bool(match.get("stillRunning")) != bool(still_running):
+        return False
+    stated = bool(still_running)
     if match.get("stderrEmpty") is not None:
         stated = True
         if stderr is None or (len(stderr.strip()) == 0) != match["stderrEmpty"]:
@@ -519,6 +528,62 @@ def run_program(argv, env, stdin_data, timeout_sec, secrets=()):
         # Pipes of Windows can be set non-blocking from Python 3.12 on.
         return _run_polled(argv, env, stdin_data, timeout_sec)
     return _run_threads(argv, env, stdin_data, timeout_sec)
+
+
+# Programs of detached calls left to run on their own; reaped as they end.
+_DETACHED = []
+
+
+def reap_detached():
+    """Reap the programs of detached calls that have ended (no zombie is
+    left of them); the others run on."""
+    for proc in list(_DETACHED):
+        if proc.poll() is not None:
+            _DETACHED.remove(proc)
+
+
+def _read_capped(fh):
+    fh.seek(0)
+    data = fh.read(OUTPUT_CAP_BYTES + 1)
+    return data[:OUTPUT_CAP_BYTES], len(data) > OUTPUT_CAP_BYTES
+
+
+def run_detached(argv, env, stdin_data, wait_sec, secrets=()):
+    """Run argv (no shell) as run_program does, but wait at most wait_sec
+    for its exit and never kill it (registry.go#Executor.Detach). An exit in
+    that time gives its CallResult; a program still running is left to run
+    on its own (its own session or process group, stdout and stderr in
+    files only it still holds) and gives a CallResult with still_running.
+    Raises ExecutorRefusal as run_program does."""
+    for s in secrets:
+        if s and (any(s in a for a in argv) or (stdin_data is not None and s.encode("utf-8") in stdin_data)):
+            raise ExecutorRefusal("the call would carry a secret of the monitor")
+    reap_detached()
+    out, err = tempfile.TemporaryFile(), tempfile.TemporaryFile()
+    try:
+        kwargs = {"start_new_session": True} if os.name == "posix" else {
+            "creationflags": getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)}
+        try:
+            proc = subprocess.Popen(argv, stdin=subprocess.PIPE if stdin_data is not None else subprocess.DEVNULL,
+                                    stdout=out, stderr=err, env=env, close_fds=True, **kwargs)
+        except OSError as exc:
+            raise ExecutorRefusal("the program cannot be started (%s)" % (exc.strerror or exc))
+        if stdin_data is not None:
+            # A writer of its own: a program that reads its stdin late never
+            # holds the call past its time.
+            writer = _Writer(proc.stdin, stdin_data)
+            writer.start()
+        try:
+            exit_code = proc.wait(timeout=max(wait_sec, 0))
+        except subprocess.TimeoutExpired:
+            _DETACHED.append(proc)
+            return CallResult(None, b"", b"", False, still_running=True)
+        stdout, cut = _read_capped(out)
+        stderr, err_cut = _read_capped(err)
+        return CallResult(exit_code, stdout, stderr, False, truncated=cut, stderr_truncated=err_cut)
+    finally:
+        out.close()
+        err.close()
 
 
 def _ended_unreaped(proc):
@@ -886,6 +951,8 @@ class ArgvExecutor(object):
                     raise ExecutorRefusal("the message path of a .cmd program is not ASCII")
                 if not all(BATCH_SAFE_ARG.match(a) for a in argv[1:]):
                     raise ExecutorRefusal("an argument of a .cmd program holds characters cmd.exe interprets")
+            if executor.get("detach"):
+                return run_detached(argv, env, stdin_data, timeout_sec, self.secrets)
             return run_program(argv, env, stdin_data, timeout_sec, self.secrets)
         finally:
             if text_file is not None:

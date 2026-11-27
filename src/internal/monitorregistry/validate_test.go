@@ -237,6 +237,72 @@ func TestValidate_RejectsEachRule(t *testing.T) {
 		{"a variable that must not carry a value in a channel's detection", func(r *Registry) {
 			r.Channels[1].Detect.EnvNot = []EnvCondition{{Name: "ALPHA_MONITOR_ENABLED", Equals: strp("false")}}
 		}, RuleInvalid},
+		{"a variable that must be unset in a channel's detection", func(r *Registry) {
+			r.Channels[1].Detect.EnvAbsent = []string{"ALPHA_MODE"}
+		}, RuleInvalid},
+		{"a variable that must be unset, with a name that is no variable", func(r *Registry) {
+			r.Agents[0].Methods[1].Conditions.EnvAbsent = []string{"ALPHA MODE"}
+		}, RuleInvalid},
+		{"a setting that must not carry a value in a channel's detection", func(r *Registry) {
+			r.Channels[1].Detect.SettingsNot = []SettingCondition{{Path: "~/.alpha/c.yaml", Format: SettingYAMLScalar,
+				Key: "display.notify", Equals: json.RawMessage(`"off"`)}}
+		}, RuleInvalid},
+		{"a setting that must not carry a value, without that value", func(r *Registry) {
+			r.Agents[0].Methods[1].Conditions.SettingsNot = []SettingCondition{{Path: "~/.alpha/c.yaml",
+				Format: SettingYAMLScalar, Key: "display.notify"}}
+		}, RuleInvalid},
+		{"a setting that must not carry a value, in an unknown format", func(r *Registry) {
+			r.Agents[0].Methods[1].Conditions.SettingsNot = []SettingCondition{{Path: "~/.alpha/c.ini",
+				Format: "ini", Key: "display.notify", Equals: json.RawMessage(`"off"`)}}
+		}, RuleInvalid},
+		{"alternatives in a channel's detection", func(r *Registry) {
+			r.Channels[1].Detect.AnyOf = []Conditions{{Env: []EnvCondition{{Name: "A"}}}, {Env: []EnvCondition{{Name: "B"}}}}
+		}, RuleInvalid},
+		{"one alternative is no choice", func(r *Registry) {
+			r.Agents[0].Methods[1].Conditions.AnyOf = []Conditions{{Env: []EnvCondition{{Name: "A"}}}}
+		}, RuleInvalid},
+		{"an empty alternative always holds", func(r *Registry) {
+			r.Agents[0].Methods[1].Conditions.AnyOf = []Conditions{{Env: []EnvCondition{{Name: "A"}}}, {}}
+		}, RuleInvalid},
+		{"alternatives inside an alternative", func(r *Registry) {
+			inner := []Conditions{{Env: []EnvCondition{{Name: "A"}}}, {Env: []EnvCondition{{Name: "B"}}}}
+			r.Agents[0].Methods[1].Conditions.AnyOf = []Conditions{{Env: []EnvCondition{{Name: "C"}}, AnyOf: inner},
+				{Env: []EnvCondition{{Name: "D"}}}}
+		}, RuleInvalid},
+		{"an alternative that names records", func(r *Registry) {
+			r.Agents[0].Methods[1].Conditions.AnyOf = []Conditions{{Env: []EnvCondition{{Name: "A"}}, Records: []string{"alpha"}},
+				{Env: []EnvCondition{{Name: "B"}}}}
+		}, RuleInvalid},
+		{"an invalid condition inside an alternative", func(r *Registry) {
+			r.Agents[0].Methods[1].Conditions.AnyOf = []Conditions{{Env: []EnvCondition{{Name: "A B"}}},
+				{Env: []EnvCondition{{Name: "B"}}}}
+		}, RuleInvalid},
+		{"a detached http call", func(r *Registry) {
+			r.Channels[1].Executor = Executor{Type: ExecutorHTTP, TimeoutSec: 30, Detach: true,
+				HTTP: &HTTPRequest{Method: "POST", URL: "{env:HOST_URL}", BodyField: "text"}}
+			r.Channels[1].Binaries = nil
+			r.Channels[1].Outcomes = []OutcomeRow{{Match: Match{HTTPStatus: intp(200)}, Outcome: OutcomeQueued}}
+		}, RuleInvalid},
+		{"a call still running in the table of a call that is not detached", func(r *Registry) {
+			r.Channels[0].Outcomes = append(r.Channels[0].Outcomes,
+				OutcomeRow{Match: Match{StillRunning: boolp(true)}, Outcome: OutcomeUnknown})
+		}, RuleInvalid},
+		{"a call still running with an exit code", func(r *Registry) {
+			r.Channels[0].Executor.Detach = true
+			r.Channels[0].Outcomes = append(r.Channels[0].Outcomes,
+				OutcomeRow{Match: Match{StillRunning: boolp(true), ExitCode: intp(9)}, Outcome: OutcomeUnknown})
+		}, RuleInvalid},
+		{"a call not still running as a sign", func(r *Registry) {
+			r.Channels[0].Executor.Detach = true
+			r.Channels[0].Outcomes = append(r.Channels[0].Outcomes,
+				OutcomeRow{Match: Match{StillRunning: boolp(false)}, Outcome: OutcomeUnknown})
+		}, RuleInvalid},
+		{"two rows of a call still running", func(r *Registry) {
+			r.Channels[0].Executor.Detach = true
+			r.Channels[0].Outcomes = append(r.Channels[0].Outcomes,
+				OutcomeRow{Match: Match{StillRunning: boolp(true)}, Outcome: OutcomeUnknown},
+				OutcomeRow{Match: Match{StillRunning: boolp(true)}, Outcome: OutcomeQueued})
+		}, RuleAmbiguousSign},
 		{"stderr criterion in the table of an http channel", func(r *Registry) {
 			r.Channels[1].Executor = Executor{Type: ExecutorHTTP, TimeoutSec: 30,
 				HTTP: &HTTPRequest{Method: "POST", URL: "{env:HOST_URL}", BodyField: "text"}}
@@ -596,6 +662,30 @@ func TestValidate_AcceptsAVariableThatMustNotCarryAValue(t *testing.T) {
 	r.Agents[0].Methods[1].Conditions.EnvNot = []EnvCondition{{Name: "ALPHA_MONITOR_ENABLED", Equals: strp("false")}}
 	if err := r.Validate(); err != nil {
 		t.Fatalf("a method with a variable that must not carry a value was refused: %v", err)
+	}
+}
+
+// TestValidate_AcceptsTheHermesReadings — a detached call with its row of a
+// call still running beside the rows of its exit, and a method whose
+// alternatives read a variable or, without it, a setting, pass in a correct
+// record.
+func TestValidate_AcceptsTheHermesReadings(t *testing.T) {
+	r := validRegistry()
+	r.Channels[0].Executor.Detach = true
+	r.Channels[0].Outcomes = append(r.Channels[0].Outcomes,
+		OutcomeRow{Match: Match{StillRunning: boolp(true)}, Outcome: OutcomeUnknown})
+	r.Agents[0].Methods[1].Conditions = Conditions{
+		Env: []EnvCondition{{Name: "ALPHA_SESSION"}},
+		AnyOf: []Conditions{
+			{Env: []EnvCondition{{Name: "ALPHA_MODE", Pattern: "[Qq]ueue"}}},
+			{EnvAbsent: []string{"ALPHA_MODE"}, Settings: []SettingCondition{{Path: "~/.alpha/c.yaml",
+				Format: SettingYAMLScalar, Key: "display.mode", Equals: json.RawMessage(`"queue"`)}}},
+		},
+		SettingsNot: []SettingCondition{{Path: "~/.alpha/c.yaml", Format: SettingYAMLScalar,
+			Key: "display.notify", Equals: json.RawMessage(`false`)}},
+	}
+	if err := r.Validate(); err != nil {
+		t.Fatalf("a correct record with the Hermes readings was refused: %v", err)
 	}
 }
 

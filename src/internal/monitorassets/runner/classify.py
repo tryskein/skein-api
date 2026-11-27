@@ -22,18 +22,20 @@ DELIVERED_OUTCOMES = frozenset((OUTCOME_QUEUED, OUTCOME_INPUT_WRITTEN, OUTCOME_I
                                 OUTCOME_TURN_STARTED))
 
 
-def answer_sign(exit_code=None, doc=None, http_status=None, timed_out=False):
+def answer_sign(exit_code=None, doc=None, http_status=None, timed_out=False, still_running=False):
     """The sign of an answer as a journal line names it: the exit code, the
-    HTTP status, or the timeout."""
+    HTTP status, the timeout, or a detached program still running."""
     if timed_out:
         return {"timeout": True}
+    if still_running:
+        return {"stillRunning": True}
     if http_status is not None:
         return {"httpStatus": http_status}
     return {"exitCode": exit_code}
 
 
 def classify(rows, exit_code=None, doc=None, http_status=None, timed_out=False,
-             written=False, earlier_refused=True, stderr=None):
+             written=False, earlier_refused=True, stderr=None, still_running=False):
     """(outcome, sign) of one answer by the closed table rows. written: the
     text was handed to the channel in this attempt (a step that may have
     written it ran); earlier_refused: every earlier attempt of this
@@ -41,9 +43,10 @@ def classify(rows, exit_code=None, doc=None, http_status=None, timed_out=False,
     if timed_out:
         return OUTCOME_UNKNOWN, answer_sign(timed_out=True)
     matched = [r for r in rows or [] if outcome_sign_matches(r.get("match") or {}, exit_code=exit_code,
-                                                      doc=doc, http_status=http_status, stderr=stderr)]
+                                                      doc=doc, http_status=http_status, stderr=stderr,
+                                                      still_running=still_running)]
     if len(matched) != 1:
-        return OUTCOME_UNKNOWN, answer_sign(exit_code, doc, http_status)
+        return OUTCOME_UNKNOWN, answer_sign(exit_code, doc, http_status, still_running=still_running)
     outcome = matched[0].get("outcome")
     if outcome not in CHANNEL_OUTCOMES:
         return OUTCOME_UNKNOWN, matched[0].get("match")
@@ -66,4 +69,5 @@ def classify_result(rows, result, written=False, earlier_refused=True):
         return OUTCOME_UNKNOWN, {"httpError": error}
     return classify(rows, exit_code=result.exit_code, doc=result.json, timed_out=result.timed_out,
                     http_status=getattr(result, "http_status", None), stderr=getattr(result, "sign_stderr", None),
-                    written=written, earlier_refused=earlier_refused)
+                    written=written, earlier_refused=earlier_refused,
+                    still_running=getattr(result, "still_running", False))

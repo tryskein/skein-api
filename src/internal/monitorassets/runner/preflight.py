@@ -41,6 +41,7 @@
 # the probe executors (executors.py#SystemProbeRunner) are the preflight's
 # defaults.
 
+import errno
 import json
 import ntpath
 import os
@@ -244,25 +245,30 @@ def expand_path(path, env):
 
 
 _MISSING = object()
+# The setting file or its key does not exist: the agent's default applies.
+_ABSENT = object()
 
 
 def read_setting(cond, env):
-    """The value at the dotted key of the setting file, or _MISSING when the
-    file, the key or the format cannot be read."""
+    """The value at the dotted key of the setting file; _ABSENT when the
+    file or the key does not exist; _MISSING when the file, its format or
+    the value cannot be read."""
     path = expand_path(cond.get("path", ""), env)
     if path is None:
         return _MISSING
     try:
         with open(path, "rb") as fh:
             raw = fh.read()
-    except OSError:
-        return _MISSING
+    except OSError as exc:
+        return _ABSENT if exc.errno == errno.ENOENT else _MISSING
     fmt = cond.get("format")
     if fmt == "yaml-scalar":
         try:
             value = read_yaml_scalar(raw.decode("utf-8"), cond.get("key", "").split("."))
         except ValueError:  # not UTF-8
             return _MISSING
+        if value is SETTING_ABSENT:
+            return _ABSENT
         return _MISSING if value is SETTING_NOT_READ else value
     try:
         if fmt == "json":
@@ -278,8 +284,11 @@ def read_setting(cond, env):
     except ValueError:
         return _MISSING
     for part in cond.get("key", "").split("."):
-        if not isinstance(doc, dict) or part not in doc:
-            return _MISSING
+        if doc is None or (isinstance(doc, dict) and part not in doc):
+            return _ABSENT
+        if not isinstance(doc, dict):
+            # A scalar or a list where the path needs an object.
+            return _ABSENT if not isinstance(doc, list) else _MISSING
         doc = doc[part]
     return doc
 
@@ -300,7 +309,17 @@ def _same_json_value(a, b):
 
 def setting_holds(cond, env):
     value = read_setting(cond, env)
-    return value is not _MISSING and _same_json_value(value, cond.get("equals"))
+    return value is not _MISSING and value is not _ABSENT and _same_json_value(value, cond.get("equals"))
+
+
+def setting_not_holds(cond, env):
+    """registry.go#Conditions.SettingsNot: the value is read and differs
+    from `equals`, or the file or the key does not exist; a file not read
+    does not hold."""
+    value = read_setting(cond, env)
+    if value is _ABSENT:
+        return True
+    return value is not _MISSING and not _same_json_value(value, cond.get("equals"))
 
 
 def program_found(name, env):
@@ -441,15 +460,40 @@ def conditions_hold(conds, env, agent=None, record=None):
         ok, cause = agent_options_absent(conds["agentOptionsAbsent"], agent)
         if not ok:
             return False, cause
+    ok, cause = _plain_conditions_hold(conds, env)
+    if not ok:
+        return False, cause
+    alternatives = conds.get("anyOf") or []
+    if alternatives:
+        causes = []
+        for alt in alternatives:
+            ok, cause = _plain_conditions_hold(alt, env)
+            if ok:
+                return True, None
+            causes.append(cause)
+        return False, "no alternative holds (%s)" % "; ".join(causes)
+    return True, None
+
+
+def _plain_conditions_hold(conds, env):
+    """The conditions of a method other than records, agent options and
+    alternatives: (True, None) or (False, cause)."""
     for cond in conds.get("env") or []:
         if not env_holds(cond, env):
             return False, "variable %s not set as required" % cond.get("name")
     for cond in conds.get("envNot") or []:
         if not env_not_holds(cond, env):
             return False, "variable %s is %s" % (cond.get("name"), cond.get("equals"))
+    for name in conds.get("envAbsent") or []:
+        if env.get(name, ""):
+            return False, "variable %s is set" % name
     for cond in conds.get("settings") or []:
         if not setting_holds(cond, env):
             return False, "setting %s of %s not read or not as required" % (cond.get("key"), cond.get("path"))
+    for cond in conds.get("settingsNot") or []:
+        if not setting_not_holds(cond, env):
+            return False, "setting %s of %s not read or %s" % (cond.get("key"), cond.get("path"),
+                                                               json.dumps(cond.get("equals")))
     for name in conds.get("programs") or []:
         if not program_found(name, env):
             return False, "program %s not found" % name

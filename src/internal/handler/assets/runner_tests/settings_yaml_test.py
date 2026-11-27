@@ -85,6 +85,7 @@ class YamlSettingTest(unittest.TestCase):
     def assert_read(self, text, key, expected):
         value = self.read(text, key)
         self.assertIsNot(value, RUNNER._MISSING, "%s not read" % key)
+        self.assertIsNot(value, RUNNER._ABSENT, "%s absent" % key)
         self.assertEqual(type(value), type(expected), "%s read as %r" % (key, value))
         self.assertEqual(value, expected)
 
@@ -121,17 +122,28 @@ class YamlSettingTest(unittest.TestCase):
             with self.subTest(word=word):
                 self.assert_read("display:\n  busy_input_mode: %s\n" % word, "display.busy_input_mode", expected)
 
-    def test_a_path_that_does_not_lead_to_a_scalar_gives_no_value(self):
+    def test_a_key_the_file_does_not_hold_is_absent(self):
+        # No such key: the agent's default applies (a setting that must not
+        # carry a value holds then; one that must carry it does not).
         for name, text, key in (
                 ("no such key", HERMES_WRITTEN, "display.busy_mode"),
                 ("no such section", HERMES_WRITTEN, "terminal.busy_input_mode"),
                 ("a scalar where a section is needed", "display: off\n", "display.busy_input_mode"),
-                ("a section is no scalar", HERMES_WRITTEN, "display"),
-                ("a sequence is no scalar", HERMES_WRITTEN, "toolsets"),
+                ("a null where a section is needed", "display:\ncompact: true\n", "display.busy_input_mode"),
                 ("an empty file", "", "display.busy_input_mode"),
                 ("only comments", "# display:\n#   busy_input_mode: queue\n", "display.busy_input_mode")):
             with self.subTest(case=name):
-                self.assert_not_read(text, key)
+                self.assertIs(self.read(text, key), RUNNER._ABSENT)
+
+    def test_a_missing_file_is_absent(self):
+        cond = {"path": "{env:HERMES_HOME}/config.yaml", "format": "yaml-scalar",
+                "key": "display.busy_input_mode", "equals": "queue"}
+        self.assertIs(RUNNER.read_setting(cond, self.env), RUNNER._ABSENT)
+
+    def test_a_path_that_leads_to_a_collection_gives_no_value(self):
+        for name, key in (("a section is no scalar", "display"), ("a sequence is no scalar", "toolsets")):
+            with self.subTest(case=name):
+                self.assert_not_read(HERMES_WRITTEN, key)
 
     def test_a_form_outside_the_narrow_reading_gives_no_value(self):
         # Every text below holds busy_input_mode: queue for a full YAML 1.1

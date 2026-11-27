@@ -28,6 +28,9 @@
 import re
 
 SETTING_NOT_READ = object()
+# The file holds no such key (an empty document, a missing key, a scalar or
+# null where the path needs a mapping): the agent's default applies.
+SETTING_ABSENT = object()
 
 _YAML_BOOLEANS = {}
 for _word, _value in (("true", True), ("false", False), ("yes", True), ("no", False),
@@ -53,15 +56,16 @@ class _NotRead(Exception):
 
 
 def read_yaml_scalar(text, keys):
-    """The scalar at the path of keys of the YAML document text (a str), or
-    SETTING_NOT_READ when the document is outside the narrow form, the path
-    does not lead to a scalar, or a key is missing."""
+    """The scalar at the path of keys of the YAML document text (a str);
+    SETTING_ABSENT when the document holds no such key; SETTING_NOT_READ
+    when the document is outside the narrow form or the path leads to a
+    collection."""
     if not keys:
         return SETTING_NOT_READ
     try:
         lines = _significant_lines(text)
         if not lines:
-            return SETTING_NOT_READ
+            return SETTING_ABSENT
         return _read(lines, 0, len(lines), lines[0][0], list(keys))
     except _NotRead:
         return SETTING_NOT_READ
@@ -134,7 +138,7 @@ def _read(lines, start, end, indent, keys):
     entries = _entries(lines, start, end, indent)
     entry = entries.get(keys[0])
     if entry is None:
-        return SETTING_NOT_READ
+        return SETTING_ABSENT
     rest, child_start, child_end = entry
     has_children = child_start < child_end
     if len(keys) > 1:
@@ -142,8 +146,11 @@ def _read(lines, start, end, indent, keys):
             # A scalar where the path needs a block mapping: no such key
             # below it. Any other form (flow, anchor, tag) is not read.
             _scalar(rest)
-            return SETTING_NOT_READ
-        if not has_children or _is_sequence_item(lines[child_start][1]):
+            return SETTING_ABSENT
+        if not has_children:
+            # Null where the path needs a mapping: no such key below it.
+            return SETTING_ABSENT
+        if _is_sequence_item(lines[child_start][1]):
             return SETTING_NOT_READ
         return _read(lines, child_start, child_end, lines[child_start][0], keys[1:])
     if rest is None:

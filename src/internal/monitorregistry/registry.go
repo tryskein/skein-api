@@ -202,9 +202,23 @@ type Conditions struct {
 	// entry has Equals and no Pattern. Only a method of an agent record
 	// states it.
 	EnvNot []EnvCondition `json:"envNot,omitempty"`
+	// EnvAbsent are variables of the agent process that must be unset or
+	// empty (a setting read from a file only when no variable overrides
+	// it). Only a method of an agent record states it.
+	EnvAbsent []string `json:"envAbsent,omitempty"`
 	// Settings are values read from configuration files of the agent. A
 	// setting that cannot be read does not hold.
 	Settings []SettingCondition `json:"settings,omitempty"`
+	// SettingsNot are settings that must not carry a value: each holds when
+	// its value is read and differs from Equals, or when the file or the key
+	// is absent (the agent's default applies); a file whose form is not read
+	// does not hold. Only a method of an agent record states it.
+	SettingsNot []SettingCondition `json:"settingsNot,omitempty"`
+	// AnyOf are alternatives of which at least one must hold, besides every
+	// other condition here. An alternative states env, envNot, envAbsent,
+	// settings, settingsNot or programs, never anyOf, records or agent
+	// options. Only a method of an agent record states it.
+	AnyOf []Conditions `json:"anyOf,omitempty"`
 	// Programs are executables that must be found.
 	Programs []string `json:"programs,omitempty"`
 	// AgentOptionsAbsent are long options the argument list of the agent
@@ -490,6 +504,12 @@ type Executor struct {
 	HTTP *HTTPRequest `json:"http,omitempty"`
 	// TimeoutSec bounds one call.
 	TimeoutSec int `json:"timeoutSec"`
+	// Detach, for an argv executor, lets the program outlive TimeoutSec: the
+	// call waits that long for its exit, which the outcome table classifies
+	// as usual; a program still running then is left to run on its own and
+	// the call is classified by the row whose StillRunning is true (a
+	// command that holds its caller for a whole turn of the agent).
+	Detach bool `json:"detach,omitempty"`
 }
 
 // HTTPRequest is the request of an http executor. The text of an event is
@@ -593,6 +613,10 @@ type Match struct {
 	// its stderr: true holds for an empty stderr, false for any output there
 	// (a warning).
 	StderrEmpty *bool `json:"stderrEmpty,omitempty"`
+	// StillRunning, set to true and alone in its row, is the sign of a
+	// detached call (Executor.Detach) whose program had not exited when the
+	// call's time ran out: it has no exit code and no output yet.
+	StillRunning *bool `json:"stillRunning,omitempty"`
 }
 
 // Probe types (non-delivering availability checks).

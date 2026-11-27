@@ -362,16 +362,35 @@ func (v *validator) conditions(path string, c Conditions, agentOptions bool) {
 			v.add(RuleInvalid, epath+".equals", "the value the variable must not carry is missing")
 		}
 	}
-	for i, s := range c.Settings {
-		spath := fmt.Sprintf("%s.settings[%d]", path, i)
-		v.text(RuleInvalid, spath+".path", s.Path)
-		v.text(RuleInvalid, spath+".key", s.Key)
-		if !settingFormats[s.Format] {
-			v.add(RuleInvalid, spath+".format", "format %q is not one of json, toml, yaml-scalar", s.Format)
+	v.settings(path+".settings", c.Settings)
+	v.settings(path+".settingsNot", c.SettingsNot)
+	if len(c.SettingsNot) > 0 && !agentOptions {
+		v.add(RuleInvalid, path+".settingsNot", "only a method of an agent record states a setting that must not carry a value")
+	}
+	if len(c.EnvAbsent) > 0 && !agentOptions {
+		v.add(RuleInvalid, path+".envAbsent", "only a method of an agent record states a variable that must be unset")
+	}
+	for i, name := range c.EnvAbsent {
+		if !envNamePattern.MatchString(name) {
+			v.add(RuleInvalid, fmt.Sprintf("%s.envAbsent[%d]", path, i), "%q is not an environment variable name", name)
 		}
-		if len(s.Equals) == 0 {
-			v.add(RuleInvalid, spath+".equals", "the expected value is missing")
+	}
+	if len(c.AnyOf) > 0 && !agentOptions {
+		v.add(RuleInvalid, path+".anyOf", "only a method of an agent record states alternatives")
+	}
+	if len(c.AnyOf) == 1 {
+		v.add(RuleInvalid, path+".anyOf", "one alternative is no choice: state its conditions directly")
+	}
+	for i, alt := range c.AnyOf {
+		apath := fmt.Sprintf("%s.anyOf[%d]", path, i)
+		switch {
+		case len(alt.AnyOf) > 0 || len(alt.Records) > 0 || len(alt.RecordsAbsent) > 0 || len(alt.AgentOptionsAbsent) > 0:
+			v.add(RuleInvalid, apath, "an alternative states only env, envNot, envAbsent, settings, settingsNot or programs")
+		case len(alt.Env) == 0 && len(alt.EnvNot) == 0 && len(alt.EnvAbsent) == 0 && len(alt.Settings) == 0 &&
+			len(alt.SettingsNot) == 0 && len(alt.Programs) == 0:
+			v.add(RuleInvalid, apath, "an empty alternative always holds")
 		}
+		v.conditions(apath, alt, agentOptions)
 	}
 	v.names(path+".programs", c.Programs)
 	if len(c.AgentOptionsAbsent) > 0 && !agentOptions {
@@ -386,6 +405,20 @@ func (v *validator) conditions(path string, c Conditions, agentOptions bool) {
 	for i, o := range c.AgentOptionsAbsent {
 		if !longOptionPattern.MatchString(o) {
 			v.add(RuleInvalid, fmt.Sprintf("%s.agentOptionsAbsent[%d]", path, i), "%q is not a long option of the form --name", o)
+		}
+	}
+}
+
+func (v *validator) settings(path string, list []SettingCondition) {
+	for i, s := range list {
+		spath := fmt.Sprintf("%s[%d]", path, i)
+		v.text(RuleInvalid, spath+".path", s.Path)
+		v.text(RuleInvalid, spath+".key", s.Key)
+		if !settingFormats[s.Format] {
+			v.add(RuleInvalid, spath+".format", "format %q is not one of json, toml, yaml-scalar", s.Format)
+		}
+		if len(s.Equals) == 0 {
+			v.add(RuleInvalid, spath+".equals", "the expected value is missing")
 		}
 	}
 }
@@ -459,7 +492,7 @@ func (v *validator) channel(path string, c *Channel) {
 		}
 	}
 	v.signs(path+".outcomes", rows)
-	v.criteriaOf(path+".outcomes", rows, c.Executor.Type)
+	v.criteriaOf(path+".outcomes", rows, c.Executor.Type, c.Executor.Detach)
 	v.noEnvRefs(path+".outcomes", rows)
 
 	switch {
@@ -596,6 +629,9 @@ func (v *validator) executor(path string, e Executor) {
 				e.Feed, want[0], want[1], text, file)
 		}
 	case ExecutorHTTP:
+		if e.Detach {
+			v.add(RuleInvalid, path+".detach", "only an argv program is left to run on its own")
+		}
 		if len(e.Argv) > 0 || e.Feed != "" {
 			v.add(RuleInvalid, path, "an http executor has no argv and no feed")
 		}
@@ -730,7 +766,7 @@ func (v *validator) blindCalls(path string, c *Channel) {
 			}
 		}
 		v.signs(path+".submit.outcomes", rows)
-		v.criteriaOf(path+".submit.outcomes", rows, s.Executor.Type)
+		v.criteriaOf(path+".submit.outcomes", rows, s.Executor.Type, false)
 		v.noEnvRefs(path+".submit.outcomes", rows)
 	}
 }
@@ -901,6 +937,9 @@ func (v *validator) signs(path string, rows []Match) {
 			v.add(RuleAmbiguousSign, rpath, "the row has no criterion")
 			continue
 		}
+		if m.StillRunning != nil && (!*m.StillRunning || !m.onlyStillRunning()) {
+			v.add(RuleInvalid, rpath+".stillRunning", "a call still running has no exit and no output: stillRunning is true and alone")
+		}
 		for _, k := range slices.Sorted(maps.Keys(m.JSON)) {
 			v.jsonPath(rpath+".json", k)
 			if name, ok := envRef(m.JSON[k]); ok && !envNamePattern.MatchString(name) {
@@ -949,9 +988,12 @@ func (v *validator) signs(path string, rows []Match) {
 // executor has: an argv program has an exit code and no HTTP status, an
 // http request has a status and no exit code. A row with the other
 // criterion could never match.
-func (v *validator) criteriaOf(path string, rows []Match, executor string) {
+func (v *validator) criteriaOf(path string, rows []Match, executor string, detach bool) {
 	for i, m := range rows {
 		rpath := fmt.Sprintf("%s[%d].match", path, i)
+		if m.StillRunning != nil && !detach {
+			v.add(RuleInvalid, rpath+".stillRunning", "only a detached argv call can still be running")
+		}
 		switch {
 		case executor == ExecutorArgv && m.HTTPStatus != nil:
 			v.add(RuleInvalid, rpath+".httpStatus", "an argv answer has no HTTP status")
@@ -1024,7 +1066,15 @@ func (v *validator) noEnvRefs(path string, rows []Match) {
 // empty reports whether the sign states no criterion.
 func (m Match) empty() bool {
 	return m.ExitCode == nil && m.HTTPStatus == nil && len(m.JSON) == 0 && len(m.JSONAbsent) == 0 && len(m.JSONType) == 0 &&
-		m.StderrEmpty == nil && len(m.StderrJSON) == 0 && m.StderrContains == nil
+		m.StderrEmpty == nil && len(m.StderrJSON) == 0 && m.StderrContains == nil && m.StillRunning == nil
+}
+
+// onlyStillRunning reports whether the row states no criterion but
+// stillRunning.
+func (m Match) onlyStillRunning() bool {
+	rest := m
+	rest.StillRunning = nil
+	return rest.empty()
 }
 
 // overlaps reports whether one answer can satisfy both signs: every
@@ -1032,6 +1082,11 @@ func (m Match) empty() bool {
 // overlaps nothing (it is refused on its own).
 func (m Match) overlaps(o Match) bool {
 	if m.empty() || o.empty() {
+		return false
+	}
+	// A call still running has no exit and no output: it is apart from
+	// every sign of a finished call.
+	if (m.StillRunning != nil) != (o.StillRunning != nil) {
 		return false
 	}
 	if m.StderrEmpty != nil && o.StderrEmpty != nil && *m.StderrEmpty != *o.StderrEmpty {
@@ -1129,7 +1184,7 @@ func (v *validator) probe(path string, p *Probe) {
 			}
 		}
 		v.signs(path+".results", rows)
-		v.criteriaOf(path+".results", rows, ExecutorArgv)
+		v.criteriaOf(path+".results", rows, ExecutorArgv, false)
 	default:
 		if len(p.Argv) > 0 {
 			if p.Type == ProbeSocketConnect || p.Type == ProbeTCPReach {
@@ -1209,7 +1264,7 @@ func (v *validator) addressee(path string, c *Channel) {
 			}
 		}
 		v.signs(path+".command.results", rows)
-		v.criteriaOf(path+".command.results", rows, ExecutorArgv)
+		v.criteriaOf(path+".command.results", rows, ExecutorArgv, false)
 		if len(a.Command.Capture) > 0 && !slices.ContainsFunc(a.Command.Results, func(r AddresseeResultRow) bool {
 			return r.Result == AddresseeSame
 		}) {

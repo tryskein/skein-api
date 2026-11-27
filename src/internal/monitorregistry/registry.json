@@ -262,8 +262,8 @@
     },
     {
       "id": "hermes",
-      "about": "Hermes Agent: the runner runs as a background terminal process whose new output comes to the agent on each heartbeat tick.",
-      "source": "github.com/NousResearch/hermes-agent 24b14819: tools/terminal_tool.py#terminal_tool (background, heartbeat, persist_on_release: a background process without it is killed when the agent's lifecycle ends a session, e.g. on context compression or /new), tools/process_registry.py#HEARTBEAT_MIN_SECONDS (60) and #HEARTBEAT_TICK_SECONDS (5: a tick comes up to ~65 s after the last one), #_emit_heartbeat (a tick carries the output since the previous one; quiet ticks are skipped; each tick wakes an idle agent), tools/process_registry_notifications.py#HEARTBEAT_OUTPUT_CHARS (2000: only the last 2000 characters of a tick's output are kept, the rest counted in omitted; two undelivered ticks merge under the same cap); notify=[pattern] is not used (at most one per 15 s and 8 for the life of the process); pyproject.toml [project.scripts] hermes (a Python console script).",
+      "about": "Hermes Agent: the runner runs as a background terminal process whose new output comes to the agent on each heartbeat tick; with background notifications off, the monitor resumes the session through hermes chat when its busy input mode is queue.",
+      "source": "github.com/NousResearch/hermes-agent 24b14819: tools/terminal_tool.py#terminal_tool (background, heartbeat, persist_on_release: a background process without it is killed when the agent's lifecycle ends a session, e.g. on context compression or /new), tools/process_registry.py#HEARTBEAT_MIN_SECONDS (60) and #HEARTBEAT_TICK_SECONDS (5: a tick comes up to ~65 s after the last one), #_emit_heartbeat (a tick carries the output since the previous one; quiet ticks are skipped; each tick wakes an idle agent), tools/process_registry_notifications.py#HEARTBEAT_OUTPUT_CHARS (2000: only the last 2000 characters of a tick's output are kept, the rest counted in omitted; two undelivered ticks merge under the same cap); notify=[pattern] is not used (at most one per 15 s and 8 for the life of the process); pyproject.toml [project.scripts] hermes (a Python console script). Notifications off: gateway/run_config_loaders.py (HERMES_BACKGROUND_NOTIFICATIONS before display.background_process_notifications; False or \"off\", lower-cased, is off); busy input mode: run_config_loaders.py#_load_busy_input_mode (HERMES_GATEWAY_BUSY_INPUT_MODE before display.busy_input_mode, interrupt by default); config.yaml in HERMES_HOME, else ~/.hermes (hermes_constants.py#get_process_hermes_home; %LOCALAPPDATA%\\hermes on Windows and HERMES_DATA_DIR_SUFFIX are not read here, so there the default applies).",
       "process": {
         "executables": [
           "hermes",
@@ -276,7 +276,99 @@
       "methods": [
         {
           "kind": "stream",
-          "conditions": {},
+          "conditions": {
+            "anyOf": [
+              {
+                "env": [
+                  {
+                    "name": "HERMES_BACKGROUND_NOTIFICATIONS"
+                  }
+                ],
+                "envNot": [
+                  {
+                    "name": "HERMES_BACKGROUND_NOTIFICATIONS",
+                    "equals": "off"
+                  },
+                  {
+                    "name": "HERMES_BACKGROUND_NOTIFICATIONS",
+                    "equals": "Off"
+                  },
+                  {
+                    "name": "HERMES_BACKGROUND_NOTIFICATIONS",
+                    "equals": "OFF"
+                  }
+                ]
+              },
+              {
+                "envAbsent": [
+                  "HERMES_BACKGROUND_NOTIFICATIONS"
+                ],
+                "env": [
+                  {
+                    "name": "HERMES_HOME"
+                  }
+                ],
+                "settingsNot": [
+                  {
+                    "path": "{env:HERMES_HOME}/config.yaml",
+                    "format": "yaml-scalar",
+                    "key": "display.background_process_notifications",
+                    "equals": "off"
+                  },
+                  {
+                    "path": "{env:HERMES_HOME}/config.yaml",
+                    "format": "yaml-scalar",
+                    "key": "display.background_process_notifications",
+                    "equals": "Off"
+                  },
+                  {
+                    "path": "{env:HERMES_HOME}/config.yaml",
+                    "format": "yaml-scalar",
+                    "key": "display.background_process_notifications",
+                    "equals": "OFF"
+                  },
+                  {
+                    "path": "{env:HERMES_HOME}/config.yaml",
+                    "format": "yaml-scalar",
+                    "key": "display.background_process_notifications",
+                    "equals": false
+                  }
+                ]
+              },
+              {
+                "envAbsent": [
+                  "HERMES_BACKGROUND_NOTIFICATIONS",
+                  "HERMES_HOME"
+                ],
+                "settingsNot": [
+                  {
+                    "path": "~/.hermes/config.yaml",
+                    "format": "yaml-scalar",
+                    "key": "display.background_process_notifications",
+                    "equals": "off"
+                  },
+                  {
+                    "path": "~/.hermes/config.yaml",
+                    "format": "yaml-scalar",
+                    "key": "display.background_process_notifications",
+                    "equals": "Off"
+                  },
+                  {
+                    "path": "~/.hermes/config.yaml",
+                    "format": "yaml-scalar",
+                    "key": "display.background_process_notifications",
+                    "equals": "OFF"
+                  },
+                  {
+                    "path": "~/.hermes/config.yaml",
+                    "format": "yaml-scalar",
+                    "key": "display.background_process_notifications",
+                    "equals": false
+                  }
+                ]
+              }
+            ]
+          },
           "instruction": "Run `command` with the terminal tool: background=true, heartbeat=60, persist_on_release=true, and no notify. Each heartbeat brings the new output of the monitor: each line is an event. If a tick reports omitted output, read the events of the monitor's journal. If the process ends, run `command` the same way again: the cursor is kept, no event is lost.",
           "limits": {
             "line": {
@@ -292,6 +384,60 @@
               "intervalSec": 70
             }
           }
+        },
+        {
+          "kind": "delivery",
+          "channel": "hermes-resume",
+          "conditions": {
+            "env": [
+              {
+                "name": "HERMES_SESSION_ID"
+              }
+            ],
+            "anyOf": [
+              {
+                "env": [
+                  {
+                    "name": "HERMES_GATEWAY_BUSY_INPUT_MODE",
+                    "pattern": "[Qq][Uu][Ee][Uu][Ee]"
+                  }
+                ]
+              },
+              {
+                "envAbsent": [
+                  "HERMES_GATEWAY_BUSY_INPUT_MODE"
+                ],
+                "env": [
+                  {
+                    "name": "HERMES_HOME"
+                  }
+                ],
+                "settings": [
+                  {
+                    "path": "{env:HERMES_HOME}/config.yaml",
+                    "format": "yaml-scalar",
+                    "key": "display.busy_input_mode",
+                    "equals": "queue"
+                  }
+                ]
+              },
+              {
+                "envAbsent": [
+                  "HERMES_GATEWAY_BUSY_INPUT_MODE",
+                  "HERMES_HOME"
+                ],
+                "settings": [
+                  {
+                    "path": "~/.hermes/config.yaml",
+                    "format": "yaml-scalar",
+                    "key": "display.busy_input_mode",
+                    "equals": "queue"
+                  }
+                ]
+              }
+            ]
+          },
+          "instruction": "Run `command` once in a shell: it returns after the line {\"event\":\"monitor_started\",...}, and the monitor resumes this session with each event through hermes chat on its own; with busy_input_mode queue an event waits for the current turn."
         }
       ]
     },
@@ -3103,6 +3249,94 @@
       },
       "address": {
         "env": "PASEO_TERMINAL_ID"
+      }
+    },
+    {
+      "id": "hermes-resume",
+      "about": "hermes chat --resume: the own delivery command of Hermes, which submits the text to a session of its gateway by the session id; the command holds its caller until the turn ends, so the monitor waits only for an early refusal and leaves it running.",
+      "source": "github.com/NousResearch/hermes-agent 24b14819: hermes_cli/_parser.py (chat --resume SESSION_ID, --query-file - reads the query from stdin verbatim, -Q answers and exits), hermes_cli/gateway_chat.py#run_gateway_chat (resume by id; not found: 'No session found matching'), #launch_from_args (errors print 'Error: ' and exit 1, an unsupported option 2; a connection or read failure exits 1 with no proof of where it failed), #exit_on_resume_refusal ('Error: Resume retains gateway session policy', exit 2), hermes_cli/gateway_chat_view.py#run ('Your message was not sent.' before the submit, exit 3) and #submit (the prompt.submit receipt is not printed: no sign of acceptance comes out before the turn ends); agent/agent_init_session.py publishes HERMES_SESSION_ID, and a delegated child keeps its parent's id.",
+      "step": 3,
+      "order": 2,
+      "kind": "addressed",
+      "blind": false,
+      "detect": {
+        "env": [
+          {
+            "name": "HERMES_SESSION_ID"
+          }
+        ]
+      },
+      "executor": {
+        "type": "argv",
+        "argv": [
+          "hermes",
+          "chat",
+          "--resume",
+          "{env:HERMES_SESSION_ID}",
+          "--query-file",
+          "-",
+          "-Q"
+        ],
+        "feed": "stdin",
+        "timeoutSec": 15,
+        "detach": true
+      },
+      "idle": {
+        "type": "none"
+      },
+      "outcomes": [
+        {
+          "match": {
+            "exitCode": 0
+          },
+          "outcome": "queued"
+        },
+        {
+          "match": {
+            "exitCode": 1,
+            "stderrContains": "Error: No session found matching"
+          },
+          "outcome": "refused-before-send"
+        },
+        {
+          "match": {
+            "exitCode": 2,
+            "stderrContains": "Error: Resume retains gateway session policy"
+          },
+          "outcome": "refused-before-send"
+        },
+        {
+          "match": {
+            "exitCode": 3,
+            "stderrContains": "Your message was not sent."
+          },
+          "outcome": "refused-before-send"
+        },
+        {
+          "match": {
+            "stillRunning": true
+          },
+          "outcome": "unknown"
+        }
+      ],
+      "probeUndefined": true,
+      "addressee": {
+        "process": "none",
+        "limitation": "The command submits to the session the id names and prints no receipt before the turn ends: a call still running after its time is unknown, so queued is known only when the turn ended within it."
+      },
+      "binaries": {
+        "linux": [
+          "hermes"
+        ],
+        "macos": [
+          "hermes"
+        ],
+        "windows": [
+          "hermes.exe"
+        ]
+      },
+      "address": {
+        "env": "HERMES_SESSION_ID"
       }
     }
   ],
