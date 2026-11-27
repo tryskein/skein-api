@@ -109,7 +109,7 @@ var (
 	kinds            = set(KindTerminal, KindAddressed)
 	steps            = map[int]bool{StepOwnDelivery: true, StepHost: true, StepTerminal: true, StepBlind: true}
 	platforms        = set(PlatformLinux, PlatformMacOS, PlatformWindows)
-	units            = set(UnitChars, UnitBytes, UnitLines, UnitEvents)
+	units            = set(UnitChars, UnitUTF16, UnitBytes, UnitLines, UnitEvents)
 	settingFormats   = set(SettingJSON, SettingTOML, SettingYAML)
 	windowsShells    = set(WindowsShellPowerShell, WindowsShellPwsh, WindowsShellGitBash)
 	httpMethods      = set("POST", "PUT")
@@ -315,7 +315,7 @@ func (v *validator) limits(path string, l *Limits) {
 			v.add(RuleInvalid, path+"."+name+".max", "limit %d is not positive", lim.Max)
 		}
 		if !units[lim.Unit] {
-			v.add(RuleInvalid, path+"."+name+".unit", "unit %q is not one of chars, bytes, lines, events", lim.Unit)
+			v.add(RuleInvalid, path+"."+name+".unit", "unit %q is not one of chars, utf16, bytes, lines, events", lim.Unit)
 		}
 	}
 	if l.Rate != nil && (l.Rate.Burst <= 0 || l.Rate.IntervalSec <= 0) {

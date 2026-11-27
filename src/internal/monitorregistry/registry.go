@@ -198,6 +198,7 @@ type SettingCondition struct {
 // Limit units, as the source of a record states them.
 const (
 	UnitChars  = "chars"
+	UnitUTF16  = "utf16"
 	UnitBytes  = "bytes"
 	UnitLines  = "lines"
 	UnitEvents = "events"
