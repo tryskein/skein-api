@@ -512,13 +512,17 @@ class JournalOutageThenStopTest(unittest.TestCase):
         mon.spy.after = after
         outage = world.runner.JournalUnavailable("write_failed", mon.journal.path)
         with mock.patch.object(mon.journal, "delivery", side_effect=outage):
-            with self.assertRaises(world.runner.JournalUnavailable):
+            # Review round 3 of wave 7, row 21: the stop by lost access wins
+            # although the journal refuses the outcome's line; the line goes
+            # to the deferred tail with the stop.
+            with self.assertRaises(world.runner.Stop) as caught:
                 mon.page([note(1)])
+        self.assertEqual(caught.exception.reason, "token_expired")
         self.assertEqual(enter.calls(), [])
-        # The runner starts again with the same token; the journal is back.
-        again = world.monitor()
-        again.page([note(1)])
-        self.assertEqual(again.deliveries(), [(1, "unknown", None, False)])
+        # The journal is back: the deferred tail brings the line, without
+        # the preview.
+        world.runner.append_tails(world.env)
+        self.assertEqual(mon.deliveries(), [(1, "unknown", None, False)])
 
 
 @unittest.skipUnless(os.name == "posix", "the POSIX runner")

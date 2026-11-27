@@ -530,7 +530,13 @@ class DeliverySink(object):
             self._open = None
             outcomes, journaled = state["outcomes"], state["journaled"]
             waiting = [n for n in state["pending"] if str(n["id"]) not in outcomes]
-            close_waiting(self, cursor, outcomes, journaled, waiting, OUTCOME_ACCESS_LOST, exc.reason)
+            # Outcomes fixed on this page but not in the journal yet (it
+            # refused their line) go with the stop too, without the preview,
+            # into the journal or the deferred tail.
+            byid = dict((str(n["id"]), n) for n in notifications if isinstance(n, dict) and n.get("id") is not None)
+            known = [(byid[eid], status) for eid, status in sorted(outcomes.items())
+                     if eid not in journaled and eid in byid]
+            close_waiting(self, cursor, outcomes, journaled, waiting, OUTCOME_ACCESS_LOST, exc.reason, known=known)
             raise access_stop(exc.reason)
         self._open = None
         if self.gone:
