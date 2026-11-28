@@ -86,6 +86,20 @@ def _wait_gone(pid, sec=10):
     return _gone(pid)
 
 
+def _process_state(pid):
+    """The state, the parent and the group of pid as /proc/<pid>/stat gives
+    them, for the message of a failed check; or why they cannot be read."""
+    try:
+        with open("/proc/%d/stat" % pid) as fh:
+            fields = fh.read().rsplit(")", 1)[1].split()
+    except OSError as exc:
+        return "pid %d: no /proc entry (%s)" % (pid, exc.strerror or exc)
+    try:
+        return "pid %d: state %s, ppid %s, pgid %s" % (pid, fields[0], fields[1], fields[2])
+    except IndexError:
+        return "pid %d: unreadable stat %r" % (pid, fields)
+
+
 class FakeMonotonic(object):
     """A monotonic clock each reading of which moves it on by a step: the
     deadlines of a call run out after a bounded number of its waits,
@@ -192,11 +206,19 @@ class ProgramWaitTest(unittest.TestCase):
         # Review round 2 of wave 7, K4: both pipes reach their end before the
         # grace (the descendant redirected them), and the descendant is still
         # killed with the program's group.
-        argv = ["sh", "-c", "(exec >/dev/null 2>&1 </dev/null; exec sleep 60) & echo $! > %s; echo done"
-                % self.pidfile]
+        argv = ["sh", "-c", "echo $$ > %s.prog; (exec >/dev/null 2>&1 </dev/null; exec sleep 60) & echo $! > %s; "
+                "echo done" % (self.pidfile, self.pidfile)]
         result = RUNNER.run_program(argv, dict(os.environ), None, 10)
         self.assertEqual((result.exit_code, result.stdout.strip()), (0, b"done"))
-        self.assertTrue(_wait_gone(self.descendant()), "a descendant without the pipes outlived the call")
+        descendant = self.descendant()
+        if not _wait_gone(descendant):
+            # The program leads the group of the call (start_new_session):
+            # its pid is the group the call kills.
+            with open(self.pidfile + ".prog") as fh:
+                group = int(fh.read().strip())
+            self.fail("a descendant without the pipes outlived the call: %s; the group of the call %d; "
+                      "this process: pid %d, pgid %d"
+                      % (_process_state(descendant), group, os.getpid(), os.getpgid(0)))
 
     def test_a_failure_while_setting_up_the_pipes_kills_the_program(self):
         # Review round 2 of wave 7, row 19: the clean-up is armed before the
