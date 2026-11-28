@@ -565,9 +565,11 @@ class AddresseeCheckTest(unittest.TestCase):
 
     def dead_process(self):
         proc = subprocess.Popen(["sleep", "30"])
-        info = harness_info(proc.pid)
-        proc.kill()
-        proc.wait()
+        try:
+            info = harness_info(proc.pid)
+        finally:
+            proc.kill()
+            proc.wait()
         return [proc.pid, info.start]
 
     def test_a_terminal_channel_with_another_agent_process(self):
