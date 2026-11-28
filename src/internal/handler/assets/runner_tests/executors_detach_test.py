@@ -113,6 +113,17 @@ class DetachedCallTest(unittest.TestCase):
         self.executor = RUNNER.ArgvExecutor(self.token, self.env, [])
         # A program left running is let go at the end of the test.
         self.addCleanup(self.release)
+        # A call through the executor is held in the detached calls of the
+        # runner: nothing of it outlives the test.
+        self.addCleanup(RUNNER.DETACHED_CALLS.end_all)
+
+    def calls(self, clock):
+        """Detached calls of this test, kept by clock: the programs still
+        held by them are killed and reaped at its end, on every way out of
+        it."""
+        calls = RUNNER.DetachedCalls(clock=clock)
+        self.addCleanup(calls.end_all)
+        return calls
 
     def release(self):
         with open(self.mark + ".go", "w") as fh:
@@ -179,8 +190,7 @@ class DetachedCallTest(unittest.TestCase):
         def clock():
             looks[0] += 1
             return now[0]
-        calls = RUNNER.DetachedCalls(clock=clock)
-        self.addCleanup(calls.end_all)
+        calls = self.calls(clock)
         with mock.patch.object(RUNNER, "_DETACHED_WATCH_STEP_SEC", 0.02):
             result = self.detached("tree", calls)
             self.assertTrue(result.still_running)
@@ -200,8 +210,7 @@ class DetachedCallTest(unittest.TestCase):
         self.assertTrue(gone(program) and gone(child), "the tree of the hung call outlived its deadline")
 
     def test_one_call_of_a_channel_runs_at_a_time(self):
-        calls = RUNNER.DetachedCalls(clock=lambda: 0.0)
-        self.addCleanup(calls.end_all)
+        calls = self.calls(lambda: 0.0)
         self.assertTrue(self.detached("slow", calls).still_running)
         with self.assertRaises(RUNNER.ExecutorRefusal):
             self.detached("ok", calls)
@@ -216,8 +225,7 @@ class DetachedCallTest(unittest.TestCase):
         # on that lock while the kill runs (an event, not a wait of a fixed
         # time).
         now = [1000.0]
-        calls = RUNNER.DetachedCalls(clock=lambda: now[0])
-        self.addCleanup(calls.end_all)
+        calls = self.calls(lambda: now[0])
         contended = threading.Event()
         calls._lock = _SeenLock(calls._lock, contended)
         self.assertTrue(self.detached("tree", calls).still_running)
@@ -258,8 +266,7 @@ class DetachedCallTest(unittest.TestCase):
         # Review round 2 of wave 14, row 16: the output of a detached call
         # is kept to the cap on both streams, the rest is read and dropped.
         self.env["NOISE"] = str(RUNNER.OUTPUT_CAP_BYTES + 4096)
-        calls = RUNNER.DetachedCalls(clock=lambda: 0.0)
-        self.addCleanup(calls.end_all)
+        calls = self.calls(lambda: 0.0)
         result = RUNNER.run_detached([sys.executable, self.script, "noisy"], self.env, b"", 30, key="channel",
                                      calls=calls)
         self.assertEqual(result.exit_code, 0)
@@ -275,8 +282,7 @@ class DetachedCallTest(unittest.TestCase):
         if not os.path.isdir("/proc"):
             self.skipTest("the descriptors of a process are read from /proc")
         self.env["NOISE"] = str(4 * RUNNER.OUTPUT_CAP_BYTES)
-        calls = RUNNER.DetachedCalls(clock=lambda: 0.0)
-        self.addCleanup(calls.end_all)
+        calls = self.calls(lambda: 0.0)
         result = RUNNER.run_detached([sys.executable, self.script, "noisy-live"], self.env, b"", 0.2,
                                      key="channel", calls=calls)
         self.assertTrue(result.still_running)
@@ -307,8 +313,7 @@ class DetachedCallTest(unittest.TestCase):
         # refused before send; the watcher kills the tree again and frees
         # the channel once the kill works.
         with self.failing_kill(), mock.patch.object(RUNNER, "_DETACHED_WATCH_STEP_SEC", 0.02):
-            calls = RUNNER.DetachedCalls(clock=lambda: 0.0)
-            self.addCleanup(calls.end_all)
+            calls = self.calls(lambda: 0.0)
             early = self.detached("orphan", calls)
             self.assertEqual(early.exit_code, 0)
             self.assertEqual(RUNNER.classify_result(ROWS, early), ("unknown", {"treeKill": FAILURE}))
@@ -324,7 +329,7 @@ class DetachedCallTest(unittest.TestCase):
 
     def test_a_closing_monitor_keeps_a_tree_it_could_not_kill(self):
         with self.failing_kill():
-            calls = RUNNER.DetachedCalls(clock=lambda: 0.0)
+            calls = self.calls(lambda: 0.0)
             calls.closing = True
             killed = self.detached("tree", calls)
             self.assertTrue(killed.still_running)
@@ -341,7 +346,7 @@ class DetachedCallTest(unittest.TestCase):
         # kill at the stop is told to the listener of the calls.
         with self.failing_kill():
             told = []
-            calls = RUNNER.DetachedCalls(clock=lambda: 0.0)
+            calls = self.calls(lambda: 0.0)
             calls.on_failure = lambda key, failure: told.append((key, failure))
             self.assertTrue(self.detached("tree", calls).still_running)
             program, child = self.pids()
@@ -361,7 +366,7 @@ class DetachedCallTest(unittest.TestCase):
             raise RUNNER.StopSignal()
         with self.failing_kill():
             told = []
-            calls = RUNNER.DetachedCalls(clock=lambda: 0.0)
+            calls = self.calls(lambda: 0.0)
             calls.on_failure = lambda key, failure: told.append((key, failure))
             with mock.patch.object(RUNNER, "_wait_unreaped", stop):
                 with self.assertRaises(RUNNER.StopSignal):
@@ -386,15 +391,14 @@ class DetachedCallTest(unittest.TestCase):
             if starts[0] == 2:
                 raise RUNNER.StopSignal()
             return start(reader)
-        calls = RUNNER.DetachedCalls(clock=lambda: 0.0)
+        calls = self.calls(lambda: 0.0)
         with mock.patch.object(RUNNER._Reader, "start", second_start_stops):
             with self.assertRaises(RUNNER.StopSignal):
                 self.detached("tree", calls)
         self.assertEqual(calls.running(), [])
 
     def test_a_program_left_to_run_is_reaped_once_it_ends(self):
-        calls = RUNNER.DetachedCalls(clock=lambda: 0.0)
-        self.addCleanup(calls.end_all)
+        calls = self.calls(lambda: 0.0)
         with mock.patch.object(RUNNER, "_DETACHED_WATCH_STEP_SEC", 0.02):
             self.assertTrue(self.detached("slow", calls).still_running)
             self.release()
