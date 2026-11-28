@@ -481,10 +481,12 @@ class DeadOwnerTest(Base):
             finally:
                 os._exit(0)
         os.close(w)
-        self.assertEqual(os.read(r, 1), b"x")
-        os.close(r)
-        os.kill(pid, signal.SIGKILL)
-        os.waitpid(pid, 0)
+        try:
+            self.assertEqual(os.read(r, 1), b"x")
+        finally:
+            os.close(r)
+            os.kill(pid, signal.SIGKILL)
+            os.waitpid(pid, 0)
 
     def test_death_at_each_step(self):
         identity = ident([addr("orca", "t-1")])
