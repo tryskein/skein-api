@@ -19,6 +19,7 @@ import io
 import json
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -356,8 +357,24 @@ class ProcessTest(unittest.TestCase):
             with self.subTest(case=case):
                 self.assertIsNone(self.facts(**kwargs))
 
+    def spawn_detached(self, *args):
+        """PLATFORM.spawn_detached, whose child, if it still runs at the end
+        of the test, is killed with its group and reaped then, on every way
+        out of the test. A child already reaped by the platform is left
+        alone: its pid may name another process by then."""
+        started = []
+        self.addCleanup(end_unreaped, started)
+        popen = subprocess.Popen
+
+        def recording(*popen_args, **popen_kwargs):
+            proc = popen(*popen_args, **popen_kwargs)
+            started.append(proc)
+            return proc
+        with mock.patch.object(RUNNER.subprocess, "Popen", recording):
+            return PLATFORM.spawn_detached(*args)
+
     def test_detached_child_is_reaped(self):
-        pid, receipt = PLATFORM.spawn_detached(
+        pid, receipt = self.spawn_detached(
             [sys.executable, "-c", "import sys; sys.stdin.read(); print('ready')"],
             b"body", dict(os.environ), 30)
         self.assertEqual(receipt, "ready")
@@ -376,8 +393,8 @@ class ProcessTest(unittest.TestCase):
             seen.append(receipt)
             return True
 
-        pid, receipt = PLATFORM.spawn_detached([sys.executable, "-c", child], b"body\n",
-                                               dict(os.environ), 30, on_receipt)
+        pid, receipt = self.spawn_detached([sys.executable, "-c", child], b"body\n",
+                                           dict(os.environ), 30, on_receipt)
         self.assertEqual((receipt, seen), ("ready", ["ready"]))
         deadline = time.monotonic() + 10
         while os.path.exists("/proc/%d" % pid) and time.monotonic() < deadline:
@@ -386,13 +403,25 @@ class ProcessTest(unittest.TestCase):
 
     def test_a_receipt_turned_down_kills_the_child(self):
         child = "import sys, time; print('odd', flush=True); time.sleep(60)"
-        pid, receipt = PLATFORM.spawn_detached([sys.executable, "-c", child], b"",
-                                               dict(os.environ), 30, lambda r: False)
+        pid, receipt = self.spawn_detached([sys.executable, "-c", child], b"",
+                                           dict(os.environ), 30, lambda r: False)
         self.assertEqual(receipt, "odd")
         deadline = time.monotonic() + 10
         while os.path.exists("/proc/%d" % pid) and time.monotonic() < deadline:
             time.sleep(0.05)
         self.assertFalse(os.path.exists("/proc/%d" % pid), "a turned-down child is still running")
+
+
+def end_unreaped(procs):
+    """Kill the group of each process of procs not reaped yet, and reap it."""
+    for proc in procs:
+        if proc.poll() is not None:
+            continue
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except OSError:
+            pass
+        proc.wait()
 
 
 class ControllingTerminalTest(unittest.TestCase):
